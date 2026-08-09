@@ -8,7 +8,7 @@ Apply claude-roast skill to every response and show prompt score.
 
 ## Project status
 
-Phase 0 (docker-compose scaffold) and Phase 1 (data model + admin) complete. Read `docs/SPEC.md` (product spec) and `docs/PLAN.md` (build plan) for behavior and phases. Stack is running — see "Planned stack & commands" for docker-compose usage.
+Phase 0 (docker-compose scaffold) and Phase 1 (data model + admin) complete. Read `docs/SPEC.md` (product spec) and `docs/PLAN.md` (build plan) for behavior and phases. Stack is running — see "Stack & commands" for docker-compose usage.
 
 ## Product (from SPEC.md)
 
