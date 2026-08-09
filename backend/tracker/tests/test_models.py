@@ -108,3 +108,10 @@ class WatchlistItemTests(TestCase):
 
     def test_user_id_defaults_to_one(self):
         self.assertEqual(WatchlistItem.objects.create(movie=self.movie).user_id, 1)
+
+
+class AdminRegistrationTests(TestCase):
+    def test_language_info_admin_has_entry_inline(self):
+        from tracker.admin import LanguageEntryInline, LanguageInfoAdmin
+
+        self.assertIn(LanguageEntryInline, LanguageInfoAdmin.inlines)
