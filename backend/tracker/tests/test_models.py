@@ -115,3 +115,9 @@ class AdminRegistrationTests(TestCase):
         from tracker.admin import LanguageEntryInline, LanguageInfoAdmin
 
         self.assertIn(LanguageEntryInline, LanguageInfoAdmin.inlines)
+
+
+class SeedTests(TestCase):
+    def test_seed_creates_empty_preference(self):
+        self.assertTrue(Preference.objects.filter(user_id=1).exists())
+        self.assertEqual(Preference.objects.count(), 1)
