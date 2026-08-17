@@ -98,3 +98,7 @@ REST_FRAMEWORK = {
         "rest_framework.renderers.JSONRenderer",
     ],
 }
+
+# External API keys (set via env or docker-compose env_file).
+TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "")
+RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "")

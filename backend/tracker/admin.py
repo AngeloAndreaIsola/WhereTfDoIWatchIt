@@ -2,6 +2,7 @@ from django.contrib import admin
 from django.contrib.postgres.fields import ArrayField
 
 from .models import (
+    ApiCallCounter,
     Availability,
     LanguageEntry,
     LanguageInfo,
@@ -67,3 +68,9 @@ class PreferenceAdmin(admin.ModelAdmin):
 class WatchlistItemAdmin(admin.ModelAdmin):
     list_display = ("movie", "source", "added_at")
     search_fields = ("movie__title",)
+
+
+@admin.register(ApiCallCounter)
+class ApiCallCounterAdmin(admin.ModelAdmin):
+    list_display = ("service", "call_date", "count")
+    list_filter = ("service", "call_date")

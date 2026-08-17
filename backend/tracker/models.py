@@ -109,3 +109,17 @@ class WatchlistItem(models.Model):
 
     def __str__(self):
         return f"{self.source}: {self.movie}"
+
+
+class ApiCallCounter(models.Model):
+    service = models.CharField(max_length=50, unique=True)
+    call_date = models.DateField(auto_now_add=True)
+    count = models.IntegerField(default=0)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["service"], name="uniq_apicallcounter_service"),
+        ]
+
+    def __str__(self):
+        return f"{self.service}: {self.count} on {self.call_date}"
