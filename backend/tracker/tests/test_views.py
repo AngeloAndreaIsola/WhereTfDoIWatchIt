@@ -70,3 +70,93 @@ class WatchlistEndpointTests(TestCase):
     def test_post_requires_file(self):
         resp = self.client.post("/api/watchlist/")
         self.assertEqual(resp.status_code, 400)
+
+
+class WatchlistResolveEndpointTests(TestCase):
+    def test_missing_selections_returns_400(self):
+        resp = self.client.post(
+            "/api/watchlist/resolve/",
+            data={},
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(
+            resp.json()["error"],
+            "selections parameter is required and must not be empty",
+        )
+
+    def test_empty_selections_returns_400(self):
+        resp = self.client.post(
+            "/api/watchlist/resolve/",
+            data={"selections": []},
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(
+            resp.json()["error"],
+            "selections parameter is required and must not be empty",
+        )
+
+    def test_invalid_tmdb_id_returns_400(self):
+        resp = self.client.post(
+            "/api/watchlist/resolve/",
+            data={"selections": [{"original_title": "Test", "year": 2020, "tmdb_id": "not-an-int"}]},
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(
+            resp.json()["error"],
+            "selections parameter is required and must not be empty",
+        )
+
+    def test_valid_selections_creates_movie_and_watchlist_item(self):
+        payload = {
+            "selections": [
+                {"original_title": "Inception", "year": 2010, "tmdb_id": 27205},
+                {"original_title": "The Matrix", "year": 1999, "tmdb_id": 603},
+            ]
+        }
+        resp = self.client.post(
+            "/api/watchlist/resolve/",
+            data=payload,
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 201)
+        data = resp.json()
+        self.assertEqual(data["resolved_count"], 2)
+        self.assertEqual(len(data["items"]), 2)
+
+        movie = Movie.objects.get(tmdb_id=27205)
+        self.assertEqual(movie.title, "Inception")
+        self.assertEqual(movie.year, 2010)
+
+        watchlist_item = data["items"][0]
+        self.assertEqual(watchlist_item["movie"]["tmdb_id"], 27205)
+        self.assertEqual(watchlist_item["source"], "letterboxd_resolved")
+
+    def test_duplicate_selections_deduplicated_and_existing_item_returned(self):
+        # Pre-create movie and WatchlistItem
+        movie = Movie.objects.create(tmdb_id=27205, title="Inception", year=2010)
+        from tracker.models import WatchlistItem
+        existing_item = WatchlistItem.objects.create(
+            user_id=1, movie=movie, source="letterboxd_resolved"
+        )
+
+        payload = {
+            "selections": [
+                {"original_title": "Inception", "year": 2010, "tmdb_id": 27205},
+                {"original_title": "Inception Duplicate", "year": 2010, "tmdb_id": 27205},
+            ]
+        }
+        resp = self.client.post(
+            "/api/watchlist/resolve/",
+            data=payload,
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 201)
+        data = resp.json()
+        self.assertEqual(data["resolved_count"], 1)
+        self.assertEqual(len(data["items"]), 1)
+        self.assertEqual(data["items"][0]["id"], existing_item.id)
+        # Verify title was not updated for existing movie
+        self.assertEqual(Movie.objects.get(tmdb_id=27205).title, "Inception")
