@@ -12,9 +12,11 @@ from rest_framework.response import Response
 
 from .models import Movie, Preference, WatchlistItem
 from .serializers import (
+    MovieSerializer,
     PreferenceSerializer,
     RankedOfferSerializer,
     WatchlistItemSerializer,
+    WatchlistReportRowSerializer,
 )
 from .services.cache import AvailabilityCache
 from .services.letterboxd import import_rows, parse_csv
@@ -185,6 +187,45 @@ def watchlist_resolve(request):
         },
         status=status.HTTP_201_CREATED,
     )
+
+
+@api_view(["GET"])
+def watchlist_report(request):
+    """Return aggregated report for watchlist items (user_id=1)."""
+    items = (
+        WatchlistItem.objects.select_related("movie")
+        .filter(user_id=1)
+        .order_by("-added_at")
+    )
+    preference = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
+    cache = AvailabilityCache()
+
+    report = []
+    for item in items:
+        movie = item.movie
+        try:
+            cache.get_or_refresh(movie)
+        except RateLimitExceeded as exc:
+            return Response({"error": str(exc), "rate_limited": True}, status=429)
+
+        offers = cache._read_offers(movie)
+        ranked = rank_offers(offers, preference)
+
+        countries = sorted(list({r.country.upper() for r in ranked if r.country}))
+        best = ranked[0] if ranked else None
+        best_country = best.country.upper() if best else None
+        best_service = best.service if best else None
+
+        report.append(
+            {
+                "movie": movie,
+                "available_countries": countries,
+                "best_country": best_country,
+                "best_service": best_service,
+            }
+        )
+
+    return Response({"report": WatchlistReportRowSerializer(report, many=True).data})
 
 
 @api_view(["GET"])

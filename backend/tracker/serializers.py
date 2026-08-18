@@ -34,3 +34,10 @@ class RankedOfferSerializer(serializers.Serializer):
     audio_languages = serializers.ListField(child=serializers.CharField())
     subtitle_languages = serializers.ListField(child=serializers.CharField())
     ranking = serializers.DictField()
+
+
+class WatchlistReportRowSerializer(serializers.Serializer):
+    movie = MovieSerializer(read_only=True)
+    available_countries = serializers.ListField(child=serializers.CharField())
+    best_country = serializers.CharField(allow_null=True)
+    best_service = serializers.CharField(allow_null=True)
