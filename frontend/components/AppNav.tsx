@@ -7,6 +7,7 @@ const navItems = [
   { href: "/", label: "Home" },
   { href: "/watchlist", label: "Watchlist" },
   { href: "/preferences", label: "Preferences" },
+  { href: "/subscriptions", label: "Subscriptions" },
 ];
 
 export function AppNav() {

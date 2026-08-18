@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import OfferList, { Offer } from "@/components/OfferList";
 
 /* ---------- Types ---------- */
 
@@ -10,22 +11,6 @@ interface SearchResult {
   year: number | null;
 }
 
-interface RankingInfo {
-  audio_rank: number;
-  subtitle_rank: number;
-  quality_rank: number;
-}
-
-interface Offer {
-  country: string;
-  service: string;
-  offer_type: string;
-  quality: string;
-  audio_languages: string[];
-  subtitle_languages: string[];
-  ranking: RankingInfo;
-}
-
 interface AvailabilityResponse {
   movie: { tmdb_id: number; title: string; year: number | null };
   cache: { refreshed: boolean; reason: string; offers: number };
@@ -33,23 +18,6 @@ interface AvailabilityResponse {
 }
 
 /* ---------- Helpers ---------- */
-
-function qualityLabel(q: string): string {
-  const map: Record<string, string> = {
-    "4k": "4K",
-    uhd: "4K",
-    hdr: "HDR",
-    hd: "HD",
-    sd: "SD",
-  };
-  return map[q.toLowerCase()] ?? q.toUpperCase();
-}
-
-function rankBadge(rank: number): string {
-  if (rank === 0) return "★";
-  if (rank < 99) return `#${rank + 1}`;
-  return "—";
-}
 
 /* ---------- SearchPage ---------- */
 
@@ -261,66 +229,11 @@ export default function SearchPage() {
 
           {/* Offers */}
           {!availLoading && !availError && offers.length > 0 && (
-            <div className="space-y-3">
-              {offers.map((o, i) => (
-                <div
-                  key={`${o.country}-${o.service}-${o.quality}-${i}`}
-                  className={`rounded-lg border p-4 text-sm transition-colors
-                    ${i === 0
-                      ? "border-green-400 bg-green-50 shadow-sm dark:border-green-600 dark:bg-green-900/20"
-                      : "border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800/50"}`}
-                >
-                  {/* Top row: service + country + best badge */}
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <span className="font-semibold">{o.service}</span>
-                      <span className="ml-2 rounded bg-gray-100 px-1.5 py-0.5 text-xs font-medium text-gray-600
-                                       dark:bg-gray-700 dark:text-gray-300">
-                        {o.country}
-                      </span>
-                      <span className="ml-2 text-xs text-gray-400">
-                        {o.offer_type}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {o.quality && (
-                        <span className="rounded bg-gray-200 px-1.5 py-0.5 text-xs font-mono font-bold
-                                         dark:bg-gray-600 dark:text-gray-200">
-                          {qualityLabel(o.quality)}
-                        </span>
-                      )}
-                      {i === 0 && (
-                        <span className="rounded-full bg-green-600 px-2 py-0.5 text-xs font-bold text-white">
-                          Best
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Language info */}
-                  <div className="mt-2 flex flex-wrap gap-x-6 gap-y-1 text-xs text-gray-500 dark:text-gray-400">
-                    <span>
-                      🔊 Audio:{" "}
-                      {o.audio_languages.length > 0
-                        ? o.audio_languages.join(", ")
-                        : "—"}
-                      <span className="ml-1 text-gray-300 dark:text-gray-600">
-                        {rankBadge(o.ranking.audio_rank)}
-                      </span>
-                    </span>
-                    <span>
-                      💬 Subs:{" "}
-                      {o.subtitle_languages.length > 0
-                        ? o.subtitle_languages.join(", ")
-                        : "—"}
-                      <span className="ml-1 text-gray-300 dark:text-gray-600">
-                        {rankBadge(o.ranking.subtitle_rank)}
-                      </span>
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
+            <OfferList
+              tmdbId={selected.tmdb_id}
+              offers={offers}
+              onRefreshAvailability={() => fetchAvailability(selected)}
+            />
           )}
 
           {/* No offers */}
