@@ -4,7 +4,45 @@ from unittest.mock import MagicMock, patch
 from django.test import TestCase
 from django.urls import reverse
 
-from tracker.models import Movie, Preference
+from tracker.models import Movie, Preference, Subscription
+
+
+class SubscriptionsEndpointTests(TestCase):
+    def test_get_returns_empty_list(self):
+        resp = self.client.get("/api/subscriptions/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json(), [])
+
+    def test_post_creates_subscription_and_trims_whitespace(self):
+        resp = self.client.post(
+            "/api/subscriptions/",
+            data={"name": "  Netflix  "},
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 201)
+        data = resp.json()
+        self.assertEqual(data["name"], "Netflix")
+        self.assertTrue(Subscription.objects.filter(user_id=1, name="Netflix").exists())
+
+    def test_post_duplicate_case_insensitive_returns_400(self):
+        Subscription.objects.create(user_id=1, name="Netflix")
+        resp = self.client.post(
+            "/api/subscriptions/",
+            data={"name": "NETFLIX"},
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json(), {"name": ["Subscription with this name already exists."]})
+
+    def test_delete_removes_subscription(self):
+        sub = Subscription.objects.create(user_id=1, name="Hulu")
+        resp = self.client.delete(f"/api/subscriptions/{sub.id}/")
+        self.assertEqual(resp.status_code, 204)
+        self.assertFalse(Subscription.objects.filter(id=sub.id).exists())
+
+    def test_delete_non_existent_returns_404(self):
+        resp = self.client.delete("/api/subscriptions/9999/")
+        self.assertEqual(resp.status_code, 404)
 
 
 class PreferencesEndpointTests(TestCase):
@@ -297,3 +335,107 @@ class WatchlistResolveEndpointTests(TestCase):
         self.assertEqual(data["items"][0]["id"], existing_item.id)
         # Verify title was not updated for existing movie
         self.assertEqual(Movie.objects.get(tmdb_id=27205).title, "Inception")
+
+
+class MovieLanguageInfoEndpointTests(TestCase):
+    def setUp(self):
+        self.movie = Movie.objects.create(tmdb_id=500, title="Test Movie", year=2023)
+
+    def test_404_when_movie_not_tracked(self):
+        resp = self.client.get("/api/movie/9999/language-info/?provider=Netflix&country=US")
+        self.assertEqual(resp.status_code, 404)
+
+        resp = self.client.put(
+            "/api/movie/9999/language-info/",
+            data={"provider": "Netflix", "country": "US", "audio_languages": ["en"]},
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 404)
+
+    def test_get_requires_provider_and_country(self):
+        resp = self.client.get(f"/api/movie/{self.movie.tmdb_id}/language-info/")
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("provider and country parameters required", resp.json()["error"])
+
+    def test_get_returns_empty_when_no_language_info(self):
+        resp = self.client.get(
+            f"/api/movie/{self.movie.tmdb_id}/language-info/?provider=Netflix&country=US"
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["movie_tmdb_id"], self.movie.tmdb_id)
+        self.assertEqual(data["provider"], "Netflix")
+        self.assertEqual(data["country"], "US")
+        self.assertEqual(data["audio_languages"], [])
+        self.assertEqual(data["subtitle_languages"], [])
+
+    def test_put_creates_language_info_and_normalizes_codes(self):
+        payload = {
+            "provider": "Netflix",
+            "country": "us",
+            "audio_languages": ["EN", "  ES ", "en"],
+            "subtitle_languages": [" IT ", "fr"],
+        }
+        resp = self.client.put(
+            f"/api/movie/{self.movie.tmdb_id}/language-info/",
+            data=payload,
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["country"], "US")
+        self.assertEqual(data["audio_languages"], ["en", "es"])
+        self.assertEqual(data["subtitle_languages"], ["it", "fr"])
+
+        # Subsequent GET should return updated info
+        get_resp = self.client.get(
+            f"/api/movie/{self.movie.tmdb_id}/language-info/?provider=Netflix&country=US"
+        )
+        self.assertEqual(get_resp.status_code, 200)
+        self.assertEqual(get_resp.json()["audio_languages"], ["en", "es"])
+        self.assertEqual(get_resp.json()["subtitle_languages"], ["it", "fr"])
+
+    def test_put_updates_and_overwrites_existing_entries(self):
+        # Initial put
+        self.client.put(
+            f"/api/movie/{self.movie.tmdb_id}/language-info/",
+            data={"provider": "Prime", "country": "US", "audio_languages": ["en"], "subtitle_languages": ["es"]},
+            content_type="application/json",
+        )
+        # Update put
+        update_resp = self.client.put(
+            f"/api/movie/{self.movie.tmdb_id}/language-info/",
+            data={"provider": "Prime", "country": "US", "audio_languages": ["de"], "subtitle_languages": []},
+            content_type="application/json",
+        )
+        self.assertEqual(update_resp.status_code, 200)
+        self.assertEqual(update_resp.json()["audio_languages"], ["de"])
+        self.assertEqual(update_resp.json()["subtitle_languages"], [])
+
+    def test_put_validates_invalid_language_codes(self):
+        payload = {
+            "provider": "Netflix",
+            "country": "US",
+            "audio_languages": ["english"],
+            "subtitle_languages": ["es"],
+        }
+        resp = self.client.put(
+            f"/api/movie/{self.movie.tmdb_id}/language-info/",
+            data=payload,
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_put_validates_invalid_country_code(self):
+        payload = {
+            "provider": "Netflix",
+            "country": "USA",
+            "audio_languages": ["en"],
+            "subtitle_languages": ["es"],
+        }
+        resp = self.client.put(
+            f"/api/movie/{self.movie.tmdb_id}/language-info/",
+            data=payload,
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 400)

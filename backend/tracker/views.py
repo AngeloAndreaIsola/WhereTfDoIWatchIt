@@ -3,21 +3,25 @@ from __future__ import annotations
 
 import logging
 
-from django.db import connection
+from django.db import connection, transaction
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.decorators import api_view, parser_classes
 from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 
-from .models import Movie, Preference, WatchlistItem
+
+from .models import LanguageEntry, LanguageInfo,Movie, Preference, Region, Subscription, WatchlistItem
 from .serializers import (
+    LanguageInfoSerializer,
     MovieSerializer,
     PreferenceSerializer,
     RankedOfferSerializer,
+    SubscriptionSerializer,
     WatchlistItemSerializer,
     WatchlistReportRowSerializer,
 )
+from .services.bulk_refresh import process_watchlist_refresh
 from .services.cache import AvailabilityCache
 from .services.letterboxd import import_rows, parse_csv
 from .services.ranking import rank_offers
@@ -91,6 +95,27 @@ def movie_availability(request, tmdb_id: int):
             "offers": RankedOfferSerializer([offer.to_dict() for offer in ranked], many=True).data,
         }
     )
+
+
+@api_view(["GET", "POST"])
+def subscriptions_list_create(request):
+    """List or create user subscriptions (single-user, user_id=1)."""
+    if request.method == "GET":
+        subs = Subscription.objects.filter(user_id=1).order_by("id")
+        return Response(SubscriptionSerializer(subs, many=True).data)
+
+    serializer = SubscriptionSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    serializer.save(user_id=1)
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(["DELETE"])
+def subscription_detail(request, pk: int):
+    """Delete a subscription by primary key (single-user, user_id=1)."""
+    sub = get_object_or_404(Subscription, pk=pk, user_id=1)
+    sub.delete()
+    return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 @api_view(["GET", "PUT"])
@@ -275,6 +300,132 @@ def watchlist_report(request):
             "summary": summary,
         }
     )
+
+
+@api_view(["GET", "PUT"])
+def movie_language_info(request, tmdb_id: int):
+    """Read or update LanguageInfo for a movie/region pair."""
+    try:
+        movie = Movie.objects.get(tmdb_id=tmdb_id)
+    except Movie.DoesNotExist:
+        return Response({"error": "movie not tracked yet"}, status=404)
+
+    if request.method == "GET":
+        provider = request.GET.get("provider") or ""
+        country = request.GET.get("country") or ""
+        if not provider.strip() or not country.strip():
+            return Response(
+                {"error": "provider and country parameters required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        provider_clean = provider.strip()
+        country_clean = country.strip().upper()
+
+        info = (
+            LanguageInfo.objects.filter(
+                movie=movie,
+                region__provider__iexact=provider_clean,
+                region__country__iexact=country_clean,
+            )
+            .prefetch_related("entries")
+            .first()
+        )
+
+        audio = []
+        subs = []
+        if info:
+            for entry in info.entries.all():
+                if entry.kind == "audio":
+                    audio.append(entry.language_code)
+                elif entry.kind == "subtitle":
+                    subs.append(entry.language_code)
+
+        return Response(
+            {
+                "movie_tmdb_id": tmdb_id,
+                "provider": provider_clean,
+                "country": country_clean,
+                "audio_languages": audio,
+                "subtitle_languages": subs,
+            }
+        )
+
+    # PUT request
+    serializer = LanguageInfoSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    validated = serializer.validated_data
+
+    provider = validated["provider"]
+    country = validated["country"]
+    audio_languages = validated["audio_languages"]
+    subtitle_languages = validated["subtitle_languages"]
+
+    with transaction.atomic():
+        region, _ = Region.objects.get_or_create(
+            provider=provider,
+            country=country,
+        )
+        info, _ = LanguageInfo.objects.get_or_create(
+            movie=movie,
+            region=region,
+        )
+        info.entries.all().delete()
+        for code in audio_languages:
+            LanguageEntry.objects.create(
+                language_info=info,
+                kind="audio",
+                language_code=code,
+            )
+        for code in subtitle_languages:
+            LanguageEntry.objects.create(
+                language_info=info,
+                kind="subtitle",
+                language_code=code,
+            )
+
+    return Response(
+        {
+            "movie_tmdb_id": tmdb_id,
+            "provider": provider,
+            "country": country,
+            "audio_languages": audio_languages,
+            "subtitle_languages": subtitle_languages,
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["POST"])
+def watchlist_refresh(request):
+    """Trigger budgeted watchlist availability refresh (user_id=1)."""
+    data = request.data if isinstance(request.data, dict) else {}
+    budget_raw = data.get("budget", 10)
+
+    if isinstance(budget_raw, bool) or not isinstance(budget_raw, int):
+        return Response(
+            {"error": "budget must be a positive integer"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if budget_raw <= 0:
+        return Response(
+            {"error": "budget must be greater than 0"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if budget_raw > 90:
+        return Response(
+            {"error": "budget cannot exceed 90"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    summary = process_watchlist_refresh(budget=budget_raw, user_id=1)
+
+    if summary.get("rate_limited"):
+        return Response(summary, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+    return Response(summary, status=status.HTTP_200_OK)
 
 
 @api_view(["GET"])

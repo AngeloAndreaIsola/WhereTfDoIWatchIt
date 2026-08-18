@@ -2,11 +2,17 @@ from django.urls import path, re_path
 from . import views
 
 urlpatterns = [
-    re_path(r"^health/?$", views.health, name="health"),
-    re_path(r"^search/?$", views.search, name="search"),
-    re_path(r"^movie/(?P<tmdb_id>\d+)/availability/?$", views.movie_availability, name="movie-availability"),
-    re_path(r"^preferences/?$", views.preferences, name="preferences"),
-    re_path(r"^watchlist/?$", views.watchlist, name="watchlist"),
-    re_path(r"^watchlist/report/?$", views.watchlist_report, name="watchlist-report"),
-    re_path(r"^watchlist/resolve/?$", views.watchlist_resolve, name="watchlist-resolve"),
+    path("health/", views.health, name="health"),
+    path("search/", views.search, name="search"),
+    path("movie/<int:tmdb_id>/availability/", views.movie_availability, name="movie-availability"),
+    path("movie/<int:tmdb_id>/language-info/", views.movie_language_info, name="movie-language-info"),
+    path("subscriptions/", views.subscriptions_list_create, name="subscriptions-list-create"),
+    path("subscriptions", views.subscriptions_list_create),
+    path("subscriptions/<int:pk>/", views.subscription_detail, name="subscription-detail"),
+    path("subscriptions/<int:pk>", views.subscription_detail),
+    path("preferences/", views.preferences, name="preferences"),
+    path("watchlist/", views.watchlist, name="watchlist"),
+    path("watchlist/refresh/", views.watchlist_refresh, name="watchlist-refresh"),
+    path("watchlist/report/", views.watchlist_report, name="watchlist-report"),
+    path("watchlist/resolve/", views.watchlist_resolve, name="watchlist-resolve"),
 ]

@@ -1,6 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  skipTrailingSlashRedirect: true,
+  trailingSlash: true,  
   async rewrites() {
     const backend = process.env.BACKEND_URL ?? "http://localhost:8000";
     return [
