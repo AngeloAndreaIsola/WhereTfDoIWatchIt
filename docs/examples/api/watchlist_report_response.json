@@ -1,0 +1,29 @@
+{
+  "report": [
+    {
+      "movie": {
+        "id": 101,
+        "tmdb_id": 27205,
+        "title": "Inception",
+        "year": 2010
+      },
+      "available_countries": [
+        "GB",
+        "US"
+      ],
+      "best_country": "US",
+      "best_service": "Netflix"
+    },
+    {
+      "movie": {
+        "id": 102,
+        "tmdb_id": 999999,
+        "title": "Rare Indie Movie",
+        "year": 2022
+      },
+      "available_countries": [],
+      "best_country": null,
+      "best_service": null
+    }
+  ]
+}
