@@ -1,6 +1,7 @@
 # Scheduled Refresh (Cron Setup)
 
 This document describes how to configure cron for automatic daily availability background refreshes.
+For full server setup and deployment instructions, see [`DEPLOYMENT.md`](DEPLOYMENT.md).
 
 ## Recommended Crontab Entry
 
