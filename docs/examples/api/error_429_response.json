@@ -1,0 +1,4 @@
+{
+  "error": "Daily API limit reached for streaming_availability",
+  "rate_limited": true
+}

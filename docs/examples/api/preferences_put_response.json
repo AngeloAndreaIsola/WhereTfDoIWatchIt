@@ -1,0 +1,14 @@
+{
+  "audio_languages": [
+    "en",
+    "it"
+  ],
+  "subtitle_languages": [
+    "en"
+  ],
+  "candidate_countries": [
+    "us",
+    "gb",
+    "it"
+  ]
+}
