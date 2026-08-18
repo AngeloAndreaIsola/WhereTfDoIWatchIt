@@ -1,5 +1,6 @@
 from django.contrib.postgres.fields import ArrayField
 from django.db import models
+from django.utils import timezone
 
 
 class Movie(models.Model):
@@ -123,3 +124,15 @@ class ApiCallCounter(models.Model):
 
     def __str__(self):
         return f"{self.service}: {self.count} on {self.call_date}"
+
+
+class RefreshRun(models.Model):
+    service = models.CharField(max_length=50, default="streaming_availability")
+    started_at = models.DateTimeField(default=timezone.now)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    rows_refreshed = models.IntegerField(default=0)
+    rows_skipped = models.IntegerField(default=0)
+    rate_limited = models.BooleanField(default=False)
+
+    def __str__(self):
+        return f"RefreshRun {self.service} @ {self.started_at}"
