@@ -4,7 +4,45 @@ from unittest.mock import MagicMock, patch
 from django.test import TestCase
 from django.urls import reverse
 
-from tracker.models import Movie, Preference
+from tracker.models import Movie, Preference, Subscription
+
+
+class SubscriptionsEndpointTests(TestCase):
+    def test_get_returns_empty_list(self):
+        resp = self.client.get("/api/subscriptions/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json(), [])
+
+    def test_post_creates_subscription_and_trims_whitespace(self):
+        resp = self.client.post(
+            "/api/subscriptions/",
+            data={"name": "  Netflix  "},
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 201)
+        data = resp.json()
+        self.assertEqual(data["name"], "Netflix")
+        self.assertTrue(Subscription.objects.filter(user_id=1, name="Netflix").exists())
+
+    def test_post_duplicate_case_insensitive_returns_400(self):
+        Subscription.objects.create(user_id=1, name="Netflix")
+        resp = self.client.post(
+            "/api/subscriptions/",
+            data={"name": "NETFLIX"},
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json(), {"name": ["Subscription with this name already exists."]})
+
+    def test_delete_removes_subscription(self):
+        sub = Subscription.objects.create(user_id=1, name="Hulu")
+        resp = self.client.delete(f"/api/subscriptions/{sub.id}/")
+        self.assertEqual(resp.status_code, 204)
+        self.assertFalse(Subscription.objects.filter(id=sub.id).exists())
+
+    def test_delete_non_existent_returns_404(self):
+        resp = self.client.delete("/api/subscriptions/9999/")
+        self.assertEqual(resp.status_code, 404)
 
 
 class PreferencesEndpointTests(TestCase):
