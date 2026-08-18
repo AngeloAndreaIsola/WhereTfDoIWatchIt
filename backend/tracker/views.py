@@ -131,6 +131,64 @@ def watchlist(request):
     )
 
 
+@api_view(["POST"])
+def watchlist_resolve(request):
+    """Resolve selected movies into Movie and WatchlistItem database records."""
+    selections = request.data.get("selections") if isinstance(request.data, dict) else None
+    if not selections or not isinstance(selections, list):
+        return Response(
+            {"error": "selections parameter is required and must not be empty"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Validate each item has a valid integer tmdb_id
+    for item in selections:
+        if not isinstance(item, dict) or "tmdb_id" not in item:
+            return Response(
+                {"error": "selections parameter is required and must not be empty"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        tmdb_id = item.get("tmdb_id")
+        if tmdb_id is None or isinstance(tmdb_id, bool) or not isinstance(tmdb_id, int):
+            return Response(
+                {"error": "selections parameter is required and must not be empty"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    # Deduplicate selections by tmdb_id while maintaining order
+    unique_selections = []
+    seen_ids = set()
+    for item in selections:
+        tmdb_id = item["tmdb_id"]
+        if tmdb_id not in seen_ids:
+            seen_ids.add(tmdb_id)
+            unique_selections.append(item)
+
+    watchlist_items = []
+    for sel in unique_selections:
+        movie, _ = Movie.objects.get_or_create(
+            tmdb_id=sel["tmdb_id"],
+            defaults={
+                "title": sel.get("original_title") or "",
+                "year": sel.get("year"),
+            },
+        )
+        item, _ = WatchlistItem.objects.get_or_create(
+            user_id=1,
+            movie=movie,
+            source="letterboxd_resolved",
+        )
+        watchlist_items.append(item)
+
+    return Response(
+        {
+            "resolved_count": len(watchlist_items),
+            "items": WatchlistItemSerializer(watchlist_items, many=True).data,
+        },
+        status=status.HTTP_201_CREATED,
+    )
+
+
 @api_view(["GET"])
 def watchlist_report(request):
     """Return aggregated report for watchlist items (user_id=1)."""

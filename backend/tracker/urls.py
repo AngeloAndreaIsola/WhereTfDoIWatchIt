@@ -8,4 +8,5 @@ urlpatterns = [
     path("preferences/", views.preferences, name="preferences"),
     path("watchlist/", views.watchlist, name="watchlist"),
     path("watchlist/report/", views.watchlist_report, name="watchlist-report"),
+    path("watchlist/resolve/", views.watchlist_resolve, name="watchlist-resolve"),
 ]
