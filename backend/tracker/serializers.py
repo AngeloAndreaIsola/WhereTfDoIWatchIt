@@ -107,6 +107,24 @@ class RankedOfferSerializer(serializers.Serializer):
     ranking = serializers.DictField()
 
 
+class CountrySummarySerializer(serializers.Serializer):
+    country = serializers.CharField()
+    count = serializers.IntegerField()
+
+
+class ServiceSummarySerializer(serializers.Serializer):
+    service = serializers.CharField()
+    count = serializers.IntegerField()
+
+
+class WatchlistReportSummarySerializer(serializers.Serializer):
+    total_movies = serializers.IntegerField()
+    available_movies = serializers.IntegerField()
+    unavailable_movies = serializers.IntegerField()
+    countries = CountrySummarySerializer(many=True)
+    services = ServiceSummarySerializer(many=True)
+
+
 class WatchlistReportRowSerializer(serializers.Serializer):
     movie = MovieSerializer(read_only=True)
     available_countries = serializers.ListField(child=serializers.CharField())

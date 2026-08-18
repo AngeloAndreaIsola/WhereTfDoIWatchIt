@@ -226,20 +226,41 @@ def watchlist_report(request):
     cache = AvailabilityCache()
 
     report = []
+    country_movie_sets: dict[str, set[int]] = {}
+    service_movie_sets: dict[str, set[int]] = {}
+    available_movies_count = 0
+
     for item in items:
         movie = item.movie
         try:
             cache.get_or_refresh(movie)
         except RateLimitExceeded as exc:
             return Response({"error": str(exc), "rate_limited": True}, status=429)
+        except Exception:
+            logger.exception("Failed to refresh availability for movie tmdb_id=%s", movie.tmdb_id)
 
-        offers = cache._read_offers(movie)
-        ranked = rank_offers(offers, preference)
+        raw_offers = cache._read_offers(movie)
+        qualifying_offers = [
+            o for o in raw_offers
+            if (o.get("offer_type") or "").lower() in ("subscription", "free")
+        ]
+
+        ranked = rank_offers(qualifying_offers, preference)
 
         countries = sorted(list({r.country.upper() for r in ranked if r.country}))
         best = ranked[0] if ranked else None
         best_country = best.country.upper() if best else None
         best_service = best.service if best else None
+
+        if countries:
+            available_movies_count += 1
+
+        for c in countries:
+            country_movie_sets.setdefault(c, set()).add(movie.id)
+
+        movie_services = {r.service for r in ranked if r.service}
+        for s in movie_services:
+            service_movie_sets.setdefault(s, set()).add(movie.id)
 
         report.append(
             {
@@ -250,7 +271,35 @@ def watchlist_report(request):
             }
         )
 
-    return Response({"report": WatchlistReportRowSerializer(report, many=True).data})
+    total_movies = len(report)
+    unavailable_movies_count = total_movies - available_movies_count
+
+    country_list = [
+        {"country": c, "count": len(m_set)}
+        for c, m_set in country_movie_sets.items()
+    ]
+    country_list.sort(key=lambda x: (-x["count"], x["country"]))
+
+    service_list = [
+        {"service": s, "count": len(m_set)}
+        for s, m_set in service_movie_sets.items()
+    ]
+    service_list.sort(key=lambda x: (-x["count"], x["service"]))
+
+    summary = {
+        "total_movies": total_movies,
+        "available_movies": available_movies_count,
+        "unavailable_movies": unavailable_movies_count,
+        "countries": country_list,
+        "services": service_list,
+    }
+
+    return Response(
+        {
+            "report": WatchlistReportRowSerializer(report, many=True).data,
+            "summary": summary,
+        }
+    )
 
 
 @api_view(["GET", "PUT"])

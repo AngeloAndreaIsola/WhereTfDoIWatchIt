@@ -340,7 +340,15 @@ export default function WatchlistPage() {
 
       {/* 3. Watchlist Items Section */}
       <section>
-        <h2 className="mb-4 text-xl font-semibold">Watchlist Items</h2>
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-xl font-semibold">Watchlist Items</h2>
+          <Link
+            href="/watchlist/report"
+            className="rounded-lg bg-gray-100 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+          >
+            View Analytics Report →
+          </Link>
+        </div>
 
         {watchlistError && (
           <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
