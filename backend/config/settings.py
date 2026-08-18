@@ -99,6 +99,8 @@ REST_FRAMEWORK = {
     ],
 }
 
+APPEND_SLASH = False
+
 # External API keys (set via env or docker-compose env_file).
 TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "")
 RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "")

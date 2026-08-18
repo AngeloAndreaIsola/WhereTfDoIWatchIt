@@ -76,7 +76,16 @@ class WatchlistReportEndpointTests(TestCase):
     def test_empty_list(self):
         resp = self.client.get("/api/watchlist/report/")
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json(), {"report": []})
+        self.assertEqual(resp.json(), {
+            "report": [],
+            "summary": {
+                "total_movies": 0,
+                "available_movies": 0,
+                "unavailable_movies": 0,
+                "countries": [],
+                "services": [],
+            },
+        })
 
     @patch("tracker.views.AvailabilityCache")
     def test_all_unavailable_list(self, mock_cache_cls):
@@ -149,6 +158,57 @@ class WatchlistReportEndpointTests(TestCase):
         resp = self.client.get("/api/watchlist/report/")
         self.assertEqual(resp.status_code, 429)
         self.assertTrue(resp.json().get("rate_limited"))
+
+    @patch("tracker.views.AvailabilityCache")
+    def test_summary_analytics_and_deduplication(self, mock_cache_cls):
+        from tracker.models import WatchlistItem
+        Preference.objects.create(user_id=1, candidate_countries=["us", "gb", "ca"])
+        m1 = Movie.objects.create(tmdb_id=501, title="Movie A", year=2020)
+        m2 = Movie.objects.create(tmdb_id=502, title="Movie B", year=2021)
+        m3 = Movie.objects.create(tmdb_id=503, title="Movie C", year=2022)
+        WatchlistItem.objects.create(user_id=1, movie=m1, source="manual")
+        WatchlistItem.objects.create(user_id=1, movie=m2, source="manual")
+        WatchlistItem.objects.create(user_id=1, movie=m3, source="manual")
+
+        instance = mock_cache_cls.return_value
+        instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=1)
+
+        def mock_read_offers(movie):
+            if movie.tmdb_id == 501:
+                return [
+                    {"country": "us", "service": "Netflix", "offer_type": "subscription", "quality": "4k", "audio": ["en"], "subs": ["en"]},
+                    {"country": "us", "service": "Netflix", "offer_type": "subscription", "quality": "hd", "audio": ["en"], "subs": ["en"]},
+                    {"country": "gb", "service": "Prime", "offer_type": "subscription", "quality": "hd", "audio": ["en"], "subs": ["en"]},
+                    {"country": "us", "service": "Apple", "offer_type": "buy", "quality": "hd", "audio": ["en"], "subs": ["en"]},
+                ]
+            if movie.tmdb_id == 502:
+                return [
+                    {"country": "us", "service": "Netflix", "offer_type": "free", "quality": "hd", "audio": ["en"], "subs": ["en"]},
+                    {"country": "ca", "service": "Apple", "offer_type": "rent", "quality": "hd", "audio": ["en"], "subs": ["en"]},
+                ]
+            return []
+
+        instance._read_offers.side_effect = mock_read_offers
+
+        resp = self.client.get("/api/watchlist/report/")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+
+        self.assertIn("summary", data)
+        summary = data["summary"]
+        self.assertEqual(summary["total_movies"], 3)
+        self.assertEqual(summary["available_movies"], 2)
+        self.assertEqual(summary["unavailable_movies"], 1)
+
+        self.assertEqual(summary["countries"], [
+            {"country": "US", "count": 2},
+            {"country": "GB", "count": 1},
+        ])
+
+        self.assertEqual(summary["services"], [
+            {"service": "Netflix", "count": 2},
+            {"service": "Prime", "count": 1},
+        ])
 class WatchlistResolveEndpointTests(TestCase):
     def test_missing_selections_returns_400(self):
         resp = self.client.post(
