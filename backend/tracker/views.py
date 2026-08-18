@@ -10,12 +10,14 @@ from rest_framework.decorators import api_view, parser_classes
 from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 
-from .models import LanguageEntry, LanguageInfo, Movie, Preference, Region, WatchlistItem
+
+from .models import LanguageEntry, LanguageInfo,Movie, Preference, Region, Subscription, WatchlistItem
 from .serializers import (
     LanguageInfoSerializer,
     MovieSerializer,
     PreferenceSerializer,
     RankedOfferSerializer,
+    SubscriptionSerializer,
     WatchlistItemSerializer,
     WatchlistReportRowSerializer,
 )
@@ -92,6 +94,27 @@ def movie_availability(request, tmdb_id: int):
             "offers": RankedOfferSerializer([offer.to_dict() for offer in ranked], many=True).data,
         }
     )
+
+
+@api_view(["GET", "POST"])
+def subscriptions_list_create(request):
+    """List or create user subscriptions (single-user, user_id=1)."""
+    if request.method == "GET":
+        subs = Subscription.objects.filter(user_id=1).order_by("id")
+        return Response(SubscriptionSerializer(subs, many=True).data)
+
+    serializer = SubscriptionSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    serializer.save(user_id=1)
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(["DELETE"])
+def subscription_detail(request, pk: int):
+    """Delete a subscription by primary key (single-user, user_id=1)."""
+    sub = get_object_or_404(Subscription, pk=pk, user_id=1)
+    sub.delete()
+    return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 @api_view(["GET", "PUT"])

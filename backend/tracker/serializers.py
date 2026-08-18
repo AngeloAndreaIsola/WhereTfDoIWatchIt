@@ -3,7 +3,30 @@ from __future__ import annotations
 
 from rest_framework import serializers
 
-from .models import Movie, Preference, WatchlistItem
+from .models import Movie, Preference, Subscription, WatchlistItem
+
+
+class SubscriptionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Subscription
+        fields = ["id", "name"]
+        extra_kwargs = {
+            "name": {
+                "validators": [],
+            }
+        }
+
+    def validate_name(self, value: str) -> str:
+        trimmed = value.strip() if value else ""
+        if not trimmed:
+            raise serializers.ValidationError("Subscription name cannot be empty.")
+
+        qs = Subscription.objects.filter(user_id=1, name__iexact=trimmed)
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError("Subscription with this name already exists.")
+        return trimmed
 
 
 class MovieSerializer(serializers.ModelSerializer):

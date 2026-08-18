@@ -216,19 +216,17 @@ export default function PreferencesPage() {
             />
           </div>
 
-          {/* Subscriptions note */}
+          {/* Subscriptions section */}
           <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm dark:border-gray-700 dark:bg-gray-800/50">
             <h3 className="font-medium text-gray-700 dark:text-gray-300">Subscriptions</h3>
             <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              Subscriptions are managed in Django admin for now. Manage subscriptions in{" "}
-              <a
-                href="/admin/tracker/subscription/"
-                target="_blank"
-                rel="noopener noreferrer"
+              Manage your active streaming services on the{" "}
+              <Link
+                href="/subscriptions"
                 className="text-blue-600 hover:underline dark:text-blue-400"
               >
-                Django Admin
-              </a>
+                Subscriptions page
+              </Link>
               .
             </p>
           </div>
