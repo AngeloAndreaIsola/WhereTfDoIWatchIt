@@ -281,7 +281,14 @@ This document provides the complete API contract specification for the **WhereTf
         "best_country": "US",
         "best_service": "Netflix"
       }
-    ]
+    ],
+    "summary": {
+      "total_movies": 2,
+      "available_movies": 1,
+      "unavailable_movies": 1,
+      "countries": [{"country": "US", "count": 1}],
+      "services": [{"service": "Netflix", "count": 1}]
+    }
   }
   ```
 - **Error Responses**:

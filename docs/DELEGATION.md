@@ -15,22 +15,21 @@ This document tracks side-feature work that can be delegated to Jules/Codex Clou
 
 ## Current known state
 
-As of this delegation plan:
+> Status update (2026-08-18): delegated Tasks 1–15 have been completed and merged. The detailed task briefs below are retained as historical implementation context, not as active parallel work assignments.
+
+As of 2026-08-18:
 
 - Phase 0 and Phase 1 are complete.
-- Phase 2 is complete and committed.
-- Phase 3 cron/audit work has been merged via delegated Task 1.
-- Frontend watchlist UI has been merged via delegated Task 2.
-- Frontend preferences UI has been merged via delegated Task 3.
-- Shared loading/error/not-found states have been merged via delegated Task 5.
-- Watchlist ambiguous resolve endpoint has been merged via delegated Task 6.
-- Aggregated watchlist report endpoint is running separately as Task 4.
+- Phase 2 single-movie search is implemented.
+- Phase 3 cron/audit work has been merged.
+- Phase 4 watchlist upload, ambiguous-match resolution, bulk refresh, report endpoint, report frontend, and analytics summary work have been merged.
+- Tasks 1–15 in this file are historical records of completed delegated work.
 
-Before assigning a task, rebase it on latest `master` and remove/adjust any file restrictions that are no longer relevant.
+Before assigning new work, rebase it on latest `master`, inspect the current code, and create fresh task briefs rather than reusing the stale sequencing below.
 
-## Files to avoid while Task 4 is open
+## Historical file restrictions
 
-Until Task 4 is merged, avoid assigning tasks that touch:
+Task 4 previously owned the `/api/watchlist/report/` backend endpoint and temporarily restricted parallel edits to:
 
 ```text
 backend/tracker/views.py
@@ -38,7 +37,7 @@ backend/tracker/urls.py
 backend/tracker/tests/test_views.py
 ```
 
-Task 4 owns the `/api/watchlist/report/` backend endpoint.
+Those restrictions are no longer active because Task 4 has merged.
 
 ---
 
@@ -899,25 +898,25 @@ Acceptance criteria:
 
 ---
 
-# Suggested 3-parallel-task batches
+# Historical 3-parallel-task batches
 
-## Immediate batch while Task 4 is still running
+These batches were used while Tasks 1–15 were in flight. They are no longer an active assignment queue.
 
-These avoid Task 4 backend files:
+## Immediate batch while Task 4 was still running
+
+These avoided Task 4 backend files:
 
 1. `Task 7a — App navigation shell`
 2. `Task 8 — Letterboxd user guide bundle`
 3. `Task 9 — Letterboxd service hardening bundle`
 
-If Task 7a feels too small, replace it with Task 8 or Task 9 first and save 7a as a follow-up after Task 4 merges.
-
-## Next batch after Task 4 merges
+## Next batch after Task 4 merged
 
 1. `Task 7b — Watchlist report frontend page`
 2. `Task 10 — Subscription management feature`
 3. `Task 15 — Backend API documentation and contract examples`
 
-## Later batch after report/subscription work stabilizes
+## Later batch after report/subscription work stabilized
 
 1. `Task 11 — Manual language info management feature`
 2. `Task 12 — Bulk refresh queue and quota-aware watchlist processing`

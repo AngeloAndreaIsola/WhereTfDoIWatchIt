@@ -25,5 +25,26 @@
       "best_country": null,
       "best_service": null
     }
-  ]
+  ],
+  "summary": {
+    "total_movies": 2,
+    "available_movies": 1,
+    "unavailable_movies": 1,
+    "countries": [
+      {
+        "country": "US",
+        "count": 1
+      },
+      {
+        "country": "GB",
+        "count": 1
+      }
+    ],
+    "services": [
+      {
+        "service": "Netflix",
+        "count": 1
+      }
+    ]
+  }
 }

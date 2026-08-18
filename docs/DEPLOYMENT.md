@@ -127,7 +127,7 @@ To run the refresh command automatically via host `crontab`:
 
 3. Add the following entry (runs daily at 03:17 UTC):
    ```cron
-   17 3 * * * cd /opt/streaming-tracker && docker compose exec -T backend python manage.py refresh_availability --budget 100 >> ./logs/refresh.log 2>&1
+   17 3 * * * cd /opt/streaming-tracker && docker compose exec -T backend python manage.py refresh_availability --budget 90 >> ./logs/refresh.log 2>&1
    ```
 
 Refer to [`docs/CRON.md`](CRON.md) for further background task details.
@@ -202,4 +202,4 @@ To deploy new code updates:
 
 - **Streaming Availability API Limit**: The free tier allows up to **100 requests per day**.
 - **Cache-First Architecture**: All movie availability lookups query PostgreSQL cache first (`Availability` model).
-- **Quota Protection**: Never trigger live API fetches for entire watchlists simultaneously. Use the daily `--budget 100` cron refresh or on-demand per-movie lookups.
+- **Quota Protection**: Never trigger live API fetches for entire watchlists simultaneously. Use the daily `--budget 90` cron refresh so the scheduled job stays below the 100 request/day free-tier cap and leaves a small reserve for on-demand per-movie lookups.
