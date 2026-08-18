@@ -21,6 +21,7 @@ from .serializers import (
     WatchlistItemSerializer,
     WatchlistReportRowSerializer,
 )
+from .services.bulk_refresh import process_watchlist_refresh
 from .services.cache import AvailabilityCache
 from .services.letterboxd import import_rows, parse_csv
 from .services.ranking import rank_offers
@@ -344,6 +345,38 @@ def movie_language_info(request, tmdb_id: int):
         },
         status=status.HTTP_200_OK,
     )
+
+
+@api_view(["POST"])
+def watchlist_refresh(request):
+    """Trigger budgeted watchlist availability refresh (user_id=1)."""
+    data = request.data if isinstance(request.data, dict) else {}
+    budget_raw = data.get("budget", 10)
+
+    if isinstance(budget_raw, bool) or not isinstance(budget_raw, int):
+        return Response(
+            {"error": "budget must be a positive integer"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if budget_raw <= 0:
+        return Response(
+            {"error": "budget must be greater than 0"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if budget_raw > 90:
+        return Response(
+            {"error": "budget cannot exceed 90"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    summary = process_watchlist_refresh(budget=budget_raw, user_id=1)
+
+    if summary.get("rate_limited"):
+        return Response(summary, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+    return Response(summary, status=status.HTTP_200_OK)
 
 
 @api_view(["GET"])
