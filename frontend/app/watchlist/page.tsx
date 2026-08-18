@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
+import OfferList, { Offer } from "@/components/OfferList";
 
 /* ---------- Types ---------- */
 
@@ -46,22 +47,6 @@ interface UploadResult {
   skipped: SkippedItem[];
 }
 
-interface RankingInfo {
-  audio_rank: number;
-  subtitle_rank: number;
-  quality_rank: number;
-}
-
-interface Offer {
-  country: string;
-  service: string;
-  offer_type: string;
-  quality: string;
-  audio_languages: string[];
-  subtitle_languages: string[];
-  ranking: RankingInfo;
-}
-
 interface AvailabilityResponse {
   movie: { tmdb_id: number; title: string; year: number | null };
   cache: { refreshed: boolean; reason: string; offers: number };
@@ -75,23 +60,6 @@ interface CachedAvailability {
 }
 
 /* ---------- Helpers ---------- */
-
-function qualityLabel(q: string): string {
-  const map: Record<string, string> = {
-    "4k": "4K",
-    uhd: "4K",
-    hdr: "HDR",
-    hd: "HD",
-    sd: "SD",
-  };
-  return map[q.toLowerCase()] ?? q.toUpperCase();
-}
-
-function rankBadge(rank: number): string {
-  if (rank === 0) return "★";
-  if (rank < 99) return `#${rank + 1}`;
-  return "—";
-}
 
 export default function WatchlistPage() {
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
@@ -185,23 +153,23 @@ export default function WatchlistPage() {
     }
   };
 
-  /* --- Toggle availability on-demand --- */
-  const toggleAvailability = async (tmdb_id: number) => {
-    if (expandedTmdbId === tmdb_id) {
+  /* --- Fetch or toggle availability --- */
+  const fetchAvailabilityForMovie = useCallback(async (tmdb_id: number, force = false) => {
+    if (!force && expandedTmdbId === tmdb_id) {
       setExpandedTmdbId(null);
       return;
     }
 
     setExpandedTmdbId(tmdb_id);
 
-    // If already cached and loaded successfully, don't refetch
-    if (availabilityCache[tmdb_id] && !availabilityCache[tmdb_id].error) {
+    // If already cached and loaded successfully and not forcing, don't refetch
+    if (!force && availabilityCache[tmdb_id] && !availabilityCache[tmdb_id].error) {
       return;
     }
 
     setAvailabilityCache((prev) => ({
       ...prev,
-      [tmdb_id]: { loading: true, error: "", data: null },
+      [tmdb_id]: { loading: true, error: "", data: force ? prev[tmdb_id]?.data ?? null : null },
     }));
 
     try {
@@ -255,6 +223,10 @@ export default function WatchlistPage() {
         },
       }));
     }
+  }, [expandedTmdbId, availabilityCache]);
+
+  const toggleAvailability = (tmdb_id: number) => {
+    fetchAvailabilityForMovie(tmdb_id, false);
   };
 
   return (
@@ -441,65 +413,11 @@ export default function WatchlistPage() {
                               No streaming offers found for your preferences.
                             </p>
                           ) : (
-                            <div className="space-y-2">
-                              {cache.data.offers.map((o, idx) => (
-                                <div
-                                  key={`${o.country}-${o.service}-${o.quality}-${idx}`}
-                                  className={`rounded-lg border p-3 text-xs transition-colors ${
-                                    idx === 0
-                                      ? "border-green-400 bg-green-50 dark:border-green-600 dark:bg-green-900/20"
-                                      : "border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800"
-                                  }`}
-                                >
-                                  <div className="flex items-start justify-between gap-2">
-                                    <div>
-                                      <span className="font-semibold text-sm">
-                                        {o.service}
-                                      </span>
-                                      <span className="ml-2 rounded bg-gray-100 px-1.5 py-0.5 font-medium text-gray-600 dark:bg-gray-700 dark:text-gray-300">
-                                        {o.country}
-                                      </span>
-                                      <span className="ml-2 text-gray-400">
-                                        {o.offer_type}
-                                      </span>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                      {o.quality && (
-                                        <span className="rounded bg-gray-200 px-1.5 py-0.5 font-mono font-bold dark:bg-gray-600 dark:text-gray-200">
-                                          {qualityLabel(o.quality)}
-                                        </span>
-                                      )}
-                                      {idx === 0 && (
-                                        <span className="rounded-full bg-green-600 px-2 py-0.5 font-bold text-white">
-                                          Best
-                                        </span>
-                                      )}
-                                    </div>
-                                  </div>
-
-                                  <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-gray-500 dark:text-gray-400">
-                                    <span>
-                                      🔊 Audio:{" "}
-                                      {o.audio_languages.length > 0
-                                        ? o.audio_languages.join(", ")
-                                        : "—"}
-                                      <span className="ml-1 text-gray-300 dark:text-gray-600">
-                                        {rankBadge(o.ranking.audio_rank)}
-                                      </span>
-                                    </span>
-                                    <span>
-                                      💬 Subs:{" "}
-                                      {o.subtitle_languages.length > 0
-                                        ? o.subtitle_languages.join(", ")
-                                        : "—"}
-                                      <span className="ml-1 text-gray-300 dark:text-gray-600">
-                                        {rankBadge(o.ranking.subtitle_rank)}
-                                      </span>
-                                    </span>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
+                            <OfferList
+                              tmdbId={tmdbId}
+                              offers={cache.data.offers}
+                              onRefreshAvailability={() => fetchAvailabilityForMovie(tmdbId, true)}
+                            />
                           )}
                         </div>
                       )}
