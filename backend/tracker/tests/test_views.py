@@ -70,3 +70,82 @@ class WatchlistEndpointTests(TestCase):
     def test_post_requires_file(self):
         resp = self.client.post("/api/watchlist/")
         self.assertEqual(resp.status_code, 400)
+
+
+class WatchlistReportEndpointTests(TestCase):
+    def test_empty_list(self):
+        resp = self.client.get("/api/watchlist/report/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json(), {"report": []})
+
+    @patch("tracker.views.AvailabilityCache")
+    def test_all_unavailable_list(self, mock_cache_cls):
+        from tracker.models import WatchlistItem
+        movie = Movie.objects.create(tmdb_id=101, title="Unavailable Movie", year=2021)
+        WatchlistItem.objects.create(user_id=1, movie=movie, source="manual")
+
+        instance = mock_cache_cls.return_value
+        instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=0)
+        instance._read_offers.return_value = []
+
+        resp = self.client.get("/api/watchlist/report/")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(len(data["report"]), 1)
+        row = data["report"][0]
+        self.assertEqual(row["movie"]["tmdb_id"], 101)
+        self.assertEqual(row["movie"]["title"], "Unavailable Movie")
+        self.assertEqual(row["available_countries"], [])
+        self.assertIsNone(row["best_country"])
+        self.assertIsNone(row["best_service"])
+
+    @patch("tracker.views.AvailabilityCache")
+    def test_mixed_list(self, mock_cache_cls):
+        from tracker.models import WatchlistItem
+        Preference.objects.create(user_id=1, candidate_countries=["us", "gb"])
+        m1 = Movie.objects.create(tmdb_id=201, title="Movie One", year=2020)
+        m2 = Movie.objects.create(tmdb_id=202, title="Movie Two", year=2022)
+        WatchlistItem.objects.create(user_id=1, movie=m1, source="manual")
+        WatchlistItem.objects.create(user_id=1, movie=m2, source="manual")
+
+        instance = mock_cache_cls.return_value
+        instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=1)
+
+        def mock_read_offers(movie):
+            if movie.tmdb_id == 201:
+                return [
+                    {"country": "us", "service": "Netflix", "offer_type": "subscription", "quality": "4k", "audio": ["en"], "subs": ["en"]},
+                    {"country": "gb", "service": "Prime", "offer_type": "subscription", "quality": "hd", "audio": ["en"], "subs": ["en"]},
+                ]
+            return []
+
+        instance._read_offers.side_effect = mock_read_offers
+
+        resp = self.client.get("/api/watchlist/report/")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(len(data["report"]), 2)
+
+        row1 = next(r for r in data["report"] if r["movie"]["tmdb_id"] == 201)
+        self.assertEqual(row1["available_countries"], ["GB", "US"])
+        self.assertEqual(row1["best_country"], "US")
+        self.assertEqual(row1["best_service"], "Netflix")
+
+        row2 = next(r for r in data["report"] if r["movie"]["tmdb_id"] == 202)
+        self.assertEqual(row2["available_countries"], [])
+        self.assertIsNone(row2["best_country"])
+        self.assertIsNone(row2["best_service"])
+
+    @patch("tracker.views.AvailabilityCache")
+    def test_respects_rate_limiter(self, mock_cache_cls):
+        from tracker.models import WatchlistItem
+        from tracker.services.rate_limit import RateLimitExceeded
+        movie = Movie.objects.create(tmdb_id=301, title="Rate Limited Movie", year=2023)
+        WatchlistItem.objects.create(user_id=1, movie=movie, source="manual")
+
+        instance = mock_cache_cls.return_value
+        instance.get_or_refresh.side_effect = RateLimitExceeded("Rate limit reached")
+
+        resp = self.client.get("/api/watchlist/report/")
+        self.assertEqual(resp.status_code, 429)
+        self.assertTrue(resp.json().get("rate_limited"))
