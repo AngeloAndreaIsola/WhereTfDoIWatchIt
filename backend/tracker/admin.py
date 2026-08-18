@@ -8,6 +8,7 @@ from .models import (
     LanguageInfo,
     Movie,
     Preference,
+    RefreshRun,
     Region,
     Subscription,
     WatchlistItem,
@@ -74,3 +75,23 @@ class WatchlistItemAdmin(admin.ModelAdmin):
 class ApiCallCounterAdmin(admin.ModelAdmin):
     list_display = ("service", "call_date", "count")
     list_filter = ("service", "call_date")
+
+
+@admin.register(RefreshRun)
+class RefreshRunAdmin(admin.ModelAdmin):
+    list_display = (
+        "service",
+        "started_at",
+        "finished_at",
+        "rows_refreshed",
+        "rows_skipped",
+        "rate_limited",
+    )
+    list_filter = ("service", "rate_limited")
+    readonly_fields = (
+        "started_at",
+        "finished_at",
+        "rows_refreshed",
+        "rows_skipped",
+        "rate_limited",
+    )
