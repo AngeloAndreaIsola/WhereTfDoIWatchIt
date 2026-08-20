@@ -25,6 +25,11 @@ class TMDbMovie:
     year: Optional[int]
     overview: Optional[str] = None
     poster_path: Optional[str] = None
+    genre_ids: list[int] | None = None
+
+    def __post_init__(self):
+        if self.genre_ids is None:
+            self.genre_ids = []
 
 
 class TMDbClient:
@@ -59,6 +64,15 @@ class TMDbClient:
             poster_path=data.get("poster_path"),
         )
 
+    def popular(self, limit: int = 24) -> list[TMDbMovie]:
+        """Fetch trending/popular movies from TMDb (trending/movie/week)."""
+        url = f"{TMDB_BASE}/trending/movie/week"
+        resp = requests.get(url, params={"api_key": self.api_key}, timeout=self.timeout)
+        resp.raise_for_status()
+        results = resp.json().get("results", [])
+        movies = [self._parse_search_result(r) for r in results]
+        return movies[:limit]
+
     def resolve(self, query: str, year: Optional[int] = None) -> Optional[TMDbMovie]:
         """Resolve a single movie; returns first match or None.
 
@@ -76,6 +90,7 @@ class TMDbClient:
             year=TMDbClient._extract_year(raw.get("release_date")),
             overview=raw.get("overview"),
             poster_path=raw.get("poster_path"),
+            genre_ids=raw.get("genre_ids") or [],
         )
 
     @staticmethod

@@ -42,6 +42,8 @@ This document provides the complete API contract specification for the **WhereTf
 | `POST` | `/api/watchlist/` | Upload and parse Letterboxd CSV watchlist file. |
 | `POST` | `/api/watchlist/resolve/` | Resolve selected ambiguous/confirmed movies into watchlist. |
 | `GET` | `/api/watchlist/report/` | Generate aggregated availability report for watchlist items. |
+| `GET` | `/api/prime/popular/` | Return trending/popular movies from TMDb for the homepage browse grid. |
+| `GET` | `/api/prime/movie/<tmdb_id>/` | Return ranked Prime Video availability offers for a single movie. |
 
 ---
 
@@ -293,3 +295,71 @@ This document provides the complete API contract specification for the **WhereTf
   ```
 - **Error Responses**:
   - `429 Too Many Requests`: Triggered if a fresh lookup is required and the Streaming Availability API rate limit is reached. Example: [`docs/examples/api/error_429_response.json`](examples/api/error_429_response.json)
+
+---
+
+### 8. Prime Video Popular (Homepage Browse)
+
+#### `GET /api/prime/popular/`
+- **Purpose**: Return trending/popular movies from TMDb for the homepage browse grid.
+- **Query Parameters**:
+  - `limit` *(optional, integer)*: Number of movies to return. Default 24, max 30.
+- **Caching**: Results are cached in-memory for 10 minutes to avoid hitting the TMDb API on every page load.
+- **Categories**: Derived from TMDb `genre_ids` via a hardcoded lookup table (Action, Comedy, Drama, Sci-Fi, Horror, etc.).
+- **Response**: `200 OK`
+  - Example: [`docs/examples/api/prime_popular_response.json`](examples/api/prime_popular_response.json)
+  ```json
+  {
+    "results": [
+      {
+        "tmdb_id": 27205,
+        "title": "Inception",
+        "year": 2010,
+        "poster_path": "/9gk7ARbtY8864fKE6tKjW8aZbZc.jpg",
+        "overview": "A thief who steals corporate secrets...",
+        "categories": ["Action", "Sci-Fi", "Thriller"]
+      }
+    ],
+    "count": 1,
+    "cached": false,
+    "source": "tmdb_trending"
+  }
+  ```
+
+---
+
+### 9. Prime Video Movie Offers (Detail Page)
+
+#### `GET /api/prime/movie/<tmdb_id>/`
+- **Purpose**: Return ranked Prime Video (provider=`amazon`) availability offers for a single movie, filtered to `subscription`/`free` offer types only, ranked by strict priority: audio language match (JA > EN) → subtitle language match (EN > JA) → quality (4K > HDR > HD > SD) → country code (alphabetical tiebreak).
+- **Path Parameters**:
+  - `tmdb_id` *(required, integer)*: The TMDb ID of the movie.
+- **Environment**: `PRIME_LIVE_FETCH` (default `true`). When `true`, a cache miss triggers a live Streaming Availability API call. When `false`, only cached `Availability` rows are returned.
+- **Response**: `200 OK`
+  - Example: [`docs/examples/api/prime_movie_response.json`](examples/api/prime_movie_response.json)
+  ```json
+  {
+    "movie": { "tmdb_id": 27205, "title": "Inception", "year": 2010 },
+    "offers": [
+      {
+        "country": "JP",
+        "service": "amazon",
+        "offer_type": "subscription",
+        "quality": "4k",
+        "audio_languages": ["ja", "en"],
+        "subtitle_languages": ["en", "ja"],
+        "ranking": { "audio_rank": 0, "subtitle_rank": 0, "quality_rank": 0 }
+      }
+    ]
+  }
+  ```
+- **Error Responses**:
+  - `404 Not Found`: Movie not available on Prime Video in any country (or not tracked in DB and live fetch is disabled).
+  - Example: [`docs/examples/api/error_prime_not_available.json`](examples/api/error_prime_not_available.json)
+  ```json
+  {
+    "movie": { "tmdb_id": 27205, "title": "Inception", "year": 2010 },
+    "offers": [],
+    "message": "Not available on Prime Video in any country."
+  }
+  ```

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from django.db import connection, transaction
 from django.shortcuts import get_object_or_404
@@ -26,7 +27,7 @@ from .services.cache import AvailabilityCache
 from .services.letterboxd import import_rows, parse_csv
 from .services.ranking import rank_offers
 from .services.rate_limit import RateLimitExceeded
-from .services.tmdb import TMDbClient
+from .services.tmdb import TMDbClient, TMDbMovie
 
 logger = logging.getLogger(__name__)
 
@@ -120,10 +121,30 @@ def subscription_detail(request, pk: int):
 
 @api_view(["GET", "PUT"])
 def preferences(request):
-    """Read or update user preferences (single-user, user_id=1)."""
-    preference, _ = Preference.objects.get_or_create(user_id=1)
+    """Read or update user preferences (single-user, user_id=1).
+
+    In v0 the source of truth is server-side (settings.DEFAULT_PREFERENCE).
+    On GET, if no Preference row exists, returns the hardcoded defaults
+    via resolve_preferences() instead of creating an empty row.
+    """
+    from .services.preferences import resolve_preferences
     if request.method == "GET":
-        return Response(PreferenceSerializer(preference).data)
+        pref_dict = resolve_preferences(user_id=1)
+        return Response(pref_dict)
+    # PUT — update an existing or new preference row
+    pref_dict = resolve_preferences(user_id=1)
+    preference, _ = Preference.objects.get_or_create(
+        user_id=1,
+        defaults=pref_dict,
+    )
+    if pref_dict["audio_languages"] != list(preference.audio_languages) or \
+       pref_dict["subtitle_languages"] != list(preference.subtitle_languages) or \
+       pref_dict["candidate_countries"] != list(preference.candidate_countries):
+        # No existing row (we used defaults) — sync DB to defaults
+        preference.audio_languages = pref_dict["audio_languages"]
+        preference.subtitle_languages = pref_dict["subtitle_languages"]
+        preference.candidate_countries = pref_dict["candidate_countries"]
+        preference.save()
     serializer = PreferenceSerializer(preference, data=request.data, partial=True)
     serializer.is_valid(raise_exception=True)
     serializer.save()
@@ -432,3 +453,170 @@ def watchlist_refresh(request):
 def health_full(request):
     """Alias kept for legacy; identical to health."""
     return health(request._request)
+
+
+# --- Prime Video MVP endpoints (v0) ---
+
+# TMDb genre IDs → readable category labels (subset for homepage chips).
+GENRE_LOOKUP: dict[int, str] = {
+    28: "Action", 12: "Adventure", 16: "Animation", 35: "Comedy",
+    80: "Crime", 18: "Drama", 99: "Documentary", 10751: "Family",
+    14: "Fantasy", 27: "Horror", 10749: "Romance", 878: "Sci-Fi",
+    53: "Thriller", 10752: "War", 37: "Western",
+}
+
+# Simple in-memory cache for the popular endpoint (10-minute TTL).
+_POPULAR_CACHE: dict[str, Any] = {}
+_POPULAR_TTL = 600  # seconds
+
+
+@api_view(["GET"])
+def prime_popular(request):
+    """GET /api/prime/popular/ — trending movies for the homepage grid.
+
+    Returns a small set of {tmdb_id, title, year, poster_path, overview, categories}.
+    Cached in-memory for 10 minutes to avoid hitting TMDb on every page load.
+    """
+    import time as _time
+    limit = request.GET.get("limit", "24")
+    try:
+        limit_int = max(1, min(int(limit), 30))
+    except (TypeError, ValueError):
+        limit_int = 24
+
+    cached = _POPULAR_CACHE.get("data")
+    ts = _POPULAR_CACHE.get("ts")
+    now = _time.time()
+    if cached is not None and ts is not None and (now - ts) < _POPULAR_TTL:
+        data = cached
+    else:
+        client = TMDbClient()
+        try:
+            movies = client.popular(limit=limit_int)
+            data = {
+                "results": [_popular_movie_dict(m) for m in movies],
+                "count": len(movies),
+                "cached": False,
+                "source": "tmdb_trending",
+            }
+            _POPULAR_CACHE["data"] = data
+            _POPULAR_CACHE["ts"] = now
+        except Exception as exc:
+            logger.exception("TMDb popular fetch failed")
+            if cached is not None:
+                # Serve stale cache if available
+                data = cached
+            else:
+                return Response(
+                    {"error": f"TMDb fetch failed: {exc}", "results": [], "count": 0, "cached": False, "source": "error"},
+                    status=502,
+                )
+
+    # Return a shallow copy so callers can't mutate the cache.
+    return Response({
+        "results": data["results"],
+        "count": data["count"],
+        "cached": cached is not None,
+        "source": data["source"],
+    })
+
+
+def _popular_movie_dict(movie: TMDbMovie) -> dict:
+    """Convert a TMDbMovie to the homepage dict shape."""
+    categories = [
+        GENRE_LOOKUP[gid] for gid in (movie.genre_ids or []) if gid in GENRE_LOOKUP
+    ]
+    return {
+        "tmdb_id": movie.tmdb_id,
+        "title": movie.title,
+        "year": movie.year,
+        "poster_path": movie.poster_path,
+        "overview": movie.overview,
+        "categories": categories,
+    }
+
+
+@api_view(["GET"])
+def prime_movie(request, tmdb_id: int):
+    """GET /api/prime/movie/<tmdb_id>/ — ranked Prime Video offers for one movie.
+
+    Filters to subscription/free offers only, provider='amazon', across all
+    countries. Uses the hardcoded DEFAULT_PREFERENCE (JA/EN) via
+    resolve_preferences(). On cache miss:
+      - If PRIME_LIVE_FETCH is True (default): hits Streaming Availability API.
+      - If PRIME_LIVE_FETCH is False: returns only cached rows.
+    """
+    from django.conf import settings
+    from .services.preferences import resolve_preferences
+
+    # Resolve or auto-create the Movie row via TMDb.
+    try:
+        movie = Movie.objects.get(tmdb_id=tmdb_id)
+    except Movie.DoesNotExist:
+        # Auto-create from TMDb details so the runtime join is non-empty.
+        client = TMDbClient()
+        try:
+            details = client.details(tmdb_id)
+            movie, _ = Movie.objects.get_or_create(
+                tmdb_id=details.tmdb_id,
+                defaults={"title": details.title, "year": details.year},
+            )
+        except Exception:
+            # TMDb lookup failed and movie not in DB.
+            return Response(
+                {
+                    "movie": {"tmdb_id": tmdb_id, "title": None, "year": None},
+                    "offers": [],
+                    "message": "Movie not tracked and could not be resolved via TMDb.",
+                },
+                status=404,
+            )
+
+    # Resolve preferences (hardcoded defaults if no DB row).
+    pref_dict = resolve_preferences(user_id=1)
+
+    # Build a Preference-like object for rank_offers (which expects a Preference
+    # instance with audio_languages, subtitle_languages, candidate_countries).
+    preference = Preference(
+        user_id=1,
+        audio_languages=pref_dict["audio_languages"],
+        subtitle_languages=pref_dict["subtitle_languages"],
+        candidate_countries=pref_dict["candidate_countries"],
+    )
+
+    # Get cached/fresh availability, gated by PRIME_LIVE_FETCH.
+    cache = AvailabilityCache()
+    if not getattr(settings, "PRIME_LIVE_FETCH", True):
+        # Offline mode: only return cached rows, never fetch live.
+        offers = cache._read_offers(movie)
+    else:
+        try:
+            status_obj = cache.get_or_refresh(movie)
+            offers = cache._read_offers(movie)
+        except RateLimitExceeded as exc:
+            return Response(
+                {"error": str(exc), "rate_limited": True}, status=429
+            )
+
+    # Filter to amazon provider + subscription/free offers only.
+    provider = getattr(settings, "DEFAULT_PREFERENCE_PROVIDER", "amazon")
+    qualifying = [
+        o for o in offers
+        if o.get("service", "").lower() == provider.lower()
+        and o.get("offer_type", "").lower() in ("subscription", "free")
+    ]
+
+    # Rank with the (hardcoded) preference. No country filter — Prime Video
+    # covers all countries, so candidate_countries is empty/unused here.
+    ranked = rank_offers(qualifying, preference)
+
+    return Response(
+        {
+            "movie": {
+                "tmdb_id": movie.tmdb_id,
+                "title": movie.title,
+                "year": movie.year,
+            },
+            "offers": [offer.to_dict() for offer in ranked],
+        }
+    )

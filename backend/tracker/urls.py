@@ -15,4 +15,6 @@ urlpatterns = [
     path("watchlist/refresh/", views.watchlist_refresh, name="watchlist-refresh"),
     path("watchlist/report/", views.watchlist_report, name="watchlist-report"),
     path("watchlist/resolve/", views.watchlist_resolve, name="watchlist-resolve"),
+    path("prime/popular/", views.prime_popular, name="prime-popular"),
+    path("prime/movie/<int:tmdb_id>/", views.prime_movie, name="prime-movie"),
 ]

@@ -9,16 +9,6 @@ interface PreferencesData {
   candidate_countries: string[];
 }
 
-function parseCommaSeparated(input: string): string[] {
-  const items = input
-    .split(",")
-    .map((item) => item.trim().toLowerCase())
-    .filter((item) => item.length > 0);
-
-  // Deduplicate while preserving order
-  return Array.from(new Set(items));
-}
-
 function formatArrayToCommaString(arr: string[] | undefined): string {
   if (!arr || !Array.isArray(arr)) return "";
   return arr.join(", ");
@@ -28,14 +18,9 @@ export default function PreferencesPage() {
   const [audioLangs, setAudioLangs] = useState("");
   const [subtitleLangs, setSubtitleLangs] = useState("");
   const [countries, setCountries] = useState("");
-
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [fetchError, setFetchError] = useState("");
-  const [saveError, setSaveError] = useState("");
-  const [successMessage, setSuccessMessage] = useState("");
-
-  /* --- Fetch Preferences --- */
+  /* --- Fetch Preferences (read-only, server-side managed) --- */
   const fetchPreferences = useCallback(async () => {
     setLoading(true);
     setFetchError("");
@@ -59,60 +44,31 @@ export default function PreferencesPage() {
     fetchPreferences();
   }, [fetchPreferences]);
 
-  /* --- Save Preferences --- */
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSaving(true);
-    setSaveError("");
-    setSuccessMessage("");
-
-    const payload: PreferencesData = {
-      audio_languages: parseCommaSeparated(audioLangs),
-      subtitle_languages: parseCommaSeparated(subtitleLangs),
-      candidate_countries: parseCommaSeparated(countries),
-    };
-
-    try {
-      const res = await fetch("/api/preferences/", {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      });
-
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail || body.error || `Failed to save preferences (${res.status})`);
-      }
-
-      const updatedData: PreferencesData = await res.json();
-      setAudioLangs(formatArrayToCommaString(updatedData.audio_languages));
-      setSubtitleLangs(formatArrayToCommaString(updatedData.subtitle_languages));
-      setCountries(formatArrayToCommaString(updatedData.candidate_countries));
-      setSuccessMessage("Preferences saved successfully.");
-    } catch (err: unknown) {
-      setSaveError(err instanceof Error ? err.message : "Failed to save preferences");
-    } finally {
-      setSaving(false);
-    }
-  };
-
   return (
     <main className="mx-auto max-w-2xl px-4 py-10 sm:px-6">
       {/* Top navigation link */}
       <div className="mb-6">
         <Link href="/" className="text-sm text-blue-600 hover:underline dark:text-blue-400">
-          ← Back to search
+          ← Back to browse
         </Link>
       </div>
 
       {/* Header */}
       <div className="mb-8">
-        <h1 className="text-3xl font-bold tracking-tight">Preferences</h1>
+        <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-gray-100">
+          Preferences
+        </h1>
         <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
           Configure your streaming availability and ranking preferences.
         </p>
+      </div>
+
+      {/* Coming soon banner */}
+      <div className="mb-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+        <span className="font-medium">Coming soon</span> — Preferences are managed
+        by the server for now. Language preferences are hardcoded to{" "}
+        <code className="font-mono">ja, en</code> (audio) and{" "}
+        <code className="font-mono">en, ja</code> (subtitles).
       </div>
 
       {/* Loading state */}
@@ -133,23 +89,9 @@ export default function PreferencesPage() {
         </div>
       )}
 
-      {/* Main form */}
+      {/* Greyed-out form */}
       {!loading && !fetchError && (
-        <form onSubmit={handleSubmit} className="space-y-6">
-          {/* Success banner */}
-          {successMessage && (
-            <div className="rounded-lg border border-green-300 bg-green-50 px-4 py-3 text-sm text-green-800 dark:border-green-700 dark:bg-green-900/30 dark:text-green-400">
-              {successMessage}
-            </div>
-          )}
-
-          {/* Save error banner */}
-          {saveError && (
-            <div className="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-700 dark:bg-red-900/30 dark:text-red-400">
-              {saveError}
-            </div>
-          )}
-
+        <div className="space-y-6 opacity-60" title="Coming soon — preferences are managed by the server for now">
           {/* Audio Languages */}
           <div>
             <label htmlFor="audio-languages" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -164,11 +106,8 @@ export default function PreferencesPage() {
               placeholder="en, it, fr"
               value={audioLangs}
               onChange={(e) => setAudioLangs(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm
-                         placeholder-gray-400 shadow-sm
-                         focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20
-                         dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100
-                         dark:placeholder-gray-500 dark:focus:border-blue-400"
+              disabled
+              className="w-full rounded-lg border border-gray-300 bg-gray-100 px-4 py-2.5 text-sm shadow-sm placeholder-gray-400 opacity-60 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
             />
           </div>
 
@@ -186,11 +125,8 @@ export default function PreferencesPage() {
               placeholder="en, it"
               value={subtitleLangs}
               onChange={(e) => setSubtitleLangs(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm
-                         placeholder-gray-400 shadow-sm
-                         focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20
-                         dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100
-                         dark:placeholder-gray-500 dark:focus:border-blue-400"
+              disabled
+              className="w-full rounded-lg border border-gray-300 bg-gray-100 px-4 py-2.5 text-sm shadow-sm placeholder-gray-400 opacity-60 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
             />
           </div>
 
@@ -208,16 +144,13 @@ export default function PreferencesPage() {
               placeholder="us, gb, nl, it"
               value={countries}
               onChange={(e) => setCountries(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm
-                         placeholder-gray-400 shadow-sm
-                         focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20
-                         dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100
-                         dark:placeholder-gray-500 dark:focus:border-blue-400"
+              disabled
+              className="w-full rounded-lg border border-gray-300 bg-gray-100 px-4 py-2.5 text-sm shadow-sm placeholder-gray-400 opacity-60 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
             />
           </div>
 
           {/* Subscriptions section */}
-          <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm dark:border-gray-700 dark:bg-gray-800/50">
+          <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm dark:border-gray-700 dark:bg-gray-800/50 opacity-60">
             <h3 className="font-medium text-gray-700 dark:text-gray-300">Subscriptions</h3>
             <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
               Manage your active streaming services on the{" "}
@@ -231,19 +164,17 @@ export default function PreferencesPage() {
             </p>
           </div>
 
-          {/* Submit button */}
+          {/* Save button (disabled) */}
           <div className="pt-2">
             <button
               type="submit"
-              disabled={saving}
-              className="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm
-                         hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50
-                         dark:bg-blue-500 dark:hover:bg-blue-600"
+              disabled
+              className="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm opacity-60"
             >
-              {saving ? "Saving…" : "Save Preferences"}
+              Save Preferences
             </button>
           </div>
-        </form>
+        </div>
       )}
     </main>
   );

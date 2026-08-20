@@ -116,3 +116,21 @@ APPEND_SLASH = False
 # External API keys (set via env or docker-compose env_file).
 TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "")
 RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "")
+
+# Hardcoded default preferences (v0): server-side source of truth until the
+# frontend preferences UI is enabled. These are returned by
+# services/preferences.resolve_preferences() when no Preference row exists.
+DEFAULT_PREFERENCE = {
+    "audio_languages": ["ja", "en"],
+    "subtitle_languages": ["en", "ja"],
+    "candidate_countries": [],
+    "accept_any_audio": False,
+    "accept_any_subtitle": False,
+}
+
+# When True, cache misses for /api/prime/movie/<id>/ trigger a live Streaming
+# Availability API call. When False, only cached rows are returned.
+PRIME_LIVE_FETCH = os.environ.get("PRIME_LIVE_FETCH", "true").lower() == "true"
+
+# The provider the Prime Video endpoints filter on (default: amazon).
+DEFAULT_PREFERENCE_PROVIDER = os.environ.get("DEFAULT_PREFERENCE_PROVIDER", "amazon")
