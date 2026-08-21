@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from "react";
 import OfferList, { Offer } from "@/components/OfferList";
+import SearchBar from "@/components/SearchBar";
 
 /* ---------- Types ---------- */
 
@@ -16,8 +17,6 @@ interface AvailabilityResponse {
   cache: { refreshed: boolean; reason: string; offers: number };
   offers: Offer[];
 }
-
-/* ---------- Helpers ---------- */
 
 /* ---------- SearchPage ---------- */
 
@@ -107,7 +106,12 @@ export default function SearchPage() {
         </p>
       </div>
 
-      {/* Search bar */}
+      {/* Homepage Search Bar */}
+      <div className="mb-8">
+        <SearchBar />
+      </div>
+
+      {/* Manual Search section */}
       <div className="flex gap-2">
         <input
           type="text"
