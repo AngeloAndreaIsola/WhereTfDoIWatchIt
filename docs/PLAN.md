@@ -89,13 +89,34 @@ Work through this in order. Do not make live Streaming Availability API calls du
    - Suggested commit title: `Add frontend smoke tests and align release docs`
    - If backend tests still fail because a local container is stale or unavailable, report the exact command/output instead of marking the work fully verified.
 
-## Phase 5 — Polish (optional, only if v1 feels worth continuing)
+## Prime Video MVP hardening (active — Claude Code, as of 2026-08-21)
 
-- [ ] Improve manual language-entry UX beyond the current functional form/admin paths
-- [ ] Enhance ambiguous TMDb match review with posters and richer metadata
-- [ ] Add broader frontend coverage for unhappy paths and API error states
-- [ ] Add CI to run backend tests and frontend test/lint/build on every pull request
-- [ ] Review npm audit output and decide whether to update vulnerable frontend dependencies deliberately
+The Prime Video MVP (`/api/prime/popular/`, `/api/prime/movie/<id>/`, homepage grid, movie detail, greyed-out
+preferences) is merged, but two issues block it from rendering real data. This is the core integration path and
+stays with Claude Code (not delegated). See `docs/PRIME_MVP_HARDENING.md` for the full plan.
+
+- [ ] **CC-1** Add `image.tmdb.org` to `frontend/next.config.mjs` `images.remotePatterns` — homepage posters
+  currently crash at runtime (`next/image` with an unconfigured host); the build passes so it was missed.
+- [ ] **CC-2** Reconcile `services/streaming_api.py` parsing + the Prime provider id against one real
+  movieofthenight response. `DEFAULT_PREFERENCE_PROVIDER` is the literal `"amazon"`, but the API's Amazon
+  service is id `"prime"` / name `"Prime Video"`, so real lookups currently match nothing. Standardize on the
+  service **id**; keep tests mocked (no live calls in tests).
+- [ ] **CC-3** Verify the click → auto-create Movie → live fetch (`PRIME_LIVE_FETCH`) → cache → ranked-offers
+  path end-to-end; document `TMDB_API_KEY`/`RAPIDAPI_KEY` in `.env.example`; optional `seed_prime_fixture`
+  command so the UI renders from cached sample data without spending quota.
+
+## Phase 5 — Polish (active queue as of 2026-08-21)
+
+Current post-Prime-MVP polish items. Delegatable ones are briefed in `docs/DELEGATION.md` (Task 16–21); the
+Prime MVP hardening above and editable preferences stay with Claude Code.
+
+- [ ] Add CI to run backend tests and frontend test/lint/build on every pull request — **delegated: Task 16**
+- [ ] Homepage search box (find a specific movie, not just browse trending) — **delegated: Task 17**
+- [ ] Enhance ambiguous TMDb match review with posters and richer metadata — **delegated: Task 18**
+- [ ] Add broader frontend coverage for unhappy paths and API error states — **delegated: Task 19**
+- [ ] Review npm audit output and update vulnerable frontend dependencies deliberately — **delegated: Task 20**
+- [ ] Improve manual language-entry UX beyond the current functional form/admin paths — **delegated: Task 21 (backlog)**
+- [ ] Editable preferences end-to-end (un-grey UI, `PATCH /api/preferences/`, ranking reads the DB `Preference` row instead of `DEFAULT_PREFERENCE`) — **Claude Code (not delegated)**
 
 ## Explicitly deferred (not v1)
 
