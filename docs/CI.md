@@ -44,11 +44,11 @@ The workflow consists of two independent jobs running on `ubuntu-latest`:
 ### 2. Frontend (`frontend`)
 
 * **Working Directory:** `./frontend`
-* **Runtime:** Node.js 20 (matching `frontend/Dockerfile`).
+* **Runtime:** Node.js 22 (required for modern jsdom / undici test dependencies).
 * **Dependencies Caching:** Caches npm packages using `frontend/package-lock.json`.
 * **Steps:**
   1. Checks out repository (`actions/checkout@v4`).
-  2. Sets up Node.js 20 with npm cache (`actions/setup-node@v4`).
+  2. Sets up Node.js 22 with npm cache (`actions/setup-node@v4`).
   3. Installs dependencies via `npm ci`.
   4. Runs ESLint via `npm run lint`.
   5. Builds Next.js application via `npm run build` with `NEXT_TELEMETRY_DISABLED=1`.
