@@ -18,14 +18,25 @@ from .models import (
 class LanguageEntryInline(admin.TabularInline):
     model = LanguageEntry
     extra = 1
+    help_text = "Language code must be a 2-letter ISO 639-1 code (e.g. 'en', 'ja', 'es')."
 
 
 @admin.register(LanguageInfo)
 class LanguageInfoAdmin(admin.ModelAdmin):
-    list_display = ("movie", "region")
-    list_filter = ("region__provider",)
-    search_fields = ("movie__title",)
+    list_display = ("movie", "region", "get_audio_count", "get_subtitle_count")
+    list_filter = ("region__provider", "region__country")
+    search_fields = ("movie__title", "region__provider", "region__country")
     inlines = [LanguageEntryInline]
+
+    @admin.display(description="Audio Languages")
+    def get_audio_count(self, obj):
+        count = obj.entries.filter(entry_type="audio").count()
+        return f"{count} language(s)"
+
+    @admin.display(description="Subtitle Languages")
+    def get_subtitle_count(self, obj):
+        count = obj.entries.filter(entry_type="subtitle").count()
+        return f"{count} language(s)"
 
 
 @admin.register(Movie)
