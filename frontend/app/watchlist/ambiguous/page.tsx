@@ -3,12 +3,7 @@
 import React, { useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
-
-interface Candidate {
-  tmdb_id: number;
-  title: string;
-  year: number | null;
-}
+import AmbiguousMatchCard, { Candidate } from "@/components/AmbiguousMatchCard";
 
 interface AmbiguousItem {
   title: string;
@@ -154,13 +149,19 @@ function AmbiguousClient() {
               )}
             </div>
 
-            <div className="space-y-2">
+            <div className="space-y-2.5">
               <p className="text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
                 Select matching TMDb title:
               </p>
 
               {/* Skip option */}
-              <label className="flex items-center gap-3 rounded-md border border-gray-100 p-2 text-sm hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-700/50">
+              <label
+                className={`flex items-center gap-3 rounded-lg border p-3 text-sm cursor-pointer transition-colors ${
+                  selectedValue === null
+                    ? "border-blue-500 bg-blue-50/60 ring-1 ring-blue-500 dark:border-blue-500 dark:bg-blue-950/30"
+                    : "border-gray-200 bg-white hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800/60 dark:hover:bg-gray-700/50"
+                }`}
+              >
                 <input
                   type="radio"
                   name={`item-${itemIdx}`}
@@ -175,31 +176,13 @@ function AmbiguousClient() {
 
               {/* Candidates */}
               {item.candidates.map((cand) => (
-                <label
+                <AmbiguousMatchCard
                   key={cand.tmdb_id}
-                  className="flex items-center gap-3 rounded-md border border-gray-100 p-2 text-sm hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-700/50"
-                >
-                  <input
-                    type="radio"
-                    name={`item-${itemIdx}`}
-                    checked={selectedValue === cand.tmdb_id}
-                    onChange={() => handleRadioChange(itemIdx, cand.tmdb_id)}
-                    className="h-4 w-4 text-blue-600 focus:ring-blue-500"
-                  />
-                  <div>
-                    <span className="font-semibold text-gray-800 dark:text-gray-200">
-                      {cand.title}
-                    </span>
-                    {cand.year && (
-                      <span className="ml-1 text-xs text-gray-500 dark:text-gray-400">
-                        ({cand.year})
-                      </span>
-                    )}
-                    <span className="ml-2 font-mono text-xs text-gray-400">
-                      ID: {cand.tmdb_id}
-                    </span>
-                  </div>
-                </label>
+                  candidate={cand}
+                  selected={selectedValue === cand.tmdb_id}
+                  onSelect={() => handleRadioChange(itemIdx, cand.tmdb_id)}
+                  name={`item-${itemIdx}`}
+                />
               ))}
             </div>
           </div>
