@@ -134,4 +134,10 @@ def _is_ambiguous(matches: list[TMDbMovie], year: Optional[int]) -> bool:
 
 
 def _candidate_dict(movie: TMDbMovie) -> dict:
-    return {"tmdb_id": movie.tmdb_id, "title": movie.title, "year": movie.year}
+    return {
+        "tmdb_id": movie.tmdb_id,
+        "title": movie.title,
+        "year": movie.year,
+        "overview": movie.overview,
+        "poster_path": movie.poster_path,
+    }

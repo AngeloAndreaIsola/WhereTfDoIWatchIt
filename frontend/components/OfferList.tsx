@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import LanguagePicker from "./LanguagePicker";
 
 export interface RankingInfo {
   audio_rank: number;
@@ -41,47 +42,48 @@ function rankBadge(rank: number): string {
   return "—";
 }
 
-function parseAndValidateCodes(input: string): { codes: string[]; error: string | null } {
-  const rawParts = input.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
-  const codes: string[] = [];
+function validateLanguageCodes(codes: string[]): { cleanCodes: string[]; error: string | null } {
+  const cleanCodes: string[] = [];
   const seen = new Set<string>();
 
-  for (const part of rawParts) {
-    if (!/^[a-z]{2}$/.test(part)) {
+  for (const rawCode of codes) {
+    const code = rawCode.trim().toLowerCase();
+    if (!code) continue;
+    if (!/^[a-z]{2}$/.test(code)) {
       return {
-        codes: [],
-        error: `Invalid ISO 639-1 code "${part}". Language codes must be 2 letters (e.g., en, es, fr).`,
+        cleanCodes: [],
+        error: `Invalid ISO 639-1 code "${code}". Language codes must be 2 letters (e.g., en, es, fr).`,
       };
     }
-    if (!seen.has(part)) {
-      seen.add(part);
-      codes.push(part);
+    if (!seen.has(code)) {
+      seen.add(code);
+      cleanCodes.push(code);
     }
   }
 
-  return { codes, error: null };
+  return { cleanCodes, error: null };
 }
 
 export default function OfferList({ tmdbId, offers, onRefreshAvailability }: OfferListProps) {
   const [editingOffer, setEditingOffer] = useState<Offer | null>(null);
-  const [audioInput, setAudioInput] = useState("");
-  const [subInput, setSubInput] = useState("");
+  const [audioCodes, setAudioCodes] = useState<string[]>([]);
+  const [subCodes, setSubCodes] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
   const [formSuccess, setFormSuccess] = useState("");
 
   const handleOpenEdit = (offer: Offer) => {
     setEditingOffer(offer);
-    setAudioInput(offer.audio_languages.join(", "));
-    setSubInput(offer.subtitle_languages.join(", "));
+    setAudioCodes([...offer.audio_languages]);
+    setSubCodes([...offer.subtitle_languages]);
     setFormError("");
     setFormSuccess("");
   };
 
   const handleCloseEdit = () => {
     setEditingOffer(null);
-    setAudioInput("");
-    setSubInput("");
+    setAudioCodes([]);
+    setSubCodes([]);
     setFormError("");
     setFormSuccess("");
   };
@@ -93,13 +95,13 @@ export default function OfferList({ tmdbId, offers, onRefreshAvailability }: Off
     setFormError("");
     setFormSuccess("");
 
-    const audioRes = parseAndValidateCodes(audioInput);
+    const audioRes = validateLanguageCodes(audioCodes);
     if (audioRes.error) {
       setFormError(`Audio: ${audioRes.error}`);
       return;
     }
 
-    const subRes = parseAndValidateCodes(subInput);
+    const subRes = validateLanguageCodes(subCodes);
     if (subRes.error) {
       setFormError(`Subtitle: ${subRes.error}`);
       return;
@@ -114,8 +116,8 @@ export default function OfferList({ tmdbId, offers, onRefreshAvailability }: Off
         body: JSON.stringify({
           provider: editingOffer.service,
           country: editingOffer.country,
-          audio_languages: audioRes.codes,
-          subtitle_languages: subRes.codes,
+          audio_languages: audioRes.cleanCodes,
+          subtitle_languages: subRes.cleanCodes,
         }),
       });
 
@@ -238,37 +240,17 @@ export default function OfferList({ tmdbId, offers, onRefreshAvailability }: Off
             </p>
 
             <form onSubmit={handleSaveLanguageInfo} className="space-y-4">
-              <div>
-                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300">
-                  Audio Language Codes
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. en, es, fr"
-                  value={audioInput}
-                  onChange={(e) => setAudioInput(e.target.value)}
-                  className="mt-1 block w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
-                />
-                <span className="text-[11px] text-gray-400">
-                  Comma-separated 2-letter ISO 639-1 codes
-                </span>
-              </div>
+              <LanguagePicker
+                label="Audio Language Codes"
+                selectedCodes={audioCodes}
+                onChange={setAudioCodes}
+              />
 
-              <div>
-                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300">
-                  Subtitle Language Codes
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. en, es, fr"
-                  value={subInput}
-                  onChange={(e) => setSubInput(e.target.value)}
-                  className="mt-1 block w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
-                />
-                <span className="text-[11px] text-gray-400">
-                  Comma-separated 2-letter ISO 639-1 codes
-                </span>
-              </div>
+              <LanguagePicker
+                label="Subtitle Language Codes"
+                selectedCodes={subCodes}
+                onChange={setSubCodes}
+              />
 
               <div className="rounded bg-amber-50 p-2.5 text-xs text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
                 Note: Language info is manually entered and may be incomplete.

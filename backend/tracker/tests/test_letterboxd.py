@@ -107,7 +107,16 @@ class ImportTests(TestCase):
         self.assertEqual(amb["uri"], "https://letterboxd.com/film/avatar/")
         self.assertEqual(amb["reason"], "multiple_matches")
         self.assertEqual(len(amb["candidates"]), 2)
-        self.assertEqual(amb["candidates"][0], {"tmdb_id": 19995, "title": "Avatar", "year": 2009})
+        self.assertEqual(
+            amb["candidates"][0],
+            {
+                "tmdb_id": 19995,
+                "title": "Avatar",
+                "year": 2009,
+                "overview": None,
+                "poster_path": None,
+            },
+        )
 
     def test_duplicate_movie_rows_do_not_create_duplicate_watchlist_items(self):
         client = self._mock_client({
@@ -154,8 +163,20 @@ class ImportTests(TestCase):
         self.assertEqual(
             amb["candidates"],
             [
-                {"tmdb_id": 1, "title": "Thing One", "year": 1999},
-                {"tmdb_id": 2, "title": "Thing Two", "year": 1999},
+                {
+                    "tmdb_id": 1,
+                    "title": "Thing One",
+                    "year": 1999,
+                    "overview": None,
+                    "poster_path": None,
+                },
+                {
+                    "tmdb_id": 2,
+                    "title": "Thing Two",
+                    "year": 1999,
+                    "overview": None,
+                    "poster_path": None,
+                },
             ],
         )
 
