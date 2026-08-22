@@ -59,16 +59,38 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "config.wsgi.application"
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": os.environ.get("POSTGRES_DB", "tracker"),
-        "USER": os.environ.get("POSTGRES_USER", "tracker"),
-        "PASSWORD": os.environ.get("POSTGRES_PASSWORD", "tracker_dev"),
-        "HOST": os.environ.get("POSTGRES_HOST", "db"),
-        "PORT": os.environ.get("POSTGRES_PORT", "5432"),
+if os.environ.get("USE_SQLITE") == "1":
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
     }
-}
+    import sys
+    from django.db import models
+    import django.contrib.postgres.fields as pg_fields
+    class ArrayFieldShim(models.JSONField):
+        def __init__(self, base_field=None, **kwargs):
+            self.base_field = base_field
+            kwargs.pop("size", None)
+            super().__init__(**kwargs)
+        def deconstruct(self):
+            name, path, args, kwargs = super().deconstruct()
+            if self.base_field:
+                args = [self.base_field] + list(args)
+            return name, path, args, kwargs
+    pg_fields.ArrayField = ArrayFieldShim
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": os.environ.get("POSTGRES_DB", "tracker"),
+            "USER": os.environ.get("POSTGRES_USER", "tracker"),
+            "PASSWORD": os.environ.get("POSTGRES_PASSWORD", "tracker_dev"),
+            "HOST": os.environ.get("POSTGRES_HOST", "db"),
+            "PORT": os.environ.get("POSTGRES_PORT", "5432"),
+        }
+    }
 
 AUTH_PASSWORD_VALIDATORS = [
     {

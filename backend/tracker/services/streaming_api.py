@@ -103,6 +103,7 @@ class StreamingOffer:
     service_name: str
     offer_type: str  # "subscription" | "free"
     quality: Optional[str] = None
+    link: Optional[str] = None
     audio_languages: list[str] = field(default_factory=list)
     subtitle_languages: list[str] = field(default_factory=list)
 
@@ -159,6 +160,7 @@ class StreamingAvailabilityClient:
                     service_name = entry.get("serviceName") or service_id
 
                 quality = (entry.get("quality") or "").lower() or None
+                link = entry.get("link") or entry.get("videoLink") or entry.get("url") or None
                 audios = entry.get("audios")
                 if audios is None:
                     audios = entry.get("audioLanguages")
@@ -173,6 +175,7 @@ class StreamingAvailabilityClient:
                         service_name=service_name,
                         offer_type=offer_type,
                         quality=quality,
+                        link=link,
                         audio_languages=_extract_langs(audios, _audio_code),
                         subtitle_languages=_extract_langs(subtitles, _subtitle_code),
                     )

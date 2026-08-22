@@ -104,6 +104,7 @@ class AvailabilityCache:
                     "is_available": True,
                     "offer_type": offer.offer_type,
                     "quality": offer.quality or "",
+                    "url": offer.link or "",
                 },
             )
             info, _ = LanguageInfo.objects.get_or_create(movie=movie, region=region)
@@ -146,6 +147,7 @@ class AvailabilityCache:
                     "service": avail.region.provider,
                     "offer_type": avail.offer_type,
                     "quality": avail.quality,
+                    "url": avail.url,
                     "audio": audio,
                     "subs": subs,
                 }

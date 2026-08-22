@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import OfferList, { Offer } from "@/components/OfferList";
+import MovieCard, { MovieCardData } from "@/components/MovieCard";
 
 /* ---------- Types ---------- */
 
@@ -11,6 +11,7 @@ interface Movie {
   tmdb_id: number;
   title: string;
   year: number | null;
+  poster_path?: string | null;
 }
 
 interface WatchlistItem {
@@ -45,42 +46,46 @@ interface UploadResult {
   resolved: WatchlistItem[];
   ambiguous: AmbiguousItem[];
   skipped: SkippedItem[];
+  watched_count?: number;
+  ratings_count?: number;
+  reviews_count?: number;
+  diary_events_count?: number;
 }
 
-interface AvailabilityResponse {
-  movie: { tmdb_id: number; title: string; year: number | null };
-  cache: { refreshed: boolean; reason: string; offers: number };
-  offers: Offer[];
+interface ReportRow {
+  movie: Movie;
+  available_countries: string[];
+  best_country: string | null;
+  best_service: string | null;
 }
 
-interface CachedAvailability {
-  loading: boolean;
-  error: string;
-  data: AvailabilityResponse | null;
+interface PreferencesData {
+  audio_languages: string[];
+  subtitle_languages: string[];
 }
-
-/* ---------- Helpers ---------- */
 
 export default function WatchlistPage() {
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
   const [loadingWatchlist, setLoadingWatchlist] = useState(true);
   const [watchlistError, setWatchlistError] = useState("");
 
+  const [reportMap, setReportMap] = useState<Record<number, ReportRow>>({});
+  const [preferences, setPreferences] = useState<PreferencesData>({
+    audio_languages: [],
+    subtitle_languages: [],
+  });
+
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
   const [uploadResult, setUploadResult] = useState<UploadResult | null>(null);
 
-  const [expandedTmdbId, setExpandedTmdbId] = useState<number | null>(null);
-  const [availabilityCache, setAvailabilityCache] = useState<
-    Record<number, CachedAvailability>
-  >({});
-
-  /* --- Fetch existing watchlist --- */
-  const fetchWatchlist = useCallback(async () => {
+  /* --- Fetch existing watchlist, report, and preferences --- */
+  const fetchWatchlistData = useCallback(async () => {
     setLoadingWatchlist(true);
     setWatchlistError("");
     try {
+      // 1. Fetch watchlist items
       const res = await fetch("/api/watchlist/");
       if (res.status === 429) {
         const body = await res.json().catch(() => ({}));
@@ -92,6 +97,32 @@ export default function WatchlistPage() {
       }
       const data: WatchlistItem[] = await res.json();
       setWatchlist(data);
+
+      // 2. Fetch preferences
+      try {
+        const pRes = await fetch("/api/preferences/");
+        if (pRes && pRes.ok) {
+          const pData = await pRes.json().catch(() => null);
+          if (pData) setPreferences(pData);
+        }
+      } catch {}
+
+      // 3. Fetch report data for quick availability summary
+      try {
+        const repRes = await fetch("/api/watchlist/report/");
+        if (repRes && repRes.ok) {
+          const repData = await repRes.json().catch(() => null);
+          if (repData && Array.isArray(repData.report)) {
+            const map: Record<number, ReportRow> = {};
+            repData.report.forEach((row: ReportRow) => {
+              if (row.movie && row.movie.tmdb_id) {
+                map[row.movie.tmdb_id] = row;
+              }
+            });
+            setReportMap(map);
+          }
+        }
+      } catch {}
     } catch (err: unknown) {
       setWatchlistError(
         err instanceof Error ? err.message : "Failed to load watchlist"
@@ -102,10 +133,10 @@ export default function WatchlistPage() {
   }, []);
 
   useEffect(() => {
-    fetchWatchlist();
-  }, [fetchWatchlist]);
+    fetchWatchlistData();
+  }, [fetchWatchlistData]);
 
-  /* --- Upload CSV --- */
+  /* --- Upload CSV or ZIP --- */
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       setSelectedFile(e.target.files[0]);
@@ -145,7 +176,7 @@ export default function WatchlistPage() {
       const data: UploadResult = await res.json();
       setUploadResult(data);
       // Refresh watchlist items after successful import
-      await fetchWatchlist();
+      await fetchWatchlistData();
     } catch (err: unknown) {
       setUploadError(err instanceof Error ? err.message : "Upload failed");
     } finally {
@@ -153,100 +184,32 @@ export default function WatchlistPage() {
     }
   };
 
-  /* --- Fetch or toggle availability --- */
-  const fetchAvailabilityForMovie = useCallback(async (tmdb_id: number, force = false) => {
-    if (!force && expandedTmdbId === tmdb_id) {
-      setExpandedTmdbId(null);
-      return;
-    }
-
-    setExpandedTmdbId(tmdb_id);
-
-    // If already cached and loaded successfully and not forcing, don't refetch
-    if (!force && availabilityCache[tmdb_id] && !availabilityCache[tmdb_id].error) {
-      return;
-    }
-
-    setAvailabilityCache((prev) => ({
-      ...prev,
-      [tmdb_id]: { loading: true, error: "", data: force ? prev[tmdb_id]?.data ?? null : null },
-    }));
-
-    try {
-      const res = await fetch(`/api/movie/${tmdb_id}/availability/`);
-
-      if (res.status === 404) {
-        setAvailabilityCache((prev) => ({
-          ...prev,
-          [tmdb_id]: {
-            loading: false,
-            error:
-              "Movie is tracked but availability has not been fetched yet.",
-            data: null,
-          },
-        }));
-        return;
-      }
-
-      if (res.status === 429) {
-        const body = await res.json().catch(() => ({}));
-        setAvailabilityCache((prev) => ({
-          ...prev,
-          [tmdb_id]: {
-            loading: false,
-            error: body.error ?? "Daily API limit reached; try again later.",
-            data: null,
-          },
-        }));
-        return;
-      }
-
-      if (!res.ok) {
-        throw new Error(`Failed to load availability (${res.status})`);
-      }
-
-      const data: AvailabilityResponse = await res.json();
-      setAvailabilityCache((prev) => ({
-        ...prev,
-        [tmdb_id]: { loading: false, error: "", data },
-      }));
-    } catch (err: unknown) {
-      setAvailabilityCache((prev) => ({
-        ...prev,
-        [tmdb_id]: {
-          loading: false,
-          error:
-            err instanceof Error
-              ? err.message
-              : "Failed to load availability",
-          data: null,
-        },
-      }));
-    }
-  }, [expandedTmdbId, availabilityCache]);
-
-  const toggleAvailability = (tmdb_id: number) => {
-    fetchAvailabilityForMovie(tmdb_id, false);
-  };
-
   return (
-    <main className="mx-auto max-w-3xl px-4 py-10 sm:px-6">
+    <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6">
       {/* Header */}
-      <div className="mb-8 text-center">
-        <h1 className="text-3xl font-bold tracking-tight">Letterboxd Watchlist</h1>
+      <div className="mb-8 text-center sm:text-left">
+        <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-gray-100">
+          Letterboxd Watchlist & Movies
+        </h1>
         <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-          Import your watchlist CSV and check streaming availability
+          Your imported movies, watchlist items, and streaming availability at a glance.
         </p>
       </div>
 
-      {/* 1. CSV Upload Form */}
-      <section className="mb-8 rounded-lg border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-700 dark:bg-gray-800">
-        <h2 className="mb-4 text-lg font-semibold">Upload Watchlist CSV</h2>
-        <form onSubmit={handleUpload} className="space-y-4">
-          <div>
+      {/* 1. File Upload Form (CSV / ZIP) */}
+      <section className="mb-8 rounded-xl border border-gray-200 bg-white p-6 shadow-xs dark:border-gray-700 dark:bg-gray-800">
+        <h2 className="mb-2 text-lg font-semibold text-gray-900 dark:text-gray-100">
+          Import Letterboxd Export (CSV or ZIP)
+        </h2>
+        <p className="mb-4 text-xs text-gray-500 dark:text-gray-400">
+          Upload individual CSVs (watchlist.csv, watched.csv, diary.csv, ratings.csv, reviews.csv) or a ZIP archive.
+        </p>
+
+        <form onSubmit={handleUpload} className="flex flex-col gap-4 sm:flex-row sm:items-center">
+          <div className="flex-1">
             <input
               type="file"
-              accept=".csv"
+              accept=".csv,.zip"
               onChange={handleFileChange}
               className="block w-full text-sm text-gray-500
                          file:mr-4 file:rounded-lg file:border-0
@@ -260,11 +223,11 @@ export default function WatchlistPage() {
           <button
             type="submit"
             disabled={!selectedFile || uploading}
-            className="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm
+            className="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-medium text-white shadow-xs
                        hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50
                        dark:bg-blue-500 dark:hover:bg-blue-600"
           >
-            {uploading ? "Uploading…" : "Import Watchlist"}
+            {uploading ? "Importing…" : "Import File / ZIP"}
           </button>
         </form>
 
@@ -278,14 +241,34 @@ export default function WatchlistPage() {
       {/* 2. Upload Result Summary & Ambiguous Banner */}
       {uploadResult && (
         <section className="mb-8 space-y-4">
-          <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800/50">
-            <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+          <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800/50">
+            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
               Import Summary
             </h3>
-            <div className="flex gap-4 text-sm font-medium">
+            <div className="flex flex-wrap gap-4 text-xs font-medium">
               <span className="text-green-600 dark:text-green-400">
-                Resolved: {uploadResult.resolved.length}
+                Resolved Watchlist: {uploadResult.resolved.length}
               </span>
+              {(uploadResult.watched_count ?? 0) > 0 && (
+                <span className="text-emerald-600 dark:text-emerald-400">
+                  Watched: {uploadResult.watched_count}
+                </span>
+              )}
+              {(uploadResult.ratings_count ?? 0) > 0 && (
+                <span className="text-blue-600 dark:text-blue-400">
+                  Ratings: {uploadResult.ratings_count}
+                </span>
+              )}
+              {(uploadResult.reviews_count ?? 0) > 0 && (
+                <span className="text-purple-600 dark:text-purple-400">
+                  Reviews: {uploadResult.reviews_count}
+                </span>
+              )}
+              {(uploadResult.diary_events_count ?? 0) > 0 && (
+                <span className="text-indigo-600 dark:text-indigo-400">
+                  Diary Entries: {uploadResult.diary_events_count}
+                </span>
+              )}
               <span className="text-amber-600 dark:text-amber-400">
                 Ambiguous: {uploadResult.ambiguous.length}
               </span>
@@ -297,7 +280,7 @@ export default function WatchlistPage() {
 
           {/* Ambiguous Review Banner */}
           {uploadResult.ambiguous.length > 0 && (
-            <div className="flex items-center justify-between rounded-lg border border-amber-300 bg-amber-50 p-4 dark:border-amber-700 dark:bg-amber-900/30">
+            <div className="flex items-center justify-between rounded-xl border border-amber-300 bg-amber-50 p-4 dark:border-amber-700 dark:bg-amber-900/30">
               <div>
                 <h4 className="font-semibold text-amber-800 dark:text-amber-300">
                   {uploadResult.ambiguous.length} Ambiguous Match
@@ -311,128 +294,70 @@ export default function WatchlistPage() {
                 href={`/watchlist/ambiguous?items=${encodeURIComponent(
                   JSON.stringify(uploadResult.ambiguous)
                 )}`}
-                className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-amber-700 dark:bg-amber-500 dark:hover:bg-amber-600"
+                className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white shadow-xs hover:bg-amber-700 dark:bg-amber-500 dark:hover:bg-amber-600"
               >
                 Review ambiguous matches
               </Link>
             </div>
           )}
-
-          {/* Skipped Details */}
-          {uploadResult.skipped.length > 0 && (
-            <div className="rounded-lg border border-gray-200 bg-white p-4 text-sm dark:border-gray-700 dark:bg-gray-800">
-              <h4 className="mb-2 font-semibold text-gray-700 dark:text-gray-300">
-                Skipped Items
-              </h4>
-              <ul className="space-y-1 text-xs text-gray-500 dark:text-gray-400">
-                {uploadResult.skipped.map((item, idx) => (
-                  <li key={idx}>
-                    <span className="font-medium">{item.title}</span>
-                    {item.year && <span> ({item.year})</span>} — Reason:{" "}
-                    {item.reason ?? "no_match"}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
         </section>
       )}
 
-      {/* 3. Watchlist Items Section */}
+      {/* 3. Watchlist Poster Grid Section */}
       <section>
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-xl font-semibold">Watchlist Items</h2>
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">
+              Watchlist Catalog ({watchlist.length})
+            </h2>
+          </div>
           <Link
             href="/watchlist/report"
-            className="rounded-lg bg-gray-100 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+            className="rounded-lg bg-gray-100 px-3.5 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
           >
             View Analytics Report →
           </Link>
         </div>
 
         {watchlistError && (
-          <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+          <div className="mb-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
             {watchlistError}
           </div>
         )}
 
         {loadingWatchlist && (
-          <p className="py-6 text-center text-sm text-gray-500 dark:text-gray-400">
-            Loading watchlist…
-          </p>
+          <div className="py-12 text-center text-sm text-gray-500 dark:text-gray-400">
+            Loading watchlist grid…
+          </div>
         )}
 
         {!loadingWatchlist && watchlist.length === 0 && (
-          <p className="py-6 text-center text-sm text-gray-500 dark:text-gray-400">
-            Your watchlist is empty. Upload a CSV above to get started.
-          </p>
+          <div className="rounded-xl border border-dashed border-gray-300 p-12 text-center text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400">
+            Your watchlist is empty. Upload a Letterboxd export CSV or ZIP above to get started.
+          </div>
         )}
 
+        {/* Responsive Poster Grid */}
         {!loadingWatchlist && watchlist.length > 0 && (
-          <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 sm:gap-6">
             {watchlist.map((item) => {
-              const tmdbId = item.movie.tmdb_id;
-              const isExpanded = expandedTmdbId === tmdbId;
-              const cache = availabilityCache[tmdbId];
+              const movie = item.movie;
+              const rep = reportMap[movie.tmdb_id];
 
-              return (
-                <div
-                  key={item.id}
-                  className="rounded-lg border border-gray-200 bg-white shadow-sm transition-colors dark:border-gray-700 dark:bg-gray-800"
-                >
-                  <button
-                    onClick={() => toggleAvailability(tmdbId)}
-                    className="flex w-full items-center justify-between p-4 text-left text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700/50"
-                  >
-                    <div>
-                      <span className="text-base font-semibold">
-                        {item.movie.title}
-                      </span>
-                      {item.movie.year && (
-                        <span className="ml-2 text-sm text-gray-500 dark:text-gray-400">
-                          ({item.movie.year})
-                        </span>
-                      )}
-                    </div>
-                    <span className="text-xs text-blue-600 dark:text-blue-400">
-                      {isExpanded ? "Hide availability ▲" : "View availability ▼"}
-                    </span>
-                  </button>
+              const cardData: MovieCardData = {
+                tmdb_id: movie.tmdb_id,
+                title: movie.title,
+                year: movie.year,
+                poster_path: movie.poster_path,
+                best_service: rep?.best_service || null,
+                best_country: rep?.best_country || null,
+                audio_languages: preferences.audio_languages,
+                subtitle_languages: preferences.subtitle_languages,
+                preferred_audio: preferences.audio_languages,
+                preferred_subtitles: preferences.subtitle_languages,
+              };
 
-                  {/* Expanded Availability Panel */}
-                  {isExpanded && (
-                    <div className="border-t border-gray-100 bg-gray-50/50 p-4 dark:border-gray-700 dark:bg-gray-800/80">
-                      {cache?.loading && (
-                        <p className="text-xs text-gray-500 dark:text-gray-400">
-                          Loading availability…
-                        </p>
-                      )}
-
-                      {cache?.error && (
-                        <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
-                          {cache.error}
-                        </div>
-                      )}
-
-                      {cache?.data && (
-                        <div>
-                          {cache.data.offers.length === 0 ? (
-                            <p className="text-xs text-gray-500 dark:text-gray-400">
-                              No streaming offers found for your preferences.
-                            </p>
-                          ) : (
-                            <OfferList
-                              tmdbId={tmdbId}
-                              offers={cache.data.offers}
-                              onRefreshAvailability={() => fetchAvailabilityForMovie(tmdbId, true)}
-                            />
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
+              return <MovieCard key={item.id} movie={cardData} />;
             })}
           </div>
         )}

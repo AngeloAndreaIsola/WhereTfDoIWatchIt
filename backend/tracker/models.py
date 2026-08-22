@@ -7,6 +7,7 @@ class Movie(models.Model):
     tmdb_id = models.IntegerField(unique=True, db_index=True)
     title = models.CharField(max_length=255)
     year = models.IntegerField(null=True, blank=True)
+    poster_path = models.CharField(max_length=255, blank=True, default="")
 
     def __str__(self):
         return f"{self.title} ({self.year})" if self.year else self.title
@@ -38,6 +39,7 @@ class Availability(models.Model):
     is_available = models.BooleanField(default=False)
     offer_type = models.CharField(max_length=20, choices=OFFER_TYPES)
     quality = models.CharField(max_length=10, blank=True)
+    url = models.URLField(max_length=500, blank=True, default="")
 
     class Meta:
         constraints = [
@@ -228,3 +230,43 @@ class RefreshRun(models.Model):
 
     def __str__(self):
         return f"RefreshRun {self.service} @ {self.started_at}"
+
+
+class UserMovieData(models.Model):
+    user_id = models.IntegerField(default=1)
+    movie = models.ForeignKey(Movie, on_delete=models.CASCADE, related_name="user_data")
+    is_watched = models.BooleanField(default=False)
+    rating = models.FloatField(null=True, blank=True)
+    review = models.TextField(blank=True, default="")
+    letterboxd_uri = models.CharField(max_length=255, blank=True, default="")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["user_id", "movie"], name="uniq_usermoviedata_user_movie")
+        ]
+
+    def __str__(self):
+        return f"User {self.user_id} data for {self.movie}"
+
+
+class MovieWatchEvent(models.Model):
+    user_id = models.IntegerField(default=1)
+    movie = models.ForeignKey(Movie, on_delete=models.CASCADE, related_name="watch_events")
+    watched_date = models.DateField(null=True, blank=True)
+    rating = models.FloatField(null=True, blank=True)
+    review = models.TextField(blank=True, default="")
+    rewatch = models.BooleanField(default=False)
+    letterboxd_uri = models.CharField(max_length=255, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user_id", "movie", "watched_date", "letterboxd_uri"],
+                name="uniq_moviewatchevent_user_movie_date_uri",
+            )
+        ]
+
+    def __str__(self):
+        return f"User {self.user_id} watched {self.movie} on {self.watched_date}"

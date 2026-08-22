@@ -1,11 +1,10 @@
 "use client";
 
 import type { PrimeOffer } from "@/lib/api";
-import { getLanguageDisplayName } from "@/lib/languages";
+import LanguageBadge from "@/components/LanguageBadge";
 
 export { PrimeOffer };
 
-// ISO 3166-1 alpha-2 → country flag emoji (covering major Proton VPN countries).
 const FLAG_MAP: Record<string, string> = {
   US: "🇺🇸", GB: "🇬🇧", CA: "🇨🇦", AU: "🇦🇺", DE: "🇩🇪", FR: "🇫🇷", IT: "🇮🇹",
   ES: "🇪🇸", JP: "🇯🇵", KR: "🇰🇷", BR: "🇧🇷", MX: "🇲🇽", IN: "🇮🇳", NL: "🇳🇱",
@@ -28,22 +27,21 @@ function qualityLabel(q: string): string {
   return map[q.toLowerCase()] ?? q.toUpperCase();
 }
 
-function languageLabel(code: string): string {
-  return getLanguageDisplayName(code);
-}
-
 interface OfferRowProps {
   offer: PrimeOffer;
   isBest?: boolean;
 }
 
 export default function OfferRow({ offer, isBest = false }: OfferRowProps) {
+  const isAudioPreferred = offer.ranking.audio_rank === 0;
+  const isSubPreferred = offer.ranking.subtitle_rank === 0;
+
   return (
     <div
       className={`
-        rounded-lg border p-4 text-sm
+        rounded-xl border p-4 text-sm transition-all
         ${isBest
-          ? "border-green-400 bg-green-50 shadow-sm dark:border-green-600 dark:bg-green-900/20"
+          ? "border-green-400 bg-green-50/80 shadow-xs dark:border-green-600 dark:bg-green-900/20"
           : "border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800/50"}
       `}
     >
@@ -53,11 +51,11 @@ export default function OfferRow({ offer, isBest = false }: OfferRowProps) {
           <span className="font-semibold text-gray-900 dark:text-gray-100">
             {offer.country}
           </span>
-          <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs font-medium text-gray-600 dark:bg-gray-700 dark:text-gray-300">
+          <span className="rounded-md bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700 dark:bg-gray-700 dark:text-gray-300">
             {offer.service}
           </span>
           <span
-            className={`rounded px-1.5 py-0.5 text-xs font-medium ${
+            className={`rounded-md px-2 py-0.5 text-xs font-medium ${
               offer.offer_type === "free"
                 ? "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300"
                 : "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300"
@@ -66,37 +64,50 @@ export default function OfferRow({ offer, isBest = false }: OfferRowProps) {
             {offer.offer_type}
           </span>
           {offer.quality && (
-            <span className="rounded bg-gray-200 px-1.5 py-0.5 font-mono text-xs font-bold text-gray-800 dark:bg-gray-600 dark:text-gray-200">
+            <span className="rounded-md bg-gray-200 px-2 py-0.5 font-mono text-xs font-bold text-gray-800 dark:bg-gray-600 dark:text-gray-200">
               {qualityLabel(offer.quality)}
             </span>
           )}
           {isBest && (
-            <span className="rounded-full bg-green-600 px-2 py-0.5 text-xs font-bold text-white">
+            <span className="rounded-full bg-green-600 px-2.5 py-0.5 text-xs font-bold text-white shadow-xs">
               Best Match
             </span>
           )}
         </div>
       </div>
 
-      <div className="mt-2 flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-gray-500 dark:text-gray-400">
-        <span>
-          🎧 Audio:{" "}
-          <span className="font-medium text-gray-700 dark:text-gray-200">
-            {offer.audio_languages.map(languageLabel).join(", ") || "—"}
-          </span>
-          <span className="ml-1 text-gray-300 dark:text-gray-600">
-            {offer.ranking.audio_rank === 0 ? "★" : `#${offer.ranking.audio_rank + 1}`}
-          </span>
-        </span>
-        <span>
-          💬 Subs:{" "}
-          <span className="font-medium text-gray-700 dark:text-gray-200">
-            {offer.subtitle_languages.map(languageLabel).join(", ") || "—"}
-          </span>
-          <span className="ml-1 text-gray-300 dark:text-gray-600">
-            {offer.ranking.subtitle_rank === 0 ? "★" : `#${offer.ranking.subtitle_rank + 1}`}
-          </span>
-        </span>
+      <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-gray-600 dark:text-gray-400 border-t border-gray-100 pt-2.5 dark:border-gray-700/60">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="font-medium text-gray-500">Audio:</span>
+          {offer.audio_languages.length > 0 ? (
+            offer.audio_languages.map((code) => (
+              <LanguageBadge
+                key={`audio-${code}`}
+                code={code}
+                type="audio"
+                isPreferred={isAudioPreferred}
+              />
+            ))
+          ) : (
+            <span className="text-gray-400">—</span>
+          )}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="font-medium text-gray-500">Subs:</span>
+          {offer.subtitle_languages.length > 0 ? (
+            offer.subtitle_languages.map((code) => (
+              <LanguageBadge
+                key={`sub-${code}`}
+                code={code}
+                type="subtitle"
+                isPreferred={isSubPreferred}
+              />
+            ))
+          ) : (
+            <span className="text-gray-400">—</span>
+          )}
+        </div>
       </div>
     </div>
   );

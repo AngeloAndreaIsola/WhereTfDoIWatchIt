@@ -11,11 +11,28 @@ export interface PopularMovie {
   categories: string[];
 }
 
+export interface UserMovieData {
+  is_watched: boolean;
+  rating?: number | null;
+  review?: string;
+  updated_at?: string;
+}
+
+export interface MovieWatchEvent {
+  id: number;
+  watched_date?: string | null;
+  rating?: number | null;
+  review?: string;
+  rewatch?: boolean;
+  created_at?: string;
+}
+
 export interface PrimeOffer {
   country: string;
   service: string;
   offer_type: "subscription" | "free";
   quality: string;
+  url?: string;
   audio_languages: string[];
   subtitle_languages: string[];
   ranking: {
@@ -30,8 +47,36 @@ export interface PrimeMovieResponse {
     tmdb_id: number;
     title: string;
     year: number | null;
+    poster_path?: string | null;
   };
+  user_data?: UserMovieData | null;
+  watch_events?: MovieWatchEvent[];
   offers: PrimeOffer[];
+}
+
+export interface WatchResult {
+  found: boolean;
+  watch_url?: string;
+  movie: {
+    tmdb_id: number;
+    title: string | null;
+    year: number | null;
+  };
+  offer?: PrimeOffer;
+  message?: string;
+}
+
+export async function fetchWatchDestination(tmdbId: number): Promise<WatchResult> {
+  const res = await fetch(`/api/watch/${tmdbId}/`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    return {
+      found: false,
+      movie: { tmdb_id: tmdbId, title: null, year: null },
+      message: body.message || body.error || `Failed to resolve watch destination (${res.status})`,
+    };
+  }
+  return res.json();
 }
 
 export interface PopularResponse {
