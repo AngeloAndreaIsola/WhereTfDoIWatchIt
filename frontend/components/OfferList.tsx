@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import LanguagePicker from "./LanguagePicker";
 import LanguageBadge from "@/components/LanguageBadge";
+import { normalizeLanguageCode } from "@/lib/languages";
 
 export interface RankingInfo {
   audio_rank: number;
@@ -24,6 +25,8 @@ export interface Offer {
 interface OfferListProps {
   tmdbId: number;
   offers: Offer[];
+  preferredAudio?: string[];
+  preferredSubtitles?: string[];
   onRefreshAvailability: () => void | Promise<void>;
 }
 
@@ -54,13 +57,27 @@ function validateLanguageCodes(codes: string[]): { cleanCodes: string[]; error: 
   return { cleanCodes, error: null };
 }
 
-export default function OfferList({ tmdbId, offers, onRefreshAvailability }: OfferListProps) {
+export default function OfferList({
+  tmdbId,
+  offers,
+  preferredAudio,
+  preferredSubtitles,
+  onRefreshAvailability,
+}: OfferListProps) {
   const [editingOffer, setEditingOffer] = useState<Offer | null>(null);
   const [audioCodes, setAudioCodes] = useState<string[]>([]);
   const [subCodes, setSubCodes] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
   const [formSuccess, setFormSuccess] = useState("");
+
+  const prefAudioSet = new Set(
+    (preferredAudio || []).map((c) => normalizeLanguageCode(c))
+  );
+
+  const prefSubSet = new Set(
+    (preferredSubtitles || []).map((c) => normalizeLanguageCode(c))
+  );
 
   const handleOpenEdit = (offer: Offer) => {
     setEditingOffer(offer);
@@ -134,8 +151,7 @@ export default function OfferList({ tmdbId, offers, onRefreshAvailability }: Off
         const hasAudio = o.audio_languages.length > 0;
         const hasSubs = o.subtitle_languages.length > 0;
         const isMissingAll = !hasAudio && !hasSubs;
-        const isAudioPreferred = o.ranking.audio_rank === 0;
-        const isSubPreferred = o.ranking.subtitle_rank === 0;
+        const watchUrl = o.url || `/watch/${tmdbId}`;
 
         return (
           <div
@@ -146,8 +162,8 @@ export default function OfferList({ tmdbId, offers, onRefreshAvailability }: Off
                 : "border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800/50"
             }`}
           >
-            {/* Top row: service + country + missing badge + quality/best */}
-            <div className="flex flex-wrap items-start justify-between gap-2">
+            {/* Top row: service + country + missing badge + quality/best + Watch button */}
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-semibold">{o.service}</span>
                 <span className="rounded-md bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600 dark:bg-gray-700 dark:text-gray-300">
@@ -171,6 +187,15 @@ export default function OfferList({ tmdbId, offers, onRefreshAvailability }: Off
                     Best
                   </span>
                 )}
+                <a
+                  href={watchUrl}
+                  target={o.url ? "_blank" : "_self"}
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1 text-xs font-semibold text-white shadow-xs hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600 transition-all"
+                >
+                  <span>▶</span>
+                  <span>Watch</span>
+                </a>
               </div>
             </div>
 
@@ -178,14 +203,14 @@ export default function OfferList({ tmdbId, offers, onRefreshAvailability }: Off
             <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-gray-100 pt-2.5 dark:border-gray-700/60">
               <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
                 <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-xs font-medium text-gray-500">Audio:</span>
+                  <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">Audio 🎧:</span>
                   {hasAudio ? (
                     o.audio_languages.map((code) => (
                       <LanguageBadge
                         key={`audio-${code}`}
                         code={code}
                         type="audio"
-                        isPreferred={isAudioPreferred}
+                        isPreferred={prefAudioSet.has(normalizeLanguageCode(code))}
                       />
                     ))
                   ) : (
@@ -196,14 +221,14 @@ export default function OfferList({ tmdbId, offers, onRefreshAvailability }: Off
                 </div>
 
                 <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-xs font-medium text-gray-500">Subs:</span>
+                  <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">Subs 💬:</span>
                   {hasSubs ? (
                     o.subtitle_languages.map((code) => (
                       <LanguageBadge
                         key={`sub-${code}`}
                         code={code}
                         type="subtitle"
-                        isPreferred={isSubPreferred}
+                        isPreferred={prefSubSet.has(normalizeLanguageCode(code))}
                       />
                     ))
                   ) : (

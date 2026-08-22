@@ -2,6 +2,7 @@
 
 import type { PrimeOffer } from "@/lib/api";
 import LanguageBadge from "@/components/LanguageBadge";
+import { normalizeLanguageCode } from "@/lib/languages";
 
 export { PrimeOffer };
 
@@ -29,12 +30,28 @@ function qualityLabel(q: string): string {
 
 interface OfferRowProps {
   offer: PrimeOffer;
+  tmdbId?: number;
   isBest?: boolean;
+  preferredAudio?: string[];
+  preferredSubtitles?: string[];
 }
 
-export default function OfferRow({ offer, isBest = false }: OfferRowProps) {
-  const isAudioPreferred = offer.ranking.audio_rank === 0;
-  const isSubPreferred = offer.ranking.subtitle_rank === 0;
+export default function OfferRow({
+  offer,
+  tmdbId,
+  isBest = false,
+  preferredAudio,
+  preferredSubtitles,
+}: OfferRowProps) {
+  const prefAudioSet = new Set(
+    (preferredAudio || []).map((c) => normalizeLanguageCode(c))
+  );
+
+  const prefSubSet = new Set(
+    (preferredSubtitles || []).map((c) => normalizeLanguageCode(c))
+  );
+
+  const watchUrl = offer.url || (tmdbId ? `/watch/${tmdbId}` : null);
 
   return (
     <div
@@ -45,7 +62,7 @@ export default function OfferRow({ offer, isBest = false }: OfferRowProps) {
           : "border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800/50"}
       `}
     >
-      <div className="flex flex-wrap items-start justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xl">{flagEmoji(offer.country)}</span>
           <span className="font-semibold text-gray-900 dark:text-gray-100">
@@ -74,18 +91,31 @@ export default function OfferRow({ offer, isBest = false }: OfferRowProps) {
             </span>
           )}
         </div>
+
+        {/* Watch Button next to offer */}
+        {watchUrl && (
+          <a
+            href={watchUrl}
+            target={offer.url ? "_blank" : "_self"}
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 py-1.5 text-xs font-semibold text-white shadow-xs hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600 transition-all"
+          >
+            <span>▶</span>
+            <span>Watch</span>
+          </a>
+        )}
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-gray-600 dark:text-gray-400 border-t border-gray-100 pt-2.5 dark:border-gray-700/60">
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="font-medium text-gray-500">Audio:</span>
+          <span className="font-semibold text-gray-700 dark:text-gray-300">Audio 🎧:</span>
           {offer.audio_languages.length > 0 ? (
             offer.audio_languages.map((code) => (
               <LanguageBadge
                 key={`audio-${code}`}
                 code={code}
                 type="audio"
-                isPreferred={isAudioPreferred}
+                isPreferred={prefAudioSet.has(normalizeLanguageCode(code))}
               />
             ))
           ) : (
@@ -94,14 +124,14 @@ export default function OfferRow({ offer, isBest = false }: OfferRowProps) {
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="font-medium text-gray-500">Subs:</span>
+          <span className="font-semibold text-gray-700 dark:text-gray-300">Subs 💬:</span>
           {offer.subtitle_languages.length > 0 ? (
             offer.subtitle_languages.map((code) => (
               <LanguageBadge
                 key={`sub-${code}`}
                 code={code}
                 type="subtitle"
-                isPreferred={isSubPreferred}
+                isPreferred={prefSubSet.has(normalizeLanguageCode(code))}
               />
             ))
           ) : (

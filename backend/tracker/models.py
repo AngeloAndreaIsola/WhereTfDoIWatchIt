@@ -1,6 +1,21 @@
-from django.contrib.postgres.fields import ArrayField
+import os
 from django.db import models
 from django.utils import timezone
+
+if os.environ.get("USE_SQLITE") == "1":
+    class ArrayField(models.JSONField):
+        def __init__(self, base_field=None, **kwargs):
+            self.base_field = base_field
+            kwargs.pop("size", None)
+            super().__init__(**kwargs)
+
+        def deconstruct(self):
+            name, path, args, kwargs = super().deconstruct()
+            if self.base_field:
+                args = [self.base_field] + list(args)
+            return name, path, args, kwargs
+else:
+    from django.contrib.postgres.fields import ArrayField
 
 
 class Movie(models.Model):

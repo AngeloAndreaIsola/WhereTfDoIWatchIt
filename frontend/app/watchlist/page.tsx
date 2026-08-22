@@ -57,6 +57,8 @@ interface ReportRow {
   available_countries: string[];
   best_country: string | null;
   best_service: string | null;
+  audio_languages?: string[];
+  subtitle_languages?: string[];
 }
 
 interface PreferencesData {
@@ -93,7 +95,10 @@ export default function WatchlistPage() {
         return;
       }
       if (!res.ok) {
-        throw new Error(`Failed to load watchlist (${res.status})`);
+        const body = await res.json().catch(() => ({}));
+        setWatchlistError(body.error ?? `Failed to load watchlist (${res.status})`);
+        setWatchlist([]);
+        return;
       }
       const data: WatchlistItem[] = await res.json();
       setWatchlist(data);
@@ -351,8 +356,8 @@ export default function WatchlistPage() {
                 poster_path: movie.poster_path,
                 best_service: rep?.best_service || null,
                 best_country: rep?.best_country || null,
-                audio_languages: preferences.audio_languages,
-                subtitle_languages: preferences.subtitle_languages,
+                audio_languages: rep?.audio_languages || [],
+                subtitle_languages: rep?.subtitle_languages || [],
                 preferred_audio: preferences.audio_languages,
                 preferred_subtitles: preferences.subtitle_languages,
               };

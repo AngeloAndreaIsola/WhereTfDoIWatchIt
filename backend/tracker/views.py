@@ -490,12 +490,16 @@ def preferences(request):
 def watchlist(request):
     """List or import watchlist items."""
     if request.method == "GET":
-        items = (
-            WatchlistItem.objects.select_related("movie")
-            .filter(user_id=1)
-            .order_by("-added_at")
-        )
-        return Response(WatchlistItemSerializer(items, many=True).data)
+        try:
+            items = (
+                WatchlistItem.objects.select_related("movie")
+                .filter(user_id=1)
+                .order_by("-added_at")
+            )
+            return Response(WatchlistItemSerializer(items, many=True).data)
+        except Exception as exc:
+            logger.exception("Failed to fetch watchlist")
+            return Response([], status=status.HTTP_200_OK)
 
     upload = request.FILES.get("file")
     if upload is None:
@@ -1049,6 +1053,7 @@ def watch_redirect(request, tmdb_id: int):
         matched = [
             o for o in qualifying
             if (o.get("service") or "").lower() in subscribed_slugs
+            or (o.get("service_id") or "").lower() in subscribed_slugs
         ]
         if matched:
             qualifying = matched

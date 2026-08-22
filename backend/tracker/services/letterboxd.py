@@ -165,49 +165,85 @@ def import_rows(
     user_id: int = 1,
     source: str = "letterboxd",
 ) -> ImportResult:
-    client = client or TMDbClient()
+    client = client or TMDbClient(timeout=3)
     result = ImportResult()
 
+    # Fast in-memory cache of local movies to prevent repeated TMDb API calls
+    local_movies_by_title_year: dict[tuple[str, Optional[int]], Movie] = {}
+    local_movies_by_uri: dict[str, Movie] = {}
+
+    for m in Movie.objects.all():
+        if m.title:
+            local_movies_by_title_year[(m.title.lower().strip(), m.year)] = m
+            if m.year is not None:
+                local_movies_by_title_year[(m.title.lower().strip(), None)] = m
+
+    for umd in UserMovieData.objects.select_related("movie").filter(user_id=user_id):
+        if umd.letterboxd_uri:
+            local_movies_by_uri[umd.letterboxd_uri] = umd.movie
+
     for row in rows:
-        matches = client.search(row.title, year=row.year)
-        if not matches:
-            result.skipped.append(
-                {"title": row.title, "year": row.year, "uri": row.uri, "reason": "no_match"}
-            )
-            continue
+        title_key = (row.title.lower().strip(), row.year)
+        movie: Optional[Movie] = None
 
-        pick = _select_match(matches, row.year)
-        if pick is None:
-            result.ambiguous.append(
-                {
-                    "title": row.title,
-                    "year": row.year,
-                    "uri": row.uri,
-                    "candidates": [_candidate_dict(m) for m in matches[:5]],
-                    "reason": "year_mismatch",
-                }
-            )
-            continue
+        if row.uri and row.uri in local_movies_by_uri:
+            movie = local_movies_by_uri[row.uri]
+        elif title_key in local_movies_by_title_year:
+            movie = local_movies_by_title_year[title_key]
+        elif (row.title.lower().strip(), None) in local_movies_by_title_year and row.year is None:
+            movie = local_movies_by_title_year[(row.title.lower().strip(), None)]
 
-        if len(matches) > 1 and _is_ambiguous(matches, row.year):
-            result.ambiguous.append(
-                {
-                    "title": row.title,
-                    "year": row.year,
-                    "uri": row.uri,
-                    "candidates": [_candidate_dict(m) for m in matches[:5]],
-                    "reason": "multiple_matches",
-                }
-            )
-            continue
+        if movie is None:
+            try:
+                matches = client.search(row.title, year=row.year)
+            except Exception as exc:
+                logger.warning("TMDb search failed for %s: %s", row.title, exc)
+                result.skipped.append(
+                    {"title": row.title, "year": row.year, "uri": row.uri, "reason": "tmdb_search_failed"}
+                )
+                continue
+            if not matches:
+                result.skipped.append(
+                    {"title": row.title, "year": row.year, "uri": row.uri, "reason": "no_match"}
+                )
+                continue
 
-        movie, created = Movie.objects.get_or_create(
-            tmdb_id=pick.tmdb_id,
-            defaults={"title": pick.title, "year": pick.year, "poster_path": pick.poster_path or ""},
-        )
-        if not created and pick.poster_path and not movie.poster_path:
-            movie.poster_path = pick.poster_path
-            movie.save()
+            pick = _select_match(matches, row.year)
+            if pick is None:
+                result.ambiguous.append(
+                    {
+                        "title": row.title,
+                        "year": row.year,
+                        "uri": row.uri,
+                        "candidates": [_candidate_dict(m) for m in matches[:5]],
+                        "reason": "year_mismatch",
+                    }
+                )
+                continue
+
+            if len(matches) > 1 and _is_ambiguous(matches, row.year):
+                result.ambiguous.append(
+                    {
+                        "title": row.title,
+                        "year": row.year,
+                        "uri": row.uri,
+                        "candidates": [_candidate_dict(m) for m in matches[:5]],
+                        "reason": "multiple_matches",
+                    }
+                )
+                continue
+
+            movie, created = Movie.objects.get_or_create(
+                tmdb_id=pick.tmdb_id,
+                defaults={"title": pick.title, "year": pick.year, "poster_path": pick.poster_path or ""},
+            )
+            if not created and pick.poster_path and not movie.poster_path:
+                movie.poster_path = pick.poster_path
+                movie.save()
+
+            local_movies_by_title_year[(movie.title.lower().strip(), movie.year)] = movie
+            if row.uri:
+                local_movies_by_uri[row.uri] = movie
 
         if row.file_type == "watchlist":
             item, _ = WatchlistItem.objects.get_or_create(

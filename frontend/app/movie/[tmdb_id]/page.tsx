@@ -14,6 +14,10 @@ interface MovieDetailPageProps {
 export default function MovieDetailPage({ params }: MovieDetailPageProps) {
   const tmdbId = parseInt(params.tmdb_id, 10);
   const [data, setData] = useState<PrimeMovieResponse | null>(null);
+  const [preferences, setPreferences] = useState<{ audio_languages: string[]; subtitle_languages: string[] }>({
+    audio_languages: [],
+    subtitle_languages: [],
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -22,6 +26,19 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
     setLoading(true);
     setError(null);
     setData(null);
+
+    // Fetch user preferences for exact language match highlighting
+    fetch("/api/preferences/")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((p) => {
+        if (!cancelled && p) {
+          setPreferences({
+            audio_languages: p.audio_languages || [],
+            subtitle_languages: p.subtitle_languages || [],
+          });
+        }
+      })
+      .catch(() => {});
 
     fetchPrimeMovieOffers(tmdbId)
       .then((d) => {
@@ -194,7 +211,13 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
                   <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-green-800 dark:text-green-300">
                     Best Match
                   </h3>
-                  <OfferRow offer={data.offers[0]} isBest={true} />
+                  <OfferRow
+                    offer={data.offers[0]}
+                    tmdbId={tmdbId}
+                    isBest={true}
+                    preferredAudio={preferences.audio_languages}
+                    preferredSubtitles={preferences.subtitle_languages}
+                  />
                 </div>
 
                 {/* All ranked offers */}
@@ -207,7 +230,10 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
                       <OfferRow
                         key={`${offer.country}-${offer.service}-${offer.quality}-${i}`}
                         offer={offer}
+                        tmdbId={tmdbId}
                         isBest={false}
+                        preferredAudio={preferences.audio_languages}
+                        preferredSubtitles={preferences.subtitle_languages}
                       />
                     ))}
                   </div>

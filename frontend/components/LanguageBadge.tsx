@@ -17,7 +17,6 @@ export default function LanguageBadge({
   compact = false,
 }: LanguageBadgeProps) {
   const displayName = getLanguageDisplayName(code);
-  const icon = type === "audio" ? "🎧" : "💬";
 
   if (isPreferred) {
     const colorClasses =
@@ -32,7 +31,6 @@ export default function LanguageBadge({
         }`}
         title={`Preferred ${type} language match (${code})`}
       >
-        <span>{icon}</span>
         <span>{compact ? code : displayName}</span>
         <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">✓</span>
       </span>
@@ -45,7 +43,6 @@ export default function LanguageBadge({
         compact ? "px-1.5 py-0.5 text-[10px]" : "px-2 py-0.5 text-xs"
       }`}
     >
-      <span>{icon}</span>
       <span>{compact ? code : displayName}</span>
     </span>
   );

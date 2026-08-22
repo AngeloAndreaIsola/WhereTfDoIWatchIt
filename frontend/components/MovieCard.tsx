@@ -26,7 +26,9 @@ interface MovieCardProps {
 
 export default function MovieCard({ movie }: MovieCardProps) {
   const posterUrl = movie.poster_path
-    ? `https://image.tmdb.org/t/p/w500${movie.poster_path}`
+    ? (movie.poster_path.startsWith("http")
+        ? movie.poster_path
+        : `https://image.tmdb.org/t/p/w500${movie.poster_path}`)
     : null;
 
   const prefAudioSet = new Set(
