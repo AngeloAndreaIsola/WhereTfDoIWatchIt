@@ -166,11 +166,11 @@ class PrimeMovieEndpointTests(TestCase):
         mock_cache = mock_cache_cls.return_value
         mock_cache._read_offers.return_value = [
             {"country": "JP", "service": "prime", "offer_type": "subscription",
-             "quality": "4k", "audio": ["ja", "en"], "subs": ["en", "ja"]},
+             "quality": "4k", "audio": ["JA", "EN"], "subs": ["EN", "JA"]},
             {"country": "US", "service": "prime", "offer_type": "subscription",
-             "quality": "hd", "audio": ["en"], "subs": ["en"]},
+             "quality": "hd", "audio": ["EN"], "subs": ["EN"]},
             {"country": "GB", "service": "netflix", "offer_type": "subscription",
-             "quality": "hd", "audio": ["en"], "subs": ["en"]},  # Should be filtered out
+             "quality": "hd", "audio": ["EN"], "subs": ["EN"]},  # Should be filtered out
         ]
         mock_cache.get_or_refresh.return_value = None
 
@@ -185,7 +185,7 @@ class PrimeMovieEndpointTests(TestCase):
         self.assertEqual(len(data["offers"]), 2)
         # JA audio should be ranked first (rank 0)
         self.assertEqual(data["offers"][0]["country"], "JP")
-        self.assertEqual(data["offers"][0]["audio_languages"], ["ja", "en"])
+        self.assertEqual(data["offers"][0]["audio_languages"], ["JA", "EN"])
         self.assertEqual(data["offers"][0]["ranking"]["audio_rank"], 0)
         # The stable service id "prime" is presented as its display name.
         self.assertEqual(data["offers"][0]["service"], "Prime Video")
@@ -238,11 +238,11 @@ class PrimeMovieEndpointTests(TestCase):
         mock_cache = mock_cache_cls.return_value
         mock_cache._read_offers.return_value = [
             {"country": "US", "service": "prime", "offer_type": "subscription",
-             "quality": "hd", "audio": ["en"], "subs": ["en"]},
+             "quality": "hd", "audio": ["EN"], "subs": ["EN"]},
             {"country": "US", "service": "prime", "offer_type": "rent",
-             "quality": "4k", "audio": ["en"], "subs": ["en"]},  # Should be filtered
+             "quality": "4k", "audio": ["EN"], "subs": ["EN"]},  # Should be filtered
             {"country": "US", "service": "prime", "offer_type": "buy",
-             "quality": "4k", "audio": ["en"], "subs": ["en"]},  # Should be filtered
+             "quality": "4k", "audio": ["EN"], "subs": ["EN"]},  # Should be filtered
         ]
         mock_cache.get_or_refresh.return_value = None
 
@@ -263,10 +263,10 @@ class PrimeMovieEndpointTests(TestCase):
         mock_cache._read_offers.return_value = [
             # US: EN audio, EN subs — lower priority
             {"country": "US", "service": "prime", "offer_type": "subscription",
-             "quality": "hd", "audio": ["en"], "subs": ["en"]},
+             "quality": "hd", "audio": ["EN"], "subs": ["EN"]},
             # JP: JA audio, EN subs — highest priority (JA audio rank 0)
             {"country": "JP", "service": "prime", "offer_type": "subscription",
-             "quality": "hd", "audio": ["ja", "en"], "subs": ["en", "ja"]},
+             "quality": "hd", "audio": ["JA", "EN"], "subs": ["EN", "JA"]},
         ]
         mock_cache.get_or_refresh.return_value = None
 

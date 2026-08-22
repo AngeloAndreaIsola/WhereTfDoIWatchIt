@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from rest_framework import serializers
 
+from .languages import CANONICAL_LANGUAGE_MAP, normalize_language_code
 from .models import Movie, Preference, Subscription, WatchlistItem
 
 
@@ -35,10 +36,63 @@ class MovieSerializer(serializers.ModelSerializer):
         fields = ["id", "tmdb_id", "title", "year"]
 
 
+def validate_language_codes(codes: list) -> list[str]:
+    cleaned = []
+    seen = set()
+    for raw in codes:
+        if not isinstance(raw, str):
+            raise serializers.ValidationError("Language codes must be strings.")
+        raw_clean = raw.strip()
+        if not raw_clean:
+            continue
+        canonical_code = normalize_language_code(raw_clean)
+        if not canonical_code:
+            valid_codes_str = ", ".join(sorted(CANONICAL_LANGUAGE_MAP.keys()))
+            raise serializers.ValidationError(
+                f"Invalid canonical language code or name '{raw}'. Must be one of: {valid_codes_str}."
+            )
+        if canonical_code not in seen:
+            seen.add(canonical_code)
+            cleaned.append(canonical_code)
+    return cleaned
+
+
 class PreferenceSerializer(serializers.ModelSerializer):
+    audio_languages = serializers.ListField(
+        child=serializers.CharField(), required=False, default=list
+    )
+    subtitle_languages = serializers.ListField(
+        child=serializers.CharField(), required=False, default=list
+    )
+    candidate_countries = serializers.ListField(
+        child=serializers.CharField(), required=False, default=list
+    )
+
     class Meta:
         model = Preference
         fields = ["audio_languages", "subtitle_languages", "candidate_countries"]
+
+    def validate_audio_languages(self, value: list) -> list[str]:
+        return validate_language_codes(value)
+
+    def validate_subtitle_languages(self, value: list) -> list[str]:
+        return validate_language_codes(value)
+
+    def validate_candidate_countries(self, value: list) -> list[str]:
+        cleaned = []
+        seen = set()
+        for raw in value:
+            if not isinstance(raw, str):
+                raise serializers.ValidationError("Country codes must be strings.")
+            c = raw.strip().upper()
+            if not c:
+                continue
+            if len(c) != 2 or not c.isalpha():
+                raise serializers.ValidationError("Country must be a 2-letter ISO code.")
+            if c not in seen:
+                seen.add(c)
+                cleaned.append(c)
+        return cleaned
 
 
 class WatchlistItemSerializer(serializers.ModelSerializer):
@@ -47,25 +101,6 @@ class WatchlistItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = WatchlistItem
         fields = ["id", "movie", "source", "added_at"]
-
-
-def validate_language_codes(codes: list) -> list[str]:
-    cleaned = []
-    seen = set()
-    for raw in codes:
-        if not isinstance(raw, str):
-            raise serializers.ValidationError("Language codes must be strings.")
-        code = raw.strip().lower()
-        if not code:
-            continue
-        if len(code) != 2 or not code.isalpha():
-            raise serializers.ValidationError(
-                f"Invalid ISO 639-1 language code '{raw}'. Codes must be 2 letters."
-            )
-        if code not in seen:
-            seen.add(code)
-            cleaned.append(code)
-    return cleaned
 
 
 class LanguageInfoSerializer(serializers.Serializer):

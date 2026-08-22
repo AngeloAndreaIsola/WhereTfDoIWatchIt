@@ -121,8 +121,8 @@ RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "")
 # frontend preferences UI is enabled. These are returned by
 # services/preferences.resolve_preferences() when no Preference row exists.
 DEFAULT_PREFERENCE = {
-    "audio_languages": ["ja", "en"],
-    "subtitle_languages": ["en", "ja"],
+    "audio_languages": ["JA", "EN"],
+    "subtitle_languages": ["EN", "JA"],
     "candidate_countries": [],
     "accept_any_audio": False,
     "accept_any_subtitle": False,

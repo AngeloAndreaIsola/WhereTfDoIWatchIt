@@ -16,11 +16,11 @@
       "offer_type": "subscription",
       "quality": "4k",
       "audio_languages": [
-        "en"
+        "EN"
       ],
       "subtitle_languages": [
-        "en",
-        "es"
+        "EN",
+        "ES"
       ],
       "ranking": {
         "score": 100,
@@ -37,10 +37,10 @@
       "offer_type": "subscription",
       "quality": "hd",
       "audio_languages": [
-        "en"
+        "EN"
       ],
       "subtitle_languages": [
-        "en"
+        "EN"
       ],
       "ranking": {
         "score": 80,

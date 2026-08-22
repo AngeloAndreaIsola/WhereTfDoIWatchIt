@@ -50,15 +50,15 @@ class ParseOffersTests(SimpleTestCase):
         self.assertEqual(jp.offer_type, "subscription")
         self.assertEqual(jp.quality, "hd")
 
-    def test_language_codes_normalized_to_iso_639_1(self):
-        # jpn -> ja, eng -> en (order preserved from the source list).
+    def test_language_codes_normalized_to_canonical_uppercase(self):
+        # jpn -> JA, eng -> EN (order preserved from the source list).
         jp = self._find("JP", "prime")
-        self.assertEqual(jp.audio_languages, ["ja", "en"])
-        self.assertEqual(jp.subtitle_languages, ["en", "ja"])
-        # spa -> es on the US prime offer.
+        self.assertEqual(jp.audio_languages, ["JA", "EN"])
+        self.assertEqual(jp.subtitle_languages, ["EN", "JA"])
+        # spa -> ES on the US prime offer.
         us = self._find("US", "prime")
-        self.assertEqual(us.audio_languages, ["en", "es"])
-        self.assertEqual(us.subtitle_languages, ["en", "es"])
+        self.assertEqual(us.audio_languages, ["EN", "ES"])
+        self.assertEqual(us.subtitle_languages, ["EN", "ES"])
         self.assertEqual(us.quality, "uhd")
 
     def test_non_prime_provider_kept_with_its_own_id(self):

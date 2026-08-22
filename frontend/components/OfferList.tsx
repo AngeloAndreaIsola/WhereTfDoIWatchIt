@@ -2,6 +2,7 @@
 
 import React, { useState } from "react";
 import LanguagePicker from "./LanguagePicker";
+import { getLanguageDisplayName } from "@/lib/languages";
 
 export interface RankingInfo {
   audio_rank: number;
@@ -47,14 +48,8 @@ function validateLanguageCodes(codes: string[]): { cleanCodes: string[]; error: 
   const seen = new Set<string>();
 
   for (const rawCode of codes) {
-    const code = rawCode.trim().toLowerCase();
+    const code = rawCode.trim().toUpperCase();
     if (!code) continue;
-    if (!/^[a-z]{2}$/.test(code)) {
-      return {
-        cleanCodes: [],
-        error: `Invalid ISO 639-1 code "${code}". Language codes must be 2 letters (e.g., en, es, fr).`,
-      };
-    }
     if (!seen.has(code)) {
       seen.add(code);
       cleanCodes.push(code);
@@ -189,7 +184,7 @@ export default function OfferList({ tmdbId, offers, onRefreshAvailability }: Off
                   🔊 Audio:{" "}
                   {hasAudio ? (
                     <span className="font-medium text-gray-700 dark:text-gray-200">
-                      {o.audio_languages.join(", ")}
+                      {o.audio_languages.map(getLanguageDisplayName).join(", ")}
                     </span>
                   ) : (
                     <span className="font-medium text-amber-600 dark:text-amber-400">
@@ -204,7 +199,7 @@ export default function OfferList({ tmdbId, offers, onRefreshAvailability }: Off
                   💬 Subs:{" "}
                   {hasSubs ? (
                     <span className="font-medium text-gray-700 dark:text-gray-200">
-                      {o.subtitle_languages.join(", ")}
+                      {o.subtitle_languages.map(getLanguageDisplayName).join(", ")}
                     </span>
                   ) : (
                     <span className="font-medium text-amber-600 dark:text-amber-400">

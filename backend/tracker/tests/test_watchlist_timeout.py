@@ -39,8 +39,8 @@ class WatchlistReportNonBlockingTests(TestCase):
 
         Preference.objects.create(
             user_id=1,
-            audio_languages=["en"],
-            subtitle_languages=["en"],
+            audio_languages=["EN"],
+            subtitle_languages=["EN"],
             candidate_countries=["US"],
         )
 
@@ -56,8 +56,8 @@ class WatchlistReportNonBlockingTests(TestCase):
             quality="hd",
         )
         info = LanguageInfo.objects.create(movie=movie, region=region)
-        LanguageEntry.objects.create(language_info=info, kind="audio", language_code="en")
-        LanguageEntry.objects.create(language_info=info, kind="subtitle", language_code="en")
+        LanguageEntry.objects.create(language_info=info, kind="audio", language_code="EN")
+        LanguageEntry.objects.create(language_info=info, kind="subtitle", language_code="EN")
 
     def _create_stale_availability(self, movie: Movie, country: str = "US", provider: str = "prime"):
         """Create stale availability for a movie."""
@@ -71,7 +71,7 @@ class WatchlistReportNonBlockingTests(TestCase):
             quality="hd",
         )
         info = LanguageInfo.objects.create(movie=movie, region=region)
-        LanguageEntry.objects.create(language_info=info, kind="audio", language_code="en")
+        LanguageEntry.objects.create(language_info=info, kind="audio", language_code="EN")
 
     @patch("tracker.views.AvailabilityCache")
     def test_report_with_fresh_cached_data_does_not_call_external_api(self, mock_cache_class):
@@ -94,7 +94,7 @@ class WatchlistReportNonBlockingTests(TestCase):
 
         data = resp.json()
         self.assertEqual(len(data["report"]), 3)
-        self.assertEqual(data["available_movies_count"], 3)
+        self.assertEqual(data["summary"]["available_movies"], 3)
 
     @patch("tracker.views.AvailabilityCache")
     def test_report_with_stale_data_does_not_block(self, mock_cache_class):
@@ -118,7 +118,7 @@ class WatchlistReportNonBlockingTests(TestCase):
         data = resp.json()
         self.assertEqual(len(data["report"]), 3)
         # Movies with stale availability should still appear
-        self.assertEqual(data["available_movies_count"], 2)
+        self.assertEqual(data["summary"]["available_movies"], 2)
 
     @patch("tracker.views.AvailabilityCache")
     def test_report_with_missing_data_does_not_block(self, mock_cache_class):
@@ -139,7 +139,7 @@ class WatchlistReportNonBlockingTests(TestCase):
         data = resp.json()
         self.assertEqual(len(data["report"]), 3)
         # No movies should have availability
-        self.assertEqual(data["available_movies_count"], 0)
+        self.assertEqual(data["summary"]["available_movies"], 0)
 
     @patch("tracker.views.AvailabilityCache")
     def test_report_with_mixed_cache_states(self, mock_cache_class):
@@ -162,7 +162,7 @@ class WatchlistReportNonBlockingTests(TestCase):
         data = resp.json()
         self.assertEqual(len(data["report"]), 3)
         # Two movies have some availability
-        self.assertEqual(data["available_movies_count"], 2)
+        self.assertEqual(data["summary"]["available_movies"], 2)
 
     @patch("tracker.views.AvailabilityCache.get_cached_only")
     def test_external_api_failure_does_not_crash_report(self, mock_get_cached):

@@ -1,6 +1,6 @@
 """Strict priority ranking for streaming offers per SPEC.
 
-Priority order (one-line config change later):
+Priority order:
 1. Audio language match (ranked order of preference.audio_languages).
 2. Subtitle language match (ranked order of preference.subtitle_languages).
 3. Quality: 4k > hdr > hd > sd.
@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
+from tracker.languages import normalize_language_code
 from ..models import Preference
 
 QUALITY_RANK = {"4k": 0, "uhd": 0, "hdr": 1, "qhd": 1, "hd": 2, "sd": 3}
@@ -46,14 +47,30 @@ class RankedOffer:
         }
 
 
+def _normalize_lang_list(raw_list: Iterable[str]) -> list[str]:
+    """Normalize a list of language strings/codes into canonical uppercase codes."""
+    res = []
+    seen = set()
+    for item in raw_list or []:
+        norm = normalize_language_code(str(item))
+        if norm and norm not in seen:
+            seen.add(norm)
+            res.append(norm)
+    return res
+
+
 def rank_offers(
     offers: Iterable[dict],
     preference: Preference,
     country_filter: Optional[set[str]] = None,
 ) -> list[RankedOffer]:
     """Strict priority sort over a list of cached offers."""
-    audio_priority = {code: i for i, code in enumerate(preference.audio_languages or [])}
-    sub_priority = {code: i for i, code in enumerate(preference.subtitle_languages or [])}
+    pref_audio = _normalize_lang_list(preference.audio_languages or [])
+    pref_subs = _normalize_lang_list(preference.subtitle_languages or [])
+
+    audio_priority = {code: i for i, code in enumerate(pref_audio)}
+    sub_priority = {code: i for i, code in enumerate(pref_subs)}
+
     allowed_countries = (
         {c.upper() for c in country_filter}
         if country_filter is not None
@@ -65,8 +82,13 @@ def rank_offers(
         country = (offer.get("country") or "").upper()
         if allowed_countries and country not in allowed_countries:
             continue
-        audio = [c.lower() for c in offer.get("audio", [])]
-        subs = [c.lower() for c in offer.get("subs", [])]
+
+        raw_audio = offer.get("audio") or offer.get("audio_languages") or []
+        raw_subs = offer.get("subs") or offer.get("subtitle_languages") or []
+
+        audio = _normalize_lang_list(raw_audio)
+        subs = _normalize_lang_list(raw_subs)
+
         audio_rank = _min_rank(audio, audio_priority)
         sub_rank = _min_rank(subs, sub_priority)
         quality = (offer.get("quality") or "").lower()

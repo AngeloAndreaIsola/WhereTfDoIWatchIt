@@ -40,14 +40,14 @@ class ResolvePreferencesDefaultsTests(TestCase):
         """
         Preference.objects.create(
             user_id=999,
-            audio_languages=["en", "fr"],
-            subtitle_languages=["es"],
+            audio_languages=["EN", "FR"],
+            subtitle_languages=["ES"],
             candidate_countries=["us", "ca"],
         )
 
         result = resolve_preferences(user_id=999)
-        self.assertEqual(result["audio_languages"], ["en", "fr"])
-        self.assertEqual(result["subtitle_languages"], ["es"])
+        self.assertEqual(result["audio_languages"], ["EN", "FR"])
+        self.assertEqual(result["subtitle_languages"], ["ES"])
         self.assertEqual(result["candidate_countries"], ["us", "ca"])
 
 
