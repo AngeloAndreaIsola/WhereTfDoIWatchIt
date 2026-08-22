@@ -106,13 +106,13 @@ class RankingTests(TestCase):
 
     def test_de_matching_deutsch(self):
         offers = [_offer("de", "Service", audio=("Deutsch",))]
-        ranked = rank_offers(offers, _pref(audio=("DE",)))
+        ranked = rank_offers(offers, _pref(audio=("DE",), countries=()))
         self.assertEqual(ranked[0].audio_rank, 0)
         self.assertEqual(ranked[0].audio, ["DE"])
 
     def test_ja_matching_japanese_provider_metadata(self):
         offers = [_offer("jp", "Service", audio=("jpn",), subs=("Japanese",))]
-        ranked = rank_offers(offers, _pref(audio=("JA",), subs=("JA",)))
+        ranked = rank_offers(offers, _pref(audio=("JA",), subs=("JA",), countries=()))
         self.assertEqual(ranked[0].audio_rank, 0)
         self.assertEqual(ranked[0].sub_rank, 0)
         self.assertEqual(ranked[0].audio, ["JA"])
@@ -125,7 +125,7 @@ class RankingTests(TestCase):
             _offer("no", "S3", audio=("nob",)),
             _offer("no", "S4", audio=("nb",)),
         ]
-        ranked = rank_offers(offers, _pref(audio=("NB",)))
+        ranked = rank_offers(offers, _pref(audio=("NB",), countries=()))
         for r in ranked:
             self.assertEqual(r.audio_rank, 0)
             self.assertEqual(r.audio, ["NB"])

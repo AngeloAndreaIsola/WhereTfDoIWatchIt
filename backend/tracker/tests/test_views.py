@@ -98,6 +98,16 @@ class MovieAvailabilityTests(TestCase):
         self.assertEqual(resp.json()["movie"]["tmdb_id"], 42)
         self.assertEqual(len(resp.json()["offers"]), 1)
 
+    @patch("tracker.views.AvailabilityCache")
+    def test_respects_rate_limiter(self, mock_cache_cls):
+        from tracker.services.rate_limit import RateLimitExceeded
+        Movie.objects.create(tmdb_id=42, title="Cached", year=2020)
+        instance = mock_cache_cls.return_value
+        instance.get_or_refresh.side_effect = RateLimitExceeded("Rate limit reached")
+        resp = self.client.get("/api/movie/42/availability/")
+        self.assertEqual(resp.status_code, 429)
+        self.assertTrue(resp.json().get("rate_limited"))
+
 
 class WatchlistEndpointTests(TestCase):
     def test_get_returns_empty(self):
@@ -182,20 +192,6 @@ class WatchlistReportEndpointTests(TestCase):
         self.assertEqual(row2["available_countries"], [])
         self.assertIsNone(row2["best_country"])
         self.assertIsNone(row2["best_service"])
-
-    @patch("tracker.views.AvailabilityCache")
-    def test_respects_rate_limiter(self, mock_cache_cls):
-        from tracker.models import WatchlistItem
-        from tracker.services.rate_limit import RateLimitExceeded
-        movie = Movie.objects.create(tmdb_id=301, title="Rate Limited Movie", year=2023)
-        WatchlistItem.objects.create(user_id=1, movie=movie, source="manual")
-
-        instance = mock_cache_cls.return_value
-        instance.get_or_refresh.side_effect = RateLimitExceeded("Rate limit reached")
-
-        resp = self.client.get("/api/watchlist/report/")
-        self.assertEqual(resp.status_code, 429)
-        self.assertTrue(resp.json().get("rate_limited"))
 
     @patch("tracker.views.AvailabilityCache")
     def test_summary_analytics_and_deduplication(self, mock_cache_cls):

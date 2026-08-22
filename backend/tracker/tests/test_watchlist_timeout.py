@@ -46,32 +46,36 @@ class WatchlistReportNonBlockingTests(TestCase):
 
     def _create_fresh_availability(self, movie: Movie, country: str = "US", provider: str = "prime"):
         """Create fresh (non-stale) availability for a movie."""
-        region = Region.objects.create(provider=provider, country=country)
-        Availability.objects.create(
+        region, _ = Region.objects.get_or_create(provider=provider, country=country)
+        Availability.objects.update_or_create(
             movie=movie,
             region=region,
-            last_checked_at=timezone.now(),
-            is_available=True,
-            offer_type="subscription",
-            quality="hd",
+            defaults={
+                "last_checked_at": timezone.now(),
+                "is_available": True,
+                "offer_type": "subscription",
+                "quality": "hd",
+            },
         )
-        info = LanguageInfo.objects.create(movie=movie, region=region)
-        LanguageEntry.objects.create(language_info=info, kind="audio", language_code="EN")
-        LanguageEntry.objects.create(language_info=info, kind="subtitle", language_code="EN")
+        info, _ = LanguageInfo.objects.get_or_create(movie=movie, region=region)
+        LanguageEntry.objects.get_or_create(language_info=info, kind="audio", language_code="EN")
+        LanguageEntry.objects.get_or_create(language_info=info, kind="subtitle", language_code="EN")
 
     def _create_stale_availability(self, movie: Movie, country: str = "US", provider: str = "prime"):
         """Create stale availability for a movie."""
-        region = Region.objects.create(provider=provider, country=country)
-        Availability.objects.create(
+        region, _ = Region.objects.get_or_create(provider=provider, country=country)
+        Availability.objects.update_or_create(
             movie=movie,
             region=region,
-            last_checked_at=timezone.now() - timedelta(hours=48),  # Stale after 24h
-            is_available=True,
-            offer_type="subscription",
-            quality="hd",
+            defaults={
+                "last_checked_at": timezone.now() - timedelta(hours=48),  # Stale after 24h
+                "is_available": True,
+                "offer_type": "subscription",
+                "quality": "hd",
+            },
         )
-        info = LanguageInfo.objects.create(movie=movie, region=region)
-        LanguageEntry.objects.create(language_info=info, kind="audio", language_code="EN")
+        info, _ = LanguageInfo.objects.get_or_create(movie=movie, region=region)
+        LanguageEntry.objects.get_or_create(language_info=info, kind="audio", language_code="EN")
 
     @patch("tracker.views.AvailabilityCache")
     def test_report_with_fresh_cached_data_does_not_call_external_api(self, mock_cache_class):
@@ -187,13 +191,12 @@ class WatchlistReportNonBlockingTests(TestCase):
         # First call succeeds, second fails, third succeeds
         call_count = [0]
 
-        def side_effect(*args, **kwargs):
+        def side_effect(movie):
             call_count[0] += 1
             if call_count[0] == 2:
                 raise Exception("Cache read failure")
-            # Return a real cache status for other calls
             cache = AvailabilityCache()
-            return cache.get_cached_only(args[0])
+            return cache.get_cached_only(movie)
 
         mock_get_cached.side_effect = side_effect
 
