@@ -67,8 +67,8 @@ export default function PreferencesPage() {
       <div className="mb-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
         <span className="font-medium">Coming soon</span> — Preferences are managed
         by the server for now. Language preferences are hardcoded to{" "}
-        <code className="font-mono">ja, en</code> (audio) and{" "}
-        <code className="font-mono">en, ja</code> (subtitles).
+        <code className="font-mono">JA, EN</code> (audio) and{" "}
+        <code className="font-mono">EN, JA</code> (subtitles).
       </div>
 
       {/* Loading state */}
@@ -98,12 +98,12 @@ export default function PreferencesPage() {
               Audio Languages
             </label>
             <p className="mb-1.5 text-xs text-gray-500 dark:text-gray-400">
-              Comma-separated ISO 639-1 language codes (e.g. <code className="font-mono">en, it, fr</code>)
+              Comma-separated canonical language codes (e.g. <code className="font-mono">EN, IT, FR</code>)
             </p>
             <input
               id="audio-languages"
               type="text"
-              placeholder="en, it, fr"
+              placeholder="EN, IT, FR"
               value={audioLangs}
               onChange={(e) => setAudioLangs(e.target.value)}
               disabled
@@ -117,12 +117,12 @@ export default function PreferencesPage() {
               Subtitle Languages
             </label>
             <p className="mb-1.5 text-xs text-gray-500 dark:text-gray-400">
-              Comma-separated ISO 639-1 language codes (e.g. <code className="font-mono">en, it</code>)
+              Comma-separated canonical language codes (e.g. <code className="font-mono">EN, IT</code>)
             </p>
             <input
               id="subtitle-languages"
               type="text"
-              placeholder="en, it"
+              placeholder="EN, IT"
               value={subtitleLangs}
               onChange={(e) => setSubtitleLangs(e.target.value)}
               disabled

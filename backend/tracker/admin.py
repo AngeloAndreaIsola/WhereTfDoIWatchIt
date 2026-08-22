@@ -18,7 +18,7 @@ from .models import (
 class LanguageEntryInline(admin.TabularInline):
     model = LanguageEntry
     extra = 1
-    help_text = "Language code must be a 2-letter ISO 639-1 code (e.g. 'en', 'ja', 'es')."
+    help_text = "Language code must be a canonical 2-letter uppercase ISO code (e.g. 'EN', 'JA', 'ES')."
 
 
 @admin.register(LanguageInfo)
@@ -30,12 +30,12 @@ class LanguageInfoAdmin(admin.ModelAdmin):
 
     @admin.display(description="Audio Languages")
     def get_audio_count(self, obj):
-        count = obj.entries.filter(entry_type="audio").count()
+        count = obj.entries.filter(kind="audio").count()
         return f"{count} language(s)"
 
     @admin.display(description="Subtitle Languages")
     def get_subtitle_count(self, obj):
-        count = obj.entries.filter(entry_type="subtitle").count()
+        count = obj.entries.filter(kind="subtitle").count()
         return f"{count} language(s)"
 
 
@@ -72,7 +72,7 @@ class PreferenceAdmin(admin.ModelAdmin):
     def formfield_for_dbfield(self, db_field, **kwargs):
         field = super().formfield_for_dbfield(db_field, **kwargs)
         if isinstance(db_field, ArrayField):
-            field.help_text = "Comma-separated ISO 639-1 codes, first = highest priority."
+            field.help_text = "Comma-separated canonical 2-letter uppercase codes (e.g. EN, DE, FR), first = highest priority."
         return field
 
 

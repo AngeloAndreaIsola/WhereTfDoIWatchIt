@@ -11,8 +11,8 @@ from rest_framework.decorators import api_view, parser_classes
 from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 
-
-from .models import LanguageEntry, LanguageInfo,Movie, Preference, Region, Subscription, WatchlistItem
+from .languages import normalize_language_code
+from .models import LanguageEntry, LanguageInfo, Movie, Preference, Region, Subscription, WatchlistItem
 from .serializers import (
     LanguageInfoSerializer,
     MovieSerializer,
@@ -359,10 +359,11 @@ def movie_language_info(request, tmdb_id: int):
         subs = []
         if info:
             for entry in info.entries.all():
-                if entry.kind == "audio":
-                    audio.append(entry.language_code)
-                elif entry.kind == "subtitle":
-                    subs.append(entry.language_code)
+                norm = normalize_language_code(entry.language_code) or entry.language_code.upper()
+                if entry.kind == "audio" and norm not in audio:
+                    audio.append(norm)
+                elif entry.kind == "subtitle" and norm not in subs:
+                    subs.append(norm)
 
         return Response(
             {

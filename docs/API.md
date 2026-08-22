@@ -123,12 +123,12 @@ This document provides the complete API contract specification for the **WhereTf
     },
     "offers": [
       {
-        "country": "us",
+        "country": "US",
         "service": "Netflix",
         "offer_type": "subscription",
         "quality": "4k",
-        "audio_languages": ["en"],
-        "subtitle_languages": ["en", "es"],
+        "audio_languages": ["EN"],
+        "subtitle_languages": ["EN", "ES"],
         "ranking": {
           "score": 100,
           "reasons": ["matches_candidate_country", "matches_audio_language", "matches_subtitle_language"]
@@ -151,8 +151,8 @@ This document provides the complete API contract specification for the **WhereTf
   - Example: [`docs/examples/api/preferences_get_response.json`](examples/api/preferences_get_response.json)
   ```json
   {
-    "audio_languages": ["en"],
-    "subtitle_languages": ["en", "es"],
+    "audio_languages": ["EN"],
+    "subtitle_languages": ["EN", "ES"],
     "candidate_countries": ["us", "gb"]
   }
   ```
@@ -163,8 +163,8 @@ This document provides the complete API contract specification for the **WhereTf
   - Example Request Body: [`docs/examples/api/preferences_put_request.json`](examples/api/preferences_put_request.json)
   ```json
   {
-    "audio_languages": ["en", "it"],
-    "subtitle_languages": ["en"],
+    "audio_languages": ["EN", "IT"],
+    "subtitle_languages": ["EN"],
     "candidate_countries": ["us", "gb", "it"]
   }
   ```
@@ -346,8 +346,8 @@ This document provides the complete API contract specification for the **WhereTf
         "service": "amazon",
         "offer_type": "subscription",
         "quality": "4k",
-        "audio_languages": ["ja", "en"],
-        "subtitle_languages": ["en", "ja"],
+        "audio_languages": ["JA", "EN"],
+        "subtitle_languages": ["EN", "JA"],
         "ranking": { "audio_rank": 0, "subtitle_rank": 0, "quality_rank": 0 }
       }
     ]

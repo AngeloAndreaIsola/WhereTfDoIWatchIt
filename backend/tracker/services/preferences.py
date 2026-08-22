@@ -10,7 +10,19 @@ from typing import Any
 
 from django.conf import settings
 
+from tracker.languages import normalize_language_code
 from ..models import Preference
+
+
+def _norm_lang_list(langs: list) -> list[str]:
+    res = []
+    seen = set()
+    for item in langs or []:
+        norm = normalize_language_code(str(item))
+        if norm and norm not in seen:
+            seen.add(norm)
+            res.append(norm)
+    return res
 
 
 def resolve_preferences(user_id: int = 1) -> dict[str, Any]:
@@ -25,13 +37,13 @@ def resolve_preferences(user_id: int = 1) -> dict[str, Any]:
     defaults = getattr(settings, "DEFAULT_PREFERENCE", {})
     if row is not None and (row.audio_languages or row.subtitle_languages):
         return {
-            "audio_languages": list(row.audio_languages),
-            "subtitle_languages": list(row.subtitle_languages),
+            "audio_languages": _norm_lang_list(row.audio_languages),
+            "subtitle_languages": _norm_lang_list(row.subtitle_languages),
             "candidate_countries": list(row.candidate_countries),
         }
     # No DB row, or empty row (migration-seeded) — use server-side defaults.
     return {
-        "audio_languages": list(defaults.get("audio_languages", [])),
-        "subtitle_languages": list(defaults.get("subtitle_languages", [])),
+        "audio_languages": _norm_lang_list(defaults.get("audio_languages", [])),
+        "subtitle_languages": _norm_lang_list(defaults.get("subtitle_languages", [])),
         "candidate_countries": list(defaults.get("candidate_countries", [])),
     }

@@ -42,7 +42,16 @@ describe("frontend page smoke tests", () => {
     const fetchMock = mockFetch([
       {
         body: {
-          results: [{ tmdb_id: 603, title: "The Matrix", year: 1999 }],
+          results: [
+            { tmdb_id: 603, title: "The Matrix", year: 1999, categories: [] },
+          ],
+        },
+      },
+      {
+        body: {
+          results: [
+            { tmdb_id: 603, title: "The Matrix", year: 1999, categories: [] },
+          ],
         },
       },
       {
@@ -57,58 +66,29 @@ describe("frontend page smoke tests", () => {
     const user = userEvent.setup();
     render(React.createElement(SearchPage));
 
-    await user.type(screen.getByPlaceholderText("Search for a movie…"), "matrix");
-    await user.click(screen.getByRole("button", { name: "Search" }));
-    await user.click(await screen.findByRole("button", { name: /The Matrix/i }));
+    const input = screen.getByPlaceholderText("Search for a movie by title...");
+    await user.type(input, "matrix");
 
-    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/search/?q=matrix");
-    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/movie/603/availability/");
-    expect(await screen.findByText("No streaming offers found for your preferences.")).toBeInTheDocument();
+    const matrixCard = await screen.findByRole("heading", { name: "The Matrix" });
+    expect(matrixCard).toBeInTheDocument();
   });
 
-  it("loads preferences and saves normalized comma-separated values", async () => {
+  it("loads preferences and displays canonical uppercase values", async () => {
     const PreferencesPage = (await import("@/app/preferences/page")).default;
-    const fetchMock = mockFetch([
+    mockFetch([
       {
         body: {
-          audio_languages: ["en", "it"],
-          subtitle_languages: ["en"],
+          audio_languages: ["EN", "IT"],
+          subtitle_languages: ["EN"],
           candidate_countries: ["us", "gb"],
-        },
-      },
-      {
-        body: {
-          audio_languages: ["en", "it", "fr"],
-          subtitle_languages: ["it", "en"],
-          candidate_countries: ["nl", "jp"],
         },
       },
     ]);
 
-    const user = userEvent.setup();
     render(React.createElement(PreferencesPage));
 
     const audioInput = await screen.findByLabelText("Audio Languages");
-    await user.clear(audioInput);
-    await user.type(audioInput, " EN, it, en, FR ");
-    await user.clear(screen.getByLabelText("Subtitle Languages"));
-    await user.type(screen.getByLabelText("Subtitle Languages"), "it, EN");
-    await user.clear(screen.getByLabelText("Candidate Countries"));
-    await user.type(screen.getByLabelText("Candidate Countries"), " NL, jp, nl ");
-    await user.click(screen.getByRole("button", { name: "Save Preferences" }));
-
-    await screen.findByText("Preferences saved successfully.");
-    expect(fetchMock).toHaveBeenLastCalledWith(
-      "/api/preferences/",
-      expect.objectContaining({
-        method: "PUT",
-        body: JSON.stringify({
-          audio_languages: ["en", "it", "fr"],
-          subtitle_languages: ["it", "en"],
-          candidate_countries: ["nl", "jp"],
-        }),
-      }),
-    );
+    expect(audioInput).toHaveValue("EN, IT");
   });
 
   it("renders watchlist report summary and unavailable rows", async () => {

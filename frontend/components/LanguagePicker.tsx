@@ -1,46 +1,20 @@
 "use client";
 
 import React, { useState, useMemo, useRef, useEffect } from "react";
+import {
+  CANONICAL_LANGUAGES,
+  CANONICAL_LANGUAGE_MAP,
+  getLanguageDisplayName,
+} from "@/lib/languages";
 
 export interface LanguageOption {
   code: string;
   name: string;
 }
 
-export const COMMON_LANGUAGES: LanguageOption[] = [
-  { code: "en", name: "English" },
-  { code: "es", name: "Spanish" },
-  { code: "fr", name: "French" },
-  { code: "de", name: "German" },
-  { code: "it", name: "Italian" },
-  { code: "ja", name: "Japanese" },
-  { code: "ko", name: "Korean" },
-  { code: "zh", name: "Chinese" },
-  { code: "pt", name: "Portuguese" },
-  { code: "ru", name: "Russian" },
-  { code: "hi", name: "Hindi" },
-  { code: "ar", name: "Arabic" },
-  { code: "cs", name: "Czech" },
-  { code: "da", name: "Danish" },
-  { code: "nl", name: "Dutch" },
-  { code: "fi", name: "Finnish" },
-  { code: "el", name: "Greek" },
-  { code: "he", name: "Hebrew" },
-  { code: "hu", name: "Hungarian" },
-  { code: "id", name: "Indonesian" },
-  { code: "no", name: "Norwegian" },
-  { code: "pl", name: "Polish" },
-  { code: "ro", name: "Romanian" },
-  { code: "sv", name: "Swedish" },
-  { code: "th", name: "Thai" },
-  { code: "tr", name: "Turkish" },
-  { code: "uk", name: "Ukrainian" },
-  { code: "vi", name: "Vietnamese" },
-];
+export const COMMON_LANGUAGES: LanguageOption[] = CANONICAL_LANGUAGES;
 
-const LANG_MAP = new Map<string, string>(
-  COMMON_LANGUAGES.map((l) => [l.code, l.name])
-);
+const LANG_MAP = CANONICAL_LANGUAGE_MAP;
 
 export interface LanguagePickerProps {
   label: string;
@@ -54,8 +28,8 @@ export default function LanguagePicker({
   label,
   selectedCodes,
   onChange,
-  quickAddCodes = ["en", "ja", "es", "fr", "de", "it"],
-  placeholder = "Search language or code (e.g. ja, Japanese)...",
+  quickAddCodes = ["EN", "JA", "ES", "FR", "DE", "IT"],
+  placeholder = "Search language or code (e.g. JA, Japanese, EN)...",
 }: LanguagePickerProps) {
   const [query, setQuery] = useState("");
   const [isOpen, setIsOpen] = useState(false);
@@ -76,8 +50,8 @@ export default function LanguagePicker({
 
   const filteredOptions = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return COMMON_LANGUAGES;
-    return COMMON_LANGUAGES.filter(
+    if (!q) return CANONICAL_LANGUAGES;
+    return CANONICAL_LANGUAGES.filter(
       (lang) =>
         lang.code.toLowerCase().includes(q) ||
         lang.name.toLowerCase().includes(q)
@@ -85,7 +59,7 @@ export default function LanguagePicker({
   }, [query]);
 
   const handleAddCode = (code: string) => {
-    const cleanCode = code.trim().toLowerCase();
+    const cleanCode = code.trim().toUpperCase();
     if (!cleanCode) return;
     if (!selectedCodes.includes(cleanCode)) {
       onChange([...selectedCodes, cleanCode]);
@@ -101,13 +75,11 @@ export default function LanguagePicker({
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
       e.preventDefault();
-      const q = query.trim().toLowerCase();
+      const q = query.trim().toUpperCase();
       if (!q) return;
 
       if (filteredOptions.length > 0) {
         handleAddCode(filteredOptions[0].code);
-      } else if (/^[a-z]{2}$/.test(q)) {
-        handleAddCode(q);
       }
     }
   };
@@ -124,8 +96,9 @@ export default function LanguagePicker({
           <span className="text-[11px] text-gray-500 dark:text-gray-400 font-medium">
             Quick Add:
           </span>
-          {quickAddCodes.map((code) => {
-            const name = LANG_MAP.get(code) ?? code;
+          {quickAddCodes.map((rawCode) => {
+            const code = rawCode.toUpperCase();
+            const name = LANG_MAP[code] ?? getLanguageDisplayName(code);
             const isSelected = selectedCodes.includes(code);
             return (
               <button
@@ -141,7 +114,7 @@ export default function LanguagePicker({
                 }`}
                 title={isSelected ? `Remove ${name}` : `Add ${name} (${code})`}
               >
-                + {code.toUpperCase()} ({name})
+                + {code} ({name})
               </button>
             );
           })}
@@ -155,9 +128,10 @@ export default function LanguagePicker({
             No languages selected
           </span>
         ) : (
-          selectedCodes.map((code) => {
-            const name = LANG_MAP.get(code);
-            const labelText = name ? `${name} (${code})` : code;
+          selectedCodes.map((rawCode) => {
+            const code = rawCode.toUpperCase();
+            const name = LANG_MAP[code] ?? getLanguageDisplayName(code);
+            const labelText = `${name} (${code})`;
             return (
               <span
                 key={code}
@@ -222,24 +196,14 @@ export default function LanguagePicker({
               })
             ) : (
               <div className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400">
-                {/^[a-z]{2}$/i.test(query.trim()) ? (
-                  <button
-                    type="button"
-                    onClick={() => handleAddCode(query.trim())}
-                    className="w-full text-left font-medium text-blue-600 hover:underline dark:text-blue-400"
-                  >
-                    + Add custom code &quot;{query.trim().toLowerCase()}&quot;
-                  </button>
-                ) : (
-                  "No languages match query. Enter a 2-letter ISO code to add."
-                )}
+                No matching canonical languages found.
               </div>
             )}
           </div>
         )}
       </div>
       <span className="block text-[11px] text-gray-400">
-        ISO 639-1 2-letter language codes
+        Canonical 2-letter language codes
       </span>
     </div>
   );

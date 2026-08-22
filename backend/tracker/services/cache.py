@@ -15,6 +15,7 @@ from typing import Iterable, Optional
 from django.db import transaction
 from django.utils import timezone
 
+from tracker.languages import normalize_language_code
 from ..models import Availability, LanguageEntry, LanguageInfo, Movie, Region
 from .rate_limit import RateLimitExceeded, RateLimiter
 from .streaming_api import StreamingAvailabilityClient, StreamingResult
@@ -108,13 +109,17 @@ class AvailabilityCache:
             info, _ = LanguageInfo.objects.get_or_create(movie=movie, region=region)
             info.entries.all().delete()
             for code in offer.audio_languages:
-                LanguageEntry.objects.create(
-                    language_info=info, kind="audio", language_code=code
-                )
+                norm = normalize_language_code(code)
+                if norm:
+                    LanguageEntry.objects.create(
+                        language_info=info, kind="audio", language_code=norm
+                    )
             for code in offer.subtitle_languages:
-                LanguageEntry.objects.create(
-                    language_info=info, kind="subtitle", language_code=code
-                )
+                norm = normalize_language_code(code)
+                if norm:
+                    LanguageEntry.objects.create(
+                        language_info=info, kind="subtitle", language_code=norm
+                    )
             written += 1
         return written
 
@@ -130,10 +135,11 @@ class AvailabilityCache:
             subs = []
             if info:
                 for entry in info.entries.all():
-                    if entry.kind == "audio":
-                        audio.append(entry.language_code)
-                    elif entry.kind == "subtitle":
-                        subs.append(entry.language_code)
+                    norm = normalize_language_code(entry.language_code) or entry.language_code.upper()
+                    if entry.kind == "audio" and norm not in audio:
+                        audio.append(norm)
+                    elif entry.kind == "subtitle" and norm not in subs:
+                        subs.append(norm)
             rows.append(
                 {
                     "country": avail.region.country,

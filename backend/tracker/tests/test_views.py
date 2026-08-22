@@ -47,21 +47,21 @@ class SubscriptionsEndpointTests(TestCase):
 
 class PreferencesEndpointTests(TestCase):
     def test_get_returns_existing(self):
-        Preference.objects.get_or_create(user_id=1, defaults={"audio_languages": ["en"], "subtitle_languages": ["en"]})
-        Preference.objects.filter(user_id=1).update(audio_languages=["en"], subtitle_languages=["en"])
+        Preference.objects.get_or_create(user_id=1, defaults={"audio_languages": ["EN"], "subtitle_languages": ["EN"]})
+        Preference.objects.filter(user_id=1).update(audio_languages=["EN"], subtitle_languages=["EN"])
         resp = self.client.get("/api/preferences/")
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json()["audio_languages"], ["en"])
+        self.assertEqual(resp.json()["audio_languages"], ["EN"])
 
     def test_put_updates(self):
         Preference.objects.get_or_create(user_id=1)
         resp = self.client.put(
             "/api/preferences/",
-            data={"audio_languages": ["en", "it"], "subtitle_languages": ["en"], "candidate_countries": ["us"]},
+            data={"audio_languages": ["EN", "IT"], "subtitle_languages": ["EN"], "candidate_countries": ["US"]},
             content_type="application/json",
         )
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(Preference.objects.get(user_id=1).audio_languages, ["en", "it"])
+        self.assertEqual(Preference.objects.get(user_id=1).audio_languages, ["EN", "IT"])
 
 
 class SearchEndpointTests(TestCase):
@@ -86,17 +86,27 @@ class MovieAvailabilityTests(TestCase):
 
     @patch("tracker.views.AvailabilityCache")
     def test_returns_ranked_offers(self, mock_cache_cls):
-        Preference.objects.create(user_id=1, audio_languages=["en"], subtitle_languages=["en"])
+        Preference.objects.create(user_id=1, audio_languages=["EN"], subtitle_languages=["EN"])
         Movie.objects.create(tmdb_id=42, title="Cached", year=2020)
         instance = mock_cache_cls.return_value
         instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=2)
         instance._read_offers.return_value = [
-            {"country": "us", "service": "Netflix", "offer_type": "subscription", "quality": "4k", "audio": ["en"], "subs": ["en"]}
+            {"country": "us", "service": "Netflix", "offer_type": "subscription", "quality": "4k", "audio": ["EN"], "subs": ["EN"]}
         ]
         resp = self.client.get("/api/movie/42/availability/")
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["movie"]["tmdb_id"], 42)
         self.assertEqual(len(resp.json()["offers"]), 1)
+
+    @patch("tracker.views.AvailabilityCache")
+    def test_respects_rate_limiter(self, mock_cache_cls):
+        from tracker.services.rate_limit import RateLimitExceeded
+        Movie.objects.create(tmdb_id=42, title="Cached", year=2020)
+        instance = mock_cache_cls.return_value
+        instance.get_or_refresh.side_effect = RateLimitExceeded("Rate limit reached")
+        resp = self.client.get("/api/movie/42/availability/")
+        self.assertEqual(resp.status_code, 429)
+        self.assertTrue(resp.json().get("rate_limited"))
 
 
 class WatchlistEndpointTests(TestCase):
@@ -149,7 +159,7 @@ class WatchlistReportEndpointTests(TestCase):
     @patch("tracker.views.AvailabilityCache")
     def test_mixed_list(self, mock_cache_cls):
         from tracker.models import WatchlistItem
-        Preference.objects.create(user_id=1, candidate_countries=["us", "gb"])
+        Preference.objects.create(user_id=1, candidate_countries=["US", "GB"])
         m1 = Movie.objects.create(tmdb_id=201, title="Movie One", year=2020)
         m2 = Movie.objects.create(tmdb_id=202, title="Movie Two", year=2022)
         WatchlistItem.objects.create(user_id=1, movie=m1, source="manual")
@@ -161,8 +171,8 @@ class WatchlistReportEndpointTests(TestCase):
         def mock_read_offers(movie):
             if movie.tmdb_id == 201:
                 return [
-                    {"country": "us", "service": "Netflix", "offer_type": "subscription", "quality": "4k", "audio": ["en"], "subs": ["en"]},
-                    {"country": "gb", "service": "Prime", "offer_type": "subscription", "quality": "hd", "audio": ["en"], "subs": ["en"]},
+                    {"country": "us", "service": "Netflix", "offer_type": "subscription", "quality": "4k", "audio": ["EN"], "subs": ["EN"]},
+                    {"country": "gb", "service": "Prime", "offer_type": "subscription", "quality": "hd", "audio": ["EN"], "subs": ["EN"]},
                 ]
             return []
 
@@ -184,23 +194,9 @@ class WatchlistReportEndpointTests(TestCase):
         self.assertIsNone(row2["best_service"])
 
     @patch("tracker.views.AvailabilityCache")
-    def test_respects_rate_limiter(self, mock_cache_cls):
-        from tracker.models import WatchlistItem
-        from tracker.services.rate_limit import RateLimitExceeded
-        movie = Movie.objects.create(tmdb_id=301, title="Rate Limited Movie", year=2023)
-        WatchlistItem.objects.create(user_id=1, movie=movie, source="manual")
-
-        instance = mock_cache_cls.return_value
-        instance.get_or_refresh.side_effect = RateLimitExceeded("Rate limit reached")
-
-        resp = self.client.get("/api/watchlist/report/")
-        self.assertEqual(resp.status_code, 429)
-        self.assertTrue(resp.json().get("rate_limited"))
-
-    @patch("tracker.views.AvailabilityCache")
     def test_summary_analytics_and_deduplication(self, mock_cache_cls):
         from tracker.models import WatchlistItem
-        Preference.objects.create(user_id=1, candidate_countries=["us", "gb", "ca"])
+        Preference.objects.create(user_id=1, candidate_countries=["US", "GB", "CA"])
         m1 = Movie.objects.create(tmdb_id=501, title="Movie A", year=2020)
         m2 = Movie.objects.create(tmdb_id=502, title="Movie B", year=2021)
         m3 = Movie.objects.create(tmdb_id=503, title="Movie C", year=2022)
@@ -214,15 +210,15 @@ class WatchlistReportEndpointTests(TestCase):
         def mock_read_offers(movie):
             if movie.tmdb_id == 501:
                 return [
-                    {"country": "us", "service": "Netflix", "offer_type": "subscription", "quality": "4k", "audio": ["en"], "subs": ["en"]},
-                    {"country": "us", "service": "Netflix", "offer_type": "subscription", "quality": "hd", "audio": ["en"], "subs": ["en"]},
-                    {"country": "gb", "service": "Prime", "offer_type": "subscription", "quality": "hd", "audio": ["en"], "subs": ["en"]},
-                    {"country": "us", "service": "Apple", "offer_type": "buy", "quality": "hd", "audio": ["en"], "subs": ["en"]},
+                    {"country": "us", "service": "Netflix", "offer_type": "subscription", "quality": "4k", "audio": ["EN"], "subs": ["EN"]},
+                    {"country": "us", "service": "Netflix", "offer_type": "subscription", "quality": "hd", "audio": ["EN"], "subs": ["EN"]},
+                    {"country": "gb", "service": "Prime", "offer_type": "subscription", "quality": "hd", "audio": ["EN"], "subs": ["EN"]},
+                    {"country": "us", "service": "Apple", "offer_type": "buy", "quality": "hd", "audio": ["EN"], "subs": ["EN"]},
                 ]
             if movie.tmdb_id == 502:
                 return [
-                    {"country": "us", "service": "Netflix", "offer_type": "free", "quality": "hd", "audio": ["en"], "subs": ["en"]},
-                    {"country": "ca", "service": "Apple", "offer_type": "rent", "quality": "hd", "audio": ["en"], "subs": ["en"]},
+                    {"country": "us", "service": "Netflix", "offer_type": "free", "quality": "hd", "audio": ["EN"], "subs": ["EN"]},
+                    {"country": "ca", "service": "Apple", "offer_type": "rent", "quality": "hd", "audio": ["EN"], "subs": ["EN"]},
                 ]
             return []
 
@@ -247,6 +243,8 @@ class WatchlistReportEndpointTests(TestCase):
             {"service": "Netflix", "count": 2},
             {"service": "Prime", "count": 1},
         ])
+
+
 class WatchlistResolveEndpointTests(TestCase):
     def test_missing_selections_returns_400(self):
         resp = self.client.post(
@@ -310,7 +308,6 @@ class WatchlistResolveEndpointTests(TestCase):
         self.assertEqual(watchlist_item["source"], "letterboxd_resolved")
 
     def test_duplicate_selections_deduplicated_and_existing_item_returned(self):
-        # Pre-create movie and WatchlistItem
         movie = Movie.objects.create(tmdb_id=27205, title="Inception", year=2010)
         from tracker.models import WatchlistItem
         existing_item = WatchlistItem.objects.create(
@@ -333,7 +330,6 @@ class WatchlistResolveEndpointTests(TestCase):
         self.assertEqual(data["resolved_count"], 1)
         self.assertEqual(len(data["items"]), 1)
         self.assertEqual(data["items"][0]["id"], existing_item.id)
-        # Verify title was not updated for existing movie
         self.assertEqual(Movie.objects.get(tmdb_id=27205).title, "Inception")
 
 
@@ -347,7 +343,7 @@ class MovieLanguageInfoEndpointTests(TestCase):
 
         resp = self.client.put(
             "/api/movie/9999/language-info/",
-            data={"provider": "Netflix", "country": "US", "audio_languages": ["en"]},
+            data={"provider": "Netflix", "country": "US", "audio_languages": ["EN"]},
             content_type="application/json",
         )
         self.assertEqual(resp.status_code, 404)
@@ -384,40 +380,40 @@ class MovieLanguageInfoEndpointTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
         self.assertEqual(data["country"], "US")
-        self.assertEqual(data["audio_languages"], ["en", "es"])
-        self.assertEqual(data["subtitle_languages"], ["it", "fr"])
+        self.assertEqual(data["audio_languages"], ["EN", "ES"])
+        self.assertEqual(data["subtitle_languages"], ["IT", "FR"])
 
         # Subsequent GET should return updated info
         get_resp = self.client.get(
             f"/api/movie/{self.movie.tmdb_id}/language-info/?provider=Netflix&country=US"
         )
         self.assertEqual(get_resp.status_code, 200)
-        self.assertEqual(get_resp.json()["audio_languages"], ["en", "es"])
-        self.assertEqual(get_resp.json()["subtitle_languages"], ["it", "fr"])
+        self.assertEqual(get_resp.json()["audio_languages"], ["EN", "ES"])
+        self.assertEqual(get_resp.json()["subtitle_languages"], ["IT", "FR"])
 
     def test_put_updates_and_overwrites_existing_entries(self):
         # Initial put
         self.client.put(
             f"/api/movie/{self.movie.tmdb_id}/language-info/",
-            data={"provider": "Prime", "country": "US", "audio_languages": ["en"], "subtitle_languages": ["es"]},
+            data={"provider": "Prime", "country": "US", "audio_languages": ["EN"], "subtitle_languages": ["ES"]},
             content_type="application/json",
         )
         # Update put
         update_resp = self.client.put(
             f"/api/movie/{self.movie.tmdb_id}/language-info/",
-            data={"provider": "Prime", "country": "US", "audio_languages": ["de"], "subtitle_languages": []},
+            data={"provider": "Prime", "country": "US", "audio_languages": ["DE"], "subtitle_languages": []},
             content_type="application/json",
         )
         self.assertEqual(update_resp.status_code, 200)
-        self.assertEqual(update_resp.json()["audio_languages"], ["de"])
+        self.assertEqual(update_resp.json()["audio_languages"], ["DE"])
         self.assertEqual(update_resp.json()["subtitle_languages"], [])
 
     def test_put_validates_invalid_language_codes(self):
         payload = {
             "provider": "Netflix",
             "country": "US",
-            "audio_languages": ["english"],
-            "subtitle_languages": ["es"],
+            "audio_languages": ["Klingon"],
+            "subtitle_languages": ["ES"],
         }
         resp = self.client.put(
             f"/api/movie/{self.movie.tmdb_id}/language-info/",
@@ -430,8 +426,8 @@ class MovieLanguageInfoEndpointTests(TestCase):
         payload = {
             "provider": "Netflix",
             "country": "USA",
-            "audio_languages": ["en"],
-            "subtitle_languages": ["es"],
+            "audio_languages": ["EN"],
+            "subtitle_languages": ["ES"],
         }
         resp = self.client.put(
             f"/api/movie/{self.movie.tmdb_id}/language-info/",

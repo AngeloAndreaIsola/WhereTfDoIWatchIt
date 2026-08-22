@@ -9,8 +9,8 @@ describe("OfferList Component with LanguagePicker UX", () => {
     service: "Netflix",
     offer_type: "flatrate",
     quality: "hd",
-    audio_languages: ["en"],
-    subtitle_languages: ["es"],
+    audio_languages: ["EN"],
+    subtitle_languages: ["ES"],
     ranking: {
       audio_rank: 0,
       subtitle_rank: 1,
@@ -44,8 +44,8 @@ describe("OfferList Component with LanguagePicker UX", () => {
     fireEvent.click(editBtn);
 
     expect(screen.getByText("Edit Language Info")).toBeInTheDocument();
-    expect(screen.getByText("English (en)")).toBeInTheDocument();
-    expect(screen.getByText("Spanish (es)")).toBeInTheDocument();
+    expect(screen.getByText("English (EN)")).toBeInTheDocument();
+    expect(screen.getByText("Español (ES)")).toBeInTheDocument();
   });
 
   it("allows quick-add language selection and tag removal", async () => {
@@ -60,19 +60,19 @@ describe("OfferList Component with LanguagePicker UX", () => {
     fireEvent.click(screen.getByRole("button", { name: /Edit Language Info/i }));
 
     // Find quick add button for Japanese (JA) in Audio Language Codes section
-    const jaButtons = screen.getAllByRole("button", { name: /\+ JA \(Japanese\)/i });
+    const jaButtons = screen.getAllByRole("button", { name: /\+ JA \(日本語\)/i });
     fireEvent.click(jaButtons[0]);
 
     // Check that Japanese tag badge appeared under Audio
-    expect(screen.getByText("Japanese (ja)")).toBeInTheDocument();
+    expect(screen.getByText("日本語 (JA)")).toBeInTheDocument();
 
     // Remove Spanish tag badge from Subtitles
     const removeEsButton = screen.getByRole("button", {
-      name: /Remove Spanish \(es\)/i,
+      name: /Remove Español \(ES\)/i,
     });
     fireEvent.click(removeEsButton);
 
-    expect(screen.queryByText("Spanish (es)")).not.toBeInTheDocument();
+    expect(screen.queryByText("Español (ES)")).not.toBeInTheDocument();
   });
 
   it("submits selected languages via PUT fetch request", async () => {
@@ -92,7 +92,7 @@ describe("OfferList Component with LanguagePicker UX", () => {
     fireEvent.click(screen.getByRole("button", { name: /Edit Language Info/i }));
 
     // Add French (FR) to Subtitles
-    const frButtons = screen.getAllByRole("button", { name: /\+ FR \(French\)/i });
+    const frButtons = screen.getAllByRole("button", { name: /\+ FR \(Français\)/i });
     fireEvent.click(frButtons[1]); // second picker is Subtitles
 
     const saveButton = screen.getByRole("button", { name: /Save Language Info/i });
@@ -107,8 +107,8 @@ describe("OfferList Component with LanguagePicker UX", () => {
           body: JSON.stringify({
             provider: "Netflix",
             country: "US",
-            audio_languages: ["en"],
-            subtitle_languages: ["es", "fr"],
+            audio_languages: ["EN"],
+            subtitle_languages: ["ES", "FR"],
           }),
         })
       );

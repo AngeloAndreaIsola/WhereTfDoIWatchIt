@@ -65,14 +65,14 @@ class LanguageInfoTests(TestCase):
 
     def test_language_entry_unique_kind_code(self):
         info = LanguageInfo.objects.create(movie=self.movie, region=self.region)
-        LanguageEntry.objects.create(language_info=info, kind="audio", language_code="en")
+        LanguageEntry.objects.create(language_info=info, kind="audio", language_code="EN")
         with self.assertRaises(IntegrityError):
-            LanguageEntry.objects.create(language_info=info, kind="audio", language_code="en")
+            LanguageEntry.objects.create(language_info=info, kind="audio", language_code="EN")
 
     def test_audio_and_subtitle_kinds_coexist(self):
         info = LanguageInfo.objects.create(movie=self.movie, region=self.region)
-        LanguageEntry.objects.create(language_info=info, kind="audio", language_code="en")
-        LanguageEntry.objects.create(language_info=info, kind="subtitle", language_code="en")
+        LanguageEntry.objects.create(language_info=info, kind="audio", language_code="EN")
+        LanguageEntry.objects.create(language_info=info, kind="subtitle", language_code="EN")
         self.assertEqual(info.entries.count(), 2)
 
 

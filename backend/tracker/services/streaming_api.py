@@ -19,29 +19,14 @@ from typing import Optional
 import requests
 from django.conf import settings
 
+from tracker.languages import normalize_language_code
+
 logger = logging.getLogger(__name__)
 
 RAPIDAPI_HOST = "streaming-availability.p.rapidapi.com"
 DEFAULT_TIMEOUT = 15
 ALLOWED_OFFER_TYPES = {"subscription", "free"}
 QUALITY_ORDER = {"4k": 4, "uhd": 4, "qhd": 3, "hdr": 3, "hd": 2, "sd": 1}
-
-# ISO 639-2 (bibliographic/B and terminologic/T) -> ISO 639-1. The v4 API reports
-# languages as 3-letter codes in some regions; our Preference model and the
-# LanguageEntry column both use 2-letter ISO 639-1, so normalize on the way in.
-_ISO6392_TO_1 = {
-    "eng": "en", "jpn": "ja", "spa": "es", "fra": "fr", "fre": "fr",
-    "deu": "de", "ger": "de", "ita": "it", "por": "pt", "rus": "ru",
-    "zho": "zh", "chi": "zh", "kor": "ko", "hin": "hi", "ara": "ar",
-    "nld": "nl", "dut": "nl", "swe": "sv", "nor": "no", "nob": "nb",
-    "dan": "da", "fin": "fi", "pol": "pl", "tur": "tr", "tha": "th",
-    "vie": "vi", "ces": "cs", "cze": "cs", "ell": "el", "gre": "el",
-    "heb": "he", "ind": "id", "ukr": "uk", "ron": "ro", "rum": "ro",
-    "hun": "hu", "cat": "ca", "hrv": "hr", "srp": "sr", "slk": "sk",
-    "slo": "sk", "bul": "bg", "isl": "is", "ice": "is", "tgl": "tl",
-    "tam": "ta", "tel": "te", "mal": "ml", "ben": "bn", "mar": "mr",
-    "pan": "pa", "guj": "gu", "kan": "kn",
-}
 
 # Stable service id -> human display name for the UI. Falls back to a title-cased
 # id for services not listed here.
@@ -70,20 +55,16 @@ def service_display_name(service_id: str) -> str:
     return SERVICE_DISPLAY_NAMES.get(sid, (service_id or "").title())
 
 
-def _norm_lang(code: Optional[str]) -> str:
-    """Normalize a language code to lowercase ISO 639-1 (2-letter).
+def _norm_lang(code: Optional[str]) -> Optional[str]:
+    """Normalize an external language code/string to an uppercase canonical application code.
 
-    Passes 2-letter codes through; maps known 3-letter codes; best-effort
-    truncates anything else so it fits the 2-char ``LanguageEntry`` column.
+    Adapts external API representations (e.g. 'eng', 'en', 'deu', 'nor', 'Japanese')
+    at the boundary to canonical codes ('EN', 'DE', 'NB', 'JA').
+    Ignores unsupported external languages (returns None).
     """
     if not code:
-        return ""
-    c = str(code).strip().lower()
-    if len(c) == 2:
-        return c
-    if len(c) == 3:
-        return _ISO6392_TO_1.get(c, c[:2])
-    return c[:2]
+        return None
+    return normalize_language_code(str(code))
 
 
 def _extract_langs(items, code_getter) -> list[str]:

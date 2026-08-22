@@ -6,8 +6,8 @@
       "service": "amazon",
       "offer_type": "subscription",
       "quality": "4k",
-      "audio_languages": ["ja", "en"],
-      "subtitle_languages": ["en", "ja"],
+      "audio_languages": ["JA", "EN"],
+      "subtitle_languages": ["EN", "JA"],
       "ranking": { "audio_rank": 0, "subtitle_rank": 0, "quality_rank": 0 }
     }
   ]

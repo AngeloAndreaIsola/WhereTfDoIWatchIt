@@ -1,6 +1,7 @@
 "use client";
 
 import type { PrimeOffer } from "@/lib/api";
+import { getLanguageDisplayName } from "@/lib/languages";
 
 export { PrimeOffer };
 
@@ -28,12 +29,7 @@ function qualityLabel(q: string): string {
 }
 
 function languageLabel(code: string): string {
-  const map: Record<string, string> = {
-    en: "English", ja: "日本語", fr: "Français", de: "Deutsch",
-    es: "Español", it: "Italiano", pt: "Português", ko: "한국어",
-    zh: "中文", ru: "Русский", ar: "العربية", tr: "Türkçe",
-  };
-  return map[code.toLowerCase()] ?? code.toUpperCase();
+  return getLanguageDisplayName(code);
 }
 
 interface OfferRowProps {
