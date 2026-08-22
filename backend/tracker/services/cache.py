@@ -52,6 +52,21 @@ class AvailabilityCache:
             return True
         return (timezone.now() - latest) > self.stale_after
 
+    def get_cached_only(self, movie: Movie) -> CacheStatus:
+        """Return cached Availability rows for movie without blocking on refresh.
+
+        Used by watchlist_report to avoid timing out on multiple movies.
+        Returns whatever is in cache (fresh, stale, or missing).
+        """
+        offers = self._read_offers(movie)
+        if not self.is_stale(movie):
+            return CacheStatus(refreshed=False, reason="fresh", offers_written=len(offers))
+
+        if not offers:
+            return CacheStatus(refreshed=False, reason="missing", offers_written=0)
+
+        return CacheStatus(refreshed=False, reason="stale", offers_written=len(offers))
+
     def get_or_refresh(self, movie: Movie) -> CacheStatus:
         """Return cached/fresh Availability rows for movie, refreshing if stale."""
         if not self.is_stale(movie):
@@ -74,8 +89,10 @@ class AvailabilityCache:
         now = timezone.now()
         written = 0
         for offer in result.offers:
+            # Store the stable service id (e.g. "prime"), not the display name
+            # ("Prime Video"), so provider filtering is reliable across regions.
             region, _ = Region.objects.get_or_create(
-                provider=offer.service_name,
+                provider=offer.service_id,
                 country=offer.country,
             )
             avail, _ = Availability.objects.update_or_create(

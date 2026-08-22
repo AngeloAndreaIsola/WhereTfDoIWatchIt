@@ -14,7 +14,7 @@ from typing import Iterable, Optional
 
 from ..models import Preference
 
-QUALITY_RANK = {"4k": 0, "uhd": 0, "hdr": 1, "hd": 2, "sd": 3}
+QUALITY_RANK = {"4k": 0, "uhd": 0, "hdr": 1, "qhd": 1, "hd": 2, "sd": 3}
 
 
 @dataclass
