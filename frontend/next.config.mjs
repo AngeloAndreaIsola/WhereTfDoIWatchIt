@@ -11,7 +11,7 @@ const nextConfig = {
     ],
   },
   async rewrites() {
-    const backend = process.env.BACKEND_URL ?? "http://127.0.0.1:8000";
+    const backend = process.env.BACKEND_URL ?? "http://backend:8000";
     // Django routes all require a trailing slash. Next's `:path*` catch-all drops
     // the incoming trailing slash when it proxies, so `/api/prime/popular/` was
     // being forwarded as `/api/prime/popular` and 404'ing. Re-append it on the
