@@ -31,6 +31,7 @@ class ExternalProviderMappingSerializer(serializers.ModelSerializer):
 class ProviderSerializer(serializers.ModelSerializer):
     external_mappings = ExternalProviderMappingSerializer(many=True, read_only=True)
     is_subscribed = serializers.SerializerMethodField()
+    scraped_content_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Provider
@@ -42,7 +43,10 @@ class ProviderSerializer(serializers.ModelSerializer):
             "is_major",
             "is_enabled",
             "icon_name",
+            "domain",
+            "last_scraped_at",
             "is_subscribed",
+            "scraped_content_count",
             "external_mappings",
         ]
 
@@ -51,6 +55,9 @@ class ProviderSerializer(serializers.ModelSerializer):
         if user_subscribed_ids is not None:
             return obj.id in user_subscribed_ids
         return Subscription.objects.filter(user_id=1, provider=obj).exists()
+
+    def get_scraped_content_count(self, obj: Provider) -> int:
+        return obj.scraped_mappings.count()
 
 
 class SubscriptionSerializer(serializers.ModelSerializer):

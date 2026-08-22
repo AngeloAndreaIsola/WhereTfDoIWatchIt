@@ -11,6 +11,9 @@ export interface ProviderItem {
   is_major: boolean;
   is_enabled: boolean;
   icon_name: string;
+  domain?: string;
+  last_scraped_at?: string | null;
+  scraped_content_count?: number;
   is_subscribed: boolean;
 }
 

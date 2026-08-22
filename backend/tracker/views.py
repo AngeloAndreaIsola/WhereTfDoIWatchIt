@@ -182,49 +182,68 @@ def subscriptions_list_create(request):
     return Response(SubscriptionSerializer(sub).data, status=status.HTTP_201_CREATED)
 
 
-def detect_provider_from_url(url: str) -> tuple[Optional[Provider], str]:
-    """Detect scraper provider and extract title/query from URL."""
-    url_lower = (url or "").strip().lower()
-    if "kisskh.co" in url_lower:
-        provider = Provider.objects.filter(slug="kisskh").first()
-        # Extract title or ID from URL path, e.g. kisskh.co/Drama/Demon-Slayer
-        parts = [p for p in url_lower.split("/") if p]
-        query = parts[-1].replace("-", " ") if parts else "Drama"
-        return provider, query
-    elif "hydrahd.ru" in url_lower:
-        provider = Provider.objects.filter(slug="hydrahd").first()
-        parts = [p for p in url_lower.split("/") if p]
-        query = parts[-1].replace("-", " ") if parts else "Movie"
-        return provider, query
-    elif "animeworld.ac" in url_lower:
-        provider = Provider.objects.filter(slug="animeworld").first()
-        parts = [p for p in url_lower.split("/") if p]
-        query = parts[-1].replace("-", " ") if parts else "Anime"
-        return provider, query
-    return None, ""
+from urllib.parse import urlparse
+from django.utils import timezone
+
+
+def detect_provider_from_url(url: str) -> tuple[Provider, str]:
+    """Dynamically get or create a scraper provider from any URL."""
+    parsed = urlparse(url.strip())
+    domain = parsed.netloc.lower() or parsed.path.split("/")[0].lower()
+    domain_clean = domain.replace("www.", "")
+
+    if not domain_clean:
+        raise ValueError("Invalid URL: domain could not be parsed.")
+
+    # Derive slug and display name
+    slug = domain_clean.split(".")[0]
+    name = domain_clean.capitalize()
+
+    provider, _ = Provider.objects.get_or_create(
+        slug=slug,
+        defaults={
+            "name": name,
+            "category": "scraper",
+            "is_major": False,
+            "is_enabled": True,
+            "icon_name": slug,
+            "domain": domain_clean,
+        },
+    )
+    if not provider.domain:
+        provider.domain = domain_clean
+        provider.save()
+
+    parts = [p for p in parsed.path.split("/") if p]
+    query = parts[-1].replace("-", " ").replace("_", " ") if parts else name
+    return provider, query
 
 
 @api_view(["POST"])
 def scraper_import_url(request):
     """Import a small provider/source by URL, trigger the scraper, and register source."""
+    from tracker.scrapers.adapters import GenericURLAdapter
+
     data = request.data if isinstance(request.data, dict) else {}
     url = (data.get("url") or "").strip()
     if not url:
         return Response({"error": "URL is required"}, status=400)
 
-    provider, query = detect_provider_from_url(url)
-    if not provider:
-        return Response(
-            {"error": "Unsupported or unrecognized provider URL. Supported domains: kisskh.co, hydrahd.ru, animeworld.ac"},
-            status=400,
-        )
+    try:
+        provider, query = detect_provider_from_url(url)
+    except Exception as exc:
+        return Response({"error": str(exc)}, status=400)
 
     scraper_cls = SCRAPER_REGISTRY.get(provider.slug.lower())
-    if not scraper_cls:
-        return Response({"error": f"No scraper adapter registered for '{provider.slug}'"}, status=400)
+    if scraper_cls:
+        scraper = scraper_cls()
+    else:
+        scraper = GenericURLAdapter(provider_slug=provider.slug, domain=provider.domain or "example.com")
 
-    scraper = scraper_cls()
     items = scraper.run(query=query)
+
+    provider.last_scraped_at = timezone.now()
+    provider.save()
 
     # Automatically subscribe/register user to this small provider source
     Subscription.objects.get_or_create(
@@ -267,6 +286,8 @@ def scraper_import_url(request):
 @api_view(["POST"])
 def scraper_run(request):
     """Trigger a scraper run for a given scraper provider slug."""
+    from tracker.scrapers.adapters import GenericURLAdapter
+
     data = request.data if isinstance(request.data, dict) else {}
     provider_slug = data.get("provider_slug") or data.get("slug") or ""
     query = data.get("query") or "Inception"
@@ -279,11 +300,15 @@ def scraper_run(request):
         return Response({"error": f"Scraper provider '{provider_slug}' not found or disabled"}, status=404)
 
     scraper_cls = SCRAPER_REGISTRY.get(provider.slug.lower())
-    if not scraper_cls:
-        return Response({"error": f"No scraper adapter registered for '{provider.slug}'"}, status=400)
+    if scraper_cls:
+        scraper = scraper_cls()
+    else:
+        scraper = GenericURLAdapter(provider_slug=provider.slug, domain=provider.domain or "example.com")
 
-    scraper = scraper_cls()
     items = scraper.run(query=query)
+
+    provider.last_scraped_at = timezone.now()
+    provider.save()
 
     matcher = ContentMatcher()
     results = []
@@ -311,6 +336,34 @@ def scraper_run(request):
         "count": len(results),
         "results": results,
     })
+
+
+@api_view(["DELETE"])
+def provider_delete(request, slug: str):
+    """Delete a custom scraper provider and its scraped mappings."""
+    provider = get_object_or_404(Provider, slug__iexact=slug)
+    if provider.is_major:
+        return Response({"error": "Major canonical providers cannot be deleted."}, status=400)
+
+    provider.delete()
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@api_view(["GET"])
+def catalog_list(request):
+    """List scraped items catalog with filtering by provider slug or query."""
+    provider_slug = request.GET.get("provider") or request.GET.get("provider_slug")
+    query = request.GET.get("q") or request.GET.get("query")
+
+    qs = ScrapedContentMapping.objects.select_related("provider", "movie").order_by("-updated_at")
+
+    if provider_slug:
+        qs = qs.filter(provider__slug__iexact=provider_slug.strip())
+    if query:
+        qs = qs.filter(scraped_title__icontains=query.strip())
+
+    serializer = ScrapedContentMappingSerializer(qs, many=True)
+    return Response({"count": len(serializer.data), "results": serializer.data})
 
 
 @api_view(["GET"])

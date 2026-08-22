@@ -4,10 +4,12 @@ from . import views
 urlpatterns = [
     path("health/", views.health, name="health"),
     path("search/", views.search, name="search"),
+    path("catalog/", views.catalog_list, name="catalog-list"),
     path("movie/<int:tmdb_id>/availability/", views.movie_availability, name="movie-availability"),
     path("movie/<int:tmdb_id>/language-info/", views.movie_language_info, name="movie-language-info"),
     path("providers/", views.providers_list, name="providers-list"),
     path("providers/<str:slug>/toggle/", views.provider_toggle, name="provider-toggle"),
+    path("providers/<str:slug>/", views.provider_delete, name="provider-delete"),
     path("subscriptions/", views.subscriptions_list_create, name="subscriptions-list-create"),
     path("subscriptions", views.subscriptions_list_create),
     path("subscriptions/<int:pk>/", views.subscription_detail, name="subscription-detail"),

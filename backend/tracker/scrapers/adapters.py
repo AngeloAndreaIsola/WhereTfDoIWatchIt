@@ -57,6 +57,60 @@ class KissKHScraper(BaseScraper):
         return items
 
 
+class GenericURLAdapter(BaseScraper):
+    """Fallback adapter for dynamically registered provider domains."""
+
+    def __init__(self, provider_slug: str, domain: str, timeout: Optional[int] = None):
+        super().__init__(timeout=timeout)
+        self.provider_slug = provider_slug
+        self.domain = domain
+
+    def _execute_run(self, query: Optional[str] = None) -> list[ScrapedItem]:
+        target_url = f"https://{self.domain}/api/search?q={query}" if query else f"https://{self.domain}"
+        resp_data = self.fetch_url(target_url)
+
+        if isinstance(resp_data, list):
+            return self.parse_items(resp_data)
+        elif isinstance(resp_data, dict):
+            items = resp_data.get("results") or resp_data.get("items") or resp_data.get("data") or []
+            return self.parse_items(items)
+        return []
+
+    def parse_items(self, raw_data: Any) -> list[ScrapedItem]:
+        items: list[ScrapedItem] = []
+        for entry in raw_data or []:
+            if not isinstance(entry, dict):
+                continue
+            title = entry.get("title") or entry.get("name")
+            if not title:
+                continue
+            year = entry.get("year")
+            try:
+                year_int = int(year) if year else None
+            except (ValueError, TypeError):
+                year_int = None
+
+            audio = entry.get("audio_languages") or entry.get("audio") or ["EN"]
+            subs = entry.get("subtitle_languages") or entry.get("subtitles") or ["EN"]
+            quality = entry.get("quality") or entry.get("res") or "1080p"
+            url_path = entry.get("url") or entry.get("link") or f"https://{self.domain}/view/{entry.get('id')}"
+
+            items.append(
+                ScrapedItem(
+                    title=str(title),
+                    provider_slug=self.provider_slug,
+                    year=year_int,
+                    source_url=str(url_path),
+                    audio_languages=audio if isinstance(audio, list) else [str(audio)],
+                    subtitle_languages=subs if isinstance(subs, list) else [str(subs)],
+                    quality=str(quality),
+                    availability=True,
+                    raw_payload=entry,
+                )
+            )
+        return items
+
+
 class HydraHDScraper(BaseScraper):
     provider_slug = "hydrahd"
 

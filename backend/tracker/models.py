@@ -95,6 +95,8 @@ class Provider(models.Model):
     is_major = models.BooleanField(default=False)
     is_enabled = models.BooleanField(default=True)
     icon_name = models.CharField(max_length=50, blank=True, default="")
+    domain = models.CharField(max_length=100, blank=True, default="")
+    last_scraped_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return f"{self.name} ({self.slug})"
