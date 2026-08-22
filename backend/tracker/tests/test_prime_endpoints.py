@@ -165,9 +165,9 @@ class PrimeMovieEndpointTests(TestCase):
         # Mock availability cache
         mock_cache = mock_cache_cls.return_value
         mock_cache._read_offers.return_value = [
-            {"country": "JP", "service": "amazon", "offer_type": "subscription",
+            {"country": "JP", "service": "prime", "offer_type": "subscription",
              "quality": "4k", "audio": ["ja", "en"], "subs": ["en", "ja"]},
-            {"country": "US", "service": "amazon", "offer_type": "subscription",
+            {"country": "US", "service": "prime", "offer_type": "subscription",
              "quality": "hd", "audio": ["en"], "subs": ["en"]},
             {"country": "GB", "service": "netflix", "offer_type": "subscription",
              "quality": "hd", "audio": ["en"], "subs": ["en"]},  # Should be filtered out
@@ -181,12 +181,14 @@ class PrimeMovieEndpointTests(TestCase):
         data = response.json()
         self.assertEqual(data["movie"]["tmdb_id"], 550)
         self.assertEqual(data["movie"]["title"], "Fight Club")
-        # Only amazon offers should be present (Netflix filtered out)
+        # Only Prime offers should be present (Netflix filtered out)
         self.assertEqual(len(data["offers"]), 2)
         # JA audio should be ranked first (rank 0)
         self.assertEqual(data["offers"][0]["country"], "JP")
         self.assertEqual(data["offers"][0]["audio_languages"], ["ja", "en"])
         self.assertEqual(data["offers"][0]["ranking"]["audio_rank"], 0)
+        # The stable service id "prime" is presented as its display name.
+        self.assertEqual(data["offers"][0]["service"], "Prime Video")
 
     @patch("tracker.views.TMDbClient")
     @patch("tracker.views.AvailabilityCache")
@@ -212,8 +214,15 @@ class PrimeMovieEndpointTests(TestCase):
         self.assertEqual(data["offers"], [])
         self.assertTrue(Movie.objects.filter(tmdb_id=999).exists())
 
-    def test_movie_not_tracked_no_tmdb_key(self):
-        """If movie is not tracked and TMDb fails, return 404 with clean JSON."""
+    @patch("tracker.views.TMDbClient")
+    def test_movie_not_tracked_tmdb_resolve_fails(self, mock_tmdb_cls):
+        """If movie is not tracked and TMDb can't resolve it, return 404 with clean JSON.
+
+        Mocked so this stays offline and deterministic regardless of whether a
+        real TMDb credential happens to be present in the environment.
+        """
+        mock_tmdb_cls.return_value.details.side_effect = Exception("404 Not Found")
+
         from django.test import Client
         response = Client().get("/api/prime/movie/99999/")
 
@@ -228,11 +237,11 @@ class PrimeMovieEndpointTests(TestCase):
 
         mock_cache = mock_cache_cls.return_value
         mock_cache._read_offers.return_value = [
-            {"country": "US", "service": "amazon", "offer_type": "subscription",
+            {"country": "US", "service": "prime", "offer_type": "subscription",
              "quality": "hd", "audio": ["en"], "subs": ["en"]},
-            {"country": "US", "service": "amazon", "offer_type": "rent",
+            {"country": "US", "service": "prime", "offer_type": "rent",
              "quality": "4k", "audio": ["en"], "subs": ["en"]},  # Should be filtered
-            {"country": "US", "service": "amazon", "offer_type": "buy",
+            {"country": "US", "service": "prime", "offer_type": "buy",
              "quality": "4k", "audio": ["en"], "subs": ["en"]},  # Should be filtered
         ]
         mock_cache.get_or_refresh.return_value = None
@@ -253,10 +262,10 @@ class PrimeMovieEndpointTests(TestCase):
         mock_cache = mock_cache_cls.return_value
         mock_cache._read_offers.return_value = [
             # US: EN audio, EN subs — lower priority
-            {"country": "US", "service": "amazon", "offer_type": "subscription",
+            {"country": "US", "service": "prime", "offer_type": "subscription",
              "quality": "hd", "audio": ["en"], "subs": ["en"]},
             # JP: JA audio, EN subs — highest priority (JA audio rank 0)
-            {"country": "JP", "service": "amazon", "offer_type": "subscription",
+            {"country": "JP", "service": "prime", "offer_type": "subscription",
              "quality": "hd", "audio": ["ja", "en"], "subs": ["en", "ja"]},
         ]
         mock_cache.get_or_refresh.return_value = None

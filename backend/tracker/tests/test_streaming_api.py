@@ -1,0 +1,79 @@
+"""Unit tests for the Streaming Availability v4 parser.
+
+These run fully offline against a saved fixture — no live RapidAPI call — so
+they never touch the 100 req/day free-tier quota. The fixture exercises the
+real v4 nested schema (``streamingOptions`` -> ``service.id`` / ``audios`` /
+``subtitles``) plus 3-letter language codes so we cover normalization.
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from django.test import SimpleTestCase
+
+from tracker.services.streaming_api import (
+    StreamingAvailabilityClient,
+    service_display_name,
+)
+
+FIXTURE = Path(__file__).parent / "fixtures" / "streaming_movie_sample.json"
+
+
+class ParseOffersTests(SimpleTestCase):
+    """Parse the v4 sample and assert offer shape + normalization."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        with FIXTURE.open() as fh:
+            cls.payload = json.load(fh)
+        cls.offers = StreamingAvailabilityClient._parse_offers(cls.payload)
+
+    def _find(self, country, service_id):
+        return next(
+            o for o in self.offers
+            if o.country == country and o.service_id == service_id
+        )
+
+    def test_excludes_rent_and_buy_offers(self):
+        # The US "apple" entry is a rent offer and must not survive the filter.
+        self.assertTrue(all(o.offer_type in {"subscription", "free"} for o in self.offers))
+        self.assertFalse(any(o.service_id == "apple" for o in self.offers))
+        # us(prime) + jp(prime) + gb(netflix) = 3; apple(rent) dropped.
+        self.assertEqual(len(self.offers), 3)
+
+    def test_prime_offer_parsed_with_stable_id_and_display_name(self):
+        jp = self._find("JP", "prime")
+        self.assertEqual(jp.service_id, "prime")
+        self.assertEqual(jp.service_name, "Prime Video")
+        self.assertEqual(jp.offer_type, "subscription")
+        self.assertEqual(jp.quality, "hd")
+
+    def test_language_codes_normalized_to_iso_639_1(self):
+        # jpn -> ja, eng -> en (order preserved from the source list).
+        jp = self._find("JP", "prime")
+        self.assertEqual(jp.audio_languages, ["ja", "en"])
+        self.assertEqual(jp.subtitle_languages, ["en", "ja"])
+        # spa -> es on the US prime offer.
+        us = self._find("US", "prime")
+        self.assertEqual(us.audio_languages, ["en", "es"])
+        self.assertEqual(us.subtitle_languages, ["en", "es"])
+        self.assertEqual(us.quality, "uhd")
+
+    def test_non_prime_provider_kept_with_its_own_id(self):
+        # Netflix is a different provider — parsed, not dropped. The prime
+        # endpoint's provider filter (not the parser) is what excludes it later.
+        gb = self._find("GB", "netflix")
+        self.assertEqual(gb.service_id, "netflix")
+        self.assertEqual(gb.service_name, "Netflix")
+
+
+class ServiceDisplayNameTests(SimpleTestCase):
+    def test_known_ids_map_to_pretty_names(self):
+        self.assertEqual(service_display_name("prime"), "Prime Video")
+        self.assertEqual(service_display_name("netflix"), "Netflix")
+
+    def test_unknown_id_falls_back_to_title_case(self):
+        self.assertEqual(service_display_name("someservice"), "Someservice")
+        self.assertEqual(service_display_name(""), "")
