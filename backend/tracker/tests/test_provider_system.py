@@ -26,8 +26,10 @@ class ProviderSystemTests(TestCase):
     def setUp(self):
         self.client = APIClient()
 
-    def test_all_eight_major_providers_and_scrapers_seeded(self):
+    def test_all_major_providers_and_scrapers_seeded(self):
         major_slugs = [
+            "prime",
+            "netflix",
             "disney",
             "hulu",
             "max",
@@ -37,6 +39,11 @@ class ProviderSystemTests(TestCase):
             "youtubetv",
             "crunchyroll",
         ]
+        for slug in major_slugs:
+            provider = Provider.objects.filter(slug=slug, category=ProviderCategory.OFFICIAL).first()
+            self.assertIsNotNone(provider, f"Major provider {slug} should exist out of the box")
+            self.assertTrue(provider.is_major)
+            self.assertTrue(provider.is_enabled)
         for slug in major_slugs:
             provider = Provider.objects.filter(slug=slug, category=ProviderCategory.OFFICIAL).first()
             self.assertIsNotNone(provider, f"Major provider {slug} should exist out of the box")
@@ -173,3 +180,26 @@ class ProviderSystemTests(TestCase):
         scraper = KissKHScraper()
         items = scraper.run(query="Inception")
         self.assertEqual(items, [])
+
+    @patch("tracker.scrapers.adapters.KissKHScraper.fetch_url")
+    def test_scraper_import_url_endpoint(self, mock_fetch):
+        mock_fetch.return_value = [
+            {
+                "id": 101,
+                "title": "Demon Slayer",
+                "year": 2019,
+                "audio": ["Japanese"],
+                "subtitles": ["English"],
+                "quality": "1080p",
+            }
+        ]
+        resp = self.client.post(
+            "/api/scrapers/import-url/",
+            data={"url": "https://kisskh.co/Drama/Demon-Slayer"},
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        data = resp.json()
+        self.assertEqual(data["provider"]["slug"], "kisskh")
+        self.assertEqual(data["count"], 1)
+        self.assertTrue(Subscription.objects.filter(user_id=1, provider__slug="kisskh").exists())

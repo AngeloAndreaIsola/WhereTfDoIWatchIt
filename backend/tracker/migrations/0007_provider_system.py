@@ -6,6 +6,20 @@ import django.db.models.deletion
 
 MAJOR_PROVIDERS = [
     {
+        "slug": "prime",
+        "name": "Prime Video",
+        "is_major": True,
+        "icon_name": "prime",
+        "streaming_availability_id": "prime",
+    },
+    {
+        "slug": "netflix",
+        "name": "Netflix",
+        "is_major": True,
+        "icon_name": "netflix",
+        "streaming_availability_id": "netflix",
+    },
+    {
         "slug": "disney",
         "name": "Disney+",
         "is_major": True,
@@ -24,7 +38,7 @@ MAJOR_PROVIDERS = [
         "name": "Max",
         "is_major": True,
         "icon_name": "max",
-        "streaming_availability_id": "hbo",  # streaming availability v4 API uses "hbo" or "max"
+        "streaming_availability_id": "hbo",
     },
     {
         "slug": "apple",

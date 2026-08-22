@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import ProviderGrid, { ProviderItem } from "@/components/ProviderGrid";
 
 interface PreferencesData {
   audio_languages: string[];
@@ -19,35 +18,18 @@ export default function PreferencesPage() {
   const [audioLangs, setAudioLangs] = useState("");
   const [subtitleLangs, setSubtitleLangs] = useState("");
   const [countries, setCountries] = useState("");
-  const [providers, setProviders] = useState<ProviderItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState("");
 
-  const fetchProviders = useCallback(async () => {
-    try {
-      const res = await fetch("/api/providers/");
-      if (res && res.ok) {
-        const data: ProviderItem[] = await res.json();
-        setProviders(data);
-      }
-    } catch {
-      // Ignore provider fetch failure gracefully in tests / offline
-    }
-  }, []);
-
-  /* --- Fetch Preferences & Providers --- */
   const fetchPreferences = useCallback(async () => {
     setLoading(true);
     setFetchError("");
     try {
-      const [prefRes] = await Promise.all([
-        fetch("/api/preferences/"),
-        fetchProviders(),
-      ]);
-      if (!prefRes.ok) {
-        throw new Error(`Failed to load preferences (${prefRes.status})`);
+      const res = await fetch("/api/preferences/");
+      if (!res.ok) {
+        throw new Error(`Failed to load preferences (${res.status})`);
       }
-      const data: PreferencesData = await prefRes.json();
+      const data: PreferencesData = await res.json();
       setAudioLangs(formatArrayToCommaString(data.audio_languages));
       setSubtitleLangs(formatArrayToCommaString(data.subtitle_languages));
       setCountries(formatArrayToCommaString(data.candidate_countries));
@@ -56,18 +38,7 @@ export default function PreferencesPage() {
     } finally {
       setLoading(false);
     }
-  }, [fetchProviders]);
-
-  const handleToggleProvider = async (slug: string) => {
-    try {
-      const res = await fetch(`/api/providers/${slug}/toggle/`, { method: "POST" });
-      if (res.ok) {
-        await fetchProviders();
-      }
-    } catch (err) {
-      console.error(`Failed to toggle provider ${slug}:`, err);
-    }
-  };
+  }, []);
 
   useEffect(() => {
     fetchPreferences();
@@ -88,20 +59,31 @@ export default function PreferencesPage() {
           Preferences
         </h1>
         <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-          Configure your streaming availability and ranking preferences.
+          Configure your language preferences and candidate countries.
         </p>
       </div>
 
-      {/* Provider Selection Section */}
-      <div className="mb-10 rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-        <ProviderGrid
-          providers={providers}
-          onToggle={handleToggleProvider}
-          loading={loading}
-        />
+      {/* Link banner to Subscriptions */}
+      <div className="mb-8 rounded-xl border border-blue-200 bg-blue-50/50 p-4 dark:border-blue-900/50 dark:bg-blue-950/20">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-blue-900 dark:text-blue-200">
+              Streaming Subscriptions
+            </h3>
+            <p className="text-xs text-blue-700 dark:text-blue-300">
+              Manage major streaming providers and import custom scraper sources on the Subscriptions page.
+            </p>
+          </div>
+          <Link
+            href="/subscriptions"
+            className="rounded-lg bg-blue-600 px-3.5 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-blue-500 dark:bg-blue-500 dark:hover:bg-blue-400"
+          >
+            Manage Subscriptions →
+          </Link>
+        </div>
       </div>
 
-      {/* Coming soon banner */}
+      {/* Language Preferences banner */}
       <div className="mb-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
         <span className="font-medium">Language Preferences</span> — Language preferences are managed
         by the server for now (hardcoded to{" "}

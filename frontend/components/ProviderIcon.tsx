@@ -10,6 +10,24 @@ export default function ProviderIcon({ slug, name, className = "h-8 w-8" }: Prov
   const cleanSlug = (slug || "").toLowerCase();
 
   switch (cleanSlug) {
+    case "prime":
+      return (
+        <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+          <rect width="24" height="24" rx="5" fill="#00A8E1" />
+          <text x="12" y="16" fontSize="9" fontWeight="extrabold" fill="#FFFFFF" textAnchor="middle">
+            prime
+          </text>
+        </svg>
+      );
+    case "netflix":
+      return (
+        <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+          <rect width="24" height="24" rx="5" fill="#E50914" />
+          <text x="12" y="16" fontSize="12" fontWeight="black" fill="#FFFFFF" textAnchor="middle">
+            N
+          </text>
+        </svg>
+      );
     case "disney":
       return (
         <svg className={className} viewBox="0 0 24 24" fill="currentColor">

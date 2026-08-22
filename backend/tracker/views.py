@@ -182,6 +182,88 @@ def subscriptions_list_create(request):
     return Response(SubscriptionSerializer(sub).data, status=status.HTTP_201_CREATED)
 
 
+def detect_provider_from_url(url: str) -> tuple[Optional[Provider], str]:
+    """Detect scraper provider and extract title/query from URL."""
+    url_lower = (url or "").strip().lower()
+    if "kisskh.co" in url_lower:
+        provider = Provider.objects.filter(slug="kisskh").first()
+        # Extract title or ID from URL path, e.g. kisskh.co/Drama/Demon-Slayer
+        parts = [p for p in url_lower.split("/") if p]
+        query = parts[-1].replace("-", " ") if parts else "Drama"
+        return provider, query
+    elif "hydrahd.ru" in url_lower:
+        provider = Provider.objects.filter(slug="hydrahd").first()
+        parts = [p for p in url_lower.split("/") if p]
+        query = parts[-1].replace("-", " ") if parts else "Movie"
+        return provider, query
+    elif "animeworld.ac" in url_lower:
+        provider = Provider.objects.filter(slug="animeworld").first()
+        parts = [p for p in url_lower.split("/") if p]
+        query = parts[-1].replace("-", " ") if parts else "Anime"
+        return provider, query
+    return None, ""
+
+
+@api_view(["POST"])
+def scraper_import_url(request):
+    """Import a small provider/source by URL, trigger the scraper, and register source."""
+    data = request.data if isinstance(request.data, dict) else {}
+    url = (data.get("url") or "").strip()
+    if not url:
+        return Response({"error": "URL is required"}, status=400)
+
+    provider, query = detect_provider_from_url(url)
+    if not provider:
+        return Response(
+            {"error": "Unsupported or unrecognized provider URL. Supported domains: kisskh.co, hydrahd.ru, animeworld.ac"},
+            status=400,
+        )
+
+    scraper_cls = SCRAPER_REGISTRY.get(provider.slug.lower())
+    if not scraper_cls:
+        return Response({"error": f"No scraper adapter registered for '{provider.slug}'"}, status=400)
+
+    scraper = scraper_cls()
+    items = scraper.run(query=query)
+
+    # Automatically subscribe/register user to this small provider source
+    Subscription.objects.get_or_create(
+        user_id=1,
+        provider=provider,
+        defaults={"name": provider.name},
+    )
+
+    matcher = ContentMatcher()
+    results = []
+    for item in items:
+        if not item.source_url:
+            item.source_url = url
+        movie, score, candidates, is_confirmed = matcher.match_item(item)
+        results.append({
+            "scraped_item": {
+                "title": item.title,
+                "year": item.year,
+                "provider_slug": item.provider_slug,
+                "source_url": item.source_url,
+                "audio_languages": item.audio_languages,
+                "subtitle_languages": item.subtitle_languages,
+                "quality": item.quality,
+            },
+            "matched_movie": MovieSerializer(movie).data if movie else None,
+            "confidence_score": score,
+            "is_confirmed": is_confirmed,
+            "candidates": candidates,
+        })
+
+    return Response({
+        "imported_url": url,
+        "provider": ProviderSerializer(provider).data,
+        "query": query,
+        "count": len(results),
+        "results": results,
+    }, status=status.HTTP_201_CREATED)
+
+
 @api_view(["POST"])
 def scraper_run(request):
     """Trigger a scraper run for a given scraper provider slug."""

@@ -12,6 +12,7 @@ urlpatterns = [
     path("subscriptions", views.subscriptions_list_create),
     path("subscriptions/<int:pk>/", views.subscription_detail, name="subscription-detail"),
     path("subscriptions/<int:pk>", views.subscription_detail),
+    path("scrapers/import-url/", views.scraper_import_url, name="scraper-import-url"),
     path("scrapers/run/", views.scraper_run, name="scraper-run"),
     path("scrapers/unresolved/", views.scraper_unresolved, name="scraper-unresolved"),
     path("scrapers/confirm-match/", views.scraper_confirm_match, name="scraper-confirm-match"),
