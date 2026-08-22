@@ -84,7 +84,6 @@ SCRAPER_PROVIDERS = [
         "category": "scraper",
         "is_major": False,
         "icon_name": "kisskh",
-        "domain": "kisskh.co",
     },
     {
         "slug": "hydrahd",
@@ -92,7 +91,6 @@ SCRAPER_PROVIDERS = [
         "category": "scraper",
         "is_major": False,
         "icon_name": "hydrahd",
-        "domain": "hydrahd.ru",
     },
     {
         "slug": "animeworld",
@@ -100,7 +98,6 @@ SCRAPER_PROVIDERS = [
         "category": "scraper",
         "is_major": False,
         "icon_name": "animeworld",
-        "domain": "animeworld.ac",
     },
 ]
 
@@ -139,7 +136,6 @@ def seed_providers(apps, schema_editor):
                 "is_major": False,
                 "is_enabled": True,
                 "icon_name": item["icon_name"],
-                "domain": item.get("domain", ""),
             },
         )
 
@@ -193,8 +189,6 @@ class Migration(migrations.Migration):
                 ("is_major", models.BooleanField(default=False)),
                 ("is_enabled", models.BooleanField(default=True)),
                 ("icon_name", models.CharField(blank=True, default="", max_length=50)),
-                ("domain", models.CharField(blank=True, default="", max_length=100)),
-                ("last_scraped_at", models.DateTimeField(blank=True, null=True)),
             ],
         ),
         migrations.CreateModel(
