@@ -1,7 +1,9 @@
 """TMDb API client.
 
-Uses TMDb v3 search endpoint to resolve title/year -> tmdb_id.
-Reads TMDB_API_KEY from Django settings.
+Uses TMDb v3 endpoints (search / details / trending) to resolve and enrich
+movies. Reads TMDB_API_KEY from Django settings and accepts either credential
+TMDb hands out: a classic v3 API key (query param) or a v4 API Read Access
+Token (JWT, sent as a Bearer header) — see ``TMDbClient._auth``.
 """
 from __future__ import annotations
 
@@ -39,21 +41,36 @@ class TMDbClient:
         if not self.api_key:
             logger.warning("TMDB_API_KEY not configured; TMDbClient calls will fail.")
 
+    def _auth(self) -> tuple[dict, dict]:
+        """Return (query_params, headers) carrying TMDb credentials.
+
+        TMDb issues two credential shapes. A classic v3 API key (32-char hex)
+        authenticates via the ``api_key`` query param. A v4 "API Read Access
+        Token" is a JWT (starts with ``eyJ``) and must be sent as a Bearer
+        header — passing it as ``api_key`` returns 401. Detect the JWT and route
+        it to the header so either credential the user pastes just works.
+        """
+        if self.api_key.startswith("eyJ"):
+            return {}, {"Authorization": f"Bearer {self.api_key}"}
+        return {"api_key": self.api_key}, {}
+
     def search(self, query: str, year: Optional[int] = None) -> list[TMDbMovie]:
         """Search TMDb by title, optionally filtered by year."""
-        params = {"api_key": self.api_key, "query": query, "include_adult": "false"}
+        params, headers = self._auth()
+        params.update({"query": query, "include_adult": "false"})
         if year is not None:
             params["year"] = year
         url = f"{TMDB_BASE}/search/movie"
-        resp = requests.get(url, params=params, timeout=self.timeout)
+        resp = requests.get(url, params=params, headers=headers, timeout=self.timeout)
         resp.raise_for_status()
         results = resp.json().get("results", [])
         return [self._parse_search_result(r) for r in results]
 
     def details(self, tmdb_id: int) -> TMDbMovie:
         """Fetch full movie details by TMDb id."""
+        params, headers = self._auth()
         url = f"{TMDB_BASE}/movie/{tmdb_id}"
-        resp = requests.get(url, params={"api_key": self.api_key}, timeout=self.timeout)
+        resp = requests.get(url, params=params, headers=headers, timeout=self.timeout)
         resp.raise_for_status()
         data = resp.json()
         return TMDbMovie(
@@ -66,8 +83,9 @@ class TMDbClient:
 
     def popular(self, limit: int = 24) -> list[TMDbMovie]:
         """Fetch trending/popular movies from TMDb (trending/movie/week)."""
+        params, headers = self._auth()
         url = f"{TMDB_BASE}/trending/movie/week"
-        resp = requests.get(url, params={"api_key": self.api_key}, timeout=self.timeout)
+        resp = requests.get(url, params=params, headers=headers, timeout=self.timeout)
         resp.raise_for_status()
         results = resp.json().get("results", [])
         movies = [self._parse_search_result(r) for r in results]
