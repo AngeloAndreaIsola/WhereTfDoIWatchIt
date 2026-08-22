@@ -1,7 +1,14 @@
-"""Streaming Availability API client (RapidAPI movieofthenight).
+"""Streaming Availability API client (RapidAPI movieofthenight, v4).
 
 Fetches availability for a single TMDb ID across all countries in one request.
-Filters strictly to subscription + free offer types (rent/buy excluded by design).
+Filters strictly to subscription + free offer types (rent/buy/addon excluded by design).
+
+The v4 ``/shows/movie/{tmdbId}`` endpoint returns a Show object whose
+``streamingOptions`` map is keyed by lowercase country code; each option nests
+the provider under ``service.id`` / ``service.name`` and lists ``audios`` /
+``subtitles`` as objects. Older schemas exposed a flat ``streamingInfo`` map with
+``serviceId`` / ``audioLanguages`` string lists — we still parse that shape as a
+fallback so saved legacy fixtures keep working.
 """
 from __future__ import annotations
 
@@ -17,7 +24,95 @@ logger = logging.getLogger(__name__)
 RAPIDAPI_HOST = "streaming-availability.p.rapidapi.com"
 DEFAULT_TIMEOUT = 15
 ALLOWED_OFFER_TYPES = {"subscription", "free"}
-QUALITY_ORDER = {"4k": 4, "uhd": 4, "hdr": 3, "hd": 2, "sd": 1}
+QUALITY_ORDER = {"4k": 4, "uhd": 4, "qhd": 3, "hdr": 3, "hd": 2, "sd": 1}
+
+# ISO 639-2 (bibliographic/B and terminologic/T) -> ISO 639-1. The v4 API reports
+# languages as 3-letter codes in some regions; our Preference model and the
+# LanguageEntry column both use 2-letter ISO 639-1, so normalize on the way in.
+_ISO6392_TO_1 = {
+    "eng": "en", "jpn": "ja", "spa": "es", "fra": "fr", "fre": "fr",
+    "deu": "de", "ger": "de", "ita": "it", "por": "pt", "rus": "ru",
+    "zho": "zh", "chi": "zh", "kor": "ko", "hin": "hi", "ara": "ar",
+    "nld": "nl", "dut": "nl", "swe": "sv", "nor": "no", "nob": "nb",
+    "dan": "da", "fin": "fi", "pol": "pl", "tur": "tr", "tha": "th",
+    "vie": "vi", "ces": "cs", "cze": "cs", "ell": "el", "gre": "el",
+    "heb": "he", "ind": "id", "ukr": "uk", "ron": "ro", "rum": "ro",
+    "hun": "hu", "cat": "ca", "hrv": "hr", "srp": "sr", "slk": "sk",
+    "slo": "sk", "bul": "bg", "isl": "is", "ice": "is", "tgl": "tl",
+    "tam": "ta", "tel": "te", "mal": "ml", "ben": "bn", "mar": "mr",
+    "pan": "pa", "guj": "gu", "kan": "kn",
+}
+
+# Stable service id -> human display name for the UI. Falls back to a title-cased
+# id for services not listed here.
+SERVICE_DISPLAY_NAMES = {
+    "prime": "Prime Video",
+    "netflix": "Netflix",
+    "apple": "Apple TV+",
+    "appletv": "Apple TV+",
+    "disney": "Disney+",
+    "hbo": "Max",
+    "max": "Max",
+    "hulu": "Hulu",
+    "paramount": "Paramount+",
+    "peacock": "Peacock",
+    "starz": "Starz",
+    "mubi": "MUBI",
+    "now": "NOW",
+    "curiosity": "Curiosity Stream",
+    "zee5": "Zee5",
+}
+
+
+def service_display_name(service_id: str) -> str:
+    """Map a stable service id ("prime") to a display name ("Prime Video")."""
+    sid = (service_id or "").lower()
+    return SERVICE_DISPLAY_NAMES.get(sid, (service_id or "").title())
+
+
+def _norm_lang(code: Optional[str]) -> str:
+    """Normalize a language code to lowercase ISO 639-1 (2-letter).
+
+    Passes 2-letter codes through; maps known 3-letter codes; best-effort
+    truncates anything else so it fits the 2-char ``LanguageEntry`` column.
+    """
+    if not code:
+        return ""
+    c = str(code).strip().lower()
+    if len(c) == 2:
+        return c
+    if len(c) == 3:
+        return _ISO6392_TO_1.get(c, c[:2])
+    return c[:2]
+
+
+def _extract_langs(items, code_getter) -> list[str]:
+    """Normalize + de-dupe a list of language entries, preserving order."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in items or []:
+        norm = _norm_lang(code_getter(item))
+        if norm and norm not in seen:
+            seen.add(norm)
+            out.append(norm)
+    return out
+
+
+def _audio_code(item) -> str:
+    # v4: {"language": "eng", "region": "USA"}; legacy: "en"
+    if isinstance(item, dict):
+        return item.get("language") or (item.get("locale") or {}).get("language") or ""
+    return item or ""
+
+
+def _subtitle_code(item) -> str:
+    # v4: {"closedCaptions": bool, "locale": {"language": "eng", ...}}; legacy: "en"
+    if isinstance(item, dict):
+        locale = item.get("locale")
+        if isinstance(locale, dict):
+            return locale.get("language") or ""
+        return item.get("language") or ""
+    return item or ""
 
 
 @dataclass
@@ -43,44 +138,62 @@ class StreamingAvailabilityClient:
         self.timeout = timeout
 
     def get_availability(self, tmdb_id: int) -> StreamingResult:
+        # v4 /shows/movie/{tmdbId} returns every country's options in one call;
+        # no country param is needed (the legacy "country=all" is not valid v4).
         url = f"https://{RAPIDAPI_HOST}/shows/movie/{tmdb_id}"
         headers = {
             "x-rapidapi-key": self.api_key,
             "x-rapidapi-host": RAPIDAPI_HOST,
         }
-        params = {"country": "all"}
-        resp = requests.get(url, headers=headers, params=params, timeout=self.timeout)
+        resp = requests.get(url, headers=headers, timeout=self.timeout)
         resp.raise_for_status()
         data = resp.json()
         offers = self._parse_offers(data)
-        return StreamingResult(tmdb_id=int(data.get("tmdbId") or tmdb_id), offers=offers)
+        # v4 tmdbId is a string like "movie/588228"; trust the requested id.
+        return StreamingResult(tmdb_id=tmdb_id, offers=offers)
 
     @staticmethod
     def _parse_offers(payload: dict) -> list[StreamingOffer]:
         offers: list[StreamingOffer] = []
-        for country, country_data in (payload.get("streamingInfo") or {}).items():
-            for entry in country_data:
+        # v4 nests availability under "streamingOptions"; legacy used "streamingInfo".
+        catalog = payload.get("streamingOptions")
+        if catalog is None:
+            catalog = payload.get("streamingInfo") or {}
+        for country, country_options in (catalog or {}).items():
+            if not isinstance(country_options, list):
+                continue
+            for entry in country_options:
+                if not isinstance(entry, dict):
+                    continue
                 offer_type = (entry.get("type") or "").lower()
                 if offer_type not in ALLOWED_OFFER_TYPES:
                     continue
+
+                service = entry.get("service")
+                if isinstance(service, dict):
+                    service_id = str(service.get("id") or "")
+                    service_name = service.get("name") or service_id
+                else:  # legacy flat shape
+                    service_id = str(entry.get("serviceId") or service or "")
+                    service_name = entry.get("serviceName") or service_id
+
                 quality = (entry.get("quality") or "").lower() or None
+                audios = entry.get("audios")
+                if audios is None:
+                    audios = entry.get("audioLanguages")
+                subtitles = entry.get("subtitles")
+                if subtitles is None:
+                    subtitles = entry.get("subtitleLanguages")
+
                 offers.append(
                     StreamingOffer(
                         country=country.upper(),
-                        service_id=str(entry.get("serviceId") or entry.get("id") or ""),
-                        service_name=entry.get("serviceName") or entry.get("serviceId") or "",
+                        service_id=service_id,
+                        service_name=service_name,
                         offer_type=offer_type,
                         quality=quality,
-                        audio_languages=[
-                            (lang or "")[:2].lower()
-                            for lang in (entry.get("audioLanguages") or [])
-                            if lang
-                        ],
-                        subtitle_languages=[
-                            (lang or "")[:2].lower()
-                            for lang in (entry.get("subtitleLanguages") or [])
-                            if lang
-                        ],
+                        audio_languages=_extract_langs(audios, _audio_code),
+                        subtitle_languages=_extract_langs(subtitles, _subtitle_code),
                     )
                 )
         return offers
