@@ -4,30 +4,115 @@ from __future__ import annotations
 from rest_framework import serializers
 
 from .languages import CANONICAL_LANGUAGE_MAP, normalize_language_code
-from .models import Movie, Preference, Subscription, WatchlistItem
+from django.db import models
+from .models import (
+    ExternalProviderMapping,
+    Movie,
+    Preference,
+    Provider,
+    ScrapedContentMapping,
+    Subscription,
+    WatchlistItem,
+)
+
+
+class MovieSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Movie
+        fields = ["id", "tmdb_id", "title", "year"]
+
+
+class ExternalProviderMappingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ExternalProviderMapping
+        fields = ["integration_name", "external_id"]
+
+
+class ProviderSerializer(serializers.ModelSerializer):
+    external_mappings = ExternalProviderMappingSerializer(many=True, read_only=True)
+    is_subscribed = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Provider
+        fields = [
+            "id",
+            "slug",
+            "name",
+            "category",
+            "is_major",
+            "is_enabled",
+            "icon_name",
+            "is_subscribed",
+            "external_mappings",
+        ]
+
+    def get_is_subscribed(self, obj: Provider) -> bool:
+        user_subscribed_ids = self.context.get("user_subscribed_ids")
+        if user_subscribed_ids is not None:
+            return obj.id in user_subscribed_ids
+        return Subscription.objects.filter(user_id=1, provider=obj).exists()
 
 
 class SubscriptionSerializer(serializers.ModelSerializer):
+    provider = ProviderSerializer(read_only=True)
+    provider_id = serializers.IntegerField(write_only=True, required=False)
+    provider_slug = serializers.CharField(write_only=True, required=False)
+
     class Meta:
         model = Subscription
-        fields = ["id", "name"]
+        fields = ["id", "name", "provider", "provider_id", "provider_slug"]
         extra_kwargs = {
-            "name": {
-                "validators": [],
-            }
+            "name": {"validators": [], "required": False, "allow_blank": True},
         }
 
-    def validate_name(self, value: str) -> str:
-        trimmed = value.strip() if value else ""
-        if not trimmed:
-            raise serializers.ValidationError("Subscription name cannot be empty.")
+    def validate(self, attrs):
+        provider_id = attrs.get("provider_id")
+        provider_slug = attrs.get("provider_slug")
+        name = attrs.get("name")
 
-        qs = Subscription.objects.filter(user_id=1, name__iexact=trimmed)
-        if self.instance:
-            qs = qs.exclude(pk=self.instance.pk)
-        if qs.exists():
-            raise serializers.ValidationError("Subscription with this name already exists.")
-        return trimmed
+        provider = None
+        if provider_id:
+            try:
+                provider = Provider.objects.get(id=provider_id)
+            except Provider.DoesNotExist:
+                raise serializers.ValidationError({"provider_id": "Provider not found."})
+        elif provider_slug:
+            try:
+                provider = Provider.objects.get(slug__iexact=provider_slug.strip())
+            except Provider.DoesNotExist:
+                raise serializers.ValidationError({"provider_slug": "Provider not found."})
+        elif name:
+            trimmed = name.strip()
+            provider = Provider.objects.filter(
+                models.Q(name__iexact=trimmed) | models.Q(slug__iexact=trimmed)
+            ).first()
+
+        if not provider and not name:
+            raise serializers.ValidationError("Either provider, provider_id, provider_slug, or name must be provided.")
+
+        attrs["resolved_provider"] = provider
+        return attrs
+
+
+class ScrapedContentMappingSerializer(serializers.ModelSerializer):
+    provider = ProviderSerializer(read_only=True)
+    movie = MovieSerializer(read_only=True)
+
+    class Meta:
+        model = ScrapedContentMapping
+        fields = [
+            "id",
+            "provider",
+            "scraped_title",
+            "scraped_year",
+            "scraped_url",
+            "movie",
+            "is_confirmed",
+            "confidence_score",
+            "raw_payload",
+            "created_at",
+            "updated_at",
+        ]
 
 
 class MovieSerializer(serializers.ModelSerializer):

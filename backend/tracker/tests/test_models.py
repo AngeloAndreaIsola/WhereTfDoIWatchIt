@@ -77,10 +77,12 @@ class LanguageInfoTests(TestCase):
 
 
 class SubscriptionTests(TestCase):
-    def test_name_unique(self):
-        Subscription.objects.create(name="Netflix")
+    def test_user_provider_unique(self):
+        from tracker.models import Provider
+        p = Provider.objects.filter(slug="disney").first()
+        Subscription.objects.create(user_id=1, provider=p, name="Disney+")
         with self.assertRaises(IntegrityError):
-            Subscription.objects.create(name="Netflix")
+            Subscription.objects.create(user_id=1, provider=p, name="Disney+")
 
     def test_user_id_defaults_to_one(self):
         self.assertEqual(Subscription.objects.create(name="Max").user_id, 1)

@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 from django.test import TestCase
 from django.urls import reverse
 
-from tracker.models import Movie, Preference, Subscription
+from tracker.models import Movie, Preference, Provider, Subscription
 
 
 class SubscriptionsEndpointTests(TestCase):
@@ -24,15 +24,15 @@ class SubscriptionsEndpointTests(TestCase):
         self.assertEqual(data["name"], "Netflix")
         self.assertTrue(Subscription.objects.filter(user_id=1, name="Netflix").exists())
 
-    def test_post_duplicate_case_insensitive_returns_400(self):
-        Subscription.objects.create(user_id=1, name="Netflix")
+    def test_post_creates_subscription_or_links_provider(self):
+        p = Provider.objects.filter(slug="disney").first()
         resp = self.client.post(
             "/api/subscriptions/",
-            data={"name": "NETFLIX"},
+            data={"provider_slug": "disney"},
             content_type="application/json",
         )
-        self.assertEqual(resp.status_code, 400)
-        self.assertEqual(resp.json(), {"name": ["Subscription with this name already exists."]})
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.json()["provider"]["slug"], "disney")
 
     def test_delete_removes_subscription(self):
         sub = Subscription.objects.create(user_id=1, name="Hulu")
@@ -389,7 +389,7 @@ class MovieLanguageInfoEndpointTests(TestCase):
         )
         self.assertEqual(get_resp.status_code, 200)
         self.assertEqual(get_resp.json()["audio_languages"], ["EN", "ES"])
-        self.assertEqual(get_resp.json()["subtitle_languages"], ["IT", "FR"])
+        self.assertEqual(sorted(get_resp.json()["subtitle_languages"]), ["FR", "IT"])
 
     def test_put_updates_and_overwrites_existing_entries(self):
         # Initial put

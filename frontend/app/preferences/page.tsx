@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
+import ProviderGrid, { ProviderItem } from "@/components/ProviderGrid";
 
 interface PreferencesData {
   audio_languages: string[];
@@ -18,18 +19,35 @@ export default function PreferencesPage() {
   const [audioLangs, setAudioLangs] = useState("");
   const [subtitleLangs, setSubtitleLangs] = useState("");
   const [countries, setCountries] = useState("");
+  const [providers, setProviders] = useState<ProviderItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState("");
-  /* --- Fetch Preferences (read-only, server-side managed) --- */
+
+  const fetchProviders = useCallback(async () => {
+    try {
+      const res = await fetch("/api/providers/");
+      if (res && res.ok) {
+        const data: ProviderItem[] = await res.json();
+        setProviders(data);
+      }
+    } catch {
+      // Ignore provider fetch failure gracefully in tests / offline
+    }
+  }, []);
+
+  /* --- Fetch Preferences & Providers --- */
   const fetchPreferences = useCallback(async () => {
     setLoading(true);
     setFetchError("");
     try {
-      const res = await fetch("/api/preferences/");
-      if (!res.ok) {
-        throw new Error(`Failed to load preferences (${res.status})`);
+      const [prefRes] = await Promise.all([
+        fetch("/api/preferences/"),
+        fetchProviders(),
+      ]);
+      if (!prefRes.ok) {
+        throw new Error(`Failed to load preferences (${prefRes.status})`);
       }
-      const data: PreferencesData = await res.json();
+      const data: PreferencesData = await prefRes.json();
       setAudioLangs(formatArrayToCommaString(data.audio_languages));
       setSubtitleLangs(formatArrayToCommaString(data.subtitle_languages));
       setCountries(formatArrayToCommaString(data.candidate_countries));
@@ -38,7 +56,18 @@ export default function PreferencesPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [fetchProviders]);
+
+  const handleToggleProvider = async (slug: string) => {
+    try {
+      const res = await fetch(`/api/providers/${slug}/toggle/`, { method: "POST" });
+      if (res.ok) {
+        await fetchProviders();
+      }
+    } catch (err) {
+      console.error(`Failed to toggle provider ${slug}:`, err);
+    }
+  };
 
   useEffect(() => {
     fetchPreferences();
@@ -63,12 +92,21 @@ export default function PreferencesPage() {
         </p>
       </div>
 
+      {/* Provider Selection Section */}
+      <div className="mb-10 rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+        <ProviderGrid
+          providers={providers}
+          onToggle={handleToggleProvider}
+          loading={loading}
+        />
+      </div>
+
       {/* Coming soon banner */}
       <div className="mb-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
-        <span className="font-medium">Coming soon</span> — Preferences are managed
-        by the server for now. Language preferences are hardcoded to{" "}
-        <code className="font-mono">JA, EN</code> (audio) and{" "}
-        <code className="font-mono">EN, JA</code> (subtitles).
+        <span className="font-medium">Language Preferences</span> — Language preferences are managed
+        by the server for now (hardcoded to{" "}
+        <code className="font-mono">JA, EN</code> audio and{" "}
+        <code className="font-mono">EN, JA</code> subtitles).
       </div>
 
       {/* Loading state */}
