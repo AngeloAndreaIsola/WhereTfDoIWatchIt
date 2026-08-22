@@ -1,6 +1,6 @@
 # Prime Video MVP — hardening plan
 
-_Status: active. Owner: Claude Code + Omniroute (core integration path — not delegated). Created 2026-08-21._
+_Status: first wave (CC-1 → CC-2 → CC-3) COMPLETE as of 2026-08-21. Owner: Claude Code + Omniroute (core integration path — not delegated). Created 2026-08-21._
 
 ## Context
 
@@ -100,3 +100,15 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml exec frontend npm
 3. With keys set: click a movie → real Prime offers, JA-audio-match ranked first; re-click → served from
    cache, `ApiCallCounter` for the day unchanged (quota respected).
 4. `curl localhost:3001/api/prime/movie/<id>/` returns a non-empty `offers` array for a movie known to be on Prime.
+
+## Completion notes (2026-08-21)
+
+**Done and verified:**
+- **CC-1** — `next.config.mjs` gained `images.remotePatterns` for `image.tmdb.org` (`/t/p/**`). Frontend `npm run build` + `npm run lint` clean. `MovieCard` builds `image.tmdb.org/t/p/w500…` URLs; the live popular endpoint returns real `poster_path`s, so the grid renders.
+- **CC-2** — `_parse_offers` rewritten for the real v4 `streamingOptions` schema (nested `service.id`/`service.name`, `audios[]`/`subtitles[]`) with a legacy-`streamingInfo` fallback and ISO 639-2→639-1 language normalization. `cache._write_result` now stores the stable **service id** (`prime`) in `Region.provider`; `DEFAULT_PREFERENCE_PROVIDER="prime"`; `prime_movie` filters on the id and maps it to the display name (`Prime Video`) via `service_display_name()`. New `tests/test_streaming_api.py` (parser + display-name units) plus updated `test_prime_endpoints.py` mocks.
+- **CC-3** — Env documented in `.env.example` (`TMDB_API_KEY`, `RAPIDAPI_KEY`, `PRIME_LIVE_FETCH`, `DEFAULT_PREFERENCE_PROVIDER`); the same vars wired through `docker-compose.yml`. New `manage.py seed_prime_fixture` loads the saved v4 fixture into `Availability`/`LanguageInfo` fully offline (no API call, no quota) so the detail page renders in dev. Verified: seeded movie 588228 → `/api/prime/movie/588228/` returns two ranked Prime offers, JA-audio ranked first, Netflix filtered out.
+- **117/117 backend tests pass.**
+
+**Two issues found and fixed beyond the original plan:**
+- **TMDb v4 auth** — the real `TMDB_API_KEY` is a v4 "API Read Access Token" (a JWT), but `TMDbClient` sent it as the v3 `?api_key=` param → every TMDb call 401'd (empty homepage grid). `TMDbClient._auth()` now detects a JWT and sends it as an `Authorization: Bearer` header, falling back to `?api_key=` for a classic v3 key. Live popular endpoint confirmed returning real trending data. Unit-tested in `tests/test_tmdb.py`.
+- **Graceful degradation** — `prime_movie` only caught `RateLimitExceeded`; any other live-fetch failure (notably the current RapidAPI 403, see below) would 500 the detail page. It now logs and falls back to cached rows, so the page always renders.
