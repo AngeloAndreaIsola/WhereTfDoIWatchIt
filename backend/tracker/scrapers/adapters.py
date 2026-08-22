@@ -14,11 +14,17 @@ class KissKHScraper(BaseScraper):
 
     def _execute_run(self, query: Optional[str] = None) -> list[ScrapedItem]:
         if not query:
+            logger.info("KissKH scraper: no query provided")
             return []
         url = f"https://kisskh.co/api/DramaList/Search?q={query}"
         resp_data = self.fetch_url(url)
-        if not resp_data or not isinstance(resp_data, list):
+        if not resp_data:
+            logger.warning("KissKH scraper: no response data")
             return []
+        if not isinstance(resp_data, list):
+            logger.warning("KissKH scraper: expected list, got %s", type(resp_data))
+            return []
+        logger.info("KissKH scraper: got %d entries", len(resp_data))
         return self.parse_items(resp_data)
 
     def parse_items(self, raw_data: Any) -> list[ScrapedItem]:
@@ -116,13 +122,51 @@ class HydraHDScraper(BaseScraper):
 
     def _execute_run(self, query: Optional[str] = None) -> list[ScrapedItem]:
         if not query:
+            logger.info("HydraHD scraper: no query provided")
             return []
-        url = f"https://hydrahd.ru/api/search?q={query}"
-        resp_data = self.fetch_url(url)
-        if not resp_data or not isinstance(resp_data, dict):
-            return []
-        results = resp_data.get("results") or []
-        return self.parse_items(results)
+
+        # Try the current domain first, fall back to old domain
+        urls_to_try = [
+            f"https://hydrahd.ws/api/search?q={query}",
+            f"https://hydrahd.ru/api/search?q={query}",
+        ]
+
+        for url in urls_to_try:
+            logger.info("HydraHD scraper: trying %s", url)
+            resp_data = self.fetch_url_with_headers(url)
+            if resp_data and isinstance(resp_data, dict):
+                results = resp_data.get("results") or []
+                logger.info("HydraHD scraper: got %d results from %s", len(results), url)
+                return self.parse_items(results)
+
+        logger.warning("HydraHD scraper: all URLs failed")
+        return []
+
+    def fetch_url_with_headers(self, url: str) -> Optional[dict | str]:
+        """Fetch URL with proper headers to avoid 403 blocks."""
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://hydrahd.ws/",
+        }
+
+        for attempt in range(1 + self.max_retries):
+            try:
+                resp = self.session.get(url, timeout=self.timeout, headers=headers, allow_redirects=True)
+                resp.raise_for_status()
+                try:
+                    return resp.json()
+                except ValueError:
+                    return resp.text
+            except Exception as exc:
+                logger.warning(
+                    "HydraHD scraper attempt %d for %s failed: %s",
+                    attempt + 1,
+                    url,
+                    exc,
+                )
+        return None
 
     def parse_items(self, raw_data: Any) -> list[ScrapedItem]:
         items: list[ScrapedItem] = []
@@ -164,15 +208,75 @@ class AnimeWorldScraper(BaseScraper):
 
     def _execute_run(self, query: Optional[str] = None) -> list[ScrapedItem]:
         if not query:
+            logger.info("AnimeWorld scraper: no query provided")
             return []
         url = f"https://animeworld.ac/api/search?keyword={query}"
         resp_data = self.fetch_url(url)
-        if not resp_data or not isinstance(resp_data, dict):
+        if not resp_data:
+            logger.warning("AnimeWorld scraper: no response data")
             return []
-        animes = resp_data.get("animes") or []
-        return self.parse_items(animes)
+
+        # AnimeWorld API returns {"html": "<div>...</div>"} not a JSON list
+        if isinstance(resp_data, dict):
+            html_content = resp_data.get("html", "")
+            if html_content:
+                logger.info("AnimeWorld scraper: parsing HTML response (%d bytes)", len(html_content))
+                return self.parse_html(html_content)
+            else:
+                logger.warning("AnimeWorld scraper: dict response has no 'html' key")
+                return []
+
+        logger.warning("AnimeWorld scraper: unexpected response type: %s", type(resp_data))
+        return []
+
+    def parse_html(self, html_content: str) -> list[ScrapedItem]:
+        """Parse HTML response containing anime items."""
+        import re
+        items: list[ScrapedItem] = []
+
+        # Extract anime entries using regex
+        # Pattern: <a class="name" href="play/...">Title</a>
+        name_pattern = r'<a class="name" href="([^"]+)">([^<]+)</a>'
+        name_matches = re.findall(name_pattern, html_content)
+
+        # Extract years: Anno: 2007
+        year_pattern = r'Anno: (\d{4})'
+        year_matches = re.findall(year_pattern, html_content)
+
+        logger.info("AnimeWorld scraper: found %d titles, %d years", len(name_matches), len(year_matches))
+
+        # Match titles with years (they appear in same order in HTML)
+        for idx, (href, title) in enumerate(name_matches):
+            year_int = None
+            if idx < len(year_matches):
+                try:
+                    year_int = int(year_matches[idx])
+                except (ValueError, TypeError):
+                    pass
+
+            # Build full URL from relative href
+            source_url = f"https://animeworld.ac/{href}" if not href.startswith("http") else href
+
+            items.append(
+                ScrapedItem(
+                    title=title.strip(),
+                    provider_slug=self.provider_slug,
+                    year=year_int,
+                    source_url=source_url,
+                    audio_languages=["JA"],  # Default for anime
+                    subtitle_languages=["EN", "IT"],  # AnimeWorld is Italian site with subs
+                    quality="1080p",
+                    availability=True,
+                    raw_payload={"href": href, "title": title, "year": year_int},
+                )
+            )
+
+        logger.info("AnimeWorld scraper: parsed %d items", len(items))
+        return items
 
     def parse_items(self, raw_data: Any) -> list[ScrapedItem]:
+        """Legacy method kept for compatibility. New implementation uses parse_html."""
+        logger.warning("AnimeWorld parse_items called with legacy format")
         items: list[ScrapedItem] = []
         for entry in raw_data or []:
             if not isinstance(entry, dict):
