@@ -253,12 +253,14 @@ def watchlist_report(request):
 
     for item in items:
         movie = item.movie
+        # Use cached data only to avoid blocking on external API calls.
+        # Stale/missing data will be refreshed by background process.
         try:
-            cache.get_or_refresh(movie)
-        except RateLimitExceeded as exc:
-            return Response({"error": str(exc), "rate_limited": True}, status=429)
+            status = cache.get_cached_only(movie)
+            if status.reason == "missing":
+                logger.info("Movie tmdb_id=%s has no cached availability, skipping in report", movie.tmdb_id)
         except Exception:
-            logger.exception("Failed to refresh availability for movie tmdb_id=%s", movie.tmdb_id)
+            logger.exception("Failed to read cached availability for movie tmdb_id=%s", movie.tmdb_id)
 
         raw_offers = cache._read_offers(movie)
         qualifying_offers = [
@@ -540,14 +542,15 @@ def _popular_movie_dict(movie: TMDbMovie) -> dict:
 def prime_movie(request, tmdb_id: int):
     """GET /api/prime/movie/<tmdb_id>/ — ranked Prime Video offers for one movie.
 
-    Filters to subscription/free offers only, provider='amazon', across all
-    countries. Uses the hardcoded DEFAULT_PREFERENCE (JA/EN) via
-    resolve_preferences(). On cache miss:
+    Filters to subscription/free offers only, provider=DEFAULT_PREFERENCE_PROVIDER
+    ("prime"), across all countries. Uses the hardcoded DEFAULT_PREFERENCE (JA/EN)
+    via resolve_preferences(). On cache miss:
       - If PRIME_LIVE_FETCH is True (default): hits Streaming Availability API.
       - If PRIME_LIVE_FETCH is False: returns only cached rows.
     """
     from django.conf import settings
     from .services.preferences import resolve_preferences
+    from .services.streaming_api import service_display_name
 
     # Resolve or auto-create the Movie row via TMDb.
     try:
@@ -591,15 +594,22 @@ def prime_movie(request, tmdb_id: int):
         offers = cache._read_offers(movie)
     else:
         try:
-            status_obj = cache.get_or_refresh(movie)
-            offers = cache._read_offers(movie)
+            cache.get_or_refresh(movie)
         except RateLimitExceeded as exc:
             return Response(
                 {"error": str(exc), "rate_limited": True}, status=429
             )
+        except Exception:
+            # A live availability fetch failure (provider outage, an unsubscribed
+            # RapidAPI key, a network error) must not 500 the detail page — fall
+            # back to whatever is already cached (possibly nothing).
+            logger.exception("Live availability fetch failed for tmdb %s", tmdb_id)
+        offers = cache._read_offers(movie)
 
-    # Filter to amazon provider + subscription/free offers only.
-    provider = getattr(settings, "DEFAULT_PREFERENCE_PROVIDER", "amazon")
+    # Filter to the Prime provider + subscription/free offers only. The provider
+    # is matched against the stable service id ("prime"), which is what
+    # cache._write_result stores in Region.provider.
+    provider = getattr(settings, "DEFAULT_PREFERENCE_PROVIDER", "prime")
     qualifying = [
         o for o in offers
         if o.get("service", "").lower() == provider.lower()
@@ -610,6 +620,13 @@ def prime_movie(request, tmdb_id: int):
     # covers all countries, so candidate_countries is empty/unused here.
     ranked = rank_offers(qualifying, preference)
 
+    # Present the stable service id as its display name ("prime" -> "Prime Video").
+    offers_out = []
+    for offer in ranked:
+        offer_dict = offer.to_dict()
+        offer_dict["service"] = service_display_name(offer_dict.get("service", ""))
+        offers_out.append(offer_dict)
+
     return Response(
         {
             "movie": {
@@ -617,6 +634,6 @@ def prime_movie(request, tmdb_id: int):
                 "title": movie.title,
                 "year": movie.year,
             },
-            "offers": [offer.to_dict() for offer in ranked],
+            "offers": offers_out,
         }
     )
