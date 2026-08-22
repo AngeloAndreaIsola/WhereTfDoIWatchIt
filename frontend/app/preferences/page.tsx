@@ -20,7 +20,7 @@ export default function PreferencesPage() {
   const [countries, setCountries] = useState("");
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState("");
-  /* --- Fetch Preferences (read-only, server-side managed) --- */
+
   const fetchPreferences = useCallback(async () => {
     setLoading(true);
     setFetchError("");
@@ -59,16 +59,36 @@ export default function PreferencesPage() {
           Preferences
         </h1>
         <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-          Configure your streaming availability and ranking preferences.
+          Configure your language preferences and candidate countries.
         </p>
       </div>
 
-      {/* Coming soon banner */}
+      {/* Link banner to Subscriptions */}
+      <div className="mb-8 rounded-xl border border-blue-200 bg-blue-50/50 p-4 dark:border-blue-900/50 dark:bg-blue-950/20">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-blue-900 dark:text-blue-200">
+              Streaming Subscriptions
+            </h3>
+            <p className="text-xs text-blue-700 dark:text-blue-300">
+              Manage major streaming providers and import custom scraper sources on the Subscriptions page.
+            </p>
+          </div>
+          <Link
+            href="/subscriptions"
+            className="rounded-lg bg-blue-600 px-3.5 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-blue-500 dark:bg-blue-500 dark:hover:bg-blue-400"
+          >
+            Manage Subscriptions →
+          </Link>
+        </div>
+      </div>
+
+      {/* Language Preferences banner */}
       <div className="mb-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
-        <span className="font-medium">Coming soon</span> — Preferences are managed
-        by the server for now. Language preferences are hardcoded to{" "}
-        <code className="font-mono">JA, EN</code> (audio) and{" "}
-        <code className="font-mono">EN, JA</code> (subtitles).
+        <span className="font-medium">Language Preferences</span> — Language preferences are managed
+        by the server for now (hardcoded to{" "}
+        <code className="font-mono">JA, EN</code> audio and{" "}
+        <code className="font-mono">EN, JA</code> subtitles).
       </div>
 
       {/* Loading state */}

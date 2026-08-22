@@ -12,16 +12,30 @@ from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 
 from .languages import normalize_language_code
-from .models import LanguageEntry, LanguageInfo, Movie, Preference, Region, Subscription, WatchlistItem
+from .models import (
+    ExternalProviderMapping,
+    LanguageEntry,
+    LanguageInfo,
+    Movie,
+    Preference,
+    Provider,
+    Region,
+    ScrapedContentMapping,
+    Subscription,
+    WatchlistItem,
+)
 from .serializers import (
     LanguageInfoSerializer,
     MovieSerializer,
     PreferenceSerializer,
+    ProviderSerializer,
     RankedOfferSerializer,
+    ScrapedContentMappingSerializer,
     SubscriptionSerializer,
     WatchlistItemSerializer,
     WatchlistReportRowSerializer,
 )
+from tracker.scrapers import SCRAPER_REGISTRY, ContentMatcher, ScrapedItem
 from .services.bulk_refresh import process_watchlist_refresh
 from .services.cache import AvailabilityCache
 from .services.letterboxd import import_rows, parse_csv
@@ -98,6 +112,48 @@ def movie_availability(request, tmdb_id: int):
     )
 
 
+@api_view(["GET"])
+def providers_list(request):
+    """List canonical providers catalog with subscription state for user_id=1."""
+    category = request.GET.get("category")
+    is_major = request.GET.get("is_major")
+
+    qs = Provider.objects.filter(is_enabled=True).prefetch_related("external_mappings").order_by("id")
+    if category:
+        qs = qs.filter(category=category.lower())
+    if is_major is not None:
+        qs = qs.filter(is_major=is_major.lower() in ("true", "1"))
+
+    user_sub_provider_ids = set(
+        Subscription.objects.filter(user_id=1, provider__isnull=False).values_list("provider_id", flat=True)
+    )
+
+    serializer = ProviderSerializer(
+        qs, many=True, context={"user_subscribed_ids": user_sub_provider_ids}
+    )
+    return Response(serializer.data)
+
+
+@api_view(["POST"])
+def provider_toggle(request, slug: str):
+    """Toggle user subscription state for a provider by slug."""
+    provider = get_object_or_404(Provider, slug__iexact=slug, is_enabled=True)
+    sub = Subscription.objects.filter(user_id=1, provider=provider).first()
+
+    if sub:
+        sub.delete()
+        is_subscribed = False
+    else:
+        Subscription.objects.create(user_id=1, provider=provider, name=provider.name)
+        is_subscribed = True
+
+    return Response({
+        "provider": provider.slug,
+        "is_subscribed": is_subscribed,
+        "message": f"{'Subscribed to' if is_subscribed else 'Unsubscribed from'} {provider.name}"
+    })
+
+
 @api_view(["GET", "POST"])
 def subscriptions_list_create(request):
     """List or create user subscriptions (single-user, user_id=1)."""
@@ -107,8 +163,276 @@ def subscriptions_list_create(request):
 
     serializer = SubscriptionSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
-    serializer.save(user_id=1)
-    return Response(serializer.data, status=status.HTTP_201_CREATED)
+    validated = serializer.validated_data
+    resolved_p = validated.get("resolved_provider")
+
+    if resolved_p:
+        sub, created = Subscription.objects.get_or_create(
+            user_id=1,
+            provider=resolved_p,
+            defaults={"name": resolved_p.name},
+        )
+    else:
+        name_clean = (validated.get("name") or "").strip()
+        sub, created = Subscription.objects.get_or_create(
+            user_id=1,
+            name=name_clean,
+        )
+
+    return Response(SubscriptionSerializer(sub).data, status=status.HTTP_201_CREATED)
+
+
+from urllib.parse import urlparse
+from django.utils import timezone
+
+
+def detect_provider_from_url(url: str) -> tuple[Provider, str]:
+    """Dynamically get or create a scraper provider from any URL."""
+    parsed = urlparse(url.strip())
+    domain = parsed.netloc.lower() or parsed.path.split("/")[0].lower()
+    domain_clean = domain.replace("www.", "")
+
+    if not domain_clean:
+        raise ValueError("Invalid URL: domain could not be parsed.")
+
+    # Derive slug and display name
+    slug = domain_clean.split(".")[0]
+    name = domain_clean.capitalize()
+
+    provider, _ = Provider.objects.get_or_create(
+        slug=slug,
+        defaults={
+            "name": name,
+            "category": "scraper",
+            "is_major": False,
+            "is_enabled": True,
+            "icon_name": slug,
+            "domain": domain_clean,
+        },
+    )
+    if not provider.domain:
+        provider.domain = domain_clean
+        provider.save()
+
+    parts = [p for p in parsed.path.split("/") if p]
+    query = parts[-1].replace("-", " ").replace("_", " ") if parts else name
+    return provider, query
+
+
+@api_view(["POST"])
+def scraper_import_url(request):
+    """Import a small provider/source by URL, trigger the scraper, and register source."""
+    from tracker.scrapers.adapters import GenericURLAdapter
+
+    data = request.data if isinstance(request.data, dict) else {}
+    url = (data.get("url") or "").strip()
+    if not url:
+        return Response({"error": "URL is required"}, status=400)
+
+    try:
+        provider, query = detect_provider_from_url(url)
+    except Exception as exc:
+        return Response({"error": str(exc)}, status=400)
+
+    scraper_cls = SCRAPER_REGISTRY.get(provider.slug.lower())
+    if scraper_cls:
+        scraper = scraper_cls()
+    else:
+        scraper = GenericURLAdapter(provider_slug=provider.slug, domain=provider.domain or "example.com")
+
+    items = scraper.run(query=query)
+
+    provider.last_scraped_at = timezone.now()
+    provider.save()
+
+    # Automatically subscribe/register user to this small provider source
+    Subscription.objects.get_or_create(
+        user_id=1,
+        provider=provider,
+        defaults={"name": provider.name},
+    )
+
+    matcher = ContentMatcher()
+    results = []
+    for item in items:
+        if not item.source_url:
+            item.source_url = url
+        movie, score, candidates, is_confirmed = matcher.match_item(item)
+        results.append({
+            "scraped_item": {
+                "title": item.title,
+                "year": item.year,
+                "provider_slug": item.provider_slug,
+                "source_url": item.source_url,
+                "audio_languages": item.audio_languages,
+                "subtitle_languages": item.subtitle_languages,
+                "quality": item.quality,
+            },
+            "matched_movie": MovieSerializer(movie).data if movie else None,
+            "confidence_score": score,
+            "is_confirmed": is_confirmed,
+            "candidates": candidates,
+        })
+
+    return Response({
+        "imported_url": url,
+        "provider": ProviderSerializer(provider).data,
+        "query": query,
+        "count": len(results),
+        "results": results,
+    }, status=status.HTTP_201_CREATED)
+
+
+@api_view(["POST"])
+def scraper_run(request):
+    """Trigger a scraper run for a given scraper provider slug."""
+    from tracker.scrapers.adapters import GenericURLAdapter
+
+    data = request.data if isinstance(request.data, dict) else {}
+    provider_slug = data.get("provider_slug") or data.get("slug") or ""
+    query = data.get("query") or "Inception"
+
+    if not provider_slug:
+        return Response({"error": "provider_slug is required"}, status=400)
+
+    provider = Provider.objects.filter(slug__iexact=provider_slug, category="scraper").first()
+    if not provider:
+        return Response({"error": f"Scraper provider '{provider_slug}' not found or disabled"}, status=404)
+
+    scraper_cls = SCRAPER_REGISTRY.get(provider.slug.lower())
+    if scraper_cls:
+        scraper = scraper_cls()
+    else:
+        scraper = GenericURLAdapter(provider_slug=provider.slug, domain=provider.domain or "example.com")
+
+    items = scraper.run(query=query)
+
+    provider.last_scraped_at = timezone.now()
+    provider.save()
+
+    matcher = ContentMatcher()
+    results = []
+    for item in items:
+        movie, score, candidates, is_confirmed = matcher.match_item(item)
+        results.append({
+            "scraped_item": {
+                "title": item.title,
+                "year": item.year,
+                "provider_slug": item.provider_slug,
+                "source_url": item.source_url,
+                "audio_languages": item.audio_languages,
+                "subtitle_languages": item.subtitle_languages,
+                "quality": item.quality,
+            },
+            "matched_movie": MovieSerializer(movie).data if movie else None,
+            "confidence_score": score,
+            "is_confirmed": is_confirmed,
+            "candidates": candidates,
+        })
+
+    return Response({
+        "provider": provider.slug,
+        "query": query,
+        "count": len(results),
+        "results": results,
+    })
+
+
+@api_view(["DELETE"])
+def provider_delete(request, slug: str):
+    """Delete a custom scraper provider and its scraped mappings."""
+    provider = get_object_or_404(Provider, slug__iexact=slug)
+    if provider.is_major:
+        return Response({"error": "Major canonical providers cannot be deleted."}, status=400)
+
+    provider.delete()
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@api_view(["GET"])
+def catalog_list(request):
+    """List scraped items catalog with filtering by provider slug or query."""
+    provider_slug = request.GET.get("provider") or request.GET.get("provider_slug")
+    query = request.GET.get("q") or request.GET.get("query")
+
+    qs = ScrapedContentMapping.objects.select_related("provider", "movie").order_by("-updated_at")
+
+    if provider_slug:
+        qs = qs.filter(provider__slug__iexact=provider_slug.strip())
+    if query:
+        qs = qs.filter(scraped_title__icontains=query.strip())
+
+    serializer = ScrapedContentMappingSerializer(qs, many=True)
+    return Response({"count": len(serializer.data), "results": serializer.data})
+
+
+@api_view(["GET"])
+def scraper_unresolved(request):
+    """List unconfirmed/ambiguous scraped mappings for review."""
+    unresolved = ScrapedContentMapping.objects.filter(
+        is_confirmed=False
+    ).select_related("provider", "movie").order_by("-updated_at")
+
+    matcher = ContentMatcher()
+    out = []
+    for mapping in unresolved:
+        item = ScrapedItem(
+            title=mapping.scraped_title,
+            provider_slug=mapping.provider.slug,
+            year=mapping.scraped_year,
+            source_url=mapping.scraped_url,
+        )
+
+        candidates = []
+        try:
+            raw_cands = matcher.tmdb_client.search(item.title, year=item.year)
+            candidates = [
+                {
+                    "tmdb_id": c.tmdb_id,
+                    "title": c.title,
+                    "year": c.year,
+                    "confidence_score": matcher.calculate_confidence(item, c),
+                }
+                for c in raw_cands[:5]
+            ]
+        except Exception:
+            pass
+
+        data = ScrapedContentMappingSerializer(mapping).data
+        data["candidates"] = candidates
+        out.append(data)
+
+    return Response(out)
+
+
+@api_view(["POST"])
+def scraper_confirm_match(request):
+    """Confirm a mapping between scraped content and a TMDb movie."""
+    data = request.data if isinstance(request.data, dict) else {}
+    mapping_id = data.get("mapping_id")
+    tmdb_id = data.get("tmdb_id")
+
+    if not mapping_id or not tmdb_id:
+        return Response({"error": "mapping_id and tmdb_id are required"}, status=400)
+
+    mapping = get_object_or_404(ScrapedContentMapping, id=mapping_id)
+
+    client = TMDbClient()
+    try:
+        details = client.details(tmdb_id)
+        movie, _ = Movie.objects.get_or_create(
+            tmdb_id=details.tmdb_id,
+            defaults={"title": details.title, "year": details.year},
+        )
+    except Exception as exc:
+        return Response({"error": f"Failed to fetch TMDb details: {exc}"}, status=400)
+
+    mapping.movie = movie
+    mapping.is_confirmed = True
+    mapping.confidence_score = 1.0
+    mapping.save()
+
+    return Response(ScrapedContentMappingSerializer(mapping).data)
 
 
 @api_view(["DELETE"])

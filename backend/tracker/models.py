@@ -79,12 +79,104 @@ class LanguageEntry(models.Model):
         return f"{self.get_kind_display()}: {self.language_code}"
 
 
-class Subscription(models.Model):
-    user_id = models.IntegerField(default=1)
-    name = models.CharField(max_length=50, unique=True)
+class ProviderCategory(models.TextChoices):
+    OFFICIAL = "official", "Official / Major Provider"
+    SCRAPER = "scraper", "Scraper / Small Source"
+
+
+class Provider(models.Model):
+    slug = models.SlugField(max_length=50, unique=True, db_index=True)
+    name = models.CharField(max_length=100)
+    category = models.CharField(
+        max_length=20,
+        choices=ProviderCategory.choices,
+        default=ProviderCategory.OFFICIAL,
+    )
+    is_major = models.BooleanField(default=False)
+    is_enabled = models.BooleanField(default=True)
+    icon_name = models.CharField(max_length=50, blank=True, default="")
+    domain = models.CharField(max_length=100, blank=True, default="")
+    last_scraped_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
-        return self.name
+        return f"{self.name} ({self.slug})"
+
+
+class ExternalProviderMapping(models.Model):
+    provider = models.ForeignKey(
+        Provider, on_delete=models.CASCADE, related_name="external_mappings"
+    )
+    integration_name = models.CharField(max_length=50)  # e.g. "streaming_availability", "tmdb"
+    external_id = models.CharField(max_length=100)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["provider", "integration_name"],
+                name="uniq_external_provider_mapping",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.provider.slug} -> {self.integration_name}:{self.external_id}"
+
+
+class ScrapedContentMapping(models.Model):
+    provider = models.ForeignKey(
+        Provider, on_delete=models.CASCADE, related_name="scraped_mappings"
+    )
+    scraped_title = models.CharField(max_length=255)
+    scraped_year = models.IntegerField(null=True, blank=True)
+    scraped_url = models.URLField(max_length=500, blank=True, default="")
+    movie = models.ForeignKey(
+        Movie,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="scraped_mappings",
+    )
+    is_confirmed = models.BooleanField(default=False)
+    confidence_score = models.FloatField(default=0.0)
+    raw_payload = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["provider", "scraped_title", "scraped_year"],
+                name="uniq_scraped_content_mapping",
+            )
+        ]
+
+    def __str__(self):
+        status_str = "Confirmed" if self.is_confirmed else "Unconfirmed"
+        return f"{self.provider.slug}: '{self.scraped_title}' -> {self.movie} ({status_str})"
+
+
+class Subscription(models.Model):
+    user_id = models.IntegerField(default=1)
+    provider = models.ForeignKey(
+        Provider,
+        on_delete=models.CASCADE,
+        related_name="subscriptions",
+        null=True,
+        blank=True,
+    )
+    name = models.CharField(max_length=50, blank=True, default="")
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user_id", "provider"],
+                name="uniq_user_provider_subscription",
+            )
+        ]
+
+    def __str__(self):
+        if self.provider:
+            return f"User {self.user_id} -> {self.provider.name}"
+        return f"User {self.user_id} -> {self.name}"
 
 
 class Preference(models.Model):
