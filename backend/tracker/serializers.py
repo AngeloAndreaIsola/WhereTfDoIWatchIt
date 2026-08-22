@@ -127,7 +127,7 @@ class ScrapedContentMappingSerializer(serializers.ModelSerializer):
 class MovieSerializer(serializers.ModelSerializer):
     class Meta:
         model = Movie
-        fields = ["id", "tmdb_id", "title", "year"]
+        fields = ["id", "tmdb_id", "title", "year", "poster_path"]
 
 
 def validate_language_codes(codes: list) -> list[str]:
