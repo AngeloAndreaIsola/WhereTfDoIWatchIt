@@ -132,5 +132,6 @@ DEFAULT_PREFERENCE = {
 # Availability API call. When False, only cached rows are returned.
 PRIME_LIVE_FETCH = os.environ.get("PRIME_LIVE_FETCH", "true").lower() == "true"
 
-# The provider the Prime Video endpoints filter on (default: amazon).
-DEFAULT_PREFERENCE_PROVIDER = os.environ.get("DEFAULT_PREFERENCE_PROVIDER", "amazon")
+# The provider the Prime Video endpoints filter on. This is the stable
+# Streaming Availability *service id* ("prime"), not the display name.
+DEFAULT_PREFERENCE_PROVIDER = os.environ.get("DEFAULT_PREFERENCE_PROVIDER", "prime")
