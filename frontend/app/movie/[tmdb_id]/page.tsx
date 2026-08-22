@@ -181,16 +181,6 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
                 )}
               </div>
 
-              {/* Prominent Watch Button */}
-              <div className="mt-6 pt-4 border-t border-gray-100 dark:border-gray-700/60">
-                <Link
-                  href={`/watch/${tmdbId}`}
-                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-6 py-3 text-sm font-semibold text-white shadow-md hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600 transition-all hover:scale-[1.01]"
-                >
-                  <span className="text-lg">▶</span>
-                  <span>Watch Movie</span>
-                </Link>
-              </div>
             </div>
           </div>
 
