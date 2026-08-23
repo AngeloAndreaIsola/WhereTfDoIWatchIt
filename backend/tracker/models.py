@@ -201,6 +201,7 @@ class Preference(models.Model):
     audio_languages = ArrayField(models.CharField(max_length=2), default=list, blank=True)
     subtitle_languages = ArrayField(models.CharField(max_length=2), default=list, blank=True)
     candidate_countries = ArrayField(models.CharField(max_length=2), default=list, blank=True)
+    language_rule = models.JSONField(default=dict, blank=True, null=True)
 
     def __str__(self):
         return f"Preference user {self.user_id}"

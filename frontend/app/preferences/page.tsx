@@ -2,11 +2,13 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
+import LanguageRuleBuilder, { GroupNode } from "@/components/LanguageRuleBuilder";
 
 interface PreferencesData {
   audio_languages: string[];
   subtitle_languages: string[];
   candidate_countries: string[];
+  language_rule?: GroupNode | null;
 }
 
 function formatArrayToCommaString(arr: string[] | undefined): string {
@@ -14,12 +16,43 @@ function formatArrayToCommaString(arr: string[] | undefined): string {
   return arr.join(", ");
 }
 
+const TWO_VIEWER_PRESET: GroupNode = {
+  type: "group",
+  op: "OR",
+  rules: [
+    {
+      type: "group",
+      op: "AND",
+      rules: [
+        { type: "condition", field: "audio", languages: ["EN", "IT"] },
+        { type: "condition", field: "subtitle", languages: ["JA"] },
+      ],
+    },
+    {
+      type: "group",
+      op: "AND",
+      rules: [
+        { type: "condition", field: "audio", languages: ["JA"] },
+        { type: "condition", field: "subtitle", languages: ["EN", "IT"] },
+      ],
+    },
+  ],
+};
+
 export default function PreferencesPage() {
   const [audioLangs, setAudioLangs] = useState("");
   const [subtitleLangs, setSubtitleLangs] = useState("");
   const [countries, setCountries] = useState("");
+  const [languageRule, setLanguageRule] = useState<GroupNode>({
+    type: "group",
+    op: "AND",
+    rules: [],
+  });
+
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [fetchError, setFetchError] = useState("");
+  const [saveSuccess, setSaveSuccess] = useState(false);
 
   const fetchPreferences = useCallback(async () => {
     setLoading(true);
@@ -33,6 +66,9 @@ export default function PreferencesPage() {
       setAudioLangs(formatArrayToCommaString(data.audio_languages));
       setSubtitleLangs(formatArrayToCommaString(data.subtitle_languages));
       setCountries(formatArrayToCommaString(data.candidate_countries));
+      if (data.language_rule && data.language_rule.type === "group") {
+        setLanguageRule(data.language_rule);
+      }
     } catch (err: unknown) {
       setFetchError(err instanceof Error ? err.message : "Failed to load preferences");
     } finally {
@@ -44,8 +80,62 @@ export default function PreferencesPage() {
     fetchPreferences();
   }, [fetchPreferences]);
 
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    setSaveSuccess(false);
+    setFetchError("");
+
+    const parsedAudio = audioLangs
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const parsedSubs = subtitleLangs
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const parsedCountries = countries
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    try {
+      const res = await fetch("/api/preferences/", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          audio_languages: parsedAudio,
+          subtitle_languages: parsedSubs,
+          candidate_countries: parsedCountries,
+          language_rule: languageRule,
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error(`Failed to save preferences (${res.status})`);
+      }
+
+      const updated: PreferencesData = await res.json();
+      setAudioLangs(formatArrayToCommaString(updated.audio_languages));
+      setSubtitleLangs(formatArrayToCommaString(updated.subtitle_languages));
+      setCountries(formatArrayToCommaString(updated.candidate_countries));
+      if (updated.language_rule && updated.language_rule.type === "group") {
+        setLanguageRule(updated.language_rule);
+      }
+      setSaveSuccess(true);
+    } catch (err: unknown) {
+      setFetchError(err instanceof Error ? err.message : "Failed to save preferences");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const applyTwoViewerPreset = () => {
+    setLanguageRule(TWO_VIEWER_PRESET);
+  };
+
   return (
-    <main className="mx-auto max-w-2xl px-4 py-10 sm:px-6">
+    <main className="mx-auto max-w-3xl px-4 py-10 sm:px-6">
       {/* Top navigation link */}
       <div className="mb-6">
         <Link href="/" className="text-sm text-blue-600 hover:underline dark:text-blue-400">
@@ -59,7 +149,7 @@ export default function PreferencesPage() {
           Preferences
         </h1>
         <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-          Configure your language preferences and candidate countries.
+          Configure your boolean language rules, language preferences, and candidate countries.
         </p>
       </div>
 
@@ -83,14 +173,6 @@ export default function PreferencesPage() {
         </div>
       </div>
 
-      {/* Language Preferences banner */}
-      <div className="mb-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
-        <span className="font-medium">Language Preferences</span> — Language preferences are managed
-        by the server for now (hardcoded to{" "}
-        <code className="font-mono">JA, EN</code> audio and{" "}
-        <code className="font-mono">EN, JA</code> subtitles).
-      </div>
-
       {/* Loading state */}
       {loading && (
         <div className="flex items-center gap-2 py-8 text-sm text-gray-500 dark:text-gray-400">
@@ -109,92 +191,113 @@ export default function PreferencesPage() {
         </div>
       )}
 
-      {/* Greyed-out form */}
+      {/* Save success banner */}
+      {saveSuccess && (
+        <div className="mb-6 rounded-lg border border-green-300 bg-green-50 px-4 py-3 text-sm text-green-700 dark:border-green-700 dark:bg-green-900/30 dark:text-green-400">
+          Preferences saved successfully!
+        </div>
+      )}
+
+      {/* Interactive Preferences Form */}
       {!loading && !fetchError && (
-        <div className="space-y-6 opacity-60" title="Coming soon — preferences are managed by the server for now">
-          {/* Audio Languages */}
+        <form onSubmit={handleSave} className="space-y-8">
+          {/* Custom Boolean Language Rule Section */}
           <div>
-            <label htmlFor="audio-languages" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-              Audio Languages
-            </label>
-            <p className="mb-1.5 text-xs text-gray-500 dark:text-gray-400">
-              Comma-separated canonical language codes (e.g. <code className="font-mono">EN, IT, FR</code>)
-            </p>
-            <input
-              id="audio-languages"
-              type="text"
-              placeholder="EN, IT, FR"
-              value={audioLangs}
-              onChange={(e) => setAudioLangs(e.target.value)}
-              disabled
-              className="w-full rounded-lg border border-gray-300 bg-gray-100 px-4 py-2.5 text-sm shadow-sm placeholder-gray-400 opacity-60 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
-            />
-          </div>
-
-          {/* Subtitle Languages */}
-          <div>
-            <label htmlFor="subtitle-languages" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-              Subtitle Languages
-            </label>
-            <p className="mb-1.5 text-xs text-gray-500 dark:text-gray-400">
-              Comma-separated canonical language codes (e.g. <code className="font-mono">EN, IT</code>)
-            </p>
-            <input
-              id="subtitle-languages"
-              type="text"
-              placeholder="EN, IT"
-              value={subtitleLangs}
-              onChange={(e) => setSubtitleLangs(e.target.value)}
-              disabled
-              className="w-full rounded-lg border border-gray-300 bg-gray-100 px-4 py-2.5 text-sm shadow-sm placeholder-gray-400 opacity-60 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
-            />
-          </div>
-
-          {/* Candidate Countries */}
-          <div>
-            <label htmlFor="candidate-countries" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-              Candidate Countries
-            </label>
-            <p className="mb-1.5 text-xs text-gray-500 dark:text-gray-400">
-              Comma-separated ISO 3166-1 country codes (e.g. <code className="font-mono">us, gb, nl, it</code>)
-            </p>
-            <input
-              id="candidate-countries"
-              type="text"
-              placeholder="us, gb, nl, it"
-              value={countries}
-              onChange={(e) => setCountries(e.target.value)}
-              disabled
-              className="w-full rounded-lg border border-gray-300 bg-gray-100 px-4 py-2.5 text-sm shadow-sm placeholder-gray-400 opacity-60 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
-            />
-          </div>
-
-          {/* Subscriptions section */}
-          <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm dark:border-gray-700 dark:bg-gray-800/50 opacity-60">
-            <h3 className="font-medium text-gray-700 dark:text-gray-300">Subscriptions</h3>
-            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              Manage your active streaming services on the{" "}
-              <Link
-                href="/subscriptions"
-                className="text-blue-600 hover:underline dark:text-blue-400"
+            <div className="mb-3 flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-bold text-gray-900 dark:text-gray-100">
+                  Custom Boolean Language Rule
+                </h2>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  Build AND/OR condition groups for multi-person viewing requirements.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={applyTwoViewerPreset}
+                className="rounded-lg border border-amber-500 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100 dark:border-amber-600 dark:bg-amber-950/40 dark:text-amber-300 dark:hover:bg-amber-900/60"
               >
-                Subscriptions page
-              </Link>
-              .
-            </p>
+                ⚡ Add Two-Viewer Preset (EN/IT + JA)
+              </button>
+            </div>
+
+            <LanguageRuleBuilder rule={languageRule} onChange={setLanguageRule} />
           </div>
 
-          {/* Save button (disabled) */}
+          <hr className="border-gray-200 dark:border-gray-800" />
+
+          {/* Simple Fallback Language Preferences */}
+          <div className="space-y-4">
+            <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">
+              Fallback Language Preferences
+            </h2>
+
+            {/* Audio Languages */}
+            <div>
+              <label htmlFor="audio-languages" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                Audio Languages
+              </label>
+              <p className="mb-1.5 text-xs text-gray-500 dark:text-gray-400">
+                Comma-separated canonical language codes (e.g. <code className="font-mono">EN, IT, FR</code>)
+              </p>
+              <input
+                id="audio-languages"
+                type="text"
+                placeholder="EN, IT, FR"
+                value={audioLangs}
+                onChange={(e) => setAudioLangs(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm shadow-sm placeholder-gray-400 focus:border-blue-500 focus:outline-none dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+              />
+            </div>
+
+            {/* Subtitle Languages */}
+            <div>
+              <label htmlFor="subtitle-languages" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                Subtitle Languages
+              </label>
+              <p className="mb-1.5 text-xs text-gray-500 dark:text-gray-400">
+                Comma-separated canonical language codes (e.g. <code className="font-mono">EN, IT, JA</code>)
+              </p>
+              <input
+                id="subtitle-languages"
+                type="text"
+                placeholder="EN, IT, JA"
+                value={subtitleLangs}
+                onChange={(e) => setSubtitleLangs(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm shadow-sm placeholder-gray-400 focus:border-blue-500 focus:outline-none dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+              />
+            </div>
+
+            {/* Candidate Countries */}
+            <div>
+              <label htmlFor="candidate-countries" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                Candidate Countries
+              </label>
+              <p className="mb-1.5 text-xs text-gray-500 dark:text-gray-400">
+                Comma-separated ISO 3166-1 country codes (e.g. <code className="font-mono">us, gb, nl, it</code>)
+              </p>
+              <input
+                id="candidate-countries"
+                type="text"
+                placeholder="us, gb, nl, it"
+                value={countries}
+                onChange={(e) => setCountries(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm shadow-sm placeholder-gray-400 focus:border-blue-500 focus:outline-none dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+              />
+            </div>
+          </div>
+
+          {/* Save button */}
           <div className="pt-2">
             <button
               type="submit"
-              disabled
-              className="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm opacity-60"
+              disabled={saving}
+              className="rounded-lg bg-blue-600 px-6 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-blue-500 disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-400"
             >
-              Save Preferences
+              {saving ? "Saving Preferences…" : "Save Preferences"}
             </button>
           </div>
-        </div>
+        </form>
       )}
     </main>
   );

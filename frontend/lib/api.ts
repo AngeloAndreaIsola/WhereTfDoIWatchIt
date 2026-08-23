@@ -35,10 +35,12 @@ export interface PrimeOffer {
   url?: string;
   audio_languages: string[];
   subtitle_languages: string[];
+  is_language_match?: boolean;
   ranking: {
     audio_rank: number;
     subtitle_rank: number;
     quality_rank: number;
+    is_language_match?: boolean;
   };
 }
 

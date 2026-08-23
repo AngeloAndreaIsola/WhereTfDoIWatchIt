@@ -30,6 +30,7 @@ class RankedOffer:
     audio_rank: int = 99
     sub_rank: int = 99
     quality_rank: int = 99
+    is_language_match: bool = True
     score: tuple = field(default_factory=tuple)
 
     def to_dict(self) -> dict:
@@ -41,12 +42,55 @@ class RankedOffer:
             "url": self.url,
             "audio_languages": self.audio,
             "subtitle_languages": self.subs,
+            "is_language_match": self.is_language_match,
             "ranking": {
                 "audio_rank": self.audio_rank,
                 "subtitle_rank": self.sub_rank,
                 "quality_rank": self.quality_rank,
+                "is_language_match": self.is_language_match,
             },
         }
+
+
+def evaluate_language_rule(
+    rule: Optional[dict],
+    offer_audio: Iterable[str],
+    offer_subs: Iterable[str],
+) -> bool:
+    """Evaluate nested AND/OR language rule against offer's audio & subtitle languages."""
+    if not rule or not isinstance(rule, dict):
+        return True
+
+    node_type = rule.get("type")
+    if node_type == "group":
+        op = (rule.get("op") or "AND").upper()
+        children = rule.get("rules") or rule.get("children") or []
+        if not children:
+            return True
+        if op == "AND":
+            return all(evaluate_language_rule(c, offer_audio, offer_subs) for c in children)
+        elif op == "OR":
+            return any(evaluate_language_rule(c, offer_audio, offer_subs) for c in children)
+        return True
+
+    elif node_type == "condition":
+        field_name = (rule.get("field") or rule.get("target") or "audio").lower()
+        raw_langs = rule.get("languages") or rule.get("language") or rule.get("value") or []
+        if isinstance(raw_langs, str):
+            raw_langs = [raw_langs]
+        target_langs = set(_normalize_lang_list(raw_langs))
+
+        if not target_langs:
+            return True
+
+        if field_name in ("audio", "audio_languages"):
+            offer_langs = set(_normalize_lang_list(offer_audio))
+        else:
+            offer_langs = set(_normalize_lang_list(offer_subs))
+
+        return bool(target_langs.intersection(offer_langs))
+
+    return True
 
 
 def _normalize_lang_list(raw_list: Iterable[str]) -> list[str]:
@@ -69,6 +113,7 @@ def rank_offers(
     """Strict priority sort over a list of cached offers."""
     pref_audio = _normalize_lang_list(preference.audio_languages or [])
     pref_subs = _normalize_lang_list(preference.subtitle_languages or [])
+    lang_rule = getattr(preference, "language_rule", None)
 
     audio_priority = {code: i for i, code in enumerate(pref_audio)}
     sub_priority = {code: i for i, code in enumerate(pref_subs)}
@@ -95,7 +140,20 @@ def rank_offers(
         sub_rank = _min_rank(subs, sub_priority)
         quality = (offer.get("quality") or "").lower()
         quality_rank = QUALITY_RANK.get(quality, 99)
-        score = (audio_rank, sub_rank, quality_rank)
+
+        if lang_rule and isinstance(lang_rule, dict) and lang_rule.get("rules"):
+            is_language_match = evaluate_language_rule(lang_rule, audio, subs)
+            match_score = 0 if is_language_match else 1
+            score = (match_score, quality_rank, audio_rank, sub_rank)
+        elif pref_audio or pref_subs:
+            is_language_match = (audio_rank < 99) or (sub_rank < 99)
+            match_score = 0 if is_language_match else 1
+            score = (match_score, audio_rank, sub_rank, quality_rank)
+        else:
+            is_language_match = True
+            match_score = 0
+            score = (match_score, quality_rank, audio_rank, sub_rank)
+
         ranked.append(
             RankedOffer(
                 country=country,
@@ -108,6 +166,7 @@ def rank_offers(
                 audio_rank=audio_rank,
                 sub_rank=sub_rank,
                 quality_rank=quality_rank,
+                is_language_match=is_language_match,
                 score=score,
             )
         )
