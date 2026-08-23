@@ -161,10 +161,11 @@ class PreferenceSerializer(serializers.ModelSerializer):
     candidate_countries = serializers.ListField(
         child=serializers.CharField(), required=False, default=list
     )
+    language_rule = serializers.JSONField(required=False, allow_null=True)
 
     class Meta:
         model = Preference
-        fields = ["audio_languages", "subtitle_languages", "candidate_countries"]
+        fields = ["audio_languages", "subtitle_languages", "candidate_countries", "language_rule"]
 
     def validate_audio_languages(self, value: list) -> list[str]:
         return validate_language_codes(value)

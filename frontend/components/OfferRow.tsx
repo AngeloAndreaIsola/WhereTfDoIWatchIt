@@ -90,6 +90,11 @@ export default function OfferRow({
               Best Match
             </span>
           )}
+          {offer.is_language_match === false && (
+            <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-semibold text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+              Language Mismatch
+            </span>
+          )}
         </div>
 
         {/* Watch Button next to offer */}
