@@ -143,13 +143,16 @@ def rank_offers(
 
         if lang_rule and isinstance(lang_rule, dict) and lang_rule.get("rules"):
             is_language_match = evaluate_language_rule(lang_rule, audio, subs)
+            match_score = 0 if is_language_match else 1
+            score = (match_score, quality_rank, audio_rank, sub_rank)
         elif pref_audio or pref_subs:
             is_language_match = (audio_rank < 99) or (sub_rank < 99)
+            match_score = 0 if is_language_match else 1
+            score = (match_score, audio_rank, sub_rank, quality_rank)
         else:
             is_language_match = True
-
-        match_score = 0 if is_language_match else 1
-        score = (match_score, quality_rank, audio_rank, sub_rank)
+            match_score = 0
+            score = (match_score, quality_rank, audio_rank, sub_rank)
 
         ranked.append(
             RankedOffer(

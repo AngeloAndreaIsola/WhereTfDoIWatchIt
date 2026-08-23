@@ -199,7 +199,7 @@ export default function PreferencesPage() {
       )}
 
       {/* Interactive Preferences Form */}
-      {!loading && (
+      {!loading && !fetchError && (
         <form onSubmit={handleSave} className="space-y-8">
           {/* Custom Boolean Language Rule Section */}
           <div>
