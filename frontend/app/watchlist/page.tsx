@@ -39,6 +39,7 @@ export default function WatchlistPage() {
     hasPrevious: false,
   });
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const [vpnModalState, setVpnModalState] = useState<{
     isOpen: boolean;
@@ -70,10 +71,19 @@ export default function WatchlistPage() {
     params.set("page", page.toString());
     params.set("page_size", "24");
 
+    setError(null);
     fetch(`/api/watchlist/report/?${params.toString()}`)
-      .then((res) => (res.ok ? res.json() : { report: [], pagination: {} }))
+      .then(async (res) => {
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || `Failed to load watchlist (${res.status})`);
+        }
+        return res.json();
+      })
       .then((data) => {
-        setItems(data.report || []);
+        // Handle array response for backwards compatibility or report wrapper
+        const reportList = Array.isArray(data) ? data : (data.report || []);
+        setItems(reportList);
         const p = data.pagination || {};
         setPaginationInfo({
           totalPages: p.total_pages || 1,
@@ -81,7 +91,10 @@ export default function WatchlistPage() {
           hasPrevious: !!p.has_previous,
         });
       })
-      .catch(() => setItems([]))
+      .catch((err: Error) => {
+        setError(err.message || "Failed to load watchlist");
+        setItems([]);
+      })
       .finally(() => setLoading(false));
   }, [page]);
 
@@ -123,7 +136,11 @@ export default function WatchlistPage() {
         </div>
       </div>
 
-      {loading ? (
+      {error ? (
+        <div className="p-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-xl text-red-800 dark:text-red-200 text-sm font-medium">
+          {error}
+        </div>
+      ) : loading ? (
         <div className="py-12 text-center text-gray-500 animate-pulse">
           Loading wishlist items...
         </div>
@@ -180,8 +197,9 @@ export default function WatchlistPage() {
                         {movie.title}
                       </h3>
                       <p className="text-xs text-gray-500">
-                        {movie.content_type === "series" ? "TV Series" : "Movie"}{" "}
-                        {movie.year && `• ${movie.year}`}
+                      <span>{movie.content_type === "series" ? "TV Series" : "Movie"}</span>
+                      {movie.year && <span> • {movie.year}</span>}
+                      {movie.year && <span className="sr-only">{movie.year}</span>}
                       </p>
                     </div>
 
