@@ -4,10 +4,15 @@ from unittest.mock import MagicMock
 from django.test import TestCase
 
 from tracker.models import Movie, WatchlistItem
+import gzip
+import xml.etree.ElementTree as ET
+
 from tracker.services.letterboxd import (
     LetterboxdRow,
     import_rows,
     parse_csv,
+    parse_file_or_zip,
+    parse_mal_xml,
 )
 from tracker.services.tmdb import TMDbMovie
 
@@ -312,3 +317,69 @@ class ExtendedLetterboxdImportTests(TestCase):
         types = {r.file_type for r in rows}
         self.assertIn("watchlist", types)
         self.assertIn("watched", types)
+
+
+class MyAnimeListImportTests(TestCase):
+    def setUp(self):
+        self.sample_xml = (
+            b'<?xml version="1.0" encoding="UTF-8" ?>\n'
+            b'<myanimelist>\n'
+            b'    <anime>\n'
+            b'        <series_animedb_id>31646</series_animedb_id>\n'
+            b'        <series_title><![CDATA[3-gatsu no Lion]]></series_title>\n'
+            b'        <my_status>Plan to Watch</my_status>\n'
+            b'    </anime>\n'
+            b'    <anime>\n'
+            b'        <series_animedb_id>35180</series_animedb_id>\n'
+            b'        <series_title><![CDATA[3-gatsu no Lion 2nd Season]]></series_title>\n'
+            b'        <my_status>Watching</my_status>\n'
+            b'    </anime>\n'
+            b'    <anime>\n'
+            b'        <series_animedb_id>1</series_animedb_id>\n'
+            b'        <series_title><![CDATA[Cowboy Bebop]]></series_title>\n'
+            b'        <my_status>Completed</my_status>\n'
+            b'    </anime>\n'
+            b'    <anime>\n'
+            b'        <series_animedb_id>2</series_animedb_id>\n'
+            b'        <series_title><![CDATA[Trigun]]></series_title>\n'
+            b'        <my_status>Dropped</my_status>\n'
+            b'    </anime>\n'
+            b'</myanimelist>'
+        )
+
+    def test_parse_mal_xml_filters_status(self):
+        rows = parse_mal_xml(self.sample_xml)
+        self.assertEqual(len(rows), 2)
+        titles = [r.title for r in rows]
+        self.assertIn("3-gatsu no Lion", titles)
+        self.assertIn("3-gatsu no Lion 2nd Season", titles)
+        self.assertNotIn("Cowboy Bebop", titles)
+        self.assertNotIn("Trigun", titles)
+
+        self.assertEqual(rows[0].source, "myanimelist")
+        self.assertEqual(rows[0].mal_id, 31646)
+
+    def test_parse_file_or_zip_handles_gzip_xml(self):
+        gz_bytes = gzip.compress(self.sample_xml)
+        rows = parse_file_or_zip(gz_bytes, filename="animelist.xml.gz")
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0].source, "myanimelist")
+
+    def test_import_rows_preserves_myanimelist_source(self):
+        client = MagicMock()
+        client.search.return_value = [
+            TMDbMovie(tmdb_id=123, title="3-gatsu no Lion", year=2016)
+        ]
+        rows = [
+            LetterboxdRow(
+                title="3-gatsu no Lion",
+                year=None,
+                source="myanimelist",
+                mal_id=31646,
+            )
+        ]
+        res = import_rows(rows, client=client)
+        self.assertEqual(len(res.resolved), 1)
+        item = res.resolved[0]
+        self.assertEqual(item.source, "myanimelist")
+        self.assertEqual(item.movie.title, "3-gatsu no Lion")

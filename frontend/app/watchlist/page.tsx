@@ -81,6 +81,7 @@ export default function WatchlistPage() {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
   const [uploadResult, setUploadResult] = useState<UploadResult | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
 
   /* --- Fetch existing watchlist, report, and preferences --- */
   const fetchWatchlistData = useCallback(async () => {
@@ -141,7 +142,30 @@ export default function WatchlistPage() {
     fetchWatchlistData();
   }, [fetchWatchlistData]);
 
-  /* --- Upload CSV or ZIP --- */
+  /* --- Drag & Drop Handlers --- */
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      setSelectedFile(e.dataTransfer.files[0]);
+    }
+  };
+
+  /* --- Upload File --- */
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       setSelectedFile(e.target.files[0]);
@@ -194,46 +218,83 @@ export default function WatchlistPage() {
       {/* Header */}
       <div className="mb-8 text-center sm:text-left">
         <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-gray-100">
-          Letterboxd Watchlist & Movies
+          Watchlist & Movie Imports
         </h1>
         <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
           Your imported movies, watchlist items, and streaming availability at a glance.
         </p>
       </div>
 
-      {/* 1. File Upload Form (CSV / ZIP) */}
+      {/* 1. File Upload Form with Drag and Drop */}
       <section className="mb-8 rounded-xl border border-gray-200 bg-white p-6 shadow-xs dark:border-gray-700 dark:bg-gray-800">
         <h2 className="mb-2 text-lg font-semibold text-gray-900 dark:text-gray-100">
-          Import Letterboxd Export (CSV or ZIP)
+          Import Watchlist Export (Letterboxd CSV/ZIP or MyAnimeList XML/GZ)
         </h2>
         <p className="mb-4 text-xs text-gray-500 dark:text-gray-400">
-          Upload individual CSVs (watchlist.csv, watched.csv, diary.csv, ratings.csv, reviews.csv) or a ZIP archive.
+          Upload Letterboxd exports (.csv, .zip) or MyAnimeList exports (.xml, .xml.gz, .gz).
         </p>
 
-        <form onSubmit={handleUpload} className="flex flex-col gap-4 sm:flex-row sm:items-center">
-          <div className="flex-1">
+        <form onSubmit={handleUpload} className="space-y-4">
+          <div
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            className={`flex flex-col items-center justify-center rounded-xl border-2 border-dashed p-6 text-center transition-colors cursor-pointer ${
+              isDragging
+                ? "border-blue-500 bg-blue-50 dark:border-blue-400 dark:bg-blue-950/30"
+                : "border-gray-300 hover:border-gray-400 dark:border-gray-700 dark:hover:border-gray-600"
+            }`}
+            onClick={() => document.getElementById("file-upload-input")?.click()}
+          >
+            <svg
+              className="mx-auto h-10 w-10 text-gray-400 dark:text-gray-500"
+              stroke="currentColor"
+              fill="none"
+              viewBox="0 0 48 48"
+              aria-hidden="true"
+            >
+              <path
+                d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8"
+                strokeWidth={2}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+            <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">
+              <span className="font-semibold text-blue-600 dark:text-blue-400">
+                Click to choose
+              </span>{" "}
+              or drag & drop your export file here
+            </p>
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              Supports .csv, .zip, .xml, .gz, .xml.gz
+            </p>
+            {selectedFile && (
+              <p className="mt-3 rounded-md bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-800 dark:bg-blue-900/50 dark:text-blue-300">
+                Selected: {selectedFile.name} ({(selectedFile.size / 1024).toFixed(1)} KB)
+              </p>
+            )}
+
             <input
+              id="file-upload-input"
               type="file"
-              accept=".csv,.zip"
+              accept=".csv,.zip,.xml,.gz,.xml.gz,text/csv,application/zip,application/xml,text/xml,application/gzip,application/x-gzip"
               onChange={handleFileChange}
-              className="block w-full text-sm text-gray-500
-                         file:mr-4 file:rounded-lg file:border-0
-                         file:bg-blue-50 file:px-4 file:py-2
-                         file:text-sm file:font-semibold file:text-blue-700
-                         hover:file:bg-blue-100
-                         dark:text-gray-400 dark:file:bg-blue-900/30 dark:file:text-blue-400"
+              className="hidden"
             />
           </div>
 
-          <button
-            type="submit"
-            disabled={!selectedFile || uploading}
-            className="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-medium text-white shadow-xs
-                       hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50
-                       dark:bg-blue-500 dark:hover:bg-blue-600"
-          >
-            {uploading ? "Importing…" : "Import File / ZIP"}
-          </button>
+          <div className="flex justify-end">
+            <button
+              type="submit"
+              disabled={!selectedFile || uploading}
+              className="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-medium text-white shadow-xs
+                         hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50
+                         dark:bg-blue-500 dark:hover:bg-blue-600"
+            >
+              {uploading ? "Importing…" : "Import File"}
+            </button>
+          </div>
         </form>
 
         {uploadError && (

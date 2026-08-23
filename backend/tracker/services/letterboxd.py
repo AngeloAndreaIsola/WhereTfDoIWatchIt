@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import csv
 import datetime
+import gzip
 import io
 import logging
+import xml.etree.ElementTree as ET
 import zipfile
 from dataclasses import dataclass, field
 from typing import Iterable, Optional
@@ -39,6 +41,8 @@ class LetterboxdRow:
     review: Optional[str] = None
     watched_date: Optional[datetime.date] = None
     rewatch: bool = False
+    source: str = "letterboxd"
+    mal_id: Optional[int] = None
 
 
 @dataclass
@@ -53,20 +57,83 @@ class ImportResult:
 
 
 def parse_file_or_zip(file_bytes: bytes, filename: str = "") -> list[LetterboxdRow]:
-    """Parse an uploaded file (CSV or ZIP) into LetterboxdRow objects."""
+    """Parse an uploaded file (CSV, ZIP, XML, GZ, XML.GZ) into LetterboxdRow objects."""
+    # Check for GZIP compression magic bytes (\x1f\x8b)
+    if file_bytes.startswith(b"\x1f\x8b"):
+        try:
+            decompressed = gzip.decompress(file_bytes)
+            return parse_file_or_zip(decompressed, filename=filename)
+        except Exception as exc:
+            logger.exception("Failed to decompress GZIP file: %s", exc)
+            return []
+
+    # Check for ZIP archive magic bytes (PK\x03\x04)
     if file_bytes.startswith(b"PK\x03\x04"):
         rows: list[LetterboxdRow] = []
         try:
             with zipfile.ZipFile(io.BytesIO(file_bytes)) as z:
                 for entry_name in sorted(z.namelist()):
-                    if entry_name.lower().endswith(".csv") and not entry_name.startswith("__MACOSX"):
-                        content = z.read(entry_name)
+                    if entry_name.startswith("__MACOSX"):
+                        continue
+                    content = z.read(entry_name)
+                    if entry_name.lower().endswith(".xml"):
+                        rows.extend(parse_mal_xml(content))
+                    elif entry_name.lower().endswith(".csv"):
                         rows.extend(parse_csv(content, filename=entry_name))
             return rows
         except Exception as exc:
             logger.exception("Failed to parse ZIP file: %s", exc)
             return []
+
+    # Check for XML content or file extension
+    fn_lower = filename.lower()
+    if fn_lower.endswith(".xml") or b"<myanimelist>" in file_bytes.lower() or b"<?xml" in file_bytes.lower():
+        return parse_mal_xml(file_bytes)
+
     return parse_csv(file_bytes, filename=filename)
+
+
+def parse_mal_xml(file_bytes: bytes) -> list[LetterboxdRow]:
+    """Parse MyAnimeList XML export into LetterboxdRow objects.
+
+    Includes anime with my_status 'Plan to Watch' or 'Watching'.
+    Excludes 'Completed', 'On-Hold', 'Dropped'.
+    """
+    rows: list[LetterboxdRow] = []
+    try:
+        root = ET.fromstring(file_bytes)
+    except Exception as exc:
+        logger.warning("Failed to parse MAL XML data: %s", exc)
+        return rows
+
+    for anime in root.findall("anime"):
+        status_elem = anime.find("my_status")
+        status = status_elem.text.strip() if status_elem is not None and status_elem.text else ""
+        if status not in ("Plan to Watch", "Watching"):
+            continue
+
+        title_elem = anime.find("series_title")
+        title = title_elem.text.strip() if title_elem is not None and title_elem.text else ""
+        if not title:
+            continue
+
+        mal_id: Optional[int] = None
+        mal_id_elem = anime.find("series_animedb_id")
+        if mal_id_elem is not None and mal_id_elem.text:
+            try:
+                mal_id = int(mal_id_elem.text.strip())
+            except ValueError:
+                mal_id = None
+
+        rows.append(
+            LetterboxdRow(
+                title=title,
+                year=None,
+                source="myanimelist",
+                mal_id=mal_id,
+            )
+        )
+    return rows
 
 
 def parse_csv(file_bytes: bytes, filename: str = "") -> list[LetterboxdRow]:
@@ -248,8 +315,9 @@ def import_rows(
                 local_movies_by_uri[row.uri] = movie
 
         if row.file_type == "watchlist":
+            item_source = getattr(row, "source", None) or source
             item, _ = WatchlistItem.objects.get_or_create(
-                movie=movie, source=source, defaults={"user_id": user_id}
+                movie=movie, source=item_source, defaults={"user_id": user_id}
             )
             result.resolved.append(item)
 
