@@ -25,7 +25,7 @@ class SubscriptionsEndpointTests(TestCase):
         self.assertTrue(Subscription.objects.filter(user_id=1, name="Netflix").exists())
 
     def test_post_creates_subscription_or_links_provider(self):
-        p = Provider.objects.filter(slug="disney").first()
+        p, _ = Provider.objects.get_or_create(slug="disney", defaults={"name": "Disney+", "is_enabled": True})
         resp = self.client.post(
             "/api/subscriptions/",
             data={"provider_slug": "disney"},
@@ -285,9 +285,8 @@ class WatchEndpointTests(TestCase):
     @patch("tracker.views.AvailabilityCache")
     def test_watch_endpoint_prioritizes_subscribed_providers(self, mock_cache_cls):
         Preference.objects.create(user_id=1, audio_languages=["EN"], subtitle_languages=["EN"])
-        p_disney = Provider.objects.filter(slug="disney").first()
-        if p_disney:
-            Subscription.objects.create(user_id=1, provider=p_disney, name="Disney+")
+        p_disney, _ = Provider.objects.get_or_create(slug="disney", defaults={"name": "Disney+", "is_enabled": True})
+        Subscription.objects.create(user_id=1, provider=p_disney, name="Disney+")
 
         instance = mock_cache_cls.return_value
         instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=2)

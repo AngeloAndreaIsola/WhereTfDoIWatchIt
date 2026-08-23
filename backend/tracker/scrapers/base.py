@@ -39,17 +39,55 @@ def normalize_quality(raw_quality: Optional[str]) -> Optional[str]:
     return None
 
 
-def normalize_language_list(raw_langs: Sequence[Any]) -> list[str]:
-    """Normalize a list of raw language inputs using the canonical language map."""
+def normalize_hdr(raw_hdr: Any) -> Optional[str | bool]:
+    """Normalize raw HDR information into string, bool, or None if unknown."""
+    if raw_hdr is None:
+        return None
+    if isinstance(raw_hdr, bool):
+        return raw_hdr
+    cleaned = str(raw_hdr).strip()
+    if not cleaned or cleaned.lower() in ("unknown", "none", "null", ""):
+        return None
+    cleaned_lower = cleaned.lower()
+    if cleaned_lower in ("true", "yes", "1"):
+        return True
+    if cleaned_lower in ("false", "no", "0"):
+        return False
+    return cleaned
+
+
+def normalize_language_list(raw_langs: Any) -> list[str]:
+    """Normalize raw language inputs (list, comma-separated string, single item) into canonical ISO codes."""
+    if not raw_langs:
+        return []
+    if isinstance(raw_langs, (str, bytes)):
+        items = re.split(r'[,/|;]+', str(raw_langs))
+    elif isinstance(raw_langs, (list, tuple, set)):
+        items = list(raw_langs)
+    else:
+        items = [raw_langs]
+
     cleaned: list[str] = []
     seen = set()
-    for item in raw_langs or []:
+
+    prefix_pattern = re.compile(
+        r'^(?:sub|subs|subtitle|subtitles|subtitled|dub|dubbed|audio|doppiato|doppiati)\s*[:\-_]?\s*',
+        re.IGNORECASE,
+    )
+
+    for item in items:
         if not item:
             continue
-        norm = normalize_language_code(str(item).strip())
+        item_str = str(item).strip()
+        if not item_str:
+            continue
+
+        cleaned_item = prefix_pattern.sub('', item_str).strip()
+        norm = normalize_language_code(cleaned_item) or normalize_language_code(item_str)
         if norm and norm not in seen:
             seen.add(norm)
             cleaned.append(norm)
+
     return cleaned
 
 
@@ -62,10 +100,12 @@ class ScrapedItem:
     content_type: str = "movie"  # "movie" | "series"
     season: Optional[int] = None
     episode: Optional[int] = None
+    episode_title: Optional[str] = None
     source_url: str = ""
     audio_languages: list[str] = field(default_factory=list)
     subtitle_languages: list[str] = field(default_factory=list)
     quality: Optional[str] = None
+    hdr: Optional[str | bool] = None
     availability: bool = True
     raw_payload: dict[str, Any] = field(default_factory=dict)
 
@@ -73,9 +113,12 @@ class ScrapedItem:
         self.title = self.title.strip() if self.title else ""
         if self.original_title:
             self.original_title = self.original_title.strip()
+        if self.episode_title:
+            self.episode_title = self.episode_title.strip()
         self.audio_languages = normalize_language_list(self.audio_languages)
         self.subtitle_languages = normalize_language_list(self.subtitle_languages)
         self.quality = normalize_quality(self.quality)
+        self.hdr = normalize_hdr(self.hdr)
 
 
 class BaseScraper:

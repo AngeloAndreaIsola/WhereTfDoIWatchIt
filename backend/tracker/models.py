@@ -113,7 +113,20 @@ class Provider(models.Model):
     is_enabled = models.BooleanField(default=True)
     icon_name = models.CharField(max_length=50, blank=True, default="")
     domain = models.CharField(max_length=100, blank=True, default="")
+    config = models.JSONField(default=dict, blank=True)
     last_scraped_at = models.DateTimeField(null=True, blank=True)
+
+    def get_merged_config(self):
+        from tracker.scrapers.configs import DEFAULT_PROVIDER_CONFIGS, merge_provider_config, ProviderConfig
+        base_cfg = DEFAULT_PROVIDER_CONFIGS.get(
+            self.slug,
+            ProviderConfig(
+                provider_slug=self.slug,
+                domain=self.domain or "localhost",
+                search_url_template=f"https://{self.domain or 'localhost'}/search?q={{query}}",
+            ),
+        )
+        return merge_provider_config(base_cfg, self.config)
 
     def __str__(self):
         return f"{self.name} ({self.slug})"
