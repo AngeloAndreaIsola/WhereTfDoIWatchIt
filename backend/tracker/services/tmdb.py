@@ -78,31 +78,27 @@ class TMDbClient:
 
         results: list[TMDbItem] = []
 
-        if content_type is None or content_type == "movie":
+        target_type = content_type or "movie"
+
+        if target_type == "movie":
             m_params = dict(params)
             if year is not None:
                 m_params["year"] = year
             url = f"{TMDB_BASE}/search/movie"
-            try:
-                resp = requests.get(url, params=m_params, headers=headers, timeout=self.timeout)
-                resp.raise_for_status()
-                movie_results = resp.json().get("results", [])
-                results.extend([self._parse_search_result(r, "movie") for r in movie_results])
-            except Exception as exc:
-                logger.exception("TMDb search movie failed: %s", exc)
+            resp = requests.get(url, params=m_params, headers=headers, timeout=self.timeout)
+            resp.raise_for_status()
+            movie_results = resp.json().get("results", [])
+            results.extend([self._parse_search_result(r, "movie") for r in movie_results])
 
-        if content_type is None or content_type == "series" or content_type == "tv":
+        elif target_type in ("series", "tv"):
             tv_params = dict(params)
             if year is not None:
                 tv_params["first_air_date_year"] = year
             url = f"{TMDB_BASE}/search/tv"
-            try:
-                resp = requests.get(url, params=tv_params, headers=headers, timeout=self.timeout)
-                resp.raise_for_status()
-                tv_results = resp.json().get("results", [])
-                results.extend([self._parse_search_result(r, "series") for r in tv_results])
-            except Exception as exc:
-                logger.exception("TMDb search TV failed: %s", exc)
+            resp = requests.get(url, params=tv_params, headers=headers, timeout=self.timeout)
+            resp.raise_for_status()
+            tv_results = resp.json().get("results", [])
+            results.extend([self._parse_search_result(r, "series") for r in tv_results])
 
         return results
 

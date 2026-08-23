@@ -59,16 +59,30 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "config.wsgi.application"
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": os.environ.get("POSTGRES_DB", "tracker"),
-        "USER": os.environ.get("POSTGRES_USER", "tracker"),
-        "PASSWORD": os.environ.get("POSTGRES_PASSWORD", "tracker_dev"),
-        "HOST": os.environ.get("POSTGRES_HOST", "db"),
-        "PORT": os.environ.get("POSTGRES_PORT", "5432"),
+if os.environ.get("USE_SQLITE") == "1":
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
     }
-}
+    import django.contrib.postgres.fields
+    class SQLiteArrayField(django.db.models.JSONField):
+        def __init__(self, base_field=None, **kwargs):
+            kwargs.pop("size", None)
+            super().__init__(**kwargs)
+    django.contrib.postgres.fields.ArrayField = SQLiteArrayField
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": os.environ.get("POSTGRES_DB", "tracker"),
+            "USER": os.environ.get("POSTGRES_USER", "tracker"),
+            "PASSWORD": os.environ.get("POSTGRES_PASSWORD", "tracker_dev"),
+            "HOST": os.environ.get("POSTGRES_HOST", "db"),
+            "PORT": os.environ.get("POSTGRES_PORT", "5432"),
+        }
+    }
 
 AUTH_PASSWORD_VALIDATORS = [
     {
