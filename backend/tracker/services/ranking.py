@@ -24,6 +24,7 @@ class RankedOffer:
     service: str
     offer_type: str
     quality: str
+    url: str = ""
     audio: list[str] = field(default_factory=list)
     subs: list[str] = field(default_factory=list)
     audio_rank: int = 99
@@ -37,6 +38,7 @@ class RankedOffer:
             "service": self.service,
             "offer_type": self.offer_type,
             "quality": self.quality,
+            "url": self.url,
             "audio_languages": self.audio,
             "subtitle_languages": self.subs,
             "ranking": {
@@ -100,6 +102,7 @@ def rank_offers(
                 service=offer.get("service", ""),
                 offer_type=offer.get("offer_type", ""),
                 quality=quality,
+                url=offer.get("url", ""),
                 audio=audio,
                 subs=subs,
                 audio_rank=audio_rank,

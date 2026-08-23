@@ -7,6 +7,8 @@ import requests
 from dataclasses import dataclass, field
 from typing import Any, Optional, Sequence
 
+from django.conf import settings
+
 from tracker.languages import normalize_language_code
 from tracker.models import Movie, Provider, ScrapedContentMapping
 from tracker.services.tmdb import TMDbClient, TMDbMovie
@@ -126,7 +128,7 @@ class ContentMatcher:
     """Matches scraped items against canonical TMDb movies, supporting confidence scores and confirmation persistence."""
 
     def __init__(self, tmdb_client: Optional[TMDbClient] = None):
-        self.tmdb_client = tmdb_client or TMDbClient()
+        self.tmdb_client = tmdb_client or TMDbClient(settings.TMDB_API_KEY)
 
     def match_item(
         self, item: ScrapedItem

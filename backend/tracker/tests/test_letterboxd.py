@@ -217,3 +217,98 @@ class ImportTests(TestCase):
         item = result.resolved[0]
         self.assertFalse(hasattr(item, "uri"))
         self.assertFalse(hasattr(item.movie, "uri"))
+
+
+class ExtendedLetterboxdImportTests(TestCase):
+    def _mock_client(self, results_by_title):
+        client = MagicMock()
+        def _search(query, year=None):
+            return results_by_title.get(query, [])
+        client.search.side_effect = _search
+        return client
+
+    def test_parses_and_imports_ratings_and_reviews_and_watched(self):
+        ratings_csv = (
+            b"Date,Name,Year,Letterboxd URI,Rating\n"
+            b"2023-01-01,Parasite,2019,https://letterboxd.com/film/parasite-2019/,4.5\n"
+        )
+        reviews_csv = (
+            b"Date,Name,Year,Letterboxd URI,Rating,Rewatch,Review,Watched Date\n"
+            b"2023-01-02,Parasite,2019,https://letterboxd.com/film/parasite-2019/,4.5,Yes,Masterpiece!,2023-01-02\n"
+        )
+        client = self._mock_client({
+            "Parasite": [TMDbMovie(tmdb_id=496243, title="Parasite", year=2019)],
+        })
+
+        from tracker.services.letterboxd import parse_csv, parse_file_or_zip
+        from tracker.models import UserMovieData, MovieWatchEvent
+
+        rows1 = parse_csv(ratings_csv, filename="ratings.csv")
+        self.assertEqual(rows1[0].file_type, "ratings")
+        self.assertEqual(rows1[0].rating, 4.5)
+
+        res1 = import_rows(rows1, client=client)
+        self.assertEqual(res1.ratings_count, 1)
+        self.assertEqual(res1.watched_count, 1)
+
+        user_data = UserMovieData.objects.get(movie__tmdb_id=496243)
+        self.assertTrue(user_data.is_watched)
+        self.assertEqual(user_data.rating, 4.5)
+
+        rows2 = parse_csv(reviews_csv, filename="reviews.csv")
+        self.assertEqual(rows2[0].file_type, "reviews")
+        self.assertEqual(rows2[0].review, "Masterpiece!")
+
+        res2 = import_rows(rows2, client=client)
+        self.assertEqual(res2.reviews_count, 1)
+
+        user_data.refresh_from_db()
+        self.assertEqual(user_data.review, "Masterpiece!")
+
+    def test_diary_preserves_multiple_viewings_per_movie(self):
+        diary_csv = (
+            b"Date,Name,Year,Letterboxd URI,Rating,Rewatch,Review,Watched Date\n"
+            b"2022-05-01,Inception,2010,https://letterboxd.com/film/inception/,5.0,No,First view,2022-05-01\n"
+            b"2023-06-15,Inception,2010,https://letterboxd.com/film/inception/,5.0,Yes,Second view,2023-06-15\n"
+        )
+        client = self._mock_client({
+            "Inception": [TMDbMovie(tmdb_id=27205, title="Inception", year=2010)],
+        })
+
+        from tracker.services.letterboxd import parse_csv
+        from tracker.models import MovieWatchEvent
+
+        rows = parse_csv(diary_csv, filename="diary.csv")
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0].file_type, "diary")
+        self.assertTrue(rows[1].rewatch)
+
+        res = import_rows(rows, client=client)
+        self.assertEqual(res.diary_events_count, 2)
+
+        events = MovieWatchEvent.objects.filter(movie__tmdb_id=27205).order_by("watched_date")
+        self.assertEqual(events.count(), 2)
+        self.assertEqual(str(events[0].watched_date), "2022-05-01")
+        self.assertFalse(events[0].rewatch)
+        self.assertEqual(str(events[1].watched_date), "2023-06-15")
+        self.assertTrue(events[1].rewatch)
+
+        # Idempotent re-import does not duplicate events
+        res_repeat = import_rows(rows, client=client)
+        self.assertEqual(MovieWatchEvent.objects.filter(movie__tmdb_id=27205).count(), 2)
+
+    def test_zip_archive_import(self):
+        import io, zipfile
+        from tracker.services.letterboxd import parse_file_or_zip
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr("watchlist.csv", "Title,Year\nSpirited Away,2001\n")
+            z.writestr("watched.csv", "Date,Name,Year\nSpirited Away,2001\n")
+
+        zip_bytes = buf.getvalue()
+        rows = parse_file_or_zip(zip_bytes, filename="export.zip")
+        self.assertEqual(len(rows), 2)
+        types = {r.file_type for r in rows}
+        self.assertIn("watchlist", types)
+        self.assertIn("watched", types)

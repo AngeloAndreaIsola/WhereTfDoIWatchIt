@@ -193,10 +193,50 @@ export const CANONICAL_LANGUAGE_MAP: Record<string, string> = Object.fromEntries
   CANONICAL_LANGUAGES.map((l) => [l.code, l.name])
 );
 
+export function normalizeLanguageCode(str: string): string {
+  if (!str) return "";
+  const trimmed = str.trim();
+  if (isCanonicalLanguageCode(trimmed)) {
+    return trimmed.toUpperCase();
+  }
+  const upper = trimmed.toUpperCase();
+
+  const nameToCode: Record<string, string> = {
+    GERMAN: "DE", DEU: "DE", GER: "DE",
+    SPANISH: "ES", SPA: "ES", ESP: "ES",
+    FRENCH: "FR", FRA: "FR", FRE: "FR",
+    ITALIAN: "IT", ITA: "IT",
+    POLISH: "PL", POL: "PL",
+    PORTUGUESE: "PT", POR: "PT",
+    DANISH: "DA", DAN: "DA",
+    FINNISH: "FI", FIN: "FI",
+    NORWEGIAN: "NO", NOR: "NO", NBO: "NB",
+    SWEDISH: "SV", SWE: "SV",
+    DUTCH: "NL", NLD: "NL", DUT: "NL",
+    HUNGARIAN: "HU", HUN: "HU",
+    JAPANESE: "JA", JPN: "JA",
+    ENGLISH: "EN", ENG: "EN",
+    CHINESE: "ZH", ZHO: "ZH", CHI: "ZH",
+    KOREAN: "KO", KOR: "KO",
+    RUSSIAN: "RU", RUS: "RU",
+  };
+
+  if (nameToCode[upper]) {
+    return nameToCode[upper];
+  }
+
+  for (const lang of CANONICAL_LANGUAGES) {
+    if (lang.code === upper || lang.name.toUpperCase() === upper) {
+      return lang.code;
+    }
+  }
+  return upper;
+}
+
 export function getLanguageDisplayName(code: string): string {
   if (!code) return "";
-  const upperCode = code.trim().toUpperCase();
-  return CANONICAL_LANGUAGE_MAP[upperCode] ?? upperCode;
+  const norm = normalizeLanguageCode(code);
+  return CANONICAL_LANGUAGE_MAP[norm] ?? norm;
 }
 
 export function isCanonicalLanguageCode(code: string): boolean {

@@ -8,10 +8,12 @@ from django.db import models
 from .models import (
     ExternalProviderMapping,
     Movie,
+    MovieWatchEvent,
     Preference,
     Provider,
     ScrapedContentMapping,
     Subscription,
+    UserMovieData,
     WatchlistItem,
 )
 
@@ -19,7 +21,7 @@ from .models import (
 class MovieSerializer(serializers.ModelSerializer):
     class Meta:
         model = Movie
-        fields = ["id", "tmdb_id", "title", "year"]
+        fields = ["id", "tmdb_id", "title", "year", "poster_path"]
 
 
 class ExternalProviderMappingSerializer(serializers.ModelSerializer):
@@ -125,7 +127,7 @@ class ScrapedContentMappingSerializer(serializers.ModelSerializer):
 class MovieSerializer(serializers.ModelSerializer):
     class Meta:
         model = Movie
-        fields = ["id", "tmdb_id", "title", "year"]
+        fields = ["id", "tmdb_id", "title", "year", "poster_path"]
 
 
 def validate_language_codes(codes: list) -> list[str]:
@@ -224,11 +226,24 @@ class LanguageInfoSerializer(serializers.Serializer):
         return validate_language_codes(value)
 
 
+class MovieWatchEventSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MovieWatchEvent
+        fields = ["id", "watched_date", "rating", "review", "rewatch", "created_at"]
+
+
+class UserMovieDataSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UserMovieData
+        fields = ["is_watched", "rating", "review", "updated_at"]
+
+
 class RankedOfferSerializer(serializers.Serializer):
     country = serializers.CharField()
     service = serializers.CharField()
     offer_type = serializers.CharField()
     quality = serializers.CharField(allow_blank=True)
+    url = serializers.CharField(allow_blank=True, required=False, default="")
     audio_languages = serializers.ListField(child=serializers.CharField())
     subtitle_languages = serializers.ListField(child=serializers.CharField())
     ranking = serializers.DictField()

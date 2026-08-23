@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from django.conf import settings
 from django.db import connection, transaction
 from django.shortcuts import get_object_or_404
 from rest_framework import status
@@ -17,28 +18,32 @@ from .models import (
     LanguageEntry,
     LanguageInfo,
     Movie,
+    MovieWatchEvent,
     Preference,
     Provider,
     Region,
     ScrapedContentMapping,
     Subscription,
+    UserMovieData,
     WatchlistItem,
 )
 from .serializers import (
     LanguageInfoSerializer,
     MovieSerializer,
+    MovieWatchEventSerializer,
     PreferenceSerializer,
     ProviderSerializer,
     RankedOfferSerializer,
     ScrapedContentMappingSerializer,
     SubscriptionSerializer,
+    UserMovieDataSerializer,
     WatchlistItemSerializer,
     WatchlistReportRowSerializer,
 )
 from tracker.scrapers import SCRAPER_REGISTRY, ContentMatcher, ScrapedItem
 from .services.bulk_refresh import process_watchlist_refresh
 from .services.cache import AvailabilityCache
-from .services.letterboxd import import_rows, parse_csv
+from .services.letterboxd import import_rows, parse_file_or_zip
 from .services.ranking import rank_offers
 from .services.rate_limit import RateLimitExceeded
 from .services.tmdb import TMDbClient, TMDbMovie
@@ -66,7 +71,7 @@ def search(request):
     if not query:
         return Response({"error": "query parameter required"}, status=400)
     try:
-        client = TMDbClient()
+        client = TMDbClient(settings.TMDB_API_KEY)
         results = client.search(query, year=year_int)
     except Exception as exc:  # network or config error
         logger.exception("TMDb search failed")
@@ -99,9 +104,15 @@ def movie_availability(request, tmdb_id: int):
 
     offers = cache._read_offers(movie)
     ranked = rank_offers(offers, preference)
+
+    user_data = UserMovieData.objects.filter(user_id=1, movie=movie).first()
+    watch_events = MovieWatchEvent.objects.filter(user_id=1, movie=movie).order_by("-watched_date", "-created_at")
+
     return Response(
         {
-            "movie": {"tmdb_id": movie.tmdb_id, "title": movie.title, "year": movie.year},
+            "movie": {"tmdb_id": movie.tmdb_id, "title": movie.title, "year": movie.year, "poster_path": movie.poster_path},
+            "user_data": UserMovieDataSerializer(user_data).data if user_data else None,
+            "watch_events": MovieWatchEventSerializer(watch_events, many=True).data,
             "cache": {
                 "refreshed": status_obj.refreshed,
                 "reason": status_obj.reason,
@@ -417,7 +428,7 @@ def scraper_confirm_match(request):
 
     mapping = get_object_or_404(ScrapedContentMapping, id=mapping_id)
 
-    client = TMDbClient()
+    client = TMDbClient(settings.TMDB_API_KEY)
     try:
         details = client.details(tmdb_id)
         movie, _ = Movie.objects.get_or_create(
@@ -480,23 +491,33 @@ def preferences(request):
 def watchlist(request):
     """List or import watchlist items."""
     if request.method == "GET":
-        items = (
-            WatchlistItem.objects.select_related("movie")
-            .filter(user_id=1)
-            .order_by("-added_at")
-        )
-        return Response(WatchlistItemSerializer(items, many=True).data)
+        try:
+            items = (
+                WatchlistItem.objects.select_related("movie")
+                .filter(user_id=1)
+                .order_by("-added_at")
+            )
+            return Response(WatchlistItemSerializer(items, many=True).data)
+        except Exception as exc:
+            logger.exception("Failed to fetch watchlist")
+            return Response([], status=status.HTTP_200_OK)
 
     upload = request.FILES.get("file")
     if upload is None:
         return Response({"error": "file field required"}, status=400)
-    rows = parse_csv(upload.read())
+    file_bytes = upload.read()
+    filename = upload.name or ""
+    rows = parse_file_or_zip(file_bytes, filename=filename)
     result = import_rows(rows)
     return Response(
         {
             "resolved": WatchlistItemSerializer(result.resolved, many=True).data,
             "ambiguous": result.ambiguous,
             "skipped": result.skipped,
+            "watched_count": result.watched_count,
+            "ratings_count": result.ratings_count,
+            "reviews_count": result.reviews_count,
+            "diary_events_count": result.diary_events_count,
         }
     )
 
@@ -536,13 +557,17 @@ def watchlist_resolve(request):
 
     watchlist_items = []
     for sel in unique_selections:
-        movie, _ = Movie.objects.get_or_create(
+        movie, created = Movie.objects.get_or_create(
             tmdb_id=sel["tmdb_id"],
             defaults={
                 "title": sel.get("original_title") or "",
                 "year": sel.get("year"),
+                "poster_path": sel.get("poster_path") or "",
             },
         )
+        if not created and sel.get("poster_path") and not movie.poster_path:
+            movie.poster_path = sel.get("poster_path")
+            movie.save()
         item, _ = WatchlistItem.objects.get_or_create(
             user_id=1,
             movie=movie,
@@ -817,7 +842,7 @@ def prime_popular(request):
     if cached is not None and ts is not None and (now - ts) < _POPULAR_TTL:
         data = cached
     else:
-        client = TMDbClient()
+        client = TMDbClient(settings.TMDB_API_KEY)
         try:
             movies = client.popular(limit=limit_int)
             data = {
@@ -882,13 +907,16 @@ def prime_movie(request, tmdb_id: int):
         movie = Movie.objects.get(tmdb_id=tmdb_id)
     except Movie.DoesNotExist:
         # Auto-create from TMDb details so the runtime join is non-empty.
-        client = TMDbClient()
+        client = TMDbClient(settings.TMDB_API_KEY)
         try:
             details = client.details(tmdb_id)
-            movie, _ = Movie.objects.get_or_create(
+            movie, created = Movie.objects.get_or_create(
                 tmdb_id=details.tmdb_id,
-                defaults={"title": details.title, "year": details.year},
+                defaults={"title": details.title, "year": details.year, "poster_path": details.poster_path or ""},
             )
+            if not created and details.poster_path and not movie.poster_path:
+                movie.poster_path = details.poster_path
+                movie.save()
         except Exception:
             # TMDb lookup failed and movie not in DB.
             return Response(
@@ -952,13 +980,107 @@ def prime_movie(request, tmdb_id: int):
         offer_dict["service"] = service_display_name(offer_dict.get("service", ""))
         offers_out.append(offer_dict)
 
+    user_data = UserMovieData.objects.filter(user_id=1, movie=movie).first()
+    watch_events = MovieWatchEvent.objects.filter(user_id=1, movie=movie).order_by("-watched_date", "-created_at")
+
     return Response(
         {
             "movie": {
                 "tmdb_id": movie.tmdb_id,
                 "title": movie.title,
                 "year": movie.year,
+                "poster_path": movie.poster_path,
             },
+            "user_data": UserMovieDataSerializer(user_data).data if user_data else None,
+            "watch_events": MovieWatchEventSerializer(watch_events, many=True).data,
             "offers": offers_out,
+        }
+    )
+
+
+@api_view(["GET"])
+def watch_redirect(request, tmdb_id: int):
+    """Resolve top ranked watch destination for a movie."""
+    try:
+        movie = Movie.objects.get(tmdb_id=tmdb_id)
+    except Movie.DoesNotExist:
+        client = TMDbClient(settings.TMDB_API_KEY)
+        try:
+            details = client.details(tmdb_id)
+            movie, created = Movie.objects.get_or_create(
+                tmdb_id=details.tmdb_id,
+                defaults={"title": details.title, "year": details.year, "poster_path": details.poster_path or ""},
+            )
+            if not created and details.poster_path and not movie.poster_path:
+                movie.poster_path = details.poster_path
+                movie.save()
+        except Exception:
+            return Response(
+                {
+                    "found": False,
+                    "movie": {"tmdb_id": tmdb_id, "title": None, "year": None},
+                    "message": "Movie not found",
+                },
+                status=404,
+            )
+
+    preference = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
+
+    user_subs = list(
+        Subscription.objects.filter(user_id=1).values_list("provider__slug", "name")
+    )
+    subscribed_slugs = set()
+    for slug, name in user_subs:
+        if slug:
+            subscribed_slugs.add(slug.lower())
+        if name:
+            subscribed_slugs.add(name.lower())
+
+    cache = AvailabilityCache()
+    try:
+        cache.get_or_refresh(movie)
+    except RateLimitExceeded:
+        pass
+    except Exception:
+        logger.exception("Live availability refresh failed for watch redirect tmdb %s", tmdb_id)
+
+    offers = cache._read_offers(movie)
+    qualifying = [
+        o for o in offers
+        if (o.get("offer_type") or "").lower() in ("subscription", "free")
+    ]
+
+    if subscribed_slugs:
+        matched = [
+            o for o in qualifying
+            if (o.get("service") or "").lower() in subscribed_slugs
+            or (o.get("service_id") or "").lower() in subscribed_slugs
+        ]
+        if matched:
+            qualifying = matched
+
+    ranked = rank_offers(qualifying, preference)
+
+    top_offer = None
+    for offer in ranked:
+        if offer.url and offer.url.strip():
+            top_offer = offer
+            break
+
+    if top_offer:
+        return Response(
+            {
+                "found": True,
+                "watch_url": top_offer.url,
+                "movie": {"tmdb_id": movie.tmdb_id, "title": movie.title, "year": movie.year, "poster_path": movie.poster_path},
+                "offer": top_offer.to_dict(),
+            }
+        )
+
+    return Response(
+        {
+            "found": False,
+            "movie": {"tmdb_id": movie.tmdb_id, "title": movie.title, "year": movie.year, "poster_path": movie.poster_path},
+            "message": "Not currently available to watch on your subscribed services.",
         }
     )

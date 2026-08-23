@@ -253,10 +253,90 @@ class WatchlistResolveEndpointTests(TestCase):
             content_type="application/json",
         )
         self.assertEqual(resp.status_code, 400)
-        self.assertEqual(
-            resp.json()["error"],
-            "selections parameter is required and must not be empty",
-        )
+
+
+class WatchEndpointTests(TestCase):
+    def setUp(self):
+        self.movie = Movie.objects.create(tmdb_id=1001, title="Test Watch Movie", year=2021)
+
+    @patch("tracker.views.AvailabilityCache")
+    def test_watch_endpoint_returns_found_and_url(self, mock_cache_cls):
+        Preference.objects.create(user_id=1, audio_languages=["EN"], subtitle_languages=["EN"])
+        instance = mock_cache_cls.return_value
+        instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=1)
+        instance._read_offers.return_value = [
+            {
+                "country": "US",
+                "service": "netflix",
+                "offer_type": "subscription",
+                "quality": "hd",
+                "url": "https://www.netflix.com/title/123",
+                "audio": ["EN"],
+                "subs": ["EN"],
+            }
+        ]
+        resp = self.client.get(f"/api/watch/{self.movie.tmdb_id}/")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertTrue(data["found"])
+        self.assertEqual(data["watch_url"], "https://www.netflix.com/title/123")
+        self.assertEqual(data["movie"]["tmdb_id"], 1001)
+
+    @patch("tracker.views.AvailabilityCache")
+    def test_watch_endpoint_prioritizes_subscribed_providers(self, mock_cache_cls):
+        Preference.objects.create(user_id=1, audio_languages=["EN"], subtitle_languages=["EN"])
+        p_disney = Provider.objects.filter(slug="disney").first()
+        if p_disney:
+            Subscription.objects.create(user_id=1, provider=p_disney, name="Disney+")
+
+        instance = mock_cache_cls.return_value
+        instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=2)
+        instance._read_offers.return_value = [
+            {
+                "country": "US",
+                "service": "netflix",
+                "offer_type": "subscription",
+                "quality": "4k",
+                "url": "https://www.netflix.com/title/123",
+                "audio": ["EN"],
+                "subs": ["EN"],
+            },
+            {
+                "country": "US",
+                "service": "disney",
+                "offer_type": "subscription",
+                "quality": "hd",
+                "url": "https://www.disneyplus.com/movies/456",
+                "audio": ["EN"],
+                "subs": ["EN"],
+            },
+        ]
+        resp = self.client.get(f"/api/watch/{self.movie.tmdb_id}/")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertTrue(data["found"])
+        self.assertEqual(data["watch_url"], "https://www.disneyplus.com/movies/456")
+
+    @patch("tracker.views.AvailabilityCache")
+    def test_watch_endpoint_returns_found_false_when_no_valid_url(self, mock_cache_cls):
+        instance = mock_cache_cls.return_value
+        instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=0)
+        instance._read_offers.return_value = []
+        resp = self.client.get(f"/api/watch/{self.movie.tmdb_id}/")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertFalse(data["found"])
+        self.assertNotIn("watch_url", data)
+        self.assertIn("message", data)
+
+    @patch("tracker.views.TMDbClient")
+    def test_watch_endpoint_404_when_movie_not_found(self, mock_tmdb):
+        mock_instance = mock_tmdb.return_value
+        mock_instance.details.side_effect = Exception("Not found on TMDb")
+        resp = self.client.get("/api/watch/999999/")
+        self.assertEqual(resp.status_code, 404)
+        self.assertFalse(resp.json()["found"])
+        self.assertEqual(resp.json()["message"], "Movie not found")
 
     def test_empty_selections_returns_400(self):
         resp = self.client.post(

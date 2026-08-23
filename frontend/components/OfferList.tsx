@@ -2,7 +2,8 @@
 
 import React, { useState } from "react";
 import LanguagePicker from "./LanguagePicker";
-import { getLanguageDisplayName } from "@/lib/languages";
+import LanguageBadge from "@/components/LanguageBadge";
+import { normalizeLanguageCode } from "@/lib/languages";
 
 export interface RankingInfo {
   audio_rank: number;
@@ -15,6 +16,7 @@ export interface Offer {
   service: string;
   offer_type: string;
   quality: string;
+  url?: string;
   audio_languages: string[];
   subtitle_languages: string[];
   ranking: RankingInfo;
@@ -23,6 +25,8 @@ export interface Offer {
 interface OfferListProps {
   tmdbId: number;
   offers: Offer[];
+  preferredAudio?: string[];
+  preferredSubtitles?: string[];
   onRefreshAvailability: () => void | Promise<void>;
 }
 
@@ -35,12 +39,6 @@ function qualityLabel(q: string): string {
     sd: "SD",
   };
   return map[q.toLowerCase()] ?? q.toUpperCase();
-}
-
-function rankBadge(rank: number): string {
-  if (rank === 0) return "★";
-  if (rank < 99) return `#${rank + 1}`;
-  return "—";
 }
 
 function validateLanguageCodes(codes: string[]): { cleanCodes: string[]; error: string | null } {
@@ -59,13 +57,27 @@ function validateLanguageCodes(codes: string[]): { cleanCodes: string[]; error: 
   return { cleanCodes, error: null };
 }
 
-export default function OfferList({ tmdbId, offers, onRefreshAvailability }: OfferListProps) {
+export default function OfferList({
+  tmdbId,
+  offers,
+  preferredAudio,
+  preferredSubtitles,
+  onRefreshAvailability,
+}: OfferListProps) {
   const [editingOffer, setEditingOffer] = useState<Offer | null>(null);
   const [audioCodes, setAudioCodes] = useState<string[]>([]);
   const [subCodes, setSubCodes] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
   const [formSuccess, setFormSuccess] = useState("");
+
+  const prefAudioSet = new Set(
+    (preferredAudio || []).map((c) => normalizeLanguageCode(c))
+  );
+
+  const prefSubSet = new Set(
+    (preferredSubtitles || []).map((c) => normalizeLanguageCode(c))
+  );
 
   const handleOpenEdit = (offer: Offer) => {
     setEditingOffer(offer);
@@ -139,77 +151,92 @@ export default function OfferList({ tmdbId, offers, onRefreshAvailability }: Off
         const hasAudio = o.audio_languages.length > 0;
         const hasSubs = o.subtitle_languages.length > 0;
         const isMissingAll = !hasAudio && !hasSubs;
+        const watchUrl = o.url || `/watch/${tmdbId}`;
 
         return (
           <div
             key={`${o.country}-${o.service}-${o.quality}-${i}`}
-            className={`rounded-lg border p-4 text-sm transition-colors ${
+            className={`rounded-xl border p-4 text-sm transition-colors ${
               i === 0
-                ? "border-green-400 bg-green-50 shadow-sm dark:border-green-600 dark:bg-green-900/20"
+                ? "border-green-400 bg-green-50 shadow-xs dark:border-green-600 dark:bg-green-900/20"
                 : "border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800/50"
             }`}
           >
-            {/* Top row: service + country + missing badge + quality/best */}
-            <div className="flex flex-wrap items-start justify-between gap-2">
+            {/* Top row: service + country + missing badge + quality/best + Watch button */}
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-semibold">{o.service}</span>
-                <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs font-medium text-gray-600 dark:bg-gray-700 dark:text-gray-300">
+                <span className="rounded-md bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600 dark:bg-gray-700 dark:text-gray-300">
                   {o.country}
                 </span>
                 <span className="text-xs text-gray-400">{o.offer_type}</span>
                 {isMissingAll && (
-                  <span className="rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+                  <span className="rounded-md bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
                     Missing language info
                   </span>
                 )}
               </div>
               <div className="flex items-center gap-2">
                 {o.quality && (
-                  <span className="rounded bg-gray-200 px-1.5 py-0.5 font-mono text-xs font-bold dark:bg-gray-600 dark:text-gray-200">
+                  <span className="rounded-md bg-gray-200 px-2 py-0.5 font-mono text-xs font-bold dark:bg-gray-600 dark:text-gray-200">
                     {qualityLabel(o.quality)}
                   </span>
                 )}
                 {i === 0 && (
-                  <span className="rounded-full bg-green-600 px-2 py-0.5 text-xs font-bold text-white">
+                  <span className="rounded-full bg-green-600 px-2.5 py-0.5 text-xs font-bold text-white shadow-xs">
                     Best
                   </span>
                 )}
+                <a
+                  href={watchUrl}
+                  target={o.url ? "_blank" : "_self"}
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1 text-xs font-semibold text-white shadow-xs hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600 transition-all"
+                >
+                  <span>▶</span>
+                  <span>Watch</span>
+                </a>
               </div>
             </div>
 
             {/* Language info + Edit Button */}
-            <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500 dark:text-gray-400">
-              <div className="flex flex-wrap gap-x-6 gap-y-1">
-                <span>
-                  🔊 Audio:{" "}
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-gray-100 pt-2.5 dark:border-gray-700/60">
+              <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">Audio 🎧:</span>
                   {hasAudio ? (
-                    <span className="font-medium text-gray-700 dark:text-gray-200">
-                      {o.audio_languages.map(getLanguageDisplayName).join(", ")}
-                    </span>
+                    o.audio_languages.map((code) => (
+                      <LanguageBadge
+                        key={`audio-${code}`}
+                        code={code}
+                        type="audio"
+                        isPreferred={prefAudioSet.has(normalizeLanguageCode(code))}
+                      />
+                    ))
                   ) : (
-                    <span className="font-medium text-amber-600 dark:text-amber-400">
+                    <span className="text-xs font-medium text-amber-600 dark:text-amber-400">
                       Missing
                     </span>
                   )}
-                  <span className="ml-1 text-gray-300 dark:text-gray-600">
-                    {rankBadge(o.ranking.audio_rank)}
-                  </span>
-                </span>
-                <span>
-                  💬 Subs:{" "}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">Subs 💬:</span>
                   {hasSubs ? (
-                    <span className="font-medium text-gray-700 dark:text-gray-200">
-                      {o.subtitle_languages.map(getLanguageDisplayName).join(", ")}
-                    </span>
+                    o.subtitle_languages.map((code) => (
+                      <LanguageBadge
+                        key={`sub-${code}`}
+                        code={code}
+                        type="subtitle"
+                        isPreferred={prefSubSet.has(normalizeLanguageCode(code))}
+                      />
+                    ))
                   ) : (
-                    <span className="font-medium text-amber-600 dark:text-amber-400">
+                    <span className="text-xs font-medium text-amber-600 dark:text-amber-400">
                       Missing
                     </span>
                   )}
-                  <span className="ml-1 text-gray-300 dark:text-gray-600">
-                    {rankBadge(o.ranking.subtitle_rank)}
-                  </span>
-                </span>
+                </div>
               </div>
 
               <button
@@ -226,7 +253,7 @@ export default function OfferList({ tmdbId, offers, onRefreshAvailability }: Off
       {/* Edit Language Info Modal */}
       {editingOffer && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-md rounded-lg border border-gray-200 bg-white p-6 shadow-xl dark:border-gray-700 dark:bg-gray-800">
+          <div className="w-full max-w-md rounded-xl border border-gray-200 bg-white p-6 shadow-xl dark:border-gray-700 dark:bg-gray-800">
             <h3 className="mb-1 text-lg font-semibold text-gray-900 dark:text-gray-100">
               Edit Language Info
             </h3>
@@ -247,18 +274,18 @@ export default function OfferList({ tmdbId, offers, onRefreshAvailability }: Off
                 onChange={setSubCodes}
               />
 
-              <div className="rounded bg-amber-50 p-2.5 text-xs text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
+              <div className="rounded-md bg-amber-50 p-2.5 text-xs text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
                 Note: Language info is manually entered and may be incomplete.
               </div>
 
               {formError && (
-                <div className="rounded bg-red-50 p-2.5 text-xs text-red-700 dark:bg-red-900/30 dark:text-red-400">
+                <div className="rounded-md bg-red-50 p-2.5 text-xs text-red-700 dark:bg-red-900/30 dark:text-red-400">
                   {formError}
                 </div>
               )}
 
               {formSuccess && (
-                <div className="rounded bg-green-50 p-2.5 text-xs text-green-700 dark:bg-green-900/30 dark:text-green-400">
+                <div className="rounded-md bg-green-50 p-2.5 text-xs text-green-700 dark:bg-green-900/30 dark:text-green-400">
                   {formSuccess}
                 </div>
               )}
@@ -275,7 +302,7 @@ export default function OfferList({ tmdbId, offers, onRefreshAvailability }: Off
                 <button
                   type="submit"
                   disabled={saving}
-                  className="rounded-md bg-blue-600 px-4 py-2 text-xs font-medium text-white shadow-sm hover:bg-blue-700 disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+                  className="rounded-md bg-blue-600 px-4 py-2 text-xs font-medium text-white shadow-xs hover:bg-blue-700 disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
                 >
                   {saving ? "Saving…" : "Save Language Info"}
                 </button>
