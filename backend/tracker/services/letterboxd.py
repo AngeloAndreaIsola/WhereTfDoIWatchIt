@@ -21,6 +21,8 @@ import zipfile
 from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
+from django.conf import settings
+
 from ..models import Movie, MovieWatchEvent, UserMovieData, WatchlistItem
 from .tmdb import TMDbClient, TMDbMovie
 
@@ -165,7 +167,7 @@ def import_rows(
     user_id: int = 1,
     source: str = "letterboxd",
 ) -> ImportResult:
-    client = client or TMDbClient(timeout=3)
+    client = client or TMDbClient(settings.TMDB_API_KEY, timeout=3)
     result = ImportResult()
 
     # Fast in-memory cache of local movies to prevent repeated TMDb API calls

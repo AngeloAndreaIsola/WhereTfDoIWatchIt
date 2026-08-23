@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from django.conf import settings
 from django.db import connection, transaction
 from django.shortcuts import get_object_or_404
 from rest_framework import status
@@ -70,7 +71,7 @@ def search(request):
     if not query:
         return Response({"error": "query parameter required"}, status=400)
     try:
-        client = TMDbClient()
+        client = TMDbClient(settings.TMDB_API_KEY)
         results = client.search(query, year=year_int)
     except Exception as exc:  # network or config error
         logger.exception("TMDb search failed")
@@ -427,7 +428,7 @@ def scraper_confirm_match(request):
 
     mapping = get_object_or_404(ScrapedContentMapping, id=mapping_id)
 
-    client = TMDbClient()
+    client = TMDbClient(settings.TMDB_API_KEY)
     try:
         details = client.details(tmdb_id)
         movie, _ = Movie.objects.get_or_create(
@@ -841,7 +842,7 @@ def prime_popular(request):
     if cached is not None and ts is not None and (now - ts) < _POPULAR_TTL:
         data = cached
     else:
-        client = TMDbClient()
+        client = TMDbClient(settings.TMDB_API_KEY)
         try:
             movies = client.popular(limit=limit_int)
             data = {
@@ -906,7 +907,7 @@ def prime_movie(request, tmdb_id: int):
         movie = Movie.objects.get(tmdb_id=tmdb_id)
     except Movie.DoesNotExist:
         # Auto-create from TMDb details so the runtime join is non-empty.
-        client = TMDbClient()
+        client = TMDbClient(settings.TMDB_API_KEY)
         try:
             details = client.details(tmdb_id)
             movie, created = Movie.objects.get_or_create(
@@ -1003,7 +1004,7 @@ def watch_redirect(request, tmdb_id: int):
     try:
         movie = Movie.objects.get(tmdb_id=tmdb_id)
     except Movie.DoesNotExist:
-        client = TMDbClient()
+        client = TMDbClient(settings.TMDB_API_KEY)
         try:
             details = client.details(tmdb_id)
             movie, created = Movie.objects.get_or_create(

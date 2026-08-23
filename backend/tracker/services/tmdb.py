@@ -41,6 +41,11 @@ class TMDbClient:
         if not self.api_key:
             logger.warning("TMDB_API_KEY not configured; TMDbClient calls will fail.")
 
+    @staticmethod
+    def is_configured() -> bool:
+        """Return True if TMDB_API_KEY is set and non-empty, otherwise False."""
+        return bool(getattr(settings, "TMDB_API_KEY", ""))
+
     def _auth(self) -> tuple[dict, dict]:
         """Return (query_params, headers) carrying TMDb credentials.
 
@@ -80,6 +85,13 @@ class TMDbClient:
             overview=data.get("overview"),
             poster_path=data.get("poster_path"),
         )
+
+    def health(self) -> dict:
+        """Return health status of TMDb client."""
+        return {
+            'api_key_configured': self.is_configured(),
+            'timeout': self.timeout,
+        }
 
     def popular(self, limit: int = 24) -> list[TMDbMovie]:
         """Fetch trending/popular movies from TMDb (trending/movie/week)."""
