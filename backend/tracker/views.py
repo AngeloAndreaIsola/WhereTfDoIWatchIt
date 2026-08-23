@@ -40,6 +40,30 @@ from .serializers import (
     WatchlistItemSerializer,
     WatchlistReportRowSerializer,
 )
+from tracker.services.filtering import apply_composable_filters
+from tracker.services.watchability import evaluate_watchability, get_user_subscriptions
+import math
+
+
+def paginate_list(items: list, page: int, page_size: int) -> tuple[list, dict]:
+    """Helper to paginate any in-memory list."""
+    page = max(1, page)
+    page_size = max(1, min(page_size, 100))
+    total_count = len(items)
+    total_pages = math.ceil(total_count / page_size) if total_count > 0 else 1
+    start_idx = (page - 1) * page_size
+    end_idx = start_idx + page_size
+    page_items = items[start_idx:end_idx]
+
+    pagination = {
+        "count": total_count,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+        "has_next": page < total_pages,
+        "has_previous": page > 1,
+    }
+    return page_items, pagination
 from tracker.scrapers import SCRAPER_REGISTRY, ContentMatcher, ScrapedItem
 from .services.bulk_refresh import process_watchlist_refresh
 from .services.cache import AvailabilityCache
@@ -60,6 +84,94 @@ def health(request):
     except Exception:
         db_ok = False
     return Response({"status": "ok", "db": "ok" if db_ok else "unreachable"})
+
+
+@api_view(["GET"])
+def geo_ip(request):
+    """Detect current apparent country from client IP/headers."""
+    country = (
+        request.META.get("HTTP_CF_IPCOUNTRY") or
+        request.META.get("HTTP_X_COUNTRY_CODE") or
+        request.META.get("HTTP_CLOUDFRONT_VIEWER_COUNTRY") or
+        "US"
+    ).strip().upper()
+    return Response({"country": country, "ip": request.META.get("REMOTE_ADDR")})
+
+
+@api_view(["GET"])
+def search_person(request):
+    """Autocomplete person/actor search via TMDb."""
+    query = request.GET.get("q") or request.GET.get("query") or ""
+    if not query:
+        return Response({"results": []})
+    try:
+        client = TMDbClient(settings.TMDB_API_KEY)
+        results = client.search_person(query)
+        return Response({"results": results})
+    except Exception as exc:
+        logger.exception("Person search failed")
+        return Response({"error": str(exc)}, status=502)
+
+
+@api_view(["GET"])
+def genres_list(request):
+    """Return TMDb genres list."""
+    genres = [
+        {"id": 28, "name": "Action"},
+        {"id": 12, "name": "Adventure"},
+        {"id": 16, "name": "Animation"},
+        {"id": 35, "name": "Comedy"},
+        {"id": 80, "name": "Crime"},
+        {"id": 99, "name": "Documentary"},
+        {"id": 18, "name": "Drama"},
+        {"id": 10751, "name": "Family"},
+        {"id": 14, "name": "Fantasy"},
+        {"id": 36, "name": "History"},
+        {"id": 27, "name": "Horror"},
+        {"id": 10402, "name": "Music"},
+        {"id": 9648, "name": "Mystery"},
+        {"id": 10749, "name": "Romance"},
+        {"id": 878, "name": "Sci-Fi"},
+        {"id": 10770, "name": "TV Movie"},
+        {"id": 53, "name": "Thriller"},
+        {"id": 10752, "name": "War"},
+        {"id": 37, "name": "Western"},
+    ]
+    return Response({"results": genres})
+
+
+@api_view(["GET"])
+def homepage_feed(request):
+    """GET /api/homepage/ — returns only watchable titles (🟢 Watchable here & 🟡 Watchable with VPN) with pagination."""
+    curr_country = request.GET.get("country") or "US"
+    pref = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
+    user_subs = get_user_subscriptions(user_id=1)
+
+    movies = Movie.objects.all().order_by("-id")
+    evaluated, _ = apply_composable_filters(
+        movies,
+        request.GET,
+        pref,
+        user_subscriptions=user_subs,
+        current_country=curr_country,
+    )
+
+    watchable_items = [
+        item for item in evaluated
+        if item["watchability"].status in ("watchable_here", "watchable_vpn")
+    ]
+
+    results = []
+    for item in watchable_items:
+        m_data = MovieSerializer(item["movie"]).data
+        m_data["watchability"] = item["watchability"].to_dict()
+        results.append(m_data)
+
+    page = int(request.GET.get("page", 1)) if str(request.GET.get("page", "")).isdigit() else 1
+    page_size = int(request.GET.get("page_size", 24)) if str(request.GET.get("page_size", "")).isdigit() else 24
+    paged_results, pagination = paginate_list(results, page, page_size)
+
+    return Response({**pagination, "results": paged_results})
 
 
 @api_view(["GET"])
@@ -362,19 +474,31 @@ def provider_delete(request, slug: str):
 
 @api_view(["GET"])
 def catalog_list(request):
-    """List scraped items catalog with filtering by provider slug or query."""
-    provider_slug = request.GET.get("provider") or request.GET.get("provider_slug")
-    query = request.GET.get("q") or request.GET.get("query")
+    """GET /api/catalog/ — List all tracked catalog items with composable filters, watchability & pagination."""
+    curr_country = request.GET.get("country") or "US"
+    pref = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
+    user_subs = get_user_subscriptions(user_id=1)
 
-    qs = ScrapedContentMapping.objects.select_related("provider", "movie").order_by("-updated_at")
+    movies = Movie.objects.all().order_by("-id")
+    evaluated, _ = apply_composable_filters(
+        movies,
+        request.GET,
+        pref,
+        user_subscriptions=user_subs,
+        current_country=curr_country,
+    )
 
-    if provider_slug:
-        qs = qs.filter(provider__slug__iexact=provider_slug.strip())
-    if query:
-        qs = qs.filter(scraped_title__icontains=query.strip())
+    results = []
+    for item in evaluated:
+        m_data = MovieSerializer(item["movie"]).data
+        m_data["watchability"] = item["watchability"].to_dict()
+        results.append(m_data)
 
-    serializer = ScrapedContentMappingSerializer(qs, many=True)
-    return Response({"count": len(serializer.data), "results": serializer.data})
+    page = int(request.GET.get("page", 1)) if str(request.GET.get("page", "")).isdigit() else 1
+    page_size = int(request.GET.get("page_size", 24)) if str(request.GET.get("page_size", "")).isdigit() else 24
+    paged_results, pagination = paginate_list(results, page, page_size)
+
+    return Response({**pagination, "results": paged_results})
 
 
 @api_view(["GET"])
@@ -586,7 +710,8 @@ def watchlist_resolve(request):
 
 @api_view(["GET"])
 def watchlist_report(request):
-    """Return aggregated report for watchlist items (user_id=1)."""
+    """Return aggregated report for watchlist items (user_id=1) with full watchability evaluation & pagination."""
+    curr_country = request.GET.get("country") or "US"
     items = (
         WatchlistItem.objects.select_related("movie")
         .filter(user_id=1)
@@ -602,21 +727,23 @@ def watchlist_report(request):
 
     for item in items:
         movie = item.movie
-        # Use cached data only to avoid blocking on external API calls.
-        # Stale/missing data will be refreshed by background process.
         try:
-            status = cache.get_cached_only(movie)
-            if status.reason == "missing":
-                logger.info("Movie tmdb_id=%s has no cached availability, skipping in report", movie.tmdb_id)
+            cache.get_cached_only(movie)
         except Exception:
-            logger.exception("Failed to read cached availability for movie tmdb_id=%s", movie.tmdb_id)
+            pass
 
         raw_offers = cache._read_offers(movie)
+        watch_res = evaluate_watchability(
+            movie,
+            raw_offers,
+            preference,
+            current_country=curr_country,
+        )
+
         qualifying_offers = [
             o for o in raw_offers
             if (o.get("offer_type") or "").lower() in ("subscription", "free")
         ]
-
         ranked = rank_offers(qualifying_offers, preference)
 
         countries = sorted(list({r.country.upper() for r in ranked if r.country}))
@@ -624,7 +751,7 @@ def watchlist_report(request):
         best_country = best.country.upper() if best else None
         best_service = best.service if best else None
 
-        if countries:
+        if countries or watch_res.status in ("watchable_here", "watchable_vpn"):
             available_movies_count += 1
 
         for c in countries:
@@ -636,10 +763,11 @@ def watchlist_report(request):
 
         report.append(
             {
-                "movie": movie,
+                "movie": MovieSerializer(movie).data,
                 "available_countries": countries,
                 "best_country": best_country,
                 "best_service": best_service,
+                "watchability": watch_res.to_dict(),
             }
         )
 
@@ -666,9 +794,14 @@ def watchlist_report(request):
         "services": service_list,
     }
 
+    page = int(request.GET.get("page", 1)) if str(request.GET.get("page", "")).isdigit() else 1
+    page_size = int(request.GET.get("page_size", 24)) if str(request.GET.get("page_size", "")).isdigit() else 24
+    paged_report, pagination = paginate_list(report, page, page_size)
+
     return Response(
         {
-            "report": WatchlistReportRowSerializer(report, many=True).data,
+            "report": paged_report,
+            "pagination": pagination,
             "summary": summary,
         }
     )
