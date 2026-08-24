@@ -124,15 +124,22 @@ class WatchlistReportEndpointTests(TestCase):
     def test_empty_list(self):
         resp = self.client.get("/api/watchlist/report/")
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json(), {
-            "report": [],
-            "summary": {
-                "total_movies": 0,
-                "available_movies": 0,
-                "unavailable_movies": 0,
-                "countries": [],
-                "services": [],
-            },
+        res_data = resp.json()
+        self.assertEqual(res_data["report"], [])
+        self.assertEqual(res_data["summary"], {
+            "total_movies": 0,
+            "available_movies": 0,
+            "unavailable_movies": 0,
+            "countries": [],
+            "services": [],
+        })
+        self.assertEqual(res_data["pagination"], {
+            "count": 0,
+            "page": 1,
+            "page_size": 24,
+            "total_pages": 1,
+            "has_next": False,
+            "has_previous": False,
         })
 
     @patch("tracker.views.AvailabilityCache")

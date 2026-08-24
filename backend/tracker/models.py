@@ -19,10 +19,26 @@ else:
 
 
 class Movie(models.Model):
+    CONTENT_TYPES = [
+        ("movie", "Movie"),
+        ("series", "Series"),
+    ]
+
     tmdb_id = models.IntegerField(unique=True, db_index=True)
     title = models.CharField(max_length=255)
     year = models.IntegerField(null=True, blank=True)
+    content_type = models.CharField(
+        max_length=10,
+        choices=CONTENT_TYPES,
+        default="movie",
+        db_index=True,
+    )
     poster_path = models.CharField(max_length=255, blank=True, default="")
+    overview = models.TextField(blank=True, default="")
+    genres = models.JSONField(default=list, blank=True)
+    genre_ids = models.JSONField(default=list, blank=True)
+    cast = models.JSONField(default=list, blank=True)
+    seasons_data = models.JSONField(default=list, blank=True)
 
     def __str__(self):
         return f"{self.title} ({self.year})" if self.year else self.title
@@ -54,7 +70,9 @@ class Availability(models.Model):
     is_available = models.BooleanField(default=False)
     offer_type = models.CharField(max_length=20, choices=OFFER_TYPES)
     quality = models.CharField(max_length=10, blank=True)
+    price_info = models.CharField(max_length=50, blank=True, default="")
     url = models.URLField(max_length=500, blank=True, default="")
+    seasons_available = models.JSONField(default=list, blank=True)
 
     class Meta:
         constraints = [

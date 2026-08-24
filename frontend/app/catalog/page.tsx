@@ -1,182 +1,291 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
+import { FilterBar, FilterState } from "@/components/FilterBar";
+import { VpnWatchModal } from "@/components/VpnWatchModal";
+import { WhyCantIWatchModal, ExcludedOffer } from "@/components/WhyCantIWatchModal";
+import { Pagination } from "@/components/Pagination";
 
-interface ScrapedCatalogItem {
-  id: number;
-  scraped_title: string;
-  scraped_year: number | null;
-  scraped_url: string;
-  is_confirmed: boolean;
-  confidence_score: number;
-  created_at: string;
-  provider: {
-    id: number;
-    slug: string;
-    name: string;
-    category: string;
+interface BestOffer {
+  country: string;
+  service: string;
+  url: string;
+  is_current_country: boolean;
+}
+
+interface CatalogItem {
+  id?: number;
+  tmdb_id: number;
+  title: string;
+  content_type?: string;
+  year?: number;
+  poster_path?: string;
+  watchability?: {
+    status?: string;
+    status_symbol?: string;
+    status_label?: string;
+    best_offer?: BestOffer;
+    explanation?: string[];
+    excluded_offers?: ExcludedOffer[];
   };
-  movie?: {
-    id: number;
-    tmdb_id: number;
-    title: string;
-    year: number | null;
-  } | null;
 }
 
 export default function CatalogPage() {
-  const [items, setItems] = useState<ScrapedCatalogItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [searchQuery, setSearchQuery] = useState("");
+  const [activeTab, setActiveTab] = useState<"watchable" | "all">("watchable");
+  const [filters, setFilters] = useState<FilterState>({
+    q: "",
+    content_type: "all",
+    genre: "",
+    year_min: "",
+    year_max: "",
+    actors: [],
+    provider: "",
+    country: "",
+    status: "",
+  });
 
-  const fetchCatalog = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const url = searchQuery
-        ? `/api/catalog/?q=${encodeURIComponent(searchQuery.trim())}`
-        : "/api/catalog/";
-      const res = await fetch(url);
-      if (!res.ok) {
-        throw new Error(`Failed to load catalog (${res.status})`);
-      }
-      const data = await res.json();
-      setItems(data.results || []);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to load catalog");
-    } finally {
-      setLoading(false);
-    }
-  }, [searchQuery]);
+  const [items, setItems] = useState<CatalogItem[]>([]);
+  const [page, setPage] = useState(1);
+  const [paginationInfo, setPaginationInfo] = useState({
+    totalPages: 1,
+    hasNext: false,
+    hasPrevious: false,
+  });
+  const [loading, setLoading] = useState(true);
+
+  const [vpnModalState, setVpnModalState] = useState<{
+    isOpen: boolean;
+    requiredCountry: string;
+    serviceName: string;
+    watchUrl: string;
+  }>({
+    isOpen: false,
+    requiredCountry: "US",
+    serviceName: "",
+    watchUrl: "",
+  });
+
+  const [whyModalState, setWhyModalState] = useState<{
+    isOpen: boolean;
+    title: string;
+    explanations: string[];
+    excludedOffers: ExcludedOffer[];
+  }>({
+    isOpen: false,
+    title: "",
+    explanations: [],
+    excludedOffers: [],
+  });
+
+  // Reset to page 1 whenever filters or tab changes
+  useEffect(() => {
+    setPage(1);
+  }, [filters, activeTab]);
 
   useEffect(() => {
-    fetchCatalog();
-  }, [fetchCatalog]);
+    setLoading(true);
+    const params = new URLSearchParams();
+    params.set("page", page.toString());
+    params.set("page_size", "24");
+    if (filters.q) params.set("q", filters.q);
+    if (filters.content_type !== "all") params.set("type", filters.content_type);
+    if (filters.genre) params.set("genre", filters.genre);
+    if (filters.year_min) params.set("year_min", filters.year_min);
+    if (filters.year_max) params.set("year_max", filters.year_max);
+    if (filters.status) params.set("status", filters.status);
+    if (activeTab === "watchable") params.set("watchable", "true");
+    filters.actors.forEach((a) => params.append("actor_id", a.id.toString()));
+
+    fetch(`/api/catalog/?${params.toString()}`)
+      .then((res) => (res.ok ? res.json() : { results: [], total_pages: 1, has_next: false, has_previous: false }))
+      .then((data) => {
+        setItems(data.results || []);
+        setPaginationInfo({
+          totalPages: data.total_pages || 1,
+          hasNext: !!data.has_next,
+          hasPrevious: !!data.has_previous,
+        });
+      })
+      .catch(() => setItems([]))
+      .finally(() => setLoading(false));
+  }, [filters, activeTab, page]);
+
+  const handleWatchClick = (bestOffer: BestOffer) => {
+    if (!bestOffer) return;
+    if (bestOffer.is_current_country) {
+      window.open(bestOffer.url, "_blank", "noopener,noreferrer");
+    } else {
+      setVpnModalState({
+        isOpen: true,
+        requiredCountry: bestOffer.country,
+        serviceName: bestOffer.service,
+        watchUrl: bestOffer.url,
+      });
+    }
+  };
+
+  const openWhyModal = (item: CatalogItem) => {
+    const watchRes = item.watchability || {};
+    setWhyModalState({
+      isOpen: true,
+      title: item.title,
+      explanations: watchRes.explanation || ["No availability data found."],
+      excludedOffers: watchRes.excluded_offers || [],
+    });
+  };
 
   return (
-    <main className="mx-auto max-w-4xl px-4 py-10 sm:px-6">
-      {/* Top navigation link */}
-      <div className="mb-6">
-        <Link href="/" className="text-sm text-blue-600 hover:underline dark:text-blue-400">
-          ← Back to home
-        </Link>
-      </div>
-
-      {/* Header */}
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-gray-100">
-          Scraped Content Catalog
-        </h1>
-        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-          Browse movies and series discovered across custom scraper sources and small providers.
-        </p>
-      </div>
-
-      {/* Search Input */}
-      <div className="mb-6 flex gap-2">
-        <input
-          type="text"
-          placeholder="Filter catalog by title..."
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          className="flex-1 rounded-lg border border-gray-300 px-3.5 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
-        />
-        <button
-          onClick={fetchCatalog}
-          className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-500 dark:bg-blue-500 dark:hover:bg-blue-400"
-        >
-          Search
-        </button>
-      </div>
-
-      {/* Loading state */}
-      {loading && (
-        <div className="flex items-center gap-2 py-8 text-sm text-gray-500 dark:text-gray-400">
-          <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-          </svg>
-          Loading catalog…
-        </div>
-      )}
-
-      {/* Error state */}
-      {error && (
-        <div className="mb-6 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-700 dark:bg-red-900/30 dark:text-red-400">
-          {error}
-        </div>
-      )}
-
-      {/* Empty State */}
-      {!loading && !error && items.length === 0 && (
-        <div className="rounded-xl border border-dashed border-gray-300 p-8 text-center dark:border-gray-700">
-          <p className="text-sm font-medium text-gray-500 dark:text-gray-400">
-            No scraped content found in catalog.
+    <div className="max-w-4xl mx-auto px-4 py-8 space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+            Catalog
+          </h1>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+            Browse titles known to the application and filter by availability.
           </p>
-          <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
-            Import custom provider URLs on the Subscriptions page to run scrapers.
-          </p>
-          <Link
-            href="/subscriptions"
-            className="mt-4 inline-block rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-blue-500 dark:bg-blue-500 dark:hover:bg-blue-400"
+        </div>
+
+        {/* Tab Switcher: Watchable vs All */}
+        <div className="flex bg-gray-100 dark:bg-gray-800 p-1 rounded-xl border border-gray-200 dark:border-gray-700 self-start">
+          <button
+            onClick={() => setActiveTab("watchable")}
+            className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-colors ${
+              activeTab === "watchable"
+                ? "bg-white dark:bg-gray-900 text-indigo-600 dark:text-indigo-400 shadow-sm"
+                : "text-gray-600 dark:text-gray-400 hover:text-gray-900"
+            }`}
           >
-            Go to Subscriptions & Sources →
-          </Link>
+            Watchable
+          </button>
+          <button
+            onClick={() => setActiveTab("all")}
+            className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-colors ${
+              activeTab === "all"
+                ? "bg-white dark:bg-gray-900 text-indigo-600 dark:text-indigo-400 shadow-sm"
+                : "text-gray-600 dark:text-gray-400 hover:text-gray-900"
+            }`}
+          >
+            All Catalog
+          </button>
         </div>
-      )}
+      </div>
 
-      {/* Catalog Grid */}
-      {!loading && !error && items.length > 0 && (
-        <div className="grid gap-4 sm:grid-cols-2">
-          {items.map((item) => (
-            <div
-              key={item.id}
-              className="flex flex-col justify-between rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900"
-            >
-              <div>
-                <div className="flex items-start justify-between gap-2">
-                  <h3 className="font-semibold text-gray-900 dark:text-gray-100">
-                    {item.scraped_title}{" "}
-                    {item.scraped_year && (
-                      <span className="font-normal text-gray-500 dark:text-gray-400">
-                        ({item.scraped_year})
+      <FilterBar filters={filters} onChange={setFilters} showStatusFilter={true} />
+
+      {loading ? (
+        <div className="py-12 text-center text-gray-500 animate-pulse">
+          Loading catalog items...
+        </div>
+      ) : items.length === 0 ? (
+        <div className="py-12 text-center border border-dashed border-gray-300 dark:border-gray-800 rounded-xl p-8">
+          <p className="text-gray-600 dark:text-gray-400 font-medium">
+            No catalog titles found matching your search and filter criteria.
+          </p>
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+            {items.map((item) => {
+              const watchRes = item.watchability || {};
+              const bestOffer = watchRes.best_offer;
+              const status = watchRes.status || "unknown";
+              const symbol = watchRes.status_symbol || "⚪";
+              const label = watchRes.status_label || "Unknown";
+
+              const isWatchable = status === "watchable_here" || status === "watchable_vpn";
+
+              return (
+                <div
+                  key={item.id || item.tmdb_id}
+                  className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-shadow flex flex-col"
+                >
+                  <Link href={`/movie/${item.tmdb_id}`}>
+                    <div className="aspect-[2/3] bg-gray-100 dark:bg-gray-800 relative">
+                      {item.poster_path ? (
+                        <img
+                          src={`https://image.tmdb.org/t/p/w500${item.poster_path}`}
+                          alt={item.title}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-gray-400 text-xs">
+                          No Poster
+                        </div>
+                      )}
+                      <span className="absolute top-2 right-2 px-2 py-1 rounded-md text-xs font-bold bg-black/70 text-white backdrop-blur-sm">
+                        {symbol} {label}
                       </span>
+                    </div>
+                  </Link>
+
+                  <div className="p-4 flex-1 flex flex-col justify-between space-y-3">
+                    <div>
+                      <h3 className="font-bold text-gray-900 dark:text-gray-100 line-clamp-1">
+                        {item.title}
+                      </h3>
+                      <p className="text-xs text-gray-500">
+                        {item.content_type === "series" ? "TV Series" : "Movie"} {item.year && `• ${item.year}`}
+                      </p>
+                    </div>
+
+                    {isWatchable && bestOffer ? (
+                      <div className="space-y-2">
+                        <div className="bg-gray-50 dark:bg-gray-800/60 p-2.5 rounded-lg text-xs space-y-1">
+                          <p className="font-bold text-gray-700 dark:text-gray-300">
+                            Best way to watch:
+                          </p>
+                          <p className="text-indigo-600 dark:text-indigo-400 font-semibold">
+                            {bestOffer.service} ({bestOffer.country})
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => handleWatchClick(bestOffer)}
+                          className="w-full py-2 text-xs font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white transition-colors"
+                        >
+                          Watch Now
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => openWhyModal(item)}
+                        className="w-full py-2 text-xs font-medium rounded-lg border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+                      >
+                        Why can&apos;t I watch this?
+                      </button>
                     )}
-                  </h3>
-                  <span className="rounded bg-blue-100 px-2 py-0.5 text-[10px] font-bold text-blue-800 dark:bg-blue-900/60 dark:text-blue-300">
-                    {item.provider?.name || "Scraper"}
-                  </span>
+                  </div>
                 </div>
+              );
+            })}
+          </div>
 
-                {item.scraped_url && (
-                  <a
-                    href={item.scraped_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="mt-1 block truncate text-xs text-blue-600 hover:underline dark:text-blue-400"
-                  >
-                    {item.scraped_url}
-                  </a>
-                )}
-              </div>
-
-              <div className="mt-4 flex items-center justify-between border-t border-gray-100 pt-3 text-xs text-gray-500 dark:border-gray-800 dark:text-gray-400">
-                <span>
-                  Match:{" "}
-                  <strong className={item.movie ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"}>
-                    {item.movie ? item.movie.title : "Unconfirmed"}
-                  </strong>
-                </span>
-                <span>
-                  Score: {Math.round(item.confidence_score * 100)}%
-                </span>
-              </div>
-            </div>
-          ))}
-        </div>
+          <Pagination
+            page={page}
+            totalPages={paginationInfo.totalPages}
+            hasNext={paginationInfo.hasNext}
+            hasPrevious={paginationInfo.hasPrevious}
+            onPageChange={setPage}
+          />
+        </>
       )}
-    </main>
+
+      <VpnWatchModal
+        isOpen={vpnModalState.isOpen}
+        onClose={() => setVpnModalState({ ...vpnModalState, isOpen: false })}
+        requiredCountry={vpnModalState.requiredCountry}
+        serviceName={vpnModalState.serviceName}
+        watchUrl={vpnModalState.watchUrl}
+      />
+
+      <WhyCantIWatchModal
+        isOpen={whyModalState.isOpen}
+        onClose={() => setWhyModalState({ ...whyModalState, isOpen: false })}
+        title={whyModalState.title}
+        explanations={whyModalState.explanations}
+        excludedOffers={whyModalState.excludedOffers}
+      />
+    </div>
   );
 }
