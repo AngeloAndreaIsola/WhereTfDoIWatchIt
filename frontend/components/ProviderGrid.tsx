@@ -36,22 +36,16 @@ export default function ProviderGrid({ providers, onToggle, loading = false }: P
     }
   };
 
-  const majorProviders = providers.filter((p) => p.is_major);
-
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-          Streaming Providers
-        </h2>
-        {loading && <span className="text-xs text-gray-500 dark:text-gray-400">Syncing…</span>}
-      </div>
-      <p className="text-xs text-gray-500 dark:text-gray-400">
-        Click a provider to toggle your active subscription status.
-      </p>
+      {loading && (
+        <div className="flex justify-end">
+          <span className="text-xs text-gray-500 dark:text-gray-400">Syncing…</span>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        {majorProviders.map((provider) => {
+        {providers.map((provider) => {
           const isSelected = provider.is_subscribed;
           const isPending = togglingSlug === provider.slug;
 
