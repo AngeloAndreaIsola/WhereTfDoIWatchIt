@@ -32,6 +32,7 @@ interface WatchlistItemRow {
 }
 
 export default function WatchlistPage() {
+  const [activeTab, setActiveTab] = useState<"all" | "watchable">("all");
   const [filters, setFilters] = useState<FilterState>({
     q: "",
     content_type: "all",
@@ -78,10 +79,10 @@ export default function WatchlistPage() {
     excludedOffers: [],
   });
 
-  // Reset page when filters change
+  // Reset page when filters or active tab change
   useEffect(() => {
     setPage(1);
-  }, [filters]);
+  }, [filters, activeTab]);
 
   useEffect(() => {
     setLoading(true);
@@ -94,6 +95,7 @@ export default function WatchlistPage() {
     if (filters.year_min) params.set("year_min", filters.year_min);
     if (filters.year_max) params.set("year_max", filters.year_max);
     if (filters.status) params.set("status", filters.status);
+    if (activeTab === "watchable") params.set("watchable", "true");
     filters.actors.forEach((a) => params.append("actor_id", a.id.toString()));
 
     setError(null);
@@ -127,7 +129,7 @@ export default function WatchlistPage() {
         setItems([]);
       })
       .finally(() => setLoading(false));
-  }, [page, filters]);
+  }, [page, filters, activeTab]);
 
   const handleWatchClick = (bestOffer: { country: string; service: string; url: string; is_current_country: boolean }) => {
     if (!bestOffer) return;
@@ -156,7 +158,7 @@ export default function WatchlistPage() {
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-8 space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
             Wishlist / Watchlist
@@ -164,6 +166,30 @@ export default function WatchlistPage() {
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
             All titles you want to watch. Unavailable items are greyed out with explanations.
           </p>
+        </div>
+
+        {/* Tab Switcher: All Wishlist vs Watchable */}
+        <div className="flex bg-gray-100 dark:bg-gray-800 p-1 rounded-xl border border-gray-200 dark:border-gray-700 self-start">
+          <button
+            onClick={() => setActiveTab("all")}
+            className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-colors ${
+              activeTab === "all"
+                ? "bg-white dark:bg-gray-900 text-indigo-600 dark:text-indigo-400 shadow-sm"
+                : "text-gray-600 dark:text-gray-400 hover:text-gray-900"
+            }`}
+          >
+            All Wishlist
+          </button>
+          <button
+            onClick={() => setActiveTab("watchable")}
+            className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-colors ${
+              activeTab === "watchable"
+                ? "bg-white dark:bg-gray-900 text-indigo-600 dark:text-indigo-400 shadow-sm"
+                : "text-gray-600 dark:text-gray-400 hover:text-gray-900"
+            }`}
+          >
+            Watchable
+          </button>
         </div>
       </div>
 
