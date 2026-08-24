@@ -40,7 +40,7 @@ class ProvidersEndpointTests(TestCase):
             },
         )
         resp = self.client.post(
-            f"/api/providers/{p.id}/toggle/",
+            f"/api/providers/{p.slug}/toggle/",
             content_type="application/json",
         )
         self.assertEqual(resp.status_code, 200)
@@ -49,7 +49,7 @@ class ProvidersEndpointTests(TestCase):
 
         # Toggle again
         resp2 = self.client.post(
-            f"/api/providers/{p.id}/toggle/",
+            f"/api/providers/{p.slug}/toggle/",
             content_type="application/json",
         )
         self.assertEqual(resp2.status_code, 200)
