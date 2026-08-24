@@ -98,6 +98,7 @@ class LanguageEntry(models.Model):
 
 class ProviderCategory(models.TextChoices):
     OFFICIAL = "official", "Official / Major Provider"
+    FREE = "free", "Free Streaming Provider"
     SCRAPER = "scraper", "Scraper / Small Source"
 
 

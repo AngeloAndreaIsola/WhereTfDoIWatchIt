@@ -7,6 +7,56 @@ from django.urls import reverse
 from tracker.models import Movie, Preference, Provider, Subscription
 
 
+class ProvidersEndpointTests(TestCase):
+    def test_get_providers_returns_free_category(self):
+        Provider.objects.get_or_create(
+            slug="raiplay",
+            defaults={
+                "name": "RaiPlay",
+                "category": "free",
+                "is_major": False,
+                "is_enabled": True,
+                "icon_name": "raiplay",
+                "domain": "raiplay.it",
+            },
+        )
+        resp = self.client.get("/api/providers/")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        free_providers = [p for p in data if p.get("category") == "free"]
+        self.assertTrue(len(free_providers) > 0)
+        self.assertEqual(free_providers[0]["slug"], "raiplay")
+
+    def test_toggle_free_provider_subscription(self):
+        p, _ = Provider.objects.get_or_create(
+            slug="bbc_iplayer",
+            defaults={
+                "name": "BBC iPlayer",
+                "category": "free",
+                "is_major": False,
+                "is_enabled": True,
+                "icon_name": "bbc_iplayer",
+                "domain": "bbc.co.uk/iplayer",
+            },
+        )
+        resp = self.client.post(
+            f"/api/providers/{p.id}/toggle/",
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.json()["is_subscribed"])
+        self.assertTrue(Subscription.objects.filter(user_id=1, provider=p).exists())
+
+        # Toggle again
+        resp2 = self.client.post(
+            f"/api/providers/{p.id}/toggle/",
+            content_type="application/json",
+        )
+        self.assertEqual(resp2.status_code, 200)
+        self.assertFalse(resp2.json()["is_subscribed"])
+        self.assertFalse(Subscription.objects.filter(user_id=1, provider=p).exists())
+
+
 class SubscriptionsEndpointTests(TestCase):
     def test_get_returns_empty_list(self):
         resp = self.client.get("/api/subscriptions/")

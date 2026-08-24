@@ -187,17 +187,24 @@ FREE_PROVIDERS = [
 def seed_free_providers(apps, schema_editor):
     Provider = apps.get_model("tracker", "Provider")
 
+    # Check if 'config' field exists on Provider model to avoid IntegrityError if config has NOT NULL constraint
+    has_config_field = any(field.name == "config" for field in Provider._meta.fields)
+
     for item in FREE_PROVIDERS:
+        defaults = {
+            "name": item["name"],
+            "category": "free",
+            "is_major": False,
+            "is_enabled": True,
+            "icon_name": item["icon_name"],
+            "domain": item["domain"],
+        }
+        if has_config_field:
+            defaults["config"] = {}
+
         Provider.objects.get_or_create(
             slug=item["slug"],
-            defaults={
-                "name": item["name"],
-                "category": "free",
-                "is_major": False,
-                "is_enabled": True,
-                "icon_name": item["icon_name"],
-                "domain": item["domain"],
-            },
+            defaults=defaults,
         )
 
 
