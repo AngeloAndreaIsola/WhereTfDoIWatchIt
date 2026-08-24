@@ -114,6 +114,7 @@ export default function SubscriptionsPage() {
   };
 
   const majorProviders = providers.filter((p) => p.is_major);
+  const freeProviders = providers.filter((p) => p.category === "free");
   const scraperProviders = providers.filter((p) => !p.is_major && p.category === "scraper");
 
   return (
@@ -131,7 +132,7 @@ export default function SubscriptionsPage() {
           Subscriptions & Sources
         </h1>
         <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-          Manage major streaming service subscriptions and import custom scraper sources.
+          Manage major streaming service subscriptions, free public broadcasters & streaming services, and custom scraper sources.
         </p>
       </div>
 
@@ -172,7 +173,24 @@ export default function SubscriptionsPage() {
             />
           </section>
 
-          {/* Section 2: Imported Small / Scraper Providers */}
+          {/* Section 2: Free Streaming Providers (European Public Broadcasters & Global Free Services) */}
+          <section className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+            <div className="mb-4">
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                Free Streaming Providers
+              </h2>
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                European public broadcasters and free ad-supported streaming services across 20+ countries. Click a provider card to enable or disable it for watch availability matching.
+              </p>
+            </div>
+            <ProviderGrid
+              providers={freeProviders}
+              onToggle={handleToggleProvider}
+              loading={loading}
+            />
+          </section>
+
+          {/* Section 3: Imported Small Providers & Sources */}
           <section className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900">
             <div className="mb-4">
               <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
