@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { FilterBar, FilterState } from "@/components/FilterBar";
 import { VpnWatchModal } from "@/components/VpnWatchModal";
 import { WhyCantIWatchModal, ExcludedOffer } from "@/components/WhyCantIWatchModal";
 import { Pagination } from "@/components/Pagination";
@@ -31,6 +32,18 @@ interface WatchlistItemRow {
 }
 
 export default function WatchlistPage() {
+  const [filters, setFilters] = useState<FilterState>({
+    q: "",
+    content_type: "all",
+    genre: "",
+    year_min: "",
+    year_max: "",
+    actors: [],
+    provider: "",
+    country: "",
+    status: "",
+  });
+
   const [items, setItems] = useState<WatchlistItemRow[]>([]);
   const [page, setPage] = useState(1);
   const [paginationInfo, setPaginationInfo] = useState({
@@ -65,18 +78,36 @@ export default function WatchlistPage() {
     excludedOffers: [],
   });
 
+  // Reset page when filters change
+  useEffect(() => {
+    setPage(1);
+  }, [filters]);
+
   useEffect(() => {
     setLoading(true);
     const params = new URLSearchParams();
     params.set("page", page.toString());
     params.set("page_size", "24");
+    if (filters.q) params.set("q", filters.q);
+    if (filters.content_type !== "all") params.set("type", filters.content_type);
+    if (filters.genre) params.set("genre", filters.genre);
+    if (filters.year_min) params.set("year_min", filters.year_min);
+    if (filters.year_max) params.set("year_max", filters.year_max);
+    if (filters.status) params.set("status", filters.status);
+    filters.actors.forEach((a) => params.append("actor_id", a.id.toString()));
 
     setError(null);
-    fetch(`/api/watchlist/report/?${params.toString()}`)
+    const resPromise = fetch(`/api/watchlist/report/?${params.toString()}`);
+    if (!resPromise || typeof resPromise.then !== "function") {
+      setLoading(false);
+      return;
+    }
+
+    resPromise
       .then(async (res) => {
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          throw new Error(errData.error || `Failed to load watchlist (${res.status})`);
+        if (!res || !res.ok) {
+          const errData = res && typeof res.json === "function" ? await res.json().catch(() => ({})) : {};
+          throw new Error(errData.error || `Failed to load watchlist (${res ? res.status : 500})`);
         }
         return res.json();
       })
@@ -96,7 +127,7 @@ export default function WatchlistPage() {
         setItems([]);
       })
       .finally(() => setLoading(false));
-  }, [page]);
+  }, [page, filters]);
 
   const handleWatchClick = (bestOffer: { country: string; service: string; url: string; is_current_country: boolean }) => {
     if (!bestOffer) return;
@@ -135,6 +166,8 @@ export default function WatchlistPage() {
           </p>
         </div>
       </div>
+
+      <FilterBar filters={filters} onChange={setFilters} showStatusFilter={true} />
 
       {error ? (
         <div className="p-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-xl text-red-800 dark:text-red-200 text-sm font-medium">

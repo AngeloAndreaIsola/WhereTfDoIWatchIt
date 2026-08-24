@@ -710,14 +710,27 @@ def watchlist_resolve(request):
 
 @api_view(["GET"])
 def watchlist_report(request):
-    """Return aggregated report for watchlist items (user_id=1) with full watchability evaluation & pagination."""
+    """Return aggregated report for watchlist items (user_id=1) with full watchability evaluation, composable filters & pagination."""
     curr_country = request.GET.get("country") or "US"
+    preference = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
+    user_subs = get_user_subscriptions(user_id=1)
+
     items = (
         WatchlistItem.objects.select_related("movie")
         .filter(user_id=1)
         .order_by("-added_at")
     )
-    preference = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
+    watchlist_movies = [item.movie for item in items]
+
+    # Apply composable filters to the watchlist movies
+    evaluated_filtered, _ = apply_composable_filters(
+        watchlist_movies,
+        request.GET,
+        preference,
+        user_subscriptions=user_subs,
+        current_country=curr_country,
+    )
+
     cache = AvailabilityCache()
 
     report = []
@@ -725,21 +738,11 @@ def watchlist_report(request):
     service_movie_sets: dict[str, set[int]] = {}
     available_movies_count = 0
 
-    for item in items:
-        movie = item.movie
-        try:
-            cache.get_cached_only(movie)
-        except Exception:
-            pass
+    for eval_item in evaluated_filtered:
+        movie = eval_item["movie"]
+        watch_res = eval_item["watchability"]
 
         raw_offers = cache._read_offers(movie)
-        watch_res = evaluate_watchability(
-            movie,
-            raw_offers,
-            preference,
-            current_country=curr_country,
-        )
-
         qualifying_offers = [
             o for o in raw_offers
             if (o.get("offer_type") or "").lower() in ("subscription", "free")
