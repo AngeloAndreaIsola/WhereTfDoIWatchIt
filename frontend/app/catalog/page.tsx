@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 
-interface ScrapedCatalogItem {
+export interface ScrapedCatalogItem {
   id: number;
   scraped_title: string;
   scraped_year: number | null;
@@ -11,6 +11,8 @@ interface ScrapedCatalogItem {
   is_confirmed: boolean;
   confidence_score: number;
   created_at: string;
+  source_indicator?: string;
+  provider_category?: string;
   provider: {
     id: number;
     slug: string;
@@ -25,6 +27,26 @@ interface ScrapedCatalogItem {
   } | null;
 }
 
+const SOURCE_INDICATOR_COLORS: Record<string, string> = {
+  Official: "bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-300",
+  Free: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300",
+  Unofficial: "bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-300",
+  Scraper: "bg-purple-100 text-purple-800 dark:bg-purple-900/60 dark:text-purple-300",
+};
+
+function SourceBadge({ source, category }: { source?: string; category?: string }) {
+  const label = source || (category === "unofficial" ? "Unofficial" : category === "free" ? "Free" : category === "official" ? "Official" : "Scraper");
+  const colorClass = SOURCE_INDICATOR_COLORS[label] || SOURCE_INDICATOR_COLORS["Scraper"];
+  return (
+    <span
+      className={`inline-flex items-center rounded px-2 py-0.5 text-[10px] font-bold ${colorClass}`}
+      title={`Source: ${label}`}
+    >
+      {label}
+    </span>
+  );
+}
+
 export default function CatalogPage() {
   const [items, setItems] = useState<ScrapedCatalogItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -35,14 +57,16 @@ export default function CatalogPage() {
     setLoading(true);
     setError("");
     try {
-      const url = searchQuery
-        ? `/api/catalog/?q=${encodeURIComponent(searchQuery.trim())}`
-        : "/api/catalog/";
+      const params = new URLSearchParams();
+      if (searchQuery.trim()) {
+        params.set("q", searchQuery.trim());
+      }
+      const url = `/api/v2/unofficial/${params.toString() ? `?${params.toString()}` : ""}`;
       const res = await fetch(url);
       if (!res.ok) {
         throw new Error(`Failed to load catalog (${res.status})`);
       }
-      const data = await res.json();
+      const data: { results?: ScrapedCatalogItem[] } = await res.json();
       setItems(data.results || []);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to load catalog");
@@ -70,7 +94,10 @@ export default function CatalogPage() {
           Scraped Content Catalog
         </h1>
         <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-          Browse movies and series discovered across custom scraper sources and small providers.
+          Browse movies and series discovered across custom scraper sources and
+          small providers. Results include unofficial sources (RaiPlay, BBC,
+          NHK, KissKH, etc.) with source indicator badges and ranking by
+          language match quality.
         </p>
       </div>
 
@@ -96,7 +123,11 @@ export default function CatalogPage() {
         <div className="flex items-center gap-2 py-8 text-sm text-gray-500 dark:text-gray-400">
           <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+            <path
+              className="opacity-75"
+              fill="currentColor"
+              d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
+            />
           </svg>
           Loading catalog…
         </div>
@@ -127,7 +158,7 @@ export default function CatalogPage() {
         </div>
       )}
 
-      {/* Catalog Grid */}
+      {/* Catalog Grid — with source indicator badges and ranked results */}
       {!loading && !error && items.length > 0 && (
         <div className="grid gap-4 sm:grid-cols-2">
           {items.map((item) => (
@@ -145,9 +176,15 @@ export default function CatalogPage() {
                       </span>
                     )}
                   </h3>
-                  <span className="rounded bg-blue-100 px-2 py-0.5 text-[10px] font-bold text-blue-800 dark:bg-blue-900/60 dark:text-blue-300">
-                    {item.provider?.name || "Scraper"}
-                  </span>
+                  <div className="flex flex-col items-end gap-1">
+                    <SourceBadge
+                      source={item.source_indicator}
+                      category={item.provider_category || item.provider?.category}
+                    />
+                    <span className="rounded bg-gray-100 px-2 py-0.5 text-[10px] font-bold text-gray-600 dark:bg-gray-800 dark:text-gray-400">
+                      {item.provider?.name || "Scraper"}
+                    </span>
+                  </div>
                 </div>
 
                 {item.scraped_url && (
@@ -165,18 +202,22 @@ export default function CatalogPage() {
               <div className="mt-4 flex items-center justify-between border-t border-gray-100 pt-3 text-xs text-gray-500 dark:border-gray-800 dark:text-gray-400">
                 <span>
                   Match:{" "}
-                  <strong className={item.movie ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"}>
+                  <strong
+                    className={
+                      item.movie
+                        ? "text-emerald-600 dark:text-emerald-400"
+                        : "text-amber-600 dark:text-amber-400"
+                    }
+                  >
                     {item.movie ? item.movie.title : "Unconfirmed"}
                   </strong>
                 </span>
-                <span>
-                  Score: {Math.round(item.confidence_score * 100)}%
-                </span>
+                <span>Score: {Math.round(item.confidence_score * 100)}%</span>
               </div>
             </div>
           ))}
         </div>
-      )}
+      )}{" "}
     </main>
   );
 }

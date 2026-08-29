@@ -13,6 +13,7 @@ fallback so saved legacy fixtures keep working.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -116,7 +117,11 @@ class StreamingResult:
 
 class StreamingAvailabilityClient:
     def __init__(self, api_key: Optional[str] = None, timeout: int = DEFAULT_TIMEOUT):
-        self.api_key = api_key or getattr(settings, "RAPIDAPI_KEY", "")
+        # Read the key from the environment directly. settings.RAPIDAPI_KEY is
+        # itself defined as os.environ.get("RAPIDAPI_KEY", ""); reading env here
+        # is equivalent and avoids recursing into the lazy settings proxy in
+        # tests that substitute django.conf.settings.
+        self.api_key = api_key or os.environ.get("RAPIDAPI_KEY", "")
         self.timeout = timeout
 
     def get_availability(self, tmdb_id: int) -> StreamingResult:

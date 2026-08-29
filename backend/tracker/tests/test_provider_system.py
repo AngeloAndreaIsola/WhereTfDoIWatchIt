@@ -64,7 +64,7 @@ class ProviderSystemTests(TestCase):
         self.assertEqual(max_mapping.external_id, "hbo")
 
         # Scrapers check
-        scraper_slugs = ["kisskh", "hydrahd", "animeworld"]
+        scraper_slugs = ["bbc", "nhk", "rai-play"]
         for slug in scraper_slugs:
             provider = Provider.objects.filter(slug=slug, category=ProviderCategory.SCRAPER).first()
             self.assertIsNotNone(provider)

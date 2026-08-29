@@ -1,5 +1,5 @@
 from django.urls import path, re_path
-from . import views
+from . import views, api_v2
 
 urlpatterns = [
     path("health/", views.health, name="health"),
@@ -27,4 +27,9 @@ urlpatterns = [
     path("prime/movie/<int:tmdb_id>/", views.prime_movie, name="prime-movie"),
     path("watch/<int:tmdb_id>/", views.watch_redirect, name="watch-redirect"),
     path("watch/<int:tmdb_id>", views.watch_redirect),
+    # --- API v2: Unofficial sources (Phase C) ---
+    path("v2/unofficial/", api_v2.unofficial_catalog, name="v2-unofficial-catalog"),
+    path("v2/unofficial/scrape/", api_v2.unofficial_scrape, name="v2-unofficial-scrape"),
+    path("v2/unofficial/movie/<int:tmdb_id>/offers/", api_v2.unofficial_movie_offers, name="v2-unofficial-movie-offers"),
+    path("v2/unofficial/providers/", api_v2.unofficial_providers, name="v2-unofficial-providers"),
 ]

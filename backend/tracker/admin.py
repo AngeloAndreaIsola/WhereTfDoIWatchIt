@@ -8,8 +8,10 @@ from .models import (
     LanguageInfo,
     Movie,
     Preference,
+    Provider,
     RefreshRun,
     Region,
+    ScrapedContentMapping,
     Subscription,
     WatchlistItem,
 )
@@ -50,6 +52,13 @@ class RegionAdmin(admin.ModelAdmin):
     list_display = ("provider", "country")
     list_filter = ("provider",)
     search_fields = ("provider",)
+
+
+@admin.register(Provider)
+class ProviderAdmin(admin.ModelAdmin):
+    list_display = ("name", "slug", "category", "is_enabled", "is_major", "source_indicator", "last_scraped_at")
+    list_filter = ("category", "is_enabled", "is_major")
+    search_fields = ("name", "slug", "domain")
 
 
 @admin.register(Availability)
@@ -106,3 +115,10 @@ class RefreshRunAdmin(admin.ModelAdmin):
         "rows_skipped",
         "rate_limited",
     )
+
+
+@admin.register(ScrapedContentMapping)
+class ScrapedContentMappingAdmin(admin.ModelAdmin):
+    list_display = ("scraped_title", "scraped_year", "provider", "movie", "is_confirmed", "confidence_score", "is_available")
+    list_filter = ("provider__category", "provider__slug", "is_confirmed", "is_available")
+    search_fields = ("scraped_title", "movie__title")

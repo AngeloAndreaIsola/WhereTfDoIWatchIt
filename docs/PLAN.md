@@ -95,13 +95,13 @@ The Prime Video MVP (`/api/prime/popular/`, `/api/prime/movie/<id>/`, homepage g
 preferences) is merged, but two issues block it from rendering real data. This is the core integration path and
 stays with Claude Code (not delegated). See `docs/PRIME_MVP_HARDENING.md` for the full plan.
 
-- [ ] **CC-1** Add `image.tmdb.org` to `frontend/next.config.mjs` `images.remotePatterns` — homepage posters
+- [X] **CC-1** Add `image.tmdb.org` to `frontend/next.config.mjs` `images.remotePatterns` — homepage posters
   currently crash at runtime (`next/image` with an unconfigured host); the build passes so it was missed.
-- [ ] **CC-2** Reconcile `services/streaming_api.py` parsing + the Prime provider id against one real
+- [X] **CC-2** Reconcile `services/streaming_api.py` parsing + the Prime provider id against one real
   movieofthenight response. `DEFAULT_PREFERENCE_PROVIDER` is the literal `"amazon"`, but the API's Amazon
   service is id `"prime"` / name `"Prime Video"`, so real lookups currently match nothing. Standardize on the
   service **id**; keep tests mocked (no live calls in tests).
-- [ ] **CC-3** Verify the click → auto-create Movie → live fetch (`PRIME_LIVE_FETCH`) → cache → ranked-offers
+- [X] **CC-3** Verify the click → auto-create Movie → live fetch (`PRIME_LIVE_FETCH`) → cache → ranked-offers
   path end-to-end; document `TMDB_API_KEY`/`RAPIDAPI_KEY` in `.env.example`; optional `seed_prime_fixture`
   command so the UI renders from cached sample data without spending quota.
 
@@ -110,13 +110,13 @@ stays with Claude Code (not delegated). See `docs/PRIME_MVP_HARDENING.md` for th
 Current post-Prime-MVP polish items. Delegatable ones are briefed in `docs/DELEGATION.md` (Task 16–21); the
 Prime MVP hardening above and editable preferences stay with Claude Code.
 
-- [ ] Add CI to run backend tests and frontend test/lint/build on every pull request — **delegated: Task 16**
-- [ ] Homepage search box (find a specific movie, not just browse trending) — **delegated: Task 17**
-- [ ] Enhance ambiguous TMDb match review with posters and richer metadata — **delegated: Task 18**
-- [ ] Add broader frontend coverage for unhappy paths and API error states — **delegated: Task 19**
-- [ ] Review npm audit output and update vulnerable frontend dependencies deliberately — **delegated: Task 20**
-- [ ] Improve manual language-entry UX beyond the current functional form/admin paths — **delegated: Task 21 (backlog)**
-- [ ] Editable preferences end-to-end (un-grey UI, `PATCH /api/preferences/`, ranking reads the DB `Preference` row instead of `DEFAULT_PREFERENCE`) — **Claude Code (not delegated)**
+- [x] Add CI to run backend tests and frontend test/lint/build on every pull request — **delegated: Task 16**
+- [x] Homepage search box (find a specific movie, not just browse trending) — **delegated: Task 17**
+- [x] Enhance ambiguous TMDb match review with posters and richer metadata — **delegated: Task 18**
+- [x] Add broader frontend coverage for unhappy paths and API error states — **delegated: Task 19**
+- [x] Review npm audit output and update vulnerable frontend dependencies deliberately — **delegated: Task 20**
+- [x] Improve manual language-entry UX beyond the current functional form/admin paths — **delegated: Task 21 (backlog)**
+- [x] Editable preferences end-to-end (un-grey UI, `PATCH /api/preferences/`, ranking reads the DB `Preference` row instead of `DEFAULT_PREFERENCE`) — **Claude Code (not delegated)**
 
 ## Explicitly deferred (not v1)
 
@@ -132,3 +132,118 @@ Prime MVP hardening above and editable preferences stay with Claude Code.
 ## Open question for future ranking changes
 
 The current ranking priority is audio language match → subtitle language match → quality. Confirm with the user before changing that priority order or treating a different order as fixed.
+
+---
+
+## Unofficial Sources Feature (Streaming Tracker v2)
+
+### Overview
+
+Add unofficial streaming sites as possible viewing options in the catalog. These sources are scraped for titles and language metadata, then matched to TMDB IDs for integration with the existing availability system.
+
+### Sources to Support
+
+**Priority sources (full catalog scraping):**
+- RaiPlay (Italy)
+- BBC (UK)  
+- NHK (Japan)
+
+**Secondary sources (from uncommitted unofficial_provideres.txt):**
+- sflix.to, sflix2.to
+- tinyzone-tv.com
+- anime-related sites (animeunion.tv, meikyou-monogatari etc.)
+
+### Implementation Plan
+
+#### Phase A: Technical Foundation
+
+1. **Create async scraper framework**
+   - Build `backend/tracker/scrapers/` directory with base `BaseScraper` class
+   - Implement async HTTP client using `aiohttp` with retry logic
+   - Add language detection using `langdetect` library
+
+2. **Data model extensions**
+   - Add `UnofficialSource` model (name, base_url, country_code, active)
+   - Add `UnofficialAvailability` model (source, tmdb_id, title, year, is_available, languages_json, last_scraped)
+   - Create `LanguageTag` lookup table for audio/subtitle languages
+
+3. **TMDB matching service**
+   - Create `backend/tracker/services/tmdb_matcher.py` for fuzzy title matching
+   - Implement confidence scoring (title match + year + genre overlap)
+   - Add manual confirmation flow via Django admin or CLI prompt
+
+#### Phase B: Source Scrapers
+
+4. **RaiPlay scraper**
+   - Handle Italian-language content
+   - Map Italian language tags to `LanguageTag`
+   - Extract available titles + streams
+
+5. **BBC scraper**
+   - Handle UK English content
+   - Extract iPlayer streaming availability
+
+6. **NHK scraper**
+   - Handle Japanese-language content
+   - Map Japanese language tags (JP, ja)
+
+7. **Remaining unofficial sources**
+   - Prioritize by traffic in unofficial_provideres.txt
+   - Implement as time allows
+
+#### Phase C: Integration & UI
+
+8. **API integration**
+   - Add `/api/v2/unofficial/` endpoints
+   - Implement filtering by user preferences (language, country)
+   - Add caching with staleness tracking
+
+9. **Frontend updates**
+   - Update catalog search to include unofficial results
+   - Add source indicator badges (Unofficial / RaiPlay / etc.)
+   - Maintain ranking: audio match → subtitle match → quality
+
+#### Phase D: Automation
+
+10. **Cron-scheduled refresh**
+    - Daily scrape of all unofficial sources
+    - Rate limit management: distribute 100 req/day across sources
+    - Automatic TMDB ID matching; flag ambiguous matches for manual review
+
+### Critical Constraints
+
+- **100 API requests/day hard cap**: Scrapers operate on cached data, not live API calls. TMDB matching uses cached results.
+- **Language handling**: Scraped titles in any language must map to TMDB's English/Japanese/etc. language codes.
+- **Unofficial ToS**: Scraping must use public pages only; no login-required or rate-limited endpoints that violate terms.
+
+### Success Criteria
+
+- [ ] All three priority sources (RaiPlay, BBC, NHK) have working scrapers
+- [ ] Movies from these sources appear in catalog search results
+- [ ] Language preferences filter works for unofficial sources
+- [ ] Daily cron job successfully updates availability data
+- [ ] Total API requests stay under 100/day
+
+### Key Files to Create/Modify
+
+**New files:**
+- `backend/tracker/scrapers/__init__.py`
+- `backend/tracker/scrapers/base.py`
+- `backend/tracker/scrapers/rai_play.py`
+- `backend/tracker/scrapers/bbc.py`
+- `backend/tracker/scrapers/nhk.py`
+- `backend/tracker/services/tmdb_matcher.py`
+
+**Modified files:**
+- `backend/tracker/models.py` - Add new models
+- `backend/tracker/admin.py` - Register new models
+- `backend/tracker/api/views.py` - Add unofficial API endpoints
+- `frontend/src/components/Catalog.tsx` - Display unofficial sources
+- `frontend/src/api/client.ts` - API methods
+
+### Timeline Estimate
+
+- Phase A: 3-4 days
+- Phase B: 5-7 days (parallelize across languages)
+- Phase C: 2 days
+- Phase D: 1 day

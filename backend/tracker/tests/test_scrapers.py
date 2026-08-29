@@ -1,260 +1,150 @@
-"""Tests for independent provider scrapers."""
-from unittest.mock import Mock, patch
+"""Tests for the priority-source scrapers (BBC, NHK, RaiPlay) and the registry."""
+from unittest.mock import patch
+
 from django.test import TestCase
 
-from tracker.scrapers import KissKHScraper, HydraHDScraper, AnimeWorldScraper
+from tracker.models import Provider, ProviderCategory
+from tracker.scrapers import (
+    BaseScraper,
+    BBCScraper,
+    NHKScraper,
+    RaiPlayScraper,
+    SCRAPER_REGISTRY,
+    resolve_scraper_class,
+)
 from tracker.scrapers.base import ScrapedItem
 
 
-class KissKHScraperTest(TestCase):
-    """Test KissKH scraper implementation."""
+# Minimal HTML fixtures exercising each scraper's card selector.
+BBC_HTML = """
+<html><body>
+  <div data-testid="programme-card">
+    <a data-testid="card-title" href="/iplayer/episodes/m000abc">Sherlock</a>
+  </div>
+</body></html>
+"""
 
+NHK_HTML = """
+<html><body>
+  <div data-testid="program-card">
+    <a data-testid="program-title" href="/nhkworld/tv/special/123">Japan Railway Journal</a>
+  </div>
+</body></html>
+"""
+
+RAIPLAY_HTML = """
+<html><body>
+  <div data-testid="media-card">
+    <h2 data-testid="media-title">Il Commissario Montalbano</h2>
+    <a href="/programmi/123">link</a>
+  </div>
+</body></html>
+"""
+
+
+class BBCScraperTest(TestCase):
     def setUp(self):
-        self.scraper = KissKHScraper()
+        self.scraper = BBCScraper()
 
     def test_no_query_returns_empty(self):
-        """Scraper returns empty list when no query provided."""
-        result = self.scraper.run(query=None)
-        self.assertEqual(result, [])
-        result = self.scraper.run(query="")
-        self.assertEqual(result, [])
+        self.assertEqual(self.scraper.run(query=None), [])
+        self.assertEqual(self.scraper.run(query=""), [])
 
-    @patch.object(KissKHScraper, 'fetch_url')
-    def test_parse_valid_response(self, mock_fetch):
-        """Scraper correctly parses valid KissKH API response."""
-        mock_fetch.return_value = [
-            {
-                "id": 12139,
-                "title": "Inception",
-                "year": 2010,
-                "rating": 8.8,
-            }
-        ]
-
-        items = self.scraper.run(query="Inception")
-
+    @patch.object(BBCScraper, "fetch_url")
+    def test_parses_programme_card(self, mock_fetch):
+        mock_fetch.return_value = BBC_HTML
+        items = self.scraper.run(query="Sherlock")
         self.assertEqual(len(items), 1)
-        self.assertEqual(items[0].title, "Inception")
-        self.assertEqual(items[0].year, 2010)
-        self.assertEqual(items[0].provider_slug, "kisskh")
-        self.assertIn("kisskh.co", items[0].source_url)
-
-    @patch.object(KissKHScraper, 'fetch_url')
-    def test_handles_no_response(self, mock_fetch):
-        """Scraper handles None response gracefully."""
-        mock_fetch.return_value = None
-        items = self.scraper.run(query="Test")
-        self.assertEqual(items, [])
-
-    @patch.object(KissKHScraper, 'fetch_url')
-    def test_handles_wrong_response_type(self, mock_fetch):
-        """Scraper handles unexpected response type gracefully."""
-        mock_fetch.return_value = {"error": "Not found"}
-        items = self.scraper.run(query="Test")
-        self.assertEqual(items, [])
-
-    @patch.object(KissKHScraper, 'fetch_url')
-    def test_missing_fields_handled(self, mock_fetch):
-        """Scraper handles missing fields in response."""
-        mock_fetch.return_value = [
-            {"id": 123},  # Missing title
-            {"title": "Valid Title", "id": 456},  # Valid
-        ]
-
-        items = self.scraper.run(query="Test")
-
-        # Should skip invalid entry but parse valid one
-        self.assertEqual(len(items), 1)
-        self.assertEqual(items[0].title, "Valid Title")
-
-
-class AnimeWorldScraperTest(TestCase):
-    """Test AnimeWorld scraper implementation."""
-
-    def setUp(self):
-        self.scraper = AnimeWorldScraper()
-
-    def test_no_query_returns_empty(self):
-        """Scraper returns empty list when no query provided."""
-        result = self.scraper.run(query=None)
-        self.assertEqual(result, [])
-
-    @patch.object(AnimeWorldScraper, 'fetch_url')
-    def test_parse_html_response(self, mock_fetch):
-        """Scraper correctly parses HTML wrapped in JSON."""
-        # Realistic AnimeWorld API response structure
-        html_content = '''
-            <div class="item">
-                <a href="play/naruto.abc123"><img class="thumb" src="img.png"></a>
-                <div class="info">
-                    <a class="name" href="play/naruto.abc123">Naruto</a>
-                    <p>Genere: <a href="../../genre/action">Azione</a><br>
-                    <p>Tipo: <a href="animes">Anime</a> - Anno: 2002 - Stato: Finito</p>
-                </div>
-            </div>
-            <div class="item">
-                <a class="name" href="play/naruto-shippuden.def456">Naruto Shippuden</a>
-                <p>Tipo: <a href="animes">Anime</a> - Anno: 2007 - Stato: Finito</p>
-            </div>
-        '''
-        mock_fetch.return_value = {"html": html_content}
-
-        items = self.scraper.run(query="Naruto")
-
-        self.assertEqual(len(items), 2)
-        self.assertEqual(items[0].title, "Naruto")
-        self.assertEqual(items[0].year, 2002)
-        self.assertEqual(items[0].provider_slug, "animeworld")
-        self.assertIn("animeworld.ac", items[0].source_url)
-
-        self.assertEqual(items[1].title, "Naruto Shippuden")
-        self.assertEqual(items[1].year, 2007)
-
-    @patch.object(AnimeWorldScraper, 'fetch_url')
-    def test_handles_no_html_key(self, mock_fetch):
-        """Scraper handles dict response without 'html' key."""
-        mock_fetch.return_value = {"error": "Not found"}
-        items = self.scraper.run(query="Test")
-        self.assertEqual(items, [])
-
-    @patch.object(AnimeWorldScraper, 'fetch_url')
-    def test_handles_empty_html(self, mock_fetch):
-        """Scraper handles empty HTML content."""
-        mock_fetch.return_value = {"html": ""}
-        items = self.scraper.run(query="Test")
-        self.assertEqual(items, [])
-
-    @patch.object(AnimeWorldScraper, 'fetch_url')
-    def test_handles_malformed_html(self, mock_fetch):
-        """Scraper handles HTML with no matching patterns."""
-        mock_fetch.return_value = {"html": "<div>No anime here</div>"}
-        items = self.scraper.run(query="Test")
-        self.assertEqual(items, [])
-
-    @patch.object(AnimeWorldScraper, 'fetch_url')
-    def test_relative_urls_resolved(self, mock_fetch):
-        """Scraper resolves relative URLs to absolute."""
-        html_content = '<a class="name" href="play/test.xyz">Test Anime</a>'
-        mock_fetch.return_value = {"html": html_content}
-
-        items = self.scraper.run(query="Test")
-
-        self.assertEqual(len(items), 1)
-        self.assertTrue(items[0].source_url.startswith("https://"))
-        self.assertIn("animeworld.ac", items[0].source_url)
-
-    @patch.object(AnimeWorldScraper, 'fetch_url')
-    def test_year_extraction_fallback(self, mock_fetch):
-        """Scraper handles missing year gracefully."""
-        html_content = '<a class="name" href="play/test.xyz">Test Anime</a>'
-        mock_fetch.return_value = {"html": html_content}
-
-        items = self.scraper.run(query="Test")
-
-        self.assertEqual(len(items), 1)
-        self.assertIsNone(items[0].year)
-
-
-class HydraHDScraperTest(TestCase):
-    """Test HydraHD scraper implementation."""
-
-    def setUp(self):
-        self.scraper = HydraHDScraper()
-
-    def test_no_query_returns_empty(self):
-        """Scraper returns empty list when no query provided."""
-        result = self.scraper.run(query=None)
-        self.assertEqual(result, [])
-
-    @patch.object(HydraHDScraper, 'fetch_url_with_headers')
-    def test_parse_valid_response(self, mock_fetch):
-        """Scraper correctly parses valid HydraHD API response."""
-        mock_fetch.return_value = {
-            "results": [
-                {
-                    "id": "abc123",
-                    "title": "Inception",
-                    "year": 2010,
-                    "audio": ["EN", "RU"],
-                    "subtitles": ["EN"],
-                    "res": "2160p",
-                }
-            ]
-        }
-
-        items = self.scraper.run(query="Inception")
-
-        self.assertEqual(len(items), 1)
-        self.assertEqual(items[0].title, "Inception")
-        self.assertEqual(items[0].year, 2010)
-        self.assertEqual(items[0].provider_slug, "hydrahd")
+        self.assertEqual(items[0].title, "Sherlock")
+        self.assertEqual(items[0].provider_slug, "bbc")
+        self.assertIn("bbc.co.uk", items[0].source_url)
         self.assertIn("EN", items[0].audio_languages)
+        self.assertIn("EN", items[0].subtitle_languages)
 
-    @patch.object(HydraHDScraper, 'fetch_url_with_headers')
-    def test_tries_multiple_domains(self, mock_fetch):
-        """Scraper tries fallback domains on failure."""
-        mock_fetch.side_effect = [None, {"results": [{"title": "Test", "id": "123"}]}]
+    @patch.object(BBCScraper, "fetch_url")
+    def test_handles_empty_response(self, mock_fetch):
+        mock_fetch.return_value = ""
+        self.assertEqual(self.scraper.run(query="x"), [])
 
-        items = self.scraper.run(query="Test")
 
-        # Should have tried both URLs
-        self.assertEqual(mock_fetch.call_count, 2)
+class NHKScraperTest(TestCase):
+    def setUp(self):
+        self.scraper = NHKScraper()
+
+    def test_no_query_returns_empty(self):
+        self.assertEqual(self.scraper.run(query=None), [])
+
+    @patch.object(NHKScraper, "fetch_url")
+    def test_parses_program_card(self, mock_fetch):
+        mock_fetch.return_value = NHK_HTML
+        items = self.scraper.run(query="Japan Railway Journal")
         self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].title, "Japan Railway Journal")
+        self.assertEqual(items[0].provider_slug, "nhk")
+        self.assertIn("JA", items[0].audio_languages)
+        self.assertTrue({"EN", "JA"}.issubset(set(items[0].subtitle_languages)))
 
-    @patch.object(HydraHDScraper, 'fetch_url_with_headers')
-    def test_handles_all_domains_failing(self, mock_fetch):
-        """Scraper returns empty when all domains fail."""
+    @patch.object(NHKScraper, "fetch_url")
+    def test_handles_none_response(self, mock_fetch):
         mock_fetch.return_value = None
-
-        items = self.scraper.run(query="Test")
-
-        self.assertEqual(items, [])
-        # Should have tried both URLs
-        self.assertEqual(mock_fetch.call_count, 2)
-
-    @patch.object(HydraHDScraper, 'fetch_url_with_headers')
-    def test_handles_empty_results(self, mock_fetch):
-        """Scraper handles empty results array."""
-        mock_fetch.return_value = {"results": []}
-
-        items = self.scraper.run(query="Test")
-
-        self.assertEqual(items, [])
+        self.assertEqual(self.scraper.run(query="x"), [])
 
 
-class ScraperDiagnosticsTest(TestCase):
-    """Test scraper diagnostic logging and error handling."""
+class RaiPlayScraperTest(TestCase):
+    def setUp(self):
+        self.scraper = RaiPlayScraper()
 
-    @patch('tracker.scrapers.adapters.logger')
-    @patch.object(KissKHScraper, 'fetch_url')
-    def test_logs_empty_query(self, mock_fetch, mock_logger):
-        """Scraper logs when query is empty."""
-        scraper = KissKHScraper()
-        scraper.run(query=None)
-        mock_logger.info.assert_called()
+    def test_no_query_returns_empty(self):
+        self.assertEqual(self.scraper.run(query=None), [])
 
-    @patch('tracker.scrapers.adapters.logger')
-    @patch.object(AnimeWorldScraper, 'fetch_url')
-    def test_logs_parsing_details(self, mock_fetch, mock_logger):
-        """Scraper logs parsing progress."""
-        html_content = '<a class="name" href="test">Test</a>'
-        mock_fetch.return_value = {"html": html_content}
+    @patch.object(RaiPlayScraper, "fetch_url")
+    def test_parses_media_card(self, mock_fetch):
+        mock_fetch.return_value = RAIPLAY_HTML
+        items = self.scraper.run(query="Montalbano")
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].title, "Il Commissario Montalbano")
+        self.assertEqual(items[0].provider_slug, "rai-play")
+        self.assertIn("IT", items[0].audio_languages)
+        self.assertIn("IT", items[0].subtitle_languages)
 
-        scraper = AnimeWorldScraper()
-        scraper.run(query="Test")
+    @patch.object(RaiPlayScraper, "fetch_url")
+    def test_parses_json_api_response(self, mock_fetch):
+        mock_fetch.return_value = {
+            "results": [{"title": "Docufilm", "url": "/programmi/doc", "quality": "4K"}]
+        }
+        items = self.scraper.run(query="Docufilm")
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].title, "Docufilm")
+        self.assertEqual(items[0].quality, "4K")
 
-        # Should log HTML size, items found, items parsed
-        info_calls = [str(call) for call in mock_logger.info.call_args_list]
-        self.assertTrue(any("parsing HTML" in str(call) for call in info_calls))
-        self.assertTrue(any("parsed" in str(call) for call in info_calls))
 
-    @patch.object(KissKHScraper, 'fetch_url')
-    def test_exception_handling(self, mock_fetch):
-        """Scraper handles exceptions gracefully and returns empty list."""
-        mock_fetch.side_effect = Exception("Network error")
+class ScraperRegistryTest(TestCase):
+    """The registry drives both the v1 scraper views and the v2/unofficial API."""
 
-        scraper = KissKHScraper()
-        items = scraper.run(query="Test")
+    def test_priority_sources_registered(self):
+        for slug in ("bbc", "nhk", "rai-play"):
+            self.assertIn(slug, SCRAPER_REGISTRY)
+            # resolve_scraper_class returns an instantiable scraper class
+            cls = resolve_scraper_class(slug)
+            self.assertIsNotNone(cls)
+            self.assertTrue(issubclass(cls, BaseScraper))
 
-        # Should not raise exception, should return empty list
-        self.assertEqual(items, [])
+    def test_resolve_returns_none_for_unknown(self):
+        self.assertIsNone(resolve_scraper_class("does-not-exist"))
+
+    def test_resolved_instance_is_scraper(self):
+        instance = resolve_scraper_class("bbc")()
+        self.assertIsInstance(instance, BBCScraper)
+
+    def test_get_or_create_provider_from_registry_slug(self):
+        """Providers referenced by the registry exist or can be created."""
+        for slug in ("bbc", "nhk", "rai-play"):
+            provider, _ = Provider.objects.get_or_create(
+                slug=slug,
+                defaults={
+                    "name": slug,
+                    "category": ProviderCategory.SCRAPER,
+                    "is_enabled": True,
+                },
+            )
+            self.assertEqual(provider.category, ProviderCategory.SCRAPER)

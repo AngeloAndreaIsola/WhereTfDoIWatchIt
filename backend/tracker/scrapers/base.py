@@ -88,11 +88,11 @@ class BaseScraper:
             self.timeout = timeout
         self.session = requests.Session()
 
-    def fetch_url(self, url: str) -> Optional[dict | str]:
+    def fetch_url(self, url: str, headers: Optional[dict] = None) -> Optional[dict | str]:
         """Fetch URL with retries, timeout, and error handling."""
         for attempt in range(1 + self.max_retries):
             try:
-                resp = self.session.get(url, timeout=self.timeout)
+                resp = self.session.get(url, timeout=self.timeout, headers=headers)
                 resp.raise_for_status()
                 try:
                     return resp.json()

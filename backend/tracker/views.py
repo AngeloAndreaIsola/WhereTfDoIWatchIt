@@ -40,7 +40,7 @@ from .serializers import (
     WatchlistItemSerializer,
     WatchlistReportRowSerializer,
 )
-from tracker.scrapers import SCRAPER_REGISTRY, ContentMatcher, ScrapedItem
+from tracker.scrapers import SCRAPER_REGISTRY, ContentMatcher, ScrapedItem, resolve_scraper_class
 from .services.bulk_refresh import process_watchlist_refresh
 from .services.cache import AvailabilityCache
 from .services.letterboxd import import_rows, parse_file_or_zip
@@ -245,7 +245,7 @@ def scraper_import_url(request):
     except Exception as exc:
         return Response({"error": str(exc)}, status=400)
 
-    scraper_cls = SCRAPER_REGISTRY.get(provider.slug.lower())
+    scraper_cls = resolve_scraper_class(provider.slug)
     if scraper_cls:
         scraper = scraper_cls()
     else:
@@ -310,7 +310,7 @@ def scraper_run(request):
     if not provider:
         return Response({"error": f"Scraper provider '{provider_slug}' not found or disabled"}, status=404)
 
-    scraper_cls = SCRAPER_REGISTRY.get(provider.slug.lower())
+    scraper_cls = resolve_scraper_class(provider.slug)
     if scraper_cls:
         scraper = scraper_cls()
     else:

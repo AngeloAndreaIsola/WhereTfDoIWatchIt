@@ -100,6 +100,7 @@ class ProviderCategory(models.TextChoices):
     OFFICIAL = "official", "Official / Major Provider"
     FREE = "free", "Free Streaming Provider"
     SCRAPER = "scraper", "Scraper / Small Source"
+    UNOFFICIAL = "unofficial", "Unofficial / Aggregator Source"
 
 
 class Provider(models.Model):
@@ -114,10 +115,23 @@ class Provider(models.Model):
     is_enabled = models.BooleanField(default=True)
     icon_name = models.CharField(max_length=50, blank=True, default="")
     domain = models.CharField(max_length=100, blank=True, default="")
+    country_code = models.CharField(max_length=2, blank=True, default="", help_text="Primary country for this provider, if region-specific.")
     last_scraped_at = models.DateTimeField(null=True, blank=True)
+    config = models.JSONField(default=dict, blank=True)
 
     def __str__(self):
         return f"{self.name} ({self.slug})"
+
+    @property
+    def source_indicator(self) -> str:
+        """Return a short label for the source type badge in the UI."""
+        if self.category == ProviderCategory.OFFICIAL:
+            return "Official"
+        if self.category == ProviderCategory.FREE:
+            return "Free"
+        if self.category == ProviderCategory.UNOFFICIAL:
+            return "Unofficial"
+        return "Scraper"
 
 
 class ExternalProviderMapping(models.Model):
@@ -146,6 +160,7 @@ class ScrapedContentMapping(models.Model):
     scraped_title = models.CharField(max_length=255)
     scraped_year = models.IntegerField(null=True, blank=True)
     scraped_url = models.URLField(max_length=500, blank=True, default="")
+    country_code = models.CharField(max_length=2, blank=True, default="", help_text="Country this scrape result applies to.")
     movie = models.ForeignKey(
         Movie,
         on_delete=models.CASCADE,
@@ -158,6 +173,8 @@ class ScrapedContentMapping(models.Model):
     raw_payload = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    last_scraped_at = models.DateTimeField(null=True, blank=True, help_text="When the source page was last scraped; null = never or unknown.")
+    is_available = models.BooleanField(default=True, help_text="Whether the title is currently available on this source.")
 
     class Meta:
         constraints = [

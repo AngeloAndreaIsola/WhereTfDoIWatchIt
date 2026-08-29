@@ -7,6 +7,24 @@ import OfferRow from "@/components/OfferRow";
 import type { PrimeOffer, PrimeMovieResponse } from "@/lib/api";
 import { fetchPrimeMovieOffers } from "@/lib/api";
 
+interface UnofficialOffer {
+  country: string;
+  service: string;
+  service_display: string;
+  source_indicator: string;
+  offer_type: string;
+  quality: string;
+  url?: string;
+  audio: string[];
+  subs: string[];
+  ranking: {
+    audio_rank: number;
+    subtitle_rank: number;
+    quality_rank: number;
+    is_language_match: boolean;
+  };
+}
+
 interface MovieDetailPageProps {
   params: { tmdb_id: string };
 }
@@ -20,6 +38,8 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [unofficialOffers, setUnofficialOffers] = useState<UnofficialOffer[] | null>(null);
+  const [unofficialLoading, setUnofficialLoading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -40,6 +60,7 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
       })
       .catch(() => {});
 
+    // Fetch official (Prime) offers
     fetchPrimeMovieOffers(tmdbId)
       .then((d) => {
         if (!cancelled) {
@@ -53,6 +74,19 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
           setLoading(false);
         }
       });
+
+    // Fetch unofficial offers (Phase C v2 endpoint)
+    setUnofficialLoading(true);
+    fetch(`/api/v2/unofficial/movie/${tmdbId}/offers/`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!cancelled && d?.offers) {
+          setUnofficialOffers(d.offers);
+        }
+      })
+      .catch(() => {})
+      .finally(() => !cancelled && setUnofficialLoading(false));
+
     return () => {
       cancelled = true;
     };
@@ -231,6 +265,69 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
               </div>
             )}
           </section>
+
+          {/* Unofficial Offers Section (Phase C) */}
+          {unofficialLoading && (
+            <div className="py-4 text-center text-sm text-gray-500 dark:text-gray-400">
+              Loading unofficial sources…
+            </div>
+          )}
+          {unofficialOffers && unofficialOffers.length > 0 && (
+            <section>
+              <h2 className="mb-4 text-lg font-bold text-gray-900 dark:text-gray-100">
+                Unofficial Sources ({unofficialOffers.length})
+              </h2>
+              <div className="space-y-3">
+                {unofficialOffers.map((offer, i) => {
+                  const SOURCE_BADGE_COLORS: Record<string, string> = {
+                    Unofficial:
+                      "bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-300",
+                    Free:
+                      "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300",
+                    Official:
+                      "bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-300",
+                    Scraper:
+                      "bg-purple-100 text-purple-800 dark:bg-purple-900/60 dark:text-purple-300",
+                  };
+                  const badgeColor =
+                    SOURCE_BADGE_COLORS[offer.source_indicator] ||
+                    SOURCE_BADGE_COLORS["Unofficial"];
+                  return (
+                    <div
+                      key={`${offer.service}-${offer.quality}-${i}`}
+                      className="flex items-center justify-between rounded-xl border border-gray-200 bg-white px-4 py-3 dark:border-gray-700 dark:bg-gray-800"
+                    >
+                      <div className="flex items-center gap-3">
+                        <span
+                          className={`inline-flex items-center rounded px-2 py-0.5 text-[10px] font-bold ${badgeColor}`}
+                        >
+                          {offer.source_indicator}
+                        </span>
+                        <span className="font-medium text-gray-900 dark:text-gray-100">
+                          {offer.service_display || offer.service}
+                        </span>
+                        {offer.quality && (
+                          <span className="text-xs text-gray-500 dark:text-gray-400">
+                            · {offer.quality.toUpperCase()}
+                          </span>
+                        )}
+                      </div>
+                      {offer.url && (
+                        <a
+                          href={offer.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-xs font-semibold text-blue-600 hover:underline dark:text-blue-400"
+                        >
+                          Watch →
+                        </a>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          )}
         </div>
       )}
     </main>
