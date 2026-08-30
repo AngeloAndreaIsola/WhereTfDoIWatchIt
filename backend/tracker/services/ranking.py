@@ -174,7 +174,7 @@ def rank_offers(
         quality = (offer.get("quality") or "").lower()
         quality_rank = QUALITY_RANK.get(quality, 99)
 
-        if lang_rule and isinstance(lang_rule, dict) and lang_rule.get("rules"):
+        if lang_rule and isinstance(lang_rule, dict) and bool(lang_rule):
             is_language_match = evaluate_language_rule(lang_rule, audio, subs)
             match_score = 0 if is_language_match else 1
             score = (match_score, quality_rank, audio_rank, sub_rank)
