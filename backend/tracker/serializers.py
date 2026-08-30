@@ -47,6 +47,7 @@ class ProviderSerializer(serializers.ModelSerializer):
     is_subscribed = serializers.SerializerMethodField()
     scraped_content_count = serializers.SerializerMethodField()
     source_indicator = serializers.SerializerMethodField()
+    has_scraper = serializers.SerializerMethodField()
 
     class Meta:
         model = Provider
@@ -64,6 +65,7 @@ class ProviderSerializer(serializers.ModelSerializer):
             "is_subscribed",
             "scraped_content_count",
             "source_indicator",
+            "has_scraper",
             "external_mappings",
         ]
 
@@ -78,6 +80,10 @@ class ProviderSerializer(serializers.ModelSerializer):
 
     def get_scraped_content_count(self, obj: Provider) -> int:
         return obj.scraped_mappings.count()
+
+    def get_has_scraper(self, obj: Provider) -> bool:
+        from tracker.scrapers import resolve_scraper_class
+        return resolve_scraper_class(obj.slug) is not None
 
 
 class SubscriptionSerializer(serializers.ModelSerializer):

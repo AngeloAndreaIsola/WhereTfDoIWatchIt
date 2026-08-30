@@ -15,6 +15,7 @@ export interface ProviderItem {
   last_scraped_at?: string | null;
   scraped_content_count?: number;
   is_subscribed: boolean;
+  has_scraper?: boolean;
 }
 
 interface ProviderGridProps {

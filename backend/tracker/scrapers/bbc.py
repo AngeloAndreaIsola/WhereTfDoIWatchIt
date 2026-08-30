@@ -13,6 +13,18 @@ FEATURED_URL = "https://www.bbc.co.uk/iplayer/categories/films/featured"
 STATE_VAR = "__IPLAYER_REDUX_STATE__"
 BBC_EPISODE_URL = "https://www.bbc.co.uk/iplayer/episode/"
 
+# Common patterns that indicate the page is geo-blocked or unreachable
+GEO_BLOCK_PATTERNS = [
+    r"only available in the uk",
+    r"bbc iplayer is only available",
+    r"you need to be in the uk",
+    r"not available in your country",
+    r"geo.?block",
+    r"restricted to the uk",
+    r"you're not authorised",
+    r"this content isn't available",
+]
+
 
 class BBCScraper(BaseScraper):
     """Scraper for BBC iPlayer streaming service (UK)."""
@@ -31,9 +43,20 @@ class BBCScraper(BaseScraper):
             logger.warning("BBC scraper: no response data from %s", FEATURED_URL)
             return []
 
+        if isinstance(raw_data, str) and self._is_geo_blocked(raw_data):
+            logger.warning("BBC scraper: content appears geo-restricted (outside UK)")
+            return []
+
         items = self._parse_state(raw_data)
         logger.info("BBC scraper: found %d items from %s", len(items), FEATURED_URL)
         return items
+
+    def _is_geo_blocked(self, html: str) -> bool:
+        """Check if the response indicates the content is geo-restricted."""
+        for pattern in GEO_BLOCK_PATTERNS:
+            if re.search(pattern, html, re.IGNORECASE):
+                return True
+        return False
 
     def _parse_state(self, html: str) -> list[ScrapedItem]:
         items: list[ScrapedItem] = []

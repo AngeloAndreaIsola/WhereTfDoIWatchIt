@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import ProviderGrid, { ProviderItem } from "@/components/ProviderGrid";
+import { triggerScraperRun } from "@/lib/api";
 
 export default function SubscriptionsPage() {
   const [providers, setProviders] = useState<ProviderItem[]>([]);
@@ -15,6 +16,7 @@ export default function SubscriptionsPage() {
   const [importSuccess, setImportSuccess] = useState("");
 
   const [actionSlug, setActionSlug] = useState<string | null>(null);
+  const [refreshResults, setRefreshResults] = useState<Record<string, string>>({});
 
   const fetchProviders = useCallback(async () => {
     setLoading(true);
@@ -50,17 +52,18 @@ export default function SubscriptionsPage() {
 
   const handleRunScraper = async (slug: string) => {
     setActionSlug(slug);
+    setRefreshResults((prev) => ({ ...prev, [slug]: "Running…" }));
     try {
-      const res = await fetch("/api/scrapers/run/", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider_slug: slug }),
-      });
-      if (res.ok) {
-        await fetchProviders();
-      }
+      const data = await triggerScraperRun(slug);
+      setRefreshResults((prev) => ({
+        ...prev,
+        [slug]: `Done — ${data.count} item(s) scraped`,
+      }));
     } catch (err) {
-      console.error(`Failed to run scraper for ${slug}:`, err);
+      setRefreshResults((prev) => ({
+        ...prev,
+        [slug]: `Error: ${err instanceof Error ? err.message : String(err)}`,
+      }));
     } finally {
       setActionSlug(null);
     }
@@ -132,7 +135,7 @@ export default function SubscriptionsPage() {
           Subscriptions & Sources
         </h1>
         <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-          Manage major streaming service subscriptions, free public broadcasters & streaming services, and custom scraper sources.
+          Manage major streaming service subscriptions, free public broadcasters &amp; streaming services, and custom scraper sources.
         </p>
       </div>
 
@@ -175,19 +178,117 @@ export default function SubscriptionsPage() {
 
           {/* Section 2: Free Streaming Providers (European Public Broadcasters & Global Free Services) */}
           <section className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-            <div className="mb-4">
-              <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-                Free Streaming Providers
-              </h2>
-              <p className="text-xs text-gray-500 dark:text-gray-400">
-                European public broadcasters and free ad-supported streaming services across 20+ countries. Click a provider card to enable or disable it for watch availability matching.
-              </p>
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                  Free Streaming Providers
+                </h2>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  European public broadcasters and free ad-supported streaming services across 20+ countries. Click a provider card to enable or disable it for watch availability matching.
+                </p>
+              </div>
             </div>
-            <ProviderGrid
-              providers={freeProviders}
-              onToggle={handleToggleProvider}
-              loading={loading}
-            />
+
+            {/* Provider list with refresh buttons */}
+            <div className="space-y-3">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                Free Providers ({freeProviders.length})
+              </h3>
+
+              {freeProviders.length === 0 ? (
+                <p className="text-xs text-gray-400 italic">No free providers configured yet.</p>
+              ) : (
+                <div className="divide-y divide-gray-100 rounded-lg border border-gray-100 dark:divide-gray-800 dark:border-gray-800">
+                  {freeProviders.map((provider) => {
+                    const isSubscribed = provider.is_subscribed;
+                    const isPending = actionSlug === provider.slug;
+                    const hasScraper = provider.has_scraper === true;
+                    const refreshMsg = refreshResults[provider.slug];
+
+                    return (
+                      <div
+                        key={provider.slug}
+                        className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between"
+                      >
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <p className="text-sm font-semibold text-gray-800 dark:text-gray-200">
+                              {provider.name}
+                            </p>
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                                isSubscribed
+                                  ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300"
+                                  : "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400"
+                              }`}
+                            >
+                              {isSubscribed ? "Active" : "Inactive"}
+                            </span>
+                            {hasScraper && (
+                              <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-semibold text-blue-700 dark:bg-blue-900/50 dark:text-blue-300">
+                                Scraper
+                              </span>
+                            )}
+                          </div>
+                          <p className="mt-0.5 text-[11px] text-gray-400">
+                            Available items: <strong className="text-gray-700 dark:text-gray-300">{provider.scraped_content_count || 0}</strong> • Last run:{" "}
+                            {provider.last_scraped_at
+                              ? new Date(provider.last_scraped_at).toLocaleString()
+                              : "Never"}
+                          </p>
+                        </div>
+
+                        {/* Action buttons */}
+                        <div className="flex items-center gap-2">
+                          {/* Enable / Render Inactive */}
+                          <button
+                            type="button"
+                            onClick={() => handleToggleProvider(provider.slug)}
+                            disabled={isPending}
+                            className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+                              isSubscribed
+                                ? "bg-amber-100 text-amber-800 hover:bg-amber-200 dark:bg-amber-900/40 dark:text-amber-300"
+                                : "bg-emerald-100 text-emerald-800 hover:bg-emerald-200 dark:bg-emerald-900/40 dark:text-emerald-300"
+                            }`}
+                          >
+                            {isSubscribed ? "Render Inactive" : "Enable"}
+                          </button>
+
+                          {/* Run Scraper — only for providers with scrapers */}
+                          {hasScraper && (
+                            <button
+                              type="button"
+                              onClick={() => handleRunScraper(provider.slug)}
+                              disabled={isPending}
+                              className="flex items-center gap-1.5 rounded-lg bg-blue-100 px-3 py-1.5 text-xs font-semibold text-blue-800 hover:bg-blue-200 dark:bg-blue-900/40 dark:text-blue-300"
+                            >
+                              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                              </svg>
+                              {isPending ? "Running…" : "Refresh"}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Refresh result messages */}
+              {Object.entries(refreshResults).filter(([, msg]) => msg).map(([slug, msg]) => (
+                <div
+                  key={slug}
+                  className={`rounded-lg border px-4 py-2.5 text-xs ${
+                    msg.startsWith("Error")
+                      ? "border-red-300 bg-red-50 text-red-700 dark:border-red-700 dark:bg-red-900/30 dark:text-red-400"
+                      : "border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
+                  }`}
+                >
+                  {msg}
+                </div>
+              ))}
+            </div>
           </section>
 
           {/* Section 3: Imported Small Providers & Sources */}
@@ -295,8 +396,11 @@ export default function SubscriptionsPage() {
                             type="button"
                             onClick={() => handleRunScraper(provider.slug)}
                             disabled={isPending}
-                            className="rounded-lg bg-blue-100 px-3 py-1.5 text-xs font-semibold text-blue-800 hover:bg-blue-200 dark:bg-blue-900/40 dark:text-blue-300"
+                            className="flex items-center gap-1.5 rounded-lg bg-blue-100 px-3 py-1.5 text-xs font-semibold text-blue-800 hover:bg-blue-200 dark:bg-blue-900/40 dark:text-blue-300"
                           >
+                            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                            </svg>
                             {isPending ? "Running…" : "Run Scraper"}
                           </button>
 

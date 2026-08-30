@@ -56,6 +56,28 @@ RAIPLAY_HTML = """
 </body></html>
 """
 
+RAIPLAY_WASHI_CONTEXT_HTML = """
+<html><body>
+<script>window.WashiContext = {
+  "title": "Film",
+  "hero": {
+    "type": "RaiPlay Hero Block",
+    "cards": {
+      "0": {
+        "uniquename": "ContentItem-abc123",
+        "type": "RaiPlay Programma Item",
+        "typology": "Film",
+        "title": "Il Commissario Montalbano",
+        "year": "1999",
+        "weblink": "/programmi/montalbano",
+        "channel": "Rai 1"
+      }
+    }
+  }
+}</script>
+</body></html>
+"""
+
 
 class BBCScraperTest(TestCase):
     def setUp(self):
@@ -116,28 +138,29 @@ class RaiPlayScraperTest(TestCase):
     def setUp(self):
         self.scraper = RaiPlayScraper()
 
-    def test_no_query_returns_empty(self):
-        self.assertEqual(self.scraper.run(query=None), [])
+    @patch.object(RaiPlayScraper, "fetch_url")
+    def test_no_query_returns_empty_on_geo_block(self, mock_fetch):
+        mock_fetch.return_value = "<html><body>non disponibile nel tuo paese</body></html>"
+        items = self.scraper.run(query=None)
+        self.assertEqual(items, [])
 
     @patch.object(RaiPlayScraper, "fetch_url")
-    def test_parses_media_card(self, mock_fetch):
-        mock_fetch.return_value = RAIPLAY_HTML
-        items = self.scraper.run(query="Montalbano")
+    def test_parses_washi_context(self, mock_fetch):
+        mock_fetch.return_value = RAIPLAY_WASHI_CONTEXT_HTML
+        items = self.scraper.run(query=None)
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0].title, "Il Commissario Montalbano")
         self.assertEqual(items[0].provider_slug, "rai-play")
+        self.assertEqual(items[0].year, 1999)
+        self.assertEqual(items[0].content_type, "movie")
         self.assertIn("IT", items[0].audio_languages)
         self.assertIn("IT", items[0].subtitle_languages)
 
     @patch.object(RaiPlayScraper, "fetch_url")
-    def test_parses_json_api_response(self, mock_fetch):
-        mock_fetch.return_value = {
-            "results": [{"title": "Docufilm", "url": "/programmi/doc", "quality": "4K"}]
-        }
-        items = self.scraper.run(query="Docufilm")
-        self.assertEqual(len(items), 1)
-        self.assertEqual(items[0].title, "Docufilm")
-        self.assertEqual(items[0].quality, "4K")
+    def test_handles_none_response(self, mock_fetch):
+        mock_fetch.return_value = None
+        items = self.scraper.run(query="x")
+        self.assertEqual(items, [])
 
 
 class ScraperRegistryTest(TestCase):

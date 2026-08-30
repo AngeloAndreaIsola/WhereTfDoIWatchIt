@@ -324,3 +324,35 @@ export async function triggerUnofficialScrape(
   }
   return res.json();
 }
+
+export interface ScrapeResult {
+  provider: string;
+  provider_name: string;
+  provider_category: string;
+  source_indicator: string;
+  count: number;
+  results: Array<{
+    scraped_title: string;
+    scraped_year: number | null;
+    confidence_score: number;
+    is_confirmed: boolean;
+    matched_movie: { tmdb_id: number; title: string; year: number | null; poster_path: string } | null;
+  }>;
+}
+
+export async function triggerScraperRun(
+  providerSlug: string
+): Promise<ScrapeResult> {
+  const res = await fetch("/api/scrapers/run/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider_slug: providerSlug }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(
+      body.error ?? `Scrape failed (${res.status})`
+    );
+  }
+  return res.json();
+}

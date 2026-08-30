@@ -420,9 +420,9 @@ def scraper_run(request):
     if not provider_slug:
         return Response({"error": "provider_slug is required"}, status=400)
 
-    provider = Provider.objects.filter(slug__iexact=provider_slug, category="scraper").first()
+    provider = Provider.objects.filter(slug__iexact=provider_slug).first()
     if not provider:
-        return Response({"error": f"Scraper provider '{provider_slug}' not found or disabled"}, status=404)
+        return Response({"error": f"Provider '{provider_slug}' not found"}, status=404)
 
     scraper_cls = resolve_scraper_class(provider.slug)
     if scraper_cls:
