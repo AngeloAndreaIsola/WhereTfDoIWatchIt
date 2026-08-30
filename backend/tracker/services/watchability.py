@@ -244,8 +244,23 @@ def evaluate_watchability(
         status_symbol = "🟡"
     else:
         status = WatchabilityStatus.NOT_WATCHABLE
-        status_label = "Not watchable with your subscriptions"
         status_symbol = "⚫"
+
+        # Check if any offer was accessible & subscribed but excluded strictly by language rules
+        lang_excluded = [
+            o for o in excluded_offers
+            if o.is_qualifying_offer_type and o.is_user_subscribed and (o.is_current_country or o.is_candidate_country) and not o.is_language_match
+        ]
+
+        if lang_excluded:
+            has_unknown = any("Language information unknown" in o.rejection_reasons for o in lang_excluded)
+            if has_unknown:
+                status_label = "Not matching language filter (language data unknown)"
+            else:
+                status_label = "Not matching language filter"
+        else:
+            status_label = "Not watchable with your subscriptions"
+
         # Compile user-friendly summary explanation
         seen_exp = set()
         for o in excluded_offers:

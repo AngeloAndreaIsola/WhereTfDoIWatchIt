@@ -156,6 +156,7 @@ class WatchabilityEvaluationTests(TestCase):
             user_subscriptions={"scraped_site"},
         )
         self.assertEqual(res.status, WatchabilityStatus.NOT_WATCHABLE)
+        self.assertEqual(res.status_label, "Not matching language filter")
         self.assertEqual(len(res.excluded_offers), 1)
         self.assertFalse(res.excluded_offers[0].is_language_match)
         self.assertIn("Does not satisfy language rules", res.excluded_offers[0].rejection_reasons)
@@ -179,6 +180,7 @@ class WatchabilityEvaluationTests(TestCase):
             user_subscriptions={"scraped_site"},
         )
         self.assertEqual(res.status, WatchabilityStatus.NOT_WATCHABLE)
+        self.assertEqual(res.status_label, "Not matching language filter (language data unknown)")
         self.assertEqual(len(res.excluded_offers), 1)
         self.assertFalse(res.excluded_offers[0].is_language_match)
         self.assertIn("Language information unknown", res.excluded_offers[0].rejection_reasons)
