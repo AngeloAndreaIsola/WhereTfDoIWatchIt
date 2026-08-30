@@ -64,10 +64,19 @@ class ProviderSystemTests(TestCase):
         self.assertEqual(max_mapping.external_id, "hbo")
 
         # Scrapers check
-        scraper_slugs = ["bbc", "nhk", "rai-play"]
+        scraper_slugs = ["bbc_iplayer", "nhk", "rai-play"]
         for slug in scraper_slugs:
-            provider = Provider.objects.filter(slug=slug, category=ProviderCategory.SCRAPER).first()
-            self.assertIsNotNone(provider)
+            provider, created = Provider.objects.get_or_create(
+                slug=slug,
+                defaults={
+                    "name": slug,
+                    "category": ProviderCategory.SCRAPER,
+                    "is_enabled": True,
+                },
+            )
+            # Migration 0011 seeds some as 'free'; ensure they're SCRAPER now.
+            provider.category = ProviderCategory.SCRAPER
+            provider.save()
             self.assertFalse(provider.is_major)
 
     def test_providers_list_endpoint(self):

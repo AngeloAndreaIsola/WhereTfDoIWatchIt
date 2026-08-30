@@ -1,55 +1,123 @@
 from __future__ import annotations
 
+import json
 import logging
+import re
 from typing import Optional, Any
-
-from bs4 import BeautifulSoup
 
 from tracker.scrapers.base import BaseScraper, ScrapedItem
 
 logger = logging.getLogger(__name__)
 
+FEATURED_URL = "https://www.bbc.co.uk/iplayer/categories/films/featured"
+STATE_VAR = "__IPLAYER_REDUX_STATE__"
+BBC_EPISODE_URL = "https://www.bbc.co.uk/iplayer/episode/"
+
 
 class BBCScraper(BaseScraper):
     """Scraper for BBC iPlayer streaming service (UK)."""
-    provider_slug = "bbc"
+    provider_slug = "bbc_iplayer"
     country_code = "GB"
 
     def __init__(self, timeout: Optional[int] = None):
         super().__init__(timeout=timeout)
 
     def _execute_run(self, query: Optional[str] = None) -> list[ScrapedItem]:
-        if not query:
-            url = "https://www.bbc.co.uk/iplayer"
-        else:
-            url = f"https://www.bbc.co.uk/iplayer/search?q={query}"
-
-        raw_data = self.fetch_url(url, headers={"User-Agent": "Mozilla/5.0 (compatible; WhereTfDoIWatchIt/1.0)"})
+        raw_data = self.fetch_url(
+            FEATURED_URL,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; WhereTfDoIWatchIt/1.0)"},
+        )
         if not raw_data:
-            logger.warning("BBC scraper: no response data from %s", url)
+            logger.warning("BBC scraper: no response data from %s", FEATURED_URL)
             return []
 
-        items = []
-        if isinstance(raw_data, str):
-            soup = BeautifulSoup(raw_data, "html.parser")
-            # BBC iPlayer uses specific data-testid attributes
-            for card in soup.find_all(attrs={"data-testid": ["listitem", "programme-card"]}):
-                title_el = card.find(attrs={"data-testid": "card-title"}) or card.find("h2") or card.find("h3")
-                title = title_el.get_text(strip=True) if title_el else ""
+        items = self._parse_state(raw_data)
+        logger.info("BBC scraper: found %d items from %s", len(items), FEATURED_URL)
+        return items
+
+    def _parse_state(self, html: str) -> list[ScrapedItem]:
+        items: list[ScrapedItem] = []
+        idx = html.find(f"{STATE_VAR} = ")
+        if idx == -1:
+            logger.warning("BBC scraper: no %s found in page HTML", STATE_VAR)
+            return []
+
+        start = idx + len(f"{STATE_VAR} = ")
+        depth = 0
+        end = start
+        for i, c in enumerate(html[start:]):
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    end = start + i + 1
+                    break
+        else:
+            end = len(html)
+
+        json_str = html[start:end]
+        try:
+            data = json.loads(json_str)
+        except json.JSONDecodeError as exc:
+            logger.warning("BBC scraper: failed to parse %s: %s", STATE_VAR, exc)
+            return []
+
+        for bundle in data.get("bundles", []):
+            for entity in bundle.get("entities", []):
+                episode = entity.get("episode")
+                if not episode or not isinstance(episode, dict):
+                    continue
+
+                title_raw = episode.get("title")
+                if isinstance(title_raw, dict):
+                    title = title_raw.get("default") or title_raw.get("editorial") or ""
+                elif isinstance(title_raw, str):
+                    title = title_raw
+                else:
+                    title = ""
+
                 if not title:
                     continue
-                link_el = card.find("a", href=True)
-                source_url = link_el["href"] if link_el else ""
-                if source_url and not source_url.startswith("http"):
-                    source_url = f"https://www.bbc.co.uk{source_url}"
-                items.append(ScrapedItem(
-                    title=title,
-                    provider_slug=self.provider_slug,
-                    source_url=source_url,
-                    audio_languages=["en"],
-                    subtitle_languages=["en"],
-                    quality="1080p",
-                ))
 
-        logger.info("BBC scraper: found %d items for query='%s'", len(items), query)
+                episode_id = episode.get("id", "")
+                source_url = f"{BBC_EPISODE_URL}{episode_id}" if episode_id else ""
+
+                synopsis_raw = episode.get("synopsis")
+                synopsis = ""
+                if isinstance(synopsis_raw, dict):
+                    synopsis = synopsis_raw.get("small") or synopsis_raw.get("editorial") or ""
+                elif isinstance(synopsis_raw, str):
+                    synopsis = synopsis_raw
+
+                versions = episode.get("versions", [])
+                quality = None
+                if versions:
+                    v = versions[0]
+                    if isinstance(v, dict):
+                        avail = v.get("availability")
+                        if isinstance(avail, dict):
+                            remaining = avail.get("remaining", "")
+                            if "Free" in remaining or "Forever" in remaining:
+                                quality = "1080p"
+
+                items.append(
+                    ScrapedItem(
+                        title=str(title),
+                        provider_slug=self.provider_slug,
+                        source_url=source_url,
+                        audio_languages=["en"],
+                        subtitle_languages=["en"],
+                        quality=quality or "1080p",
+                        availability=True,
+                        raw_payload={
+                            "episode_id": episode_id,
+                            "synopsis": synopsis,
+                            "bundle": bundle.get("title", {}).get("default", ""),
+                            "audio_languages": ["en"],
+                            "subtitle_languages": ["en"],
+                        },
+                    )
+                )
+
         return items

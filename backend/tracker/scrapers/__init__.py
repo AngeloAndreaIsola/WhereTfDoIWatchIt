@@ -16,7 +16,7 @@ from tracker.scrapers.adapters import (
 # dedicated classes; the legacy independent-source scrapers (KissKH, HydraHD,
 # AnimeWorld) remain available for secondary providers.
 SCRAPER_REGISTRY = {
-    "bbc": "tracker.scrapers.bbc.BBCScraper",
+    "bbc_iplayer": "tracker.scrapers.bbc.BBCScraper",
     "nhk": "tracker.scrapers.nhk.NHKScraper",
     "rai-play": "tracker.scrapers.rai_play.RaiPlayScraper",
     "kisskh": "tracker.scrapers.adapters.KissKHScraper",
