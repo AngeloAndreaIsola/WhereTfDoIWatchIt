@@ -52,9 +52,35 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
       .then((r) => (r.ok ? r.json() : null))
       .then((p) => {
         if (!cancelled && p) {
+          let langs: string[] = [];
+          if (
+            p.language_rule &&
+            typeof p.language_rule === "object" &&
+            p.language_rule.type === "viewers" &&
+            Array.isArray(p.language_rule.viewers)
+          ) {
+            const seen = new Set<string>();
+            for (const v of p.language_rule.viewers) {
+              if (Array.isArray(v.languages)) {
+                for (const l of v.languages) {
+                  if (typeof l === "string") {
+                    const c = l.trim().toUpperCase();
+                    if (c && !seen.has(c)) {
+                      seen.add(c);
+                      langs.push(c);
+                    }
+                  }
+                }
+              }
+            }
+          }
+          if (langs.length === 0) {
+            langs = p.audio_languages || [];
+          }
+
           setPreferences({
-            audio_languages: p.audio_languages || [],
-            subtitle_languages: p.subtitle_languages || [],
+            audio_languages: langs,
+            subtitle_languages: langs,
           });
         }
       })

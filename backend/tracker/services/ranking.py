@@ -144,9 +144,21 @@ def rank_offers(
     country_filter: Optional[set[str]] = None,
 ) -> list[RankedOffer]:
     """Strict priority sort over a list of cached offers."""
-    pref_audio = _normalize_lang_list(preference.audio_languages or [])
-    pref_subs = _normalize_lang_list(preference.subtitle_languages or [])
     lang_rule = getattr(preference, "language_rule", None)
+    if lang_rule and isinstance(lang_rule, dict) and lang_rule.get("type") == "viewers":
+        viewer_langs = []
+        seen = set()
+        for v in lang_rule.get("viewers") or []:
+            if isinstance(v, dict):
+                for l in _normalize_lang_list(v.get("languages") or []):
+                    if l not in seen:
+                        seen.add(l)
+                        viewer_langs.append(l)
+        pref_audio = viewer_langs
+        pref_subs = viewer_langs
+    else:
+        pref_audio = _normalize_lang_list(preference.audio_languages or [])
+        pref_subs = _normalize_lang_list(preference.subtitle_languages or [])
 
     audio_priority = {code: i for i, code in enumerate(pref_audio)}
     sub_priority = {code: i for i, code in enumerate(pref_subs)}
