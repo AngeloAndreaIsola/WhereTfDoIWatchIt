@@ -114,6 +114,8 @@ Prime MVP hardening above and editable preferences stay with Claude Code.
 - [x] Homepage search box (find a specific movie, not just browse trending) — **delegated: Task 17**
 - [x] Enhance ambiguous TMDb match review with posters and richer metadata — **delegated: Task 18**
 - [x] Add broader frontend coverage for unhappy paths and API error states — **delegated: Task 19**
+
+- [x] Phase C: Integration & UI — unofficial sources catalog tab, language badges, scrape panel — **done**
 - [x] Review npm audit output and update vulnerable frontend dependencies deliberately — **delegated: Task 20**
 - [x] Improve manual language-entry UX beyond the current functional form/admin paths — **delegated: Task 21 (backlog)**
 - [x] Editable preferences end-to-end (un-grey UI, `PATCH /api/preferences/`, ranking reads the DB `Preference` row instead of `DEFAULT_PREFERENCE`) — **Claude Code (not delegated)**

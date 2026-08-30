@@ -162,3 +162,165 @@ export async function search(
 
   return data.results ?? [];
 }
+
+// ─── Unofficial sources (Phase C) ────────────────────────────────────────────
+
+export interface UnofficialCatalogItem {
+  id: number;
+  scraped_title: string;
+  scraped_year: number | null;
+  scraped_url: string;
+  provider: {
+    id: number;
+    slug: string;
+    name: string;
+    category: string;
+    source_indicator: string;
+    is_enabled: boolean;
+    is_major: boolean;
+    icon_name: string | null;
+    domain: string;
+    last_scraped_at: string | null;
+    is_stale: boolean;
+  };
+  movie: {
+    id: number;
+    tmdb_id: number;
+    title: string;
+    year: number | null;
+    poster_path: string;
+  } | null;
+  is_confirmed: boolean;
+  confidence_score: number;
+  raw_payload: Record<string, unknown>;
+  is_available: boolean;
+  source_indicator: string;
+  provider_category: string;
+}
+
+export interface UnofficialCatalogResponse {
+  count: number;
+  filters: {
+    provider: string | null;
+    country: string | null;
+    audio_lang: string | null;
+    subtitle_lang: string | null;
+    available_only: boolean;
+    include_official: boolean;
+  };
+  results: UnofficialCatalogItem[];
+}
+
+export interface UnofficialProvider {
+  id: number;
+  slug: string;
+  name: string;
+  category: string;
+  source_indicator: string;
+  is_enabled: boolean;
+  is_major: boolean;
+  icon_name: string | null;
+  domain: string;
+  last_scraped_at: string | null;
+  is_stale: boolean;
+}
+
+export interface UnofficialMovieOffer {
+  country: string;
+  service: string;
+  service_display: string;
+  source_indicator: string;
+  offer_type: string;
+  quality: string;
+  url?: string;
+  audio: string[];
+  subs: string[];
+}
+
+export interface UnofficialMovieOffersResponse {
+  movie: {
+    tmdb_id: number;
+    title: string;
+    year: number | null;
+    poster_path: string;
+  };
+  offers: UnofficialMovieOffer[];
+}
+
+export interface UnofficialProvidersResponse {
+  count: number;
+  results: UnofficialProvider[];
+}
+
+export interface UnofficialCatalogFilters {
+  provider?: string;
+  country?: string;
+  audio_lang?: string;
+  subtitle_lang?: string;
+  q?: string;
+  available?: boolean;
+  include_official?: boolean;
+}
+
+export async function fetchUnofficialCatalog(
+  filters: UnofficialCatalogFilters = {}
+): Promise<UnofficialCatalogResponse> {
+  const params = new URLSearchParams();
+  if (filters.provider) params.set("provider", filters.provider);
+  if (filters.country) params.set("country", filters.country);
+  if (filters.audio_lang) params.set("audio_lang", filters.audio_lang);
+  if (filters.subtitle_lang) params.set("subtitle_lang", filters.subtitle_lang);
+  if (filters.q) params.set("q", filters.q);
+  if (filters.available !== undefined)
+    params.set("available", filters.available ? "true" : "false");
+  if (filters.include_official)
+    params.set("include_official", "true");
+
+  const res = await fetch(`/api/v2/unofficial/?${params.toString()}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(
+      body.error ?? `Failed to load unofficial catalog (${res.status})`
+    );
+  }
+  return res.json();
+}
+
+export async function fetchUnofficialProviders(): Promise<UnofficialProvidersResponse> {
+  const res = await fetch("/api/v2/unofficial/providers/?include_official=true");
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(
+      body.error ?? `Failed to load unofficial providers (${res.status})`
+    );
+  }
+  return res.json();
+}
+
+export async function fetchUnofficialMovieOffers(
+  tmdbId: number
+): Promise<UnofficialMovieOffersResponse> {
+  const res = await fetch(`/api/v2/unofficial/movie/${tmdbId}/offers/`);
+  if (!res.ok) {
+    return { movie: { tmdb_id: tmdbId, title: "", year: null, poster_path: "" }, offers: [] };
+  }
+  return res.json();
+}
+
+export async function triggerUnofficialScrape(
+  providerSlug: string,
+  query?: string
+): Promise<{ count: number; results: unknown[] }> {
+  const res = await fetch("/api/v2/unofficial/scrape/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider_slug: providerSlug, query: query ?? "" }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(
+      body.error ?? `Scrape failed (${res.status})`
+    );
+  }
+  return res.json();
+}
