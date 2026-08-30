@@ -301,7 +301,9 @@ def scraper_run(request):
 
     data = request.data if isinstance(request.data, dict) else {}
     provider_slug = data.get("provider_slug") or data.get("slug") or ""
-    query = data.get("query") or "Inception"
+    query = data.get("query")
+    if query is not None and not str(query).strip():
+        query = None
 
     if not provider_slug:
         return Response({"error": "provider_slug is required"}, status=400)
@@ -321,9 +323,23 @@ def scraper_run(request):
     provider.last_scraped_at = timezone.now()
     provider.save()
 
+    # Ensure all scraped items are saved to database mappings for provider stats
+    for item in items:
+        ScrapedContentMapping.objects.get_or_create(
+            provider=provider,
+            scraped_title=item.title,
+            scraped_year=item.year,
+            defaults={
+                "scraped_url": item.source_url,
+                "raw_payload": item.raw_payload,
+                "is_available": item.availability,
+            },
+        )
+
     matcher = ContentMatcher()
     results = []
-    for item in items:
+    # Match first 30 items against TMDb to keep HTTP response fast
+    for item in items[:30]:
         movie, score, candidates, is_confirmed = matcher.match_item(item)
         results.append({
             "scraped_item": {

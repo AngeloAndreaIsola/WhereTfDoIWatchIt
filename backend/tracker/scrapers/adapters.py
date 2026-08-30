@@ -14,9 +14,24 @@ class KissKHScraper(BaseScraper):
 
     def _execute_run(self, query: Optional[str] = None) -> list[ScrapedItem]:
         if not query:
-            logger.info("KissKH scraper: no query provided")
-            return []
-        url = f"https://kisskh.co/api/DramaList/Search?q={query}"
+            logger.info("KissKH scraper: no query provided, scraping recently added...")
+            items = []
+            for page in range(1, 11):
+                url = f"https://kisskh.do/api/DramaList/List?page={page}&type=0&sub=0&country=0&status=0&order=1"
+                logger.info("KissKH scraper: fetching %s", url)
+                resp_data = self.fetch_url(url)
+                if not resp_data or not isinstance(resp_data, dict):
+                    break
+                data = resp_data.get("data")
+                if not data:
+                    break
+                page_items = self.parse_items(data)
+                if not page_items:
+                    break
+                items.extend(page_items)
+            return items
+
+        url = f"https://kisskh.do/api/DramaList/Search?q={query}"
         resp_data = self.fetch_url(url)
         if not resp_data:
             logger.warning("KissKH scraper: no response data")
@@ -44,7 +59,7 @@ class KissKHScraper(BaseScraper):
             audio = entry.get("audio_languages") or entry.get("audio") or ["EN"]
             subs = entry.get("subtitle_languages") or entry.get("subtitles") or ["EN"]
             quality = entry.get("quality") or "1080p"
-            url_path = entry.get("url") or f"https://kisskh.co/Drama/{entry.get('id')}"
+            url_path = entry.get("url") or f"https://kisskh.do/Drama/{entry.get('id')}"
 
             items.append(
                 ScrapedItem(
@@ -122,22 +137,40 @@ class HydraHDScraper(BaseScraper):
 
     def _execute_run(self, query: Optional[str] = None) -> list[ScrapedItem]:
         if not query:
-            logger.info("HydraHD scraper: no query provided")
-            return []
+            logger.info("HydraHD scraper: no query provided, scraping recently added...")
+            items = []
+            for category in ["movies", "tv-shows"]:
+                for page in range(1, 11):  # Scrape first 10 pages per category
+                    for domain in ["hydrahd.ws", "hydrahd.ru"]:
+                        url = f"https://{domain}/{category}/date/{page}"
+                        logger.info("HydraHD scraper: fetching %s", url)
+                        resp_data = self.fetch_url_with_headers(url)
+                        if resp_data and isinstance(resp_data, str):
+                            page_items = getattr(self, "parse_html", lambda x: [])(resp_data)
+                            if page_items:
+                                items.extend(page_items)
+                                break  # Break domain loop
+            return items
 
         # Try the current domain first, fall back to old domain
         urls_to_try = [
-            f"https://hydrahd.ws/api/search?q={query}",
-            f"https://hydrahd.ru/api/search?q={query}",
+            f"https://hydrahd.ws/index.php?menu=search&query={query}",
+            f"https://hydrahd.ru/index.php?menu=search&query={query}",
         ]
 
         for url in urls_to_try:
             logger.info("HydraHD scraper: trying %s", url)
             resp_data = self.fetch_url_with_headers(url)
-            if resp_data and isinstance(resp_data, dict):
-                results = resp_data.get("results") or []
-                logger.info("HydraHD scraper: got %d results from %s", len(results), url)
-                return self.parse_items(results)
+            if resp_data:
+                if isinstance(resp_data, dict):
+                    results = resp_data.get("results") or []
+                    logger.info("HydraHD scraper: got %d results from JSON %s", len(results), url)
+                    return self.parse_items(results)
+                elif isinstance(resp_data, str):
+                    items = getattr(self, "parse_html", lambda x: [])(resp_data)
+                    logger.info("HydraHD scraper: got %d results from HTML %s", len(items), url)
+                    if items:
+                        return items
 
         logger.warning("HydraHD scraper: all URLs failed")
         return []
@@ -203,13 +236,55 @@ class HydraHDScraper(BaseScraper):
         return items
 
 
+    def parse_html(self, html_content: str) -> list[ScrapedItem]:
+        import re
+        items: list[ScrapedItem] = []
+        pattern = re.compile(
+            r'<a class="hthis"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)</a>[\s\S]*?<div class="title detz">([^<]+)</div>',
+            re.IGNORECASE
+        )
+        for href, inner_a, title in pattern.findall(html_content):
+            year_match = re.search(r'>\s*(\d{4})\s*</span>', inner_a)
+            year = year_match.group(1) if year_match else None
+            try:
+                year_int = int(year) if year else None
+            except ValueError:
+                year_int = None
+            source_url = f"https://hydrahd.ws{href}" if href.startswith("/") else href
+            items.append(
+                ScrapedItem(
+                    title=title.strip(),
+                    provider_slug=self.provider_slug,
+                    year=year_int,
+                    source_url=source_url,
+                    audio_languages=["EN"],
+                    subtitle_languages=[], 
+                    quality="1080p",
+                    availability=True,
+                    raw_payload={"href": href, "title": title, "year": year_int},
+                )
+            )
+        return items
+
 class AnimeWorldScraper(BaseScraper):
     provider_slug = "animeworld"
 
     def _execute_run(self, query: Optional[str] = None) -> list[ScrapedItem]:
         if not query:
-            logger.info("AnimeWorld scraper: no query provided")
-            return []
+            logger.info("AnimeWorld scraper: no query provided, scraping movies and animes...")
+            items = []
+            for category in ["movies", "animes"]:
+                for page in range(1, 11):
+                    url = f"https://www.animeworld.ac/{category}?page={page}"
+                    logger.info("AnimeWorld scraper: fetching %s", url)
+                    resp = self.session.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=self.timeout)
+                    if resp.status_code == 200:
+                        page_items = self.parse_html(resp.text)
+                        if not page_items:
+                            break
+                        items.extend(page_items)
+            return items
+
         url = f"https://animeworld.ac/api/search?keyword={query}"
         resp_data = self.fetch_url(url)
         if not resp_data:
@@ -236,7 +311,7 @@ class AnimeWorldScraper(BaseScraper):
 
         # Extract anime entries using regex
         # Pattern: <a class="name" href="play/...">Title</a>
-        name_pattern = r'<a class="name" href="([^"]+)">([^<]+)</a>'
+        name_pattern = r'<a[^>]*href="([^"]+)"[^>]*class="name"[^>]*>\s*([^<]+?)\s*</a>'
         name_matches = re.findall(name_pattern, html_content)
 
         # Extract years: Anno: 2007

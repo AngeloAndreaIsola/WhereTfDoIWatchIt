@@ -54,7 +54,7 @@ export default function SubscriptionsPage() {
       const res = await fetch("/api/scrapers/run/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider_slug: slug, query: "Popular" }),
+        body: JSON.stringify({ provider_slug: slug }),
       });
       if (res.ok) {
         await fetchProviders();

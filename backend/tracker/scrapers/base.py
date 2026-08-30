@@ -152,6 +152,23 @@ class ContentMatcher:
         if existing and existing.is_confirmed and existing.movie:
             return existing.movie, existing.confidence_score, [], True
 
+        # Check local DB Movie table before external API
+        exact_movie = Movie.objects.filter(title__iexact=item.title, year=item.year).first()
+        if exact_movie:
+            ScrapedContentMapping.objects.update_or_create(
+                provider=provider,
+                scraped_title=item.title,
+                scraped_year=item.year,
+                defaults={
+                    "scraped_url": item.source_url,
+                    "movie": exact_movie,
+                    "is_confirmed": False,
+                    "confidence_score": 1.0,
+                    "raw_payload": item.raw_payload,
+                },
+            )
+            return exact_movie, 1.0, [], False
+
         # 2. Search TMDb
         candidates_raw: list[TMDbMovie] = []
         try:
@@ -160,6 +177,18 @@ class ContentMatcher:
             logger.warning("TMDb search failed for scraped title '%s': %s", item.title, exc)
 
         if not candidates_raw:
+            ScrapedContentMapping.objects.update_or_create(
+                provider=provider,
+                scraped_title=item.title,
+                scraped_year=item.year,
+                defaults={
+                    "scraped_url": item.source_url,
+                    "movie": None,
+                    "is_confirmed": False,
+                    "confidence_score": 0.0,
+                    "raw_payload": item.raw_payload,
+                },
+            )
             return None, 0.0, [], False
 
         # Score candidates
