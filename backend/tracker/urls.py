@@ -29,6 +29,10 @@ urlpatterns = [
     path("watchlist/resolve/", views.watchlist_resolve, name="watchlist-resolve"),
     path("prime/popular/", views.prime_popular, name="prime-popular"),
     path("prime/movie/<int:tmdb_id>/", views.prime_movie, name="prime-movie"),
+    path("movie/<int:pk>/", views.movie_detail, name="movie-detail"),
+    path("movie/<int:pk>/link-tmdb/", views.link_tmdb, name="link-tmdb"),
+    path("movie/<int:tmdb_id>/", views.update_movie, name="update-movie"),
+    path("movie/<int:tmdb_id>/search-matches/", views.search_movie_matches, name="search-movie-matches"),
     path("watch/<int:tmdb_id>/", views.watch_redirect, name="watch-redirect"),
     path("watch/<int:tmdb_id>", views.watch_redirect),
     # --- API v2: Unofficial sources (Phase C) ---

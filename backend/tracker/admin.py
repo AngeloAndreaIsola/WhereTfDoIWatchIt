@@ -1,5 +1,9 @@
 from django.contrib import admin
 from django.contrib.postgres.fields import ArrayField
+from django import forms
+from django.urls import path
+from django.utils.html import format_html
+from django.shortcuts import render
 
 from .models import (
     ApiCallCounter,
@@ -43,8 +47,102 @@ class LanguageInfoAdmin(admin.ModelAdmin):
 
 @admin.register(Movie)
 class MovieAdmin(admin.ModelAdmin):
-    list_display = ("tmdb_id", "title", "year")
-    search_fields = ("title",)
+    list_display = ("id", "tmdb_id", "title", "year", "content_type", "tmdb_rating", "has_poster")
+    list_filter = ("content_type",)
+    search_fields = ("title", "tmdb_id")
+    readonly_fields = ("id",)
+    fieldsets = (
+        ("Basic", {"fields": ("tmdb_id", "title", "year", "content_type")}),
+        ("Media", {"fields": ("poster_path", "overview")}),
+        ("Metadata", {"fields": ("genres", "genre_ids", "cast", "seasons_data", "runtime_minutes", "tmdb_rating")}),
+    )
+
+    def has_poster(self, obj):
+        return bool(obj.poster_path)
+    has_poster.boolean = True
+    has_poster.short_description = "poster"
+
+    def get_urls(self):
+        urls = super().get_urls()
+        custom_urls = [
+            path(
+                "<path:lookup>/link-tmdb/",
+                self.admin_site.admin_view(self.link_tmdb_view),
+                name="movie-link-tmdb",
+            ),
+        ]
+        return custom_urls + urls
+
+    def link_tmdb_view(self, request, lookup):
+        """Admin view: search TMDB and link a movie to an existing DB record."""
+        from django.conf import settings
+        from .services.tmdb import TMDbClient
+
+        context = dict(self.admin_site.each_context(request))
+        movie = None
+        results = []
+        linked = False
+        error = None
+
+        if "link_btn" in request.POST:
+            tmdb_id = request.POST.get("tmdb_id", "").strip()
+            title_override = request.POST.get("title_override", "").strip()
+            movie_id = request.POST.get("movie_id", "").strip()
+            if movie_id and tmdb_id and tmdb_id.isdigit():
+                try:
+                    movie = Movie.objects.get(pk=int(movie_id))
+                except Movie.DoesNotExist:
+                    error = "Movie not found."
+                else:
+                    client = TMDbClient(settings.TMDB_API_KEY)
+                    try:
+                        details = client.details(int(tmdb_id), content_type=movie.content_type)
+                        from django.db import transaction
+                        with transaction.atomic():
+                            old_tmdb = movie.tmdb_id
+                            movie.tmdb_id = details.tmdb_id
+                            movie.title = title_override or details.title
+                            movie.year = details.year
+                            movie.poster_path = details.poster_path or ""
+                            movie.overview = details.overview or ""
+                            movie.genres = details.genres or []
+                            movie.genre_ids = details.genre_ids or []
+                            movie.cast = details.cast or []
+                            movie.seasons_data = details.seasons_data or []
+                            movie.tmdb_rating = details.rating
+                            movie.save()
+                            if old_tmdb != details.tmdb_id:
+                                Availability.objects.filter(movie=movie).delete()
+                        linked = True
+                    except Exception as exc:
+                        error = f"TMDb fetch failed: {exc}"
+            else:
+                error = "Please enter a valid TMDB ID and select a movie."
+
+        if "search_btn" in request.POST:
+            query = request.POST.get("q", "").strip()
+            movie_id = request.POST.get("movie_id", "").strip()
+            if query and movie_id:
+                try:
+                    movie = Movie.objects.get(pk=int(movie_id))
+                except Movie.DoesNotExist:
+                    error = "Movie not found."
+                else:
+                    client = TMDbClient(settings.TMDB_API_KEY)
+                    try:
+                        results = client.search(query)
+                    except Exception as exc:
+                        error = f"TMDb search failed: {exc}"
+
+        context.update({
+            "title": "Link TMDB Movie" if not movie else f"Link TMDB for '{movie}'",
+            "movie": movie,
+            "results": results,
+            "linked": linked,
+            "error": error,
+            "opts": self.model._meta,
+        })
+        return render(request, "admin/tracker/movie/link_tmdb.html", context)
 
 
 @admin.register(Region)

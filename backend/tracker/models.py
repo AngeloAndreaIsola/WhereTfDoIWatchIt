@@ -38,7 +38,10 @@ class Movie(models.Model):
     genres = models.JSONField(default=list, blank=True)
     genre_ids = models.JSONField(default=list, blank=True)
     cast = models.JSONField(default=list, blank=True)
+    director = models.JSONField(default=list, blank=True, help_text="List of director names (movie) or creators (series).")
     seasons_data = models.JSONField(default=list, blank=True)
+    runtime_minutes = models.IntegerField(null=True, blank=True)
+    tmdb_rating = models.FloatField(null=True, blank=True)
 
     def __str__(self):
         return f"{self.title} ({self.year})" if self.year else self.title

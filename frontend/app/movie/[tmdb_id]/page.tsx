@@ -1,11 +1,14 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
 import OfferRow from "@/components/OfferRow";
+import MovieEditModal from "@/components/MovieEditModal";
 import type { PrimeOffer, PrimeMovieResponse } from "@/lib/api";
 import { fetchPrimeMovieOffers } from "@/lib/api";
+import type { LinkTmdbResponse } from "@/lib/api";
 
 interface UnofficialOffer {
   country: string;
@@ -31,7 +34,9 @@ interface MovieDetailPageProps {
 
 export default function MovieDetailPage({ params }: MovieDetailPageProps) {
   const tmdbId = parseInt(params.tmdb_id, 10);
+  const router = useRouter();
   const [data, setData] = useState<PrimeMovieResponse | null>(null);
+  const [moviePk, setMoviePk] = useState<number | null>(null);
   const [preferences, setPreferences] = useState<{ audio_languages: string[]; subtitle_languages: string[] }>({
     audio_languages: [],
     subtitle_languages: [],
@@ -40,6 +45,7 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
   const [error, setError] = useState<string | null>(null);
   const [unofficialOffers, setUnofficialOffers] = useState<UnofficialOffer[] | null>(null);
   const [unofficialLoading, setUnofficialLoading] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -91,6 +97,7 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
       .then((d) => {
         if (!cancelled) {
           setData(d);
+          setMoviePk(d.movie.id ?? null);
           setLoading(false);
         }
       })
@@ -121,6 +128,37 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
   const posterUrl = data?.movie?.poster_path
     ? `https://image.tmdb.org/t/p/w500${data.movie.poster_path}`
     : null;
+
+  const handleUpdate = (title: string, posterPath: string | null) => {
+    setData((prev) =>
+      prev
+        ? {
+            ...prev,
+            movie: { ...prev.movie, title, poster_path: posterPath },
+          }
+        : prev
+    );
+  };
+
+  const handleLinked = useCallback(
+    (movie: LinkTmdbResponse["movie"]) => {
+      // Linking can change the movie's TMDb id — navigate to the new detail URL
+      // so availability (keyed by tmdb_id) is re-fetched cleanly.
+      if (movie.tmdb_id && movie.tmdb_id !== tmdbId) {
+        router.push(`/movie/${movie.tmdb_id}/`);
+        return;
+      }
+      setData((prev) =>
+        prev
+          ? {
+              ...prev,
+              movie: { ...prev.movie, title: movie.title, poster_path: movie.poster_path },
+            }
+          : prev
+      );
+    },
+    [router, tmdbId]
+  );
 
   return (
     <main className="mx-auto max-w-4xl px-4 py-8 sm:px-6">
@@ -158,7 +196,20 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
       {!loading && !error && data && (
         <div className="space-y-8">
           {/* Header Card with Poster, Title, User Data, and Watch Button */}
-          <div className="flex flex-col gap-6 rounded-2xl border border-gray-200 bg-white p-6 shadow-xs sm:flex-row dark:border-gray-700 dark:bg-gray-800">
+          <div className="relative flex flex-col gap-6 rounded-2xl border border-gray-200 bg-white p-6 shadow-xs sm:flex-row dark:border-gray-700 dark:bg-gray-800">
+            {/* Edit (pencil) button — top right corner */}
+            <button
+              type="button"
+              onClick={() => setShowEditModal(true)}
+              title="Edit title & poster / link to TMDb"
+              aria-label="Edit title & poster"
+              className="absolute right-3 top-3 z-10 rounded-full border border-gray-200 bg-white/90 p-2 text-gray-600 shadow-sm transition-colors hover:bg-gray-100 dark:border-gray-600 dark:bg-gray-800/90 dark:text-gray-300 dark:hover:bg-gray-700"
+            >
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M16.862 4.487L19.5 7.125" />
+              </svg>
+            </button>
+
             {/* Poster image */}
             <div className="relative aspect-[2/3] w-full max-w-[180px] shrink-0 overflow-hidden rounded-xl bg-gray-200 dark:bg-gray-700">
               {posterUrl ? (
@@ -189,6 +240,53 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
                   )}
                 </h1>
 
+                {/* TMDb rating */}
+                {data.movie.rating && (
+                  <div className="mt-2 flex items-center gap-1 text-sm text-amber-600 dark:text-amber-400">
+                    <span>★</span>
+                    <span className="font-semibold">{data.movie.rating.toFixed(1)}</span>
+                    <span className="text-xs text-gray-400 dark:text-gray-500">/10 TMDb</span>
+                  </div>
+                )}
+
+                {/* Synopsis */}
+                {data.movie.overview && (
+                  <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">
+                    {data.movie.overview}
+                  </p>
+                )}
+
+                {/* Genres */}
+                {data.movie.genres && data.movie.genres.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {data.movie.genres.map((g) => (
+                      <span
+                        key={g.id}
+                        className="rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-600 dark:bg-gray-700 dark:text-gray-300"
+                      >
+                        {g.name}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {/* Director / Creator */}
+                {data.movie.director && data.movie.director.length > 0 && (
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                    <span className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                      {data.movie.content_type === "series" ? "Created by" : "Director"}
+                    </span>
+                    {data.movie.director.map((name) => (
+                      <span
+                        key={name}
+                        className="rounded-full bg-purple-50 px-2.5 py-0.5 text-xs text-purple-700 dark:bg-purple-900/30 dark:text-purple-300"
+                      >
+                        {name}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
                 {/* Letterboxd User Data & History */}
                 {data.user_data && (
                   <div className="mt-3 flex flex-wrap items-center gap-3 text-xs">
@@ -212,35 +310,32 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
                   </div>
                 )}
 
-                {/* Multiple Diary Watch Events */}
-                {data.watch_events && data.watch_events.length > 0 && (
-                  <div className="mt-4 border-t border-gray-100 pt-3 dark:border-gray-700/60">
+                {/* Cast */}
+                {data.movie.cast && data.movie.cast.length > 0 && (
+                  <div className="mt-3">
                     <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                      Watch History ({data.watch_events.length} viewings)
+                      Cast
                     </h3>
-                    <ul className="mt-2 space-y-1.5 text-xs text-gray-600 dark:text-gray-300">
-                      {data.watch_events.map((evt) => (
-                        <li key={evt.id} className="flex flex-wrap items-center gap-2">
-                          <span className="font-medium text-gray-800 dark:text-gray-200">
-                            📅 {evt.watched_date || "Date unknown"}
-                          </span>
-                          {evt.rewatch && (
-                            <span className="rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-semibold text-purple-800 dark:bg-purple-900/40 dark:text-purple-300">
-                              Rewatch
-                            </span>
-                          )}
-                          {evt.rating && (
-                            <span className="text-amber-600 dark:text-amber-400 font-semibold">
-                              ★ {evt.rating}
-                            </span>
-                          )}
-                        </li>
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      {data.movie.cast.slice(0, 8).map((person) => (
+                        <span
+                          key={person.id}
+                          className="rounded-full bg-blue-50 px-2.5 py-0.5 text-xs text-blue-700 dark:bg-blue-900/30 dark:text-blue-300"
+                        >
+                          {person.character
+                            ? `${person.name} as ${person.character}`
+                            : person.name}
+                        </span>
                       ))}
-                    </ul>
+                      {data.movie.cast.length > 8 && (
+                        <span className="text-xs text-gray-400">
+                          +{data.movie.cast.length - 8} more
+                        </span>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
-
             </div>
           </div>
 
@@ -355,6 +450,20 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
             </section>
           )}
         </div>
+      )}
+
+      {/* Edit Modal */}
+      {showEditModal && data && moviePk && (
+        <MovieEditModal
+          tmdbId={tmdbId}
+          moviePk={moviePk}
+          currentTitle={data.movie.title}
+          currentPosterPath={data.movie.poster_path || null}
+          contentType={data.movie.content_type || "movie"}
+          onClose={() => setShowEditModal(false)}
+          onUpdated={handleUpdate}
+          onLinked={handleLinked}
+        />
       )}
     </main>
   );

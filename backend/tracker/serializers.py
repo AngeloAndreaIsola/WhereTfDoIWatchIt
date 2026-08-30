@@ -32,8 +32,45 @@ class MovieSerializer(serializers.ModelSerializer):
             "genres",
             "genre_ids",
             "cast",
+            "director",
             "seasons_data",
+            "runtime_minutes",
+            "tmdb_rating",
         ]
+
+
+class MovieDetailSerializer(serializers.ModelSerializer):
+    user_data = serializers.SerializerMethodField()
+    watch_events = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Movie
+        fields = [
+            "id",
+            "tmdb_id",
+            "title",
+            "year",
+            "content_type",
+            "poster_path",
+            "overview",
+            "genres",
+            "genre_ids",
+            "cast",
+            "director",
+            "seasons_data",
+            "runtime_minutes",
+            "tmdb_rating",
+            "user_data",
+            "watch_events",
+        ]
+
+    def get_user_data(self, obj: Movie):
+        user_data = UserMovieData.objects.filter(user_id=1, movie=obj).first()
+        return UserMovieDataSerializer(user_data).data if user_data else None
+
+    def get_watch_events(self, obj: Movie):
+        events = MovieWatchEvent.objects.filter(user_id=1, movie=obj).order_by("-watched_date", "-created_at")
+        return MovieWatchEventSerializer(events, many=True).data
 
 
 class ExternalProviderMappingSerializer(serializers.ModelSerializer):
@@ -149,12 +186,6 @@ class ScrapedContentMappingSerializer(serializers.ModelSerializer):
             "last_scraped_at",
             "is_available",
         ]
-
-
-class MovieSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Movie
-        fields = ["id", "tmdb_id", "title", "year", "poster_path"]
 
 
 def validate_language_codes(codes: list) -> list[str]:

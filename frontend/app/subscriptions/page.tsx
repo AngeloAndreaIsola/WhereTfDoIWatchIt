@@ -16,6 +16,7 @@ export default function SubscriptionsPage() {
   const [importSuccess, setImportSuccess] = useState("");
 
   const [actionSlug, setActionSlug] = useState<string | null>(null);
+  const [refreshingFree, setRefreshingFree] = useState(false);
   const [refreshResults, setRefreshResults] = useState<Record<string, string>>({});
 
   const fetchProviders = useCallback(async () => {
@@ -67,6 +68,35 @@ export default function SubscriptionsPage() {
     } finally {
       setActionSlug(null);
     }
+  };
+
+  const handleRefreshFreeProviders = async () => {
+    setRefreshingFree(true);
+    setRefreshResults((prev) => ({ ...prev, __free__: "Refreshing…" }));
+    let lastError: string | null = null;
+    for (const provider of freeProviders) {
+      if (!provider.has_scraper) continue;
+      try {
+        const data = await triggerScraperRun(provider.slug);
+        setRefreshResults((prev) => ({
+          ...prev,
+          [`__${provider.slug}`]: `Done — ${data.count} item(s) scraped`,
+        }));
+      } catch (err) {
+        lastError = err instanceof Error ? err.message : String(err);
+        setRefreshResults((prev) => ({
+          ...prev,
+          [`__${provider.slug}`]: `Error: ${lastError}`,
+        }));
+      }
+    }
+    setRefreshingFree(false);
+    if (lastError) {
+      setRefreshResults((prev) => ({ ...prev, __free__: `Finished with errors: ${lastError}` }));
+    } else {
+      setRefreshResults((prev) => ({ ...prev, __free__: "All free providers refreshed" }));
+    }
+    await fetchProviders();
   };
 
   const handleDeleteProvider = async (slug: string) => {
@@ -187,108 +217,49 @@ export default function SubscriptionsPage() {
                   European public broadcasters and free ad-supported streaming services across 20+ countries. Click a provider card to enable or disable it for watch availability matching.
                 </p>
               </div>
-            </div>
-
-            {/* Provider list with refresh buttons */}
-            <div className="space-y-3">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                Free Providers ({freeProviders.length})
-              </h3>
-
-              {freeProviders.length === 0 ? (
-                <p className="text-xs text-gray-400 italic">No free providers configured yet.</p>
-              ) : (
-                <div className="divide-y divide-gray-100 rounded-lg border border-gray-100 dark:divide-gray-800 dark:border-gray-800">
-                  {freeProviders.map((provider) => {
-                    const isSubscribed = provider.is_subscribed;
-                    const isPending = actionSlug === provider.slug;
-                    const hasScraper = provider.has_scraper === true;
-                    const refreshMsg = refreshResults[provider.slug];
-
-                    return (
-                      <div
-                        key={provider.slug}
-                        className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between"
-                      >
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <p className="text-sm font-semibold text-gray-800 dark:text-gray-200">
-                              {provider.name}
-                            </p>
-                            <span
-                              className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                                isSubscribed
-                                  ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300"
-                                  : "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400"
-                              }`}
-                            >
-                              {isSubscribed ? "Active" : "Inactive"}
-                            </span>
-                            {hasScraper && (
-                              <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-semibold text-blue-700 dark:bg-blue-900/50 dark:text-blue-300">
-                                Scraper
-                              </span>
-                            )}
-                          </div>
-                          <p className="mt-0.5 text-[11px] text-gray-400">
-                            Available items: <strong className="text-gray-700 dark:text-gray-300">{provider.scraped_content_count || 0}</strong> • Last run:{" "}
-                            {provider.last_scraped_at
-                              ? new Date(provider.last_scraped_at).toLocaleString()
-                              : "Never"}
-                          </p>
-                        </div>
-
-                        {/* Action buttons */}
-                        <div className="flex items-center gap-2">
-                          {/* Enable / Render Inactive */}
-                          <button
-                            type="button"
-                            onClick={() => handleToggleProvider(provider.slug)}
-                            disabled={isPending}
-                            className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
-                              isSubscribed
-                                ? "bg-amber-100 text-amber-800 hover:bg-amber-200 dark:bg-amber-900/40 dark:text-amber-300"
-                                : "bg-emerald-100 text-emerald-800 hover:bg-emerald-200 dark:bg-emerald-900/40 dark:text-emerald-300"
-                            }`}
-                          >
-                            {isSubscribed ? "Render Inactive" : "Enable"}
-                          </button>
-
-                          {/* Run Scraper — only for providers with scrapers */}
-                          {hasScraper && (
-                            <button
-                              type="button"
-                              onClick={() => handleRunScraper(provider.slug)}
-                              disabled={isPending}
-                              className="flex items-center gap-1.5 rounded-lg bg-blue-100 px-3 py-1.5 text-xs font-semibold text-blue-800 hover:bg-blue-200 dark:bg-blue-900/40 dark:text-blue-300"
-                            >
-                              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                              </svg>
-                              {isPending ? "Running…" : "Refresh"}
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              {/* Refresh result messages */}
-              {Object.entries(refreshResults).filter(([, msg]) => msg).map(([slug, msg]) => (
-                <div
-                  key={slug}
-                  className={`rounded-lg border px-4 py-2.5 text-xs ${
-                    msg.startsWith("Error")
-                      ? "border-red-300 bg-red-50 text-red-700 dark:border-red-700 dark:bg-red-900/30 dark:text-red-400"
-                      : "border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
-                  }`}
+              {freeProviders.some((p) => p.has_scraper) && (
+                <button
+                  type="button"
+                  onClick={handleRefreshFreeProviders}
+                  disabled={refreshingFree}
+                  title="Refresh all free provider catalogs"
+                  className="flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
                 >
-                  {msg}
-                </div>
-              ))}
+                  <svg
+                    className={`h-4 w-4 ${refreshingFree ? "animate-spin" : ""}`}
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  {refreshingFree ? "Refreshing…" : "Refresh"}
+                </button>
+              )}
             </div>
+            {freeProviders.length === 0 ? (
+              <p className="text-xs text-gray-400 italic">
+                No free providers configured yet.
+              </p>
+            ) : (
+              <ProviderGrid
+                providers={freeProviders}
+                onToggle={handleToggleProvider}
+                loading={loading}
+              />
+            )}
+            {refreshResults.__free__ && (
+              <div
+                className={`mt-3 rounded-lg border px-4 py-2.5 text-xs ${
+                  refreshResults.__free__.startsWith("Error")
+                    ? "border-red-300 bg-red-50 text-red-700 dark:border-red-700 dark:bg-red-900/30 dark:text-red-400"
+                    : "border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
+                }`}
+              >
+                {refreshResults.__free__}
+              </div>
+            )}
           </section>
 
           {/* Section 3: Imported Small Providers & Sources */}

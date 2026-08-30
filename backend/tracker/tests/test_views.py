@@ -590,3 +590,142 @@ class MovieLanguageInfoEndpointTests(TestCase):
             content_type="application/json",
         )
         self.assertEqual(resp.status_code, 400)
+
+
+class MovieDetailEndpointTests(TestCase):
+    def test_returns_404_when_not_found(self):
+        resp = self.client.get("/api/movie/99999/")
+        self.assertEqual(resp.status_code, 404)
+        self.assertEqual(resp.json()["error"], "movie not found")
+
+    @patch("tracker.views.TMDbClient")
+    def test_returns_full_detail(self, mock_tmdb_cls):
+        from tracker.services.tmdb import TMDbItem
+        movie = Movie.objects.create(
+            tmdb_id=777, title="Test Film", year=2023,
+            poster_path="/poster.jpg", overview="A test movie",
+            genres=[{"id": 28, "name": "Action"}], genre_ids=[28],
+            cast=[{"id": 1, "name": "Actor One", "character": "Role"}],
+            tmdb_rating=7.5,
+        )
+        mock_instance = mock_tmdb_cls.return_value
+        mock_instance.details.return_value = TMDbItem(
+            tmdb_id=777, title="Test Film", year=2023, content_type="movie",
+            overview="A test movie", poster_path="/poster.jpg",
+            genres=[{"id": 28, "name": "Action"}], genre_ids=[28],
+            cast=[{"id": 1, "name": "Actor One", "character": "Role"}],
+            seasons_data=[], rating=7.5,
+            director=["Jane Director"],
+        )
+        resp = self.client.get(f"/api/movie/{movie.id}/")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["movie"]["tmdb_id"], 777)
+        self.assertEqual(data["movie"]["title"], "Test Film")
+        self.assertEqual(data["movie"]["tmdb_rating"], 7.5)
+        self.assertEqual(data["movie"]["cast"], [{"id": 1, "name": "Actor One", "character": "Role"}])
+        self.assertEqual(data["movie"]["director"], ["Jane Director"])
+        self.assertIsNone(data["user_data"])
+        self.assertEqual(data["watch_events"], [])
+
+    @patch("tracker.views.TMDbClient")
+    def test_updates_stale_fields(self, mock_tmdb_cls):
+        from tracker.services.tmdb import TMDbItem
+        movie = Movie.objects.create(
+            tmdb_id=888, title="Old Title", year=2020,
+            poster_path="", overview="", genres=[], genre_ids=[],
+            cast=[], tmdb_rating=None,
+        )
+        mock_instance = mock_tmdb_cls.return_value
+        mock_instance.details.return_value = TMDbItem(
+            tmdb_id=888, title="Same Title", year=2020, content_type="movie",
+            overview="New synopsis", poster_path="/new-poster.jpg",
+            genres=[{"id": 35, "name": "Comedy"}], genre_ids=[35],
+            cast=[{"id": 2, "name": "Comic Actor", "character": "Himself"}],
+            seasons_data=[], rating=8.0,
+        )
+        resp = self.client.get(f"/api/movie/{movie.id}/")
+        self.assertEqual(resp.status_code, 200)
+        movie.refresh_from_db()
+        # Title is not auto-updated by detail view; only media/metadata fields are
+        self.assertEqual(movie.title, "Old Title")
+        self.assertEqual(movie.poster_path, "/new-poster.jpg")
+        self.assertEqual(movie.overview, "New synopsis")
+        self.assertEqual(movie.tmdb_rating, 8.0)
+        self.assertEqual(movie.cast, [{"id": 2, "name": "Comic Actor", "character": "Himself"}])
+
+
+class LinkTMDBEndpointTests(TestCase):
+    @patch("tracker.views.TMDbClient")
+    def test_links_tmdb_and_updates_movie(self, mock_tmdb_cls):
+        from tracker.services.tmdb import TMDbItem
+        movie = Movie.objects.create(
+            tmdb_id=0, title="Unlinked Movie", year=2022,
+            poster_path="", overview="", genres=[], genre_ids=[],
+            cast=[], tmdb_rating=None,
+        )
+        linked_details = TMDbItem(
+            tmdb_id=555, title="Correct Title", year=2022, content_type="movie",
+            overview="Real synopsis", poster_path="/real-poster.jpg",
+            genres=[{"id": 18, "name": "Drama"}], genre_ids=[18],
+            cast=[{"id": 10, "name": "Star", "character": "Lead"}],
+            seasons_data=[], rating=9.0,
+        )
+        mock_instance = mock_tmdb_cls.return_value
+        mock_instance.details.return_value = linked_details
+
+        resp = self.client.post(
+            f"/api/movie/{movie.id}/link-tmdb/",
+            data={"tmdb_id": 555},
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertTrue(data["message"].startswith("Linked to TMDB"))
+        self.assertEqual(data["movie"]["tmdb_id"], 555)
+        self.assertEqual(data["movie"]["title"], "Correct Title")
+        self.assertEqual(data["movie"]["poster_path"], "/real-poster.jpg")
+        self.assertEqual(data["movie"]["tmdb_rating"], 9.0)
+        self.assertEqual(data["movie"]["cast"], [{"id": 10, "name": "Star", "character": "Lead"}])
+
+        movie.refresh_from_db()
+        self.assertEqual(movie.tmdb_id, 555)
+        self.assertEqual(movie.title, "Correct Title")
+        self.assertEqual(movie.tmdb_rating, 9.0)
+
+    @patch("tracker.views.TMDbClient")
+    def test_uses_title_override_when_provided(self, mock_tmdb_cls):
+        from tracker.services.tmdb import TMDbItem
+        movie = Movie.objects.create(tmdb_id=0, title="Original", year=2021)
+        mock_instance = mock_tmdb_cls.return_value
+        mock_instance.details.return_value = TMDbItem(
+            tmdb_id=111, title="TMDb Title", year=2021, content_type="movie",
+            overview="", poster_path="", genres=[], genre_ids=[],
+            cast=[], seasons_data=[], rating=None,
+        )
+        resp = self.client.post(
+            f"/api/movie/{movie.id}/link-tmdb/",
+            data={"tmdb_id": 111, "title": "My Custom Title"},
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        movie.refresh_from_db()
+        self.assertEqual(movie.title, "My Custom Title")
+
+    def test_requires_tmdb_id(self):
+        movie = Movie.objects.create(tmdb_id=1, title="X", year=2020)
+        resp = self.client.post(
+            f"/api/movie/{movie.id}/link-tmdb/",
+            data={},
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json()["error"], "tmdb_id is required and must be an integer")
+
+    def test_returns_404_when_movie_not_found(self):
+        resp = self.client.post(
+            "/api/movie/99999/link-tmdb/",
+            data={"tmdb_id": 123},
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 404)

@@ -14,6 +14,7 @@ from rest_framework.response import Response
 
 from .languages import normalize_language_code
 from .models import (
+    Availability,
     ExternalProviderMapping,
     LanguageEntry,
     LanguageInfo,
@@ -29,6 +30,7 @@ from .models import (
 )
 from .serializers import (
     LanguageInfoSerializer,
+    MovieDetailSerializer,
     MovieSerializer,
     MovieWatchEventSerializer,
     PreferenceSerializer,
@@ -1040,6 +1042,55 @@ def _popular_movie_dict(movie: TMDbMovie) -> dict:
     }
 
 
+def _enrich_movie_from_tmdb(movie: Movie) -> None:
+    """Refresh sparse TMDb metadata on a Movie row (overview/cast/director/rating/etc).
+
+    No-op if TMDb is unconfigured or the fetch fails, so the detail page still
+    renders with whatever is already cached. Only writes fields that are empty
+    or changed, to avoid needless UPDATEs.
+    """
+    if not TMDbClient.is_configured():
+        return
+    client = TMDbClient(settings.TMDB_API_KEY)
+    try:
+        details = client.details(movie.tmdb_id, content_type=movie.content_type)
+    except Exception:
+        logger.exception("TMDb details fetch failed for movie %s", movie.pk)
+        return
+
+    # Guard against non-TMDbItem returns (e.g. an unconfigured mock in tests).
+    if not isinstance(details, TMDbMovie):
+        return
+
+    needs_update = False
+    if details.overview and movie.overview != details.overview:
+        movie.overview = details.overview
+        needs_update = True
+    if details.poster_path and movie.poster_path != details.poster_path:
+        movie.poster_path = details.poster_path
+        needs_update = True
+    if details.genres and movie.genres != details.genres:
+        movie.genres = details.genres
+        needs_update = True
+    if details.genre_ids and movie.genre_ids != details.genre_ids:
+        movie.genre_ids = details.genre_ids
+        needs_update = True
+    if details.cast and movie.cast != details.cast:
+        movie.cast = details.cast
+        needs_update = True
+    if details.director is not None and movie.director != details.director:
+        movie.director = details.director
+        needs_update = True
+    if details.rating is not None and movie.tmdb_rating != details.rating:
+        movie.tmdb_rating = details.rating
+        needs_update = True
+    if details.year and movie.year != details.year:
+        movie.year = details.year
+        needs_update = True
+    if needs_update:
+        movie.save()
+
+
 @api_view(["GET"])
 def prime_movie(request, tmdb_id: int):
     """GET /api/prime/movie/<tmdb_id>/ — ranked Prime Video offers for one movie.
@@ -1082,6 +1133,11 @@ def prime_movie(request, tmdb_id: int):
 
     # Resolve preferences (hardcoded defaults if no DB row).
     pref_dict = resolve_preferences(user_id=1)
+
+    # Backfill sparse TMDb metadata (overview/cast/director/rating/poster) so the
+    # detail page has something to show even when the Movie row was created from a
+    # shallow source. Non-fatal: any TMDb failure is logged and ignored.
+    _enrich_movie_from_tmdb(movie)
 
     # Build a Preference-like object for rank_offers (which expects a Preference
     # instance with audio_languages, subtitle_languages, candidate_countries).
@@ -1137,12 +1193,7 @@ def prime_movie(request, tmdb_id: int):
 
     return Response(
         {
-            "movie": {
-                "tmdb_id": movie.tmdb_id,
-                "title": movie.title,
-                "year": movie.year,
-                "poster_path": movie.poster_path,
-            },
+            "movie": MovieDetailSerializer(movie).data,
             "user_data": UserMovieDataSerializer(user_data).data if user_data else None,
             "watch_events": MovieWatchEventSerializer(watch_events, many=True).data,
             "offers": offers_out,
@@ -1236,3 +1287,165 @@ def watch_redirect(request, tmdb_id: int):
             "message": "Not currently available to watch on your subscribed services.",
         }
     )
+
+
+@api_view(["GET"])
+def movie_detail(request, pk: int):
+    """GET /api/movie/<int:pk>/ — full movie detail with TMDB metadata, availability, and user data."""
+    try:
+        movie = Movie.objects.get(pk=pk)
+    except Movie.DoesNotExist:
+        return Response({"error": "movie not found"}, status=404)
+
+    # Fetch full TMDb metadata if missing or stale
+    client = TMDbClient(settings.TMDB_API_KEY)
+    try:
+        details = client.details(movie.tmdb_id, content_type=movie.content_type)
+        needs_update = False
+        if details.overview and movie.overview != details.overview:
+            movie.overview = details.overview
+            needs_update = True
+        if details.poster_path and movie.poster_path != details.poster_path:
+            movie.poster_path = details.poster_path
+            needs_update = True
+        if details.genres and movie.genres != details.genres:
+            movie.genres = details.genres
+            needs_update = True
+        if details.genre_ids and movie.genre_ids != details.genre_ids:
+            movie.genre_ids = details.genre_ids
+            needs_update = True
+        if details.cast and movie.cast != details.cast:
+            movie.cast = details.cast
+            needs_update = True
+        if details.director is not None and movie.director != details.director:
+            movie.director = details.director
+            needs_update = True
+        if details.rating is not None and movie.tmdb_rating != details.rating:
+            movie.tmdb_rating = details.rating
+            needs_update = True
+        if needs_update:
+            movie.save()
+    except Exception:
+        logger.exception("TMDb details fetch failed for movie %s", pk)
+
+    user_data = UserMovieData.objects.filter(user_id=1, movie=movie).first()
+    watch_events = MovieWatchEvent.objects.filter(user_id=1, movie=movie).order_by("-watched_date", "-created_at")
+
+    return Response(
+        {
+            "movie": MovieDetailSerializer(movie).data,
+            "user_data": UserMovieDataSerializer(user_data).data if user_data else None,
+            "watch_events": MovieWatchEventSerializer(watch_events, many=True).data,
+        }
+    )
+
+
+@api_view(["POST"])
+def link_tmdb(request, pk: int):
+    """POST /api/movie/<int:pk>/link-tmdb/ — manually link a TMDB movie to an existing DB movie.
+
+    Request body:
+        tmdb_id (int, required): the TMDb ID to link
+        title (str, optional): override title (if omitted, uses TMDb title)
+    """
+    try:
+        movie = Movie.objects.get(pk=pk)
+    except Movie.DoesNotExist:
+        return Response({"error": "movie not found"}, status=404)
+
+    data = request.data if isinstance(request.data, dict) else {}
+    tmdb_id = data.get("tmdb_id")
+    if tmdb_id is None or not isinstance(tmdb_id, int):
+        return Response({"error": "tmdb_id is required and must be an integer"}, status=400)
+
+    client = TMDbClient(settings.TMDB_API_KEY)
+    try:
+        details = client.details(tmdb_id, content_type=data.get("content_type", "movie"))
+    except Exception as exc:
+        logger.exception("TMDb details fetch failed for tmdb_id=%s", tmdb_id)
+        return Response({"error": f"TMDb fetch failed: {exc}"}, status=502)
+
+    override_title = (data.get("title") or "").strip()
+    new_title = override_title or details.title
+
+    with transaction.atomic():
+        old_tmdb_id = movie.tmdb_id
+        movie.tmdb_id = details.tmdb_id
+        movie.title = new_title
+        movie.year = details.year
+        movie.content_type = details.content_type
+        movie.poster_path = details.poster_path or ""
+        movie.overview = details.overview or ""
+        movie.genres = details.genres or []
+        movie.genre_ids = details.genre_ids or []
+        movie.cast = details.cast or []
+        movie.seasons_data = details.seasons_data or []
+        movie.tmdb_rating = details.rating
+        movie.save()
+
+        # Invalidate cached availability for the old tmdb_id if it differs
+        if old_tmdb_id != details.tmdb_id:
+            Availability.objects.filter(movie=movie).delete()
+
+    return Response({
+        "message": f"Linked to TMDB {details.tmdb_id}",
+        "movie": MovieDetailSerializer(movie).data,
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(["PATCH"])
+def update_movie(request, tmdb_id: int):
+    """PATCH /api/movie/<tmdb_id>/ — update title and/or poster_path."""
+    try:
+        movie = Movie.objects.get(tmdb_id=tmdb_id)
+    except Movie.DoesNotExist:
+        return Response({"error": "movie not found"}, status=404)
+
+    data = request.data if isinstance(request.data, dict) else {}
+    title = data.get("title")
+    poster_path = data.get("poster_path")
+    tmdb_rating = data.get("tmdb_rating")
+
+    if title is not None:
+        movie.title = title.strip()
+    if poster_path is not None:
+        movie.poster_path = poster_path.strip()
+    if tmdb_rating is not None:
+        movie.tmdb_rating = float(tmdb_rating)
+
+    movie.save()
+    return Response({
+        "tmdb_id": movie.tmdb_id,
+        "title": movie.title,
+        "poster_path": movie.poster_path,
+        "tmdb_rating": movie.tmdb_rating,
+    })
+
+
+@api_view(["GET"])
+def search_movie_matches(request, tmdb_id: int):
+    """GET /api/movie/<tmdb_id>/search-matches/?q= — search TMDb for poster/title matches."""
+    query = request.GET.get("q", "")
+    if not query:
+        return Response({"error": "q parameter is required"}, status=400)
+
+    client = TMDbClient(settings.TMDB_API_KEY)
+    try:
+        results = client.search(query)
+    except Exception as exc:
+        return Response({"error": f"TMDb search failed: {exc}"}, status=502)
+
+    return Response({
+        "query": query,
+        "results": [
+            {
+                "tmdb_id": r.tmdb_id,
+                "title": r.title,
+                "year": r.year,
+                "poster_path": r.poster_path,
+                "overview": r.overview,
+                "rating": r.rating,
+            }
+            for r in results[:10]
+        ],
+    })

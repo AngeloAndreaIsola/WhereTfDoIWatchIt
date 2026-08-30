@@ -44,12 +44,30 @@ export interface PrimeOffer {
   };
 }
 
+export interface TMDbGenre {
+  id: number;
+  name: string;
+}
+
+export interface TMDbCastMember {
+  id: number;
+  name: string;
+  character: string;
+}
+
 export interface PrimeMovieResponse {
   movie: {
+    id: number;
     tmdb_id: number;
     title: string;
     year: number | null;
     poster_path?: string | null;
+    rating?: number | null;
+    overview?: string | null;
+    genres?: TMDbGenre[];
+    cast?: TMDbCastMember[];
+    director?: string[];
+    content_type?: string;
   };
   user_data?: UserMovieData | null;
   watch_events?: MovieWatchEvent[];
@@ -353,6 +371,103 @@ export async function triggerScraperRun(
     throw new Error(
       body.error ?? `Scrape failed (${res.status})`
     );
+  }
+  return res.json();
+}
+
+
+// ─── Movie editing & poster matching ────────────────────────────────────────
+
+export interface TMDbSearchResult {
+  tmdb_id: number;
+  title: string;
+  year: number | null;
+  poster_path: string | null;
+  overview: string | null;
+  rating: number | null;
+}
+
+export interface MovieUpdateResponse {
+  tmdb_id: number;
+  title: string;
+  poster_path: string;
+  tmdb_rating: number | null;
+}
+
+export interface MovieSearchMatchesResponse {
+  query: string;
+  results: TMDbSearchResult[];
+}
+
+export async function updateMovie(
+  tmdbId: number,
+  updates: { title?: string; poster_path?: string; tmdb_rating?: number | null }
+): Promise<MovieUpdateResponse> {
+  const res = await fetch(`/api/movie/${tmdbId}/`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updates),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `Failed to update movie (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function searchMovieMatches(
+  tmdbId: number,
+  query: string
+): Promise<MovieSearchMatchesResponse> {
+  const res = await fetch(`/api/movie/${tmdbId}/search-matches/?q=${encodeURIComponent(query)}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `Failed to search matches (${res.status})`);
+  }
+  return res.json();
+}
+
+export interface LinkTmdbResponse {
+  message: string;
+  movie: {
+    id: number;
+    tmdb_id: number;
+    title: string;
+    year: number | null;
+    content_type: string;
+    poster_path: string;
+    overview: string;
+    genres: unknown[];
+    genre_ids: unknown[];
+    cast: unknown[];
+    director: string[];
+    seasons_data: unknown[];
+    runtime_minutes: number | null;
+    tmdb_rating: number | null;
+  };
+}
+
+/**
+ * Manually link a DB movie to a TMDb entry. Syncs title, year, poster,
+ * overview, genres, cast, director, and rating from TMDb into the DB movie.
+ */
+export async function linkTmdb(
+  moviePk: number,
+  tmdbId: number,
+  opts: { title?: string; content_type?: string } = {}
+): Promise<LinkTmdbResponse> {
+  const res = await fetch(`/api/movie/${moviePk}/link-tmdb/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      tmdb_id: tmdbId,
+      title: opts.title ?? "",
+      content_type: opts.content_type ?? "movie",
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `Failed to link movie (${res.status})`);
   }
   return res.json();
 }

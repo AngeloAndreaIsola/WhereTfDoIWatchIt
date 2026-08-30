@@ -31,7 +31,9 @@ class TMDbItem:
     genre_ids: list[int] | None = None
     genres: list[dict] | None = None  # [{'id': 28, 'name': 'Action'}]
     cast: list[dict] | None = None    # [{'id': 1234, 'name': 'Ryan Gosling', 'character': '...'}]
+    director: list[str] | None = None  # [{'id': 1234, 'name': 'Denis Villeneuve'}] or creators for series
     seasons_data: list[dict] | None = None # [{'season_number': 1, 'episode_count': 10, 'name': 'Season 1'}]
+    rating: float | None = None  # TMDb vote_average
 
     def __post_init__(self):
         if self.genre_ids is None:
@@ -40,6 +42,8 @@ class TMDbItem:
             self.genres = []
         if self.cast is None:
             self.cast = []
+        if self.director is None:
+            self.director = []
         if self.seasons_data is None:
             self.seasons_data = []
 
@@ -162,6 +166,18 @@ class TMDbClient:
                     "poster_path": s.get("poster_path"),
                 })
 
+        # Directors (movie) or created_by (series). Stored as a list of names.
+        director: list[str] = []
+        if endpoint == "tv":
+            for c in data.get("created_by", []) or []:
+                name = c.get("name")
+                if name:
+                    director.append(name)
+        else:
+            for crew in credits_data.get("crew", []) or []:
+                if crew.get("job") == "Director" and crew.get("name"):
+                    director.append(crew["name"])
+
         return TMDbItem(
             tmdb_id=data["id"],
             title=title,
@@ -172,7 +188,9 @@ class TMDbClient:
             genre_ids=genre_ids,
             genres=genres,
             cast=cast,
+            director=director,
             seasons_data=seasons_data,
+            rating=data.get("vote_average"),
         )
 
     def health(self) -> dict:

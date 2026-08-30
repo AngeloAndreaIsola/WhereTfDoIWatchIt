@@ -195,6 +195,11 @@ class ContentMatcher:
                 tmdb_id=best_movie.tmdb_id,
                 defaults={"title": best_movie.title, "year": best_movie.year},
             )
+            # Backfill poster from the TMDb candidate so catalogs show artwork
+            # without first requiring a detail-page enrichment pass.
+            if not matched_movie_obj.poster_path and best_movie.poster_path:
+                matched_movie_obj.poster_path = best_movie.poster_path
+                matched_movie_obj.save(update_fields=["poster_path"])
             self._upsert_mapping(provider, item, movie=matched_movie_obj, confidence=best_score)
             return matched_movie_obj, best_score, candidate_list, False
 

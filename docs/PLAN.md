@@ -113,7 +113,14 @@ Prime MVP hardening above and editable preferences stay with Claude Code.
 - [x] Add CI to run backend tests and frontend test/lint/build on every pull request — **delegated: Task 16**
 - [x] Homepage search box (find a specific movie, not just browse trending) — **delegated: Task 17**
 - [x] Enhance ambiguous TMDb match review with posters and richer metadata — **delegated: Task 18**
-- [x] Add broader frontend coverage for unhappy paths and API error states — **delegated: Task 19**
+- [ ] Add broader frontend coverage for unhappy paths and API error states — **delegated: Task 19**
+   - [ ] Add manual poster matching and title editing for movies — **delegated: Task 20**
+   - [ ] Add detail view for movies with rating, synopsis, actors, and director — **delegated: Task 21**
+- [ ] Fix search by actor and category — **delegated: Task 22**
+- [ ] Add series import and display — **delegated: Task 23**
+- [ ] Fix page jump on subscription provider click — **delegated: Task 24**
+- [ ] Fix Free Streaming Providers and Major Streaming Providers display — **delegated: Task 25**
+- [ ] Show only watchable titles on home page — **delegated: Task 26**
 
 - [x] Phase C: Integration & UI — unofficial sources catalog tab, language badges, scrape panel — **done**
 - [x] Review npm audit output and update vulnerable frontend dependencies deliberately — **delegated: Task 20**
