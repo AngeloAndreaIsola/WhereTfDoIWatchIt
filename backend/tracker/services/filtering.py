@@ -17,35 +17,60 @@ logger = logging.getLogger(__name__)
 
 
 def apply_composable_filters(
-    queryset: QuerySet[Movie],
+    queryset: QuerySet[Movie] | list[Movie],
     params: dict,
     preference: Preference,
     user_subscriptions: Optional[set[str]] = None,
     current_country: Optional[str] = None,
 ) -> tuple[list[dict], int]:
-    """Filter Movie queryset using AND semantics for structured parameters & watchability."""
+    """Filter Movie queryset or list using AND semantics for structured parameters & watchability."""
     # 1. Text Search (Title/Overview)
     q = (params.get("q") or params.get("query") or "").strip()
     if q:
-        queryset = queryset.filter(Q(title__icontains=q) | Q(overview__icontains=q))
+        if isinstance(queryset, QuerySet):
+            queryset = queryset.filter(Q(title__icontains=q) | Q(overview__icontains=q))
+        else:
+            q_lower = q.lower()
+            queryset = [
+                m for m in queryset
+                if q_lower in (m.title or "").lower() or q_lower in (m.overview or "").lower()
+            ]
 
     # 2. Content Type (movie vs series)
     content_type = (params.get("content_type") or params.get("type") or "").lower().strip()
     if content_type in ("movie", "series", "tv"):
         ct = "series" if content_type == "tv" else content_type
-        queryset = queryset.filter(content_type=ct)
+        if isinstance(queryset, QuerySet):
+            queryset = queryset.filter(content_type=ct)
+        else:
+            queryset = [
+                m for m in queryset
+                if getattr(m, "content_type", "movie") == ct
+            ]
 
     # 3. Year / Year Range
     year_min = params.get("year_min") or params.get("year_start")
     year_max = params.get("year_max") or params.get("year_end")
     year_exact = params.get("year")
-    if year_exact and year_exact.isdigit():
-        queryset = queryset.filter(year=int(year_exact))
+    if year_exact and str(year_exact).isdigit():
+        y = int(year_exact)
+        if isinstance(queryset, QuerySet):
+            queryset = queryset.filter(year=y)
+        else:
+            queryset = [m for m in queryset if m.year == y]
     else:
-        if year_min and year_min.isdigit():
-            queryset = queryset.filter(year__gte=int(year_min))
-        if year_max and year_max.isdigit():
-            queryset = queryset.filter(year__lte=int(year_max))
+        if year_min and str(year_min).isdigit():
+            ymin = int(year_min)
+            if isinstance(queryset, QuerySet):
+                queryset = queryset.filter(year__gte=ymin)
+            else:
+                queryset = [m for m in queryset if m.year is not None and m.year >= ymin]
+        if year_max and str(year_max).isdigit():
+            ymax = int(year_max)
+            if isinstance(queryset, QuerySet):
+                queryset = queryset.filter(year__lte=ymax)
+            else:
+                queryset = [m for m in queryset if m.year is not None and m.year <= ymax]
 
     # 4. Genre Filter (by ID or Name)
     genre_req = params.get("genre") or params.get("genre_id")
@@ -129,7 +154,12 @@ def apply_composable_filters(
 
         # Apply Availability Status filter
         if status_filter:
-            if status_filter == "watchable_here" and watch_res.status != WatchabilityStatus.WATCHABLE_HERE:
+            if status_filter in ("watchable", "watchable_any") and watch_res.status not in (
+                WatchabilityStatus.WATCHABLE_HERE,
+                WatchabilityStatus.WATCHABLE_VPN,
+            ):
+                continue
+            elif status_filter == "watchable_here" and watch_res.status != WatchabilityStatus.WATCHABLE_HERE:
                 continue
             elif status_filter == "watchable_vpn" and watch_res.status != WatchabilityStatus.WATCHABLE_VPN:
                 continue

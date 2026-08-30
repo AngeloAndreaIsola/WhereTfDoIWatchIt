@@ -16,7 +16,7 @@ class KissKHScraper(BaseScraper):
         if not query:
             logger.info("KissKH scraper: no query provided, scraping recently added...")
             items = []
-            for page in range(1, 11):
+            for page in range(1, 3):
                 url = f"https://kisskh.do/api/DramaList/List?page={page}&type=0&sub=0&country=0&status=0&order=1"
                 logger.info("KissKH scraper: fetching %s", url)
                 resp_data = self.fetch_url(url)
@@ -140,7 +140,7 @@ class HydraHDScraper(BaseScraper):
             logger.info("HydraHD scraper: no query provided, scraping recently added...")
             items = []
             for category in ["movies", "tv-shows"]:
-                for page in range(1, 11):  # Scrape first 10 pages per category
+                for page in range(1, 2):  # Scrape first page per category
                     for domain in ["hydrahd.ws", "hydrahd.ru"]:
                         url = f"https://{domain}/{category}/date/{page}"
                         logger.info("HydraHD scraper: fetching %s", url)
@@ -274,7 +274,7 @@ class AnimeWorldScraper(BaseScraper):
             logger.info("AnimeWorld scraper: no query provided, scraping movies and animes...")
             items = []
             for category in ["movies", "animes"]:
-                for page in range(1, 11):
+                for page in range(1, 3):
                     url = f"https://www.animeworld.ac/{category}?page={page}"
                     logger.info("AnimeWorld scraper: fetching %s", url)
                     resp = self.session.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=self.timeout)

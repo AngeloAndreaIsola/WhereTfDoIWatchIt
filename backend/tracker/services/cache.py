@@ -152,4 +152,29 @@ class AvailabilityCache:
                     "subs": subs,
                 }
             )
+
+        from tracker.models import ScrapedContentMapping
+
+        scraped_mappings = ScrapedContentMapping.objects.filter(
+            movie=movie,
+            is_available=True,
+        ).select_related("provider")
+
+        for mapping in scraped_mappings:
+            payload = mapping.raw_payload or {}
+            audio = payload.get("audio_languages", []) if isinstance(payload, dict) else []
+            subs = payload.get("subtitle_languages", []) if isinstance(payload, dict) else []
+            rows.append(
+                {
+                    "country": payload.get("country", "") if isinstance(payload, dict) else (mapping.country_code or ""),
+                    "service": mapping.provider.slug,
+                    "offer_type": "free",
+                    "quality": mapping.provider.config.get("quality", "") if mapping.provider.config else "",
+                    "url": mapping.scraped_url or "",
+                    "audio": [str(a).upper() for a in audio],
+                    "subs": [str(s).upper() for s in subs],
+                    "is_scraped_source": True,
+                }
+            )
+
         return rows

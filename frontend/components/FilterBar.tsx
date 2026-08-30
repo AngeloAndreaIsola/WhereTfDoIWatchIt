@@ -22,6 +22,7 @@ interface FilterBarProps {
 
 export function FilterBar({ filters, onChange, showStatusFilter = true }: FilterBarProps) {
   const [genres, setGenres] = useState<{ id: number; name: string }[]>([]);
+  const [providers, setProviders] = useState<{ id: number; slug: string; name: string }[]>([]);
   const [actorSearch, setActorSearch] = useState("");
   const [actorSuggestions, setActorSuggestions] = useState<{ id: number; name: string }[]>([]);
   const [showActorDropdown, setShowActorSuggestions] = useState(false);
@@ -30,6 +31,18 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
     fetch("/api/genres/")
       .then((res) => (res.ok ? res.json() : { results: [] }))
       .then((data) => setGenres(data.results || []))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/providers/")
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data) => {
+        if (Array.isArray(data)) {
+          const active = data.filter((p: { is_subscribed?: boolean }) => p.is_subscribed);
+          setProviders(active.length > 0 ? active : data);
+        }
+      })
       .catch(() => {});
   }, []);
 
@@ -159,8 +172,8 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
         )}
       </div>
 
-      {/* Secondary Row: Genre, Year Range, Status */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      {/* Secondary Row: Genre, Provider, Year Range, Status */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
         <div>
           <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
             Genre
@@ -174,6 +187,24 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
             {genres.map((g) => (
               <option key={g.id} value={g.id}>
                 {g.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+            Provider
+          </label>
+          <select
+            value={filters.provider}
+            onChange={(e) => onChange({ ...filters, provider: e.target.value })}
+            className="w-full px-3 py-1.5 text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+          >
+            <option value="">All Providers</option>
+            {providers.map((p) => (
+              <option key={p.id || p.slug} value={p.slug}>
+                {p.name}
               </option>
             ))}
           </select>
@@ -216,6 +247,7 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
               className="w-full px-3 py-1.5 text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
             >
               <option value="">All Statuses</option>
+              <option value="watchable">🟢 Watchable (Any)</option>
               <option value="watchable_here">🟢 Watchable here</option>
               <option value="watchable_vpn">🟡 Watchable with VPN</option>
               <option value="not_watchable">⚫ Not watchable</option>

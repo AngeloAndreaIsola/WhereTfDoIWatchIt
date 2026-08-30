@@ -136,6 +136,7 @@ def evaluate_watchability(
         quality = raw.get("quality") or ""
         url = raw.get("url") or ""
         price_info = raw.get("price_info") or ""
+        is_scraped = raw.get("is_scraped_source", False)
 
         reasons = []
 
@@ -152,21 +153,28 @@ def evaluate_watchability(
         if not is_subscribed:
             reasons.append(f"No active subscription for {service}")
 
-        # 3. Language match check
+        # 3. Language match check — scraped sources skip language rules
         ranked_obj = ranked_lookup.get((service_clean, country))
-        is_lang_match = ranked_obj.is_language_match if ranked_obj else True
+        if is_scraped:
+            is_lang_match = True
+        else:
+            is_lang_match = ranked_obj.is_language_match if ranked_obj else True
         if not is_lang_match:
             reasons.append("Does not satisfy language rules")
 
-        # 4. Country / VPN check
-        is_curr = bool(curr_country and country == curr_country)
-        is_cand = country in candidate_countries
+        # 4. Country / VPN check — scraped sources are accessible from anywhere
+        if is_scraped:
+            is_curr = True
+            is_cand = True
+        else:
+            is_curr = bool(curr_country and country == curr_country)
+            is_cand = country in candidate_countries
 
-        if not is_curr and not is_cand:
-            if candidate_countries:
-                reasons.append(f"Available in {country}, but {country} is not in your configured VPN regions")
-            elif curr_country and country != curr_country:
-                reasons.append(f"Available in {country}, but no VPN regions are configured")
+            if not is_curr and not is_cand:
+                if candidate_countries:
+                    reasons.append(f"Available in {country}, but {country} is not in your configured VPN regions")
+                elif curr_country and country != curr_country:
+                    reasons.append(f"Available in {country}, but no VPN regions are configured")
 
         is_watchable = is_qualifying_type and is_subscribed and is_lang_match and (is_curr or is_cand)
 

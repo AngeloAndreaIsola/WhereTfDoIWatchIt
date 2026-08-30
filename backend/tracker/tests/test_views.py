@@ -301,6 +301,24 @@ class WatchlistReportEndpointTests(TestCase):
             {"service": "Prime", "count": 1},
         ])
 
+    @patch("tracker.views.AvailabilityCache")
+    def test_watchlist_report_with_content_type_filter(self, mock_cache_cls):
+        from tracker.models import WatchlistItem
+        m1 = Movie.objects.create(tmdb_id=601, title="Movie Title", year=2020, content_type="movie")
+        m2 = Movie.objects.create(tmdb_id=602, title="TV Series Title", year=2021, content_type="series")
+        WatchlistItem.objects.create(user_id=1, movie=m1, source="manual")
+        WatchlistItem.objects.create(user_id=1, movie=m2, source="manual")
+
+        instance = mock_cache_cls.return_value
+        instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=0)
+        instance._read_offers.return_value = []
+
+        resp = self.client.get("/api/watchlist/report/?type=series")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(len(data["report"]), 1)
+        self.assertEqual(data["report"][0]["movie"]["tmdb_id"], 602)
+
 
 class WatchlistResolveEndpointTests(TestCase):
     def test_missing_selections_returns_400(self):

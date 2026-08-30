@@ -149,24 +149,13 @@ class ContentMatcher:
             scraped_year=item.year,
         ).first()
 
-        if existing and existing.is_confirmed and existing.movie:
-            return existing.movie, existing.confidence_score, [], True
+        if existing and existing.movie:
+            return existing.movie, existing.confidence_score, [], existing.is_confirmed
 
         # Check local DB Movie table before external API
         exact_movie = Movie.objects.filter(title__iexact=item.title, year=item.year).first()
         if exact_movie:
-            ScrapedContentMapping.objects.update_or_create(
-                provider=provider,
-                scraped_title=item.title,
-                scraped_year=item.year,
-                defaults={
-                    "scraped_url": item.source_url,
-                    "movie": exact_movie,
-                    "is_confirmed": False,
-                    "confidence_score": 1.0,
-                    "raw_payload": item.raw_payload,
-                },
-            )
+            self._upsert_mapping(provider, item, movie=exact_movie, confidence=1.0)
             return exact_movie, 1.0, [], False
 
         # 2. Search TMDb
@@ -177,18 +166,7 @@ class ContentMatcher:
             logger.warning("TMDb search failed for scraped title '%s': %s", item.title, exc)
 
         if not candidates_raw:
-            ScrapedContentMapping.objects.update_or_create(
-                provider=provider,
-                scraped_title=item.title,
-                scraped_year=item.year,
-                defaults={
-                    "scraped_url": item.source_url,
-                    "movie": None,
-                    "is_confirmed": False,
-                    "confidence_score": 0.0,
-                    "raw_payload": item.raw_payload,
-                },
-            )
+            self._upsert_mapping(provider, item, confidence=0.0)
             return None, 0.0, [], False
 
         # Score candidates
@@ -209,54 +187,85 @@ class ContentMatcher:
                 best_score = score
                 best_movie = cand
 
-        # Auto-associate if high confidence (>= 0.85)
+        # Auto-associate if confidence is reasonable (>= 0.6)
+        # Scraped items often lack year info, capping score at ~0.8 even for exact title matches.
         matched_movie_obj = None
-        if best_score >= 0.85 and best_movie:
+        if best_score >= 0.6 and best_movie:
             matched_movie_obj, _ = Movie.objects.get_or_create(
                 tmdb_id=best_movie.tmdb_id,
                 defaults={"title": best_movie.title, "year": best_movie.year},
             )
-            # Save or update unconfirmed or auto mapping
+            self._upsert_mapping(provider, item, movie=matched_movie_obj, confidence=best_score)
+            return matched_movie_obj, best_score, candidate_list, False
+
+        # Save ambiguous mapping
+        self._upsert_mapping(provider, item, confidence=best_score)
+        return None, best_score, candidate_list, False
+
+    @staticmethod
+    def _upsert_mapping(provider, item, movie=None, confidence=0.0):
+        """Safely update-or-create a ScrapedContentMapping, deduping on conflict."""
+        try:
             ScrapedContentMapping.objects.update_or_create(
                 provider=provider,
                 scraped_title=item.title,
                 scraped_year=item.year,
                 defaults={
                     "scraped_url": item.source_url,
-                    "movie": matched_movie_obj,
+                    "movie": movie,
                     "is_confirmed": False,
-                    "confidence_score": best_score,
+                    "confidence_score": confidence,
                     "raw_payload": item.raw_payload,
                 },
             )
-            return matched_movie_obj, best_score, candidate_list, False
-
-        # Save ambiguous mapping
-        ScrapedContentMapping.objects.update_or_create(
-            provider=provider,
-            scraped_title=item.title,
-            scraped_year=item.year,
-            defaults={
-                "scraped_url": item.source_url,
-                "movie": None,
-                "is_confirmed": False,
-                "confidence_score": best_score,
-                "raw_payload": item.raw_payload,
-            },
-        )
-        return None, best_score, candidate_list, False
+        except ScrapedContentMapping.MultipleObjectsReturned:
+            ScrapedContentMapping.objects.filter(
+                provider=provider,
+                scraped_title=item.title,
+                scraped_year=item.year,
+            ).exclude(id=ScrapedContentMapping.objects.filter(
+                provider=provider,
+                scraped_title=item.title,
+                scraped_year=item.year,
+            ).values_list('id', flat=True).first()).delete()
+            ScrapedContentMapping.objects.update_or_create(
+                provider=provider,
+                scraped_title=item.title,
+                scraped_year=item.year,
+                defaults={
+                    "scraped_url": item.source_url,
+                    "movie": movie,
+                    "is_confirmed": False,
+                    "confidence_score": confidence,
+                    "raw_payload": item.raw_payload,
+                },
+            )
 
     @staticmethod
     def calculate_confidence(item: ScrapedItem, candidate: TMDbMovie) -> float:
         """Calculate confidence score between 0.0 and 1.0."""
         score = 0.0
-        s_title = item.title.strip().lower()
-        c_title = candidate.title.strip().lower()
-
+        import re
+        def normalize(t):
+            return re.sub(r'[^a-z0-9]', ' ', t.lower()).strip()
+            
+        s_title = normalize(item.title)
+        c_title = normalize(candidate.title)
+        
+        s_words = set(s_title.split())
+        c_words = set(c_title.split())
+        
         if s_title == c_title:
             score += 0.6
         elif s_title in c_title or c_title in s_title:
             score += 0.4
+        elif s_words and c_words:
+            overlap = len(s_words.intersection(c_words))
+            max_len = max(len(s_words), len(c_words))
+            if overlap / max_len >= 0.5:
+                score += 0.35
+            elif overlap > 0:
+                score += 0.2
         else:
             score += 0.1
 
