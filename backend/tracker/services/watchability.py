@@ -9,7 +9,12 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
 from tracker.models import Movie, Preference, Provider, Subscription
-from tracker.services.ranking import rank_offers, RankedOffer
+from tracker.services.ranking import (
+    QUALITY_RANK,
+    _min_rank,
+    _normalize_lang_list,
+    evaluate_language_rule,
+)
 
 
 class WatchabilityStatus:
@@ -122,11 +127,24 @@ def evaluate_watchability(
     excluded_offers: list[EvaluatedOffer] = []
     explanations: list[str] = []
 
-    ranked_candidates = rank_offers(offers, preference, country_filter=None)
-    ranked_lookup = {
-        (r.service.lower(), r.country.upper()): r
-        for r in ranked_candidates
-    }
+    lang_rule = getattr(preference, "language_rule", None)
+    if lang_rule and isinstance(lang_rule, dict) and lang_rule.get("type") == "viewers":
+        viewer_langs = []
+        seen = set()
+        for v in lang_rule.get("viewers") or []:
+            if isinstance(v, dict):
+                for l in _normalize_lang_list(v.get("languages") or []):
+                    if l not in seen:
+                        seen.add(l)
+                        viewer_langs.append(l)
+        pref_audio = viewer_langs
+        pref_subs = viewer_langs
+    else:
+        pref_audio = _normalize_lang_list(preference.audio_languages or [])
+        pref_subs = _normalize_lang_list(preference.subtitle_languages or [])
+
+    audio_priority = {code: i for i, code in enumerate(pref_audio)}
+    sub_priority = {code: i for i, code in enumerate(pref_subs)}
 
     for raw in offers:
         country = (raw.get("country") or "").upper().strip()
@@ -137,6 +155,30 @@ def evaluate_watchability(
         url = raw.get("url") or ""
         price_info = raw.get("price_info") or ""
         is_scraped = raw.get("is_scraped_source", False)
+
+        raw_audio = raw.get("audio") or raw.get("audio_languages") or []
+        raw_subs = raw.get("subs") or raw.get("subtitle_languages") or []
+        audio = _normalize_lang_list(raw_audio)
+        subs = _normalize_lang_list(raw_subs)
+        has_lang_info = bool(audio or subs)
+
+        audio_rank = _min_rank(audio, audio_priority)
+        sub_rank = _min_rank(subs, sub_priority)
+        quality_clean = quality.lower()
+        quality_rank = QUALITY_RANK.get(quality_clean, 99)
+
+        if lang_rule and isinstance(lang_rule, dict) and bool(lang_rule):
+            is_lang_match = evaluate_language_rule(lang_rule, audio, subs)
+            match_score = 0 if is_lang_match else 1
+            ranking_score = (match_score, quality_rank, audio_rank, sub_rank)
+        elif pref_audio or pref_subs:
+            is_lang_match = (audio_rank < 99) or (sub_rank < 99)
+            match_score = 0 if is_lang_match else 1
+            ranking_score = (match_score, audio_rank, sub_rank, quality_rank)
+        else:
+            is_lang_match = True
+            match_score = 0
+            ranking_score = (match_score, quality_rank, audio_rank, sub_rank)
 
         reasons = []
 
@@ -153,14 +195,12 @@ def evaluate_watchability(
         if not is_subscribed:
             reasons.append(f"No active subscription for {service}")
 
-        # 3. Language match check — scraped sources skip language rules
-        ranked_obj = ranked_lookup.get((service_clean, country))
-        if is_scraped:
-            is_lang_match = True
-        else:
-            is_lang_match = ranked_obj.is_language_match if ranked_obj else True
+        # 3. Language match check
         if not is_lang_match:
-            reasons.append("Does not satisfy language rules")
+            if not has_lang_info:
+                reasons.append("Language information unknown")
+            else:
+                reasons.append("Does not satisfy language rules")
 
         # 4. Country / VPN check — scraped sources are accessible from anywhere
         if is_scraped:
@@ -192,7 +232,7 @@ def evaluate_watchability(
             is_candidate_country=is_cand,
             is_watchable=is_watchable,
             rejection_reasons=reasons,
-            ranking_score=ranked_obj.score if ranked_obj else (99, 99, 99, 99),
+            ranking_score=ranking_score,
         )
 
         if is_watchable:
@@ -217,8 +257,23 @@ def evaluate_watchability(
         status_symbol = "🟡"
     else:
         status = WatchabilityStatus.NOT_WATCHABLE
-        status_label = "Not watchable with your subscriptions"
         status_symbol = "⚫"
+
+        # Check if any offer was accessible & subscribed but excluded strictly by language rules
+        lang_excluded = [
+            o for o in excluded_offers
+            if o.is_qualifying_offer_type and o.is_user_subscribed and (o.is_current_country or o.is_candidate_country) and not o.is_language_match
+        ]
+
+        if lang_excluded:
+            has_unknown = any("Language information unknown" in o.rejection_reasons for o in lang_excluded)
+            if has_unknown:
+                status_label = "Not matching language filter (language data unknown)"
+            else:
+                status_label = "Not matching language filter"
+        else:
+            status_label = "Not watchable with your subscriptions"
+
         # Compile user-friendly summary explanation
         seen_exp = set()
         for o in excluded_offers:

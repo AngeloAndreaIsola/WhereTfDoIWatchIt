@@ -57,11 +57,44 @@ def evaluate_language_rule(
     offer_audio: Iterable[str],
     offer_subs: Iterable[str],
 ) -> bool:
-    """Evaluate nested AND/OR language rule against offer's audio & subtitle languages."""
+    """Evaluate language rule against offer's audio & subtitle languages.
+
+    Supports V1 nested AND/OR group rules and V2 viewers intersection rules:
+    V2 structure:
+      {
+        "type": "viewers",
+        "viewers": [
+          {"name": "Andrea", "languages": ["EN", "IT"]},
+          {"name": "Mayu", "languages": ["JA"]}
+        ]
+      }
+    For V2, an offer is understood if for EVERY viewer, at least one of their spoken languages
+    matches either the offer's audio OR subtitle languages.
+    """
     if not rule or not isinstance(rule, dict):
         return True
 
     node_type = rule.get("type")
+
+    if node_type == "viewers":
+        viewers = rule.get("viewers") or []
+        if not viewers:
+            return True
+
+        offer_audio_langs = set(_normalize_lang_list(offer_audio))
+        offer_sub_langs = set(_normalize_lang_list(offer_subs))
+        offer_all_langs = offer_audio_langs.union(offer_sub_langs)
+
+        for v in viewers:
+            if not isinstance(v, dict):
+                continue
+            v_langs = set(_normalize_lang_list(v.get("languages") or []))
+            if not v_langs:
+                continue
+            if not v_langs.intersection(offer_all_langs):
+                return False
+        return True
+
     if node_type == "group":
         op = (rule.get("op") or "AND").upper()
         children = rule.get("rules") or rule.get("children") or []
@@ -111,9 +144,21 @@ def rank_offers(
     country_filter: Optional[set[str]] = None,
 ) -> list[RankedOffer]:
     """Strict priority sort over a list of cached offers."""
-    pref_audio = _normalize_lang_list(preference.audio_languages or [])
-    pref_subs = _normalize_lang_list(preference.subtitle_languages or [])
     lang_rule = getattr(preference, "language_rule", None)
+    if lang_rule and isinstance(lang_rule, dict) and lang_rule.get("type") == "viewers":
+        viewer_langs = []
+        seen = set()
+        for v in lang_rule.get("viewers") or []:
+            if isinstance(v, dict):
+                for l in _normalize_lang_list(v.get("languages") or []):
+                    if l not in seen:
+                        seen.add(l)
+                        viewer_langs.append(l)
+        pref_audio = viewer_langs
+        pref_subs = viewer_langs
+    else:
+        pref_audio = _normalize_lang_list(preference.audio_languages or [])
+        pref_subs = _normalize_lang_list(preference.subtitle_languages or [])
 
     audio_priority = {code: i for i, code in enumerate(pref_audio)}
     sub_priority = {code: i for i, code in enumerate(pref_subs)}
@@ -141,7 +186,7 @@ def rank_offers(
         quality = (offer.get("quality") or "").lower()
         quality_rank = QUALITY_RANK.get(quality, 99)
 
-        if lang_rule and isinstance(lang_rule, dict) and lang_rule.get("rules"):
+        if lang_rule and isinstance(lang_rule, dict) and bool(lang_rule):
             is_language_match = evaluate_language_rule(lang_rule, audio, subs)
             match_score = 0 if is_language_match else 1
             score = (match_score, quality_rank, audio_rank, sub_rank)

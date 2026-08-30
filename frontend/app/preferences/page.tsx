@@ -2,13 +2,13 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import LanguageRuleBuilder, { GroupNode } from "@/components/LanguageRuleBuilder";
+import ViewerLanguageBuilder, { ViewersRuleNode } from "@/components/ViewerLanguageBuilder";
 
 interface PreferencesData {
   audio_languages: string[];
   subtitle_languages: string[];
   candidate_countries: string[];
-  language_rule?: GroupNode | null;
+  language_rule?: ViewersRuleNode | unknown;
 }
 
 function formatArrayToCommaString(arr: string[] | undefined): string {
@@ -16,38 +16,35 @@ function formatArrayToCommaString(arr: string[] | undefined): string {
   return arr.join(", ");
 }
 
-const TWO_VIEWER_PRESET: GroupNode = {
-  type: "group",
-  op: "OR",
-  rules: [
-    {
-      type: "group",
-      op: "AND",
-      rules: [
-        { type: "condition", field: "audio", languages: ["EN", "IT"] },
-        { type: "condition", field: "subtitle", languages: ["JA"] },
-      ],
-    },
-    {
-      type: "group",
-      op: "AND",
-      rules: [
-        { type: "condition", field: "audio", languages: ["JA"] },
-        { type: "condition", field: "subtitle", languages: ["EN", "IT"] },
-      ],
-    },
+function extractViewerLanguages(rule: ViewersRuleNode): string[] {
+  if (!rule || !Array.isArray(rule.viewers)) return [];
+  const seen = new Set<string>();
+  const res: string[] = [];
+  for (const v of rule.viewers) {
+    if (Array.isArray(v.languages)) {
+      for (const lang of v.languages) {
+        const clean = lang.trim().toUpperCase();
+        if (clean && !seen.has(clean)) {
+          seen.add(clean);
+          res.push(clean);
+        }
+      }
+    }
+  }
+  return res;
+}
+
+const DEFAULT_VIEWERS_RULE: ViewersRuleNode = {
+  type: "viewers",
+  viewers: [
+    { name: "Andrea", languages: ["EN", "IT"] },
+    { name: "Mayu", languages: ["JA"] },
   ],
 };
 
 export default function PreferencesPage() {
-  const [audioLangs, setAudioLangs] = useState("");
-  const [subtitleLangs, setSubtitleLangs] = useState("");
   const [countries, setCountries] = useState("");
-  const [languageRule, setLanguageRule] = useState<GroupNode>({
-    type: "group",
-    op: "AND",
-    rules: [],
-  });
+  const [viewersRule, setViewersRule] = useState<ViewersRuleNode>(DEFAULT_VIEWERS_RULE);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -63,11 +60,9 @@ export default function PreferencesPage() {
         throw new Error(`Failed to load preferences (${res.status})`);
       }
       const data: PreferencesData = await res.json();
-      setAudioLangs(formatArrayToCommaString(data.audio_languages));
-      setSubtitleLangs(formatArrayToCommaString(data.subtitle_languages));
       setCountries(formatArrayToCommaString(data.candidate_countries));
-      if (data.language_rule && data.language_rule.type === "group") {
-        setLanguageRule(data.language_rule);
+      if (data.language_rule && typeof data.language_rule === "object" && (data.language_rule as ViewersRuleNode).type === "viewers") {
+        setViewersRule(data.language_rule as ViewersRuleNode);
       }
     } catch (err: unknown) {
       setFetchError(err instanceof Error ? err.message : "Failed to load preferences");
@@ -86,14 +81,7 @@ export default function PreferencesPage() {
     setSaveSuccess(false);
     setFetchError("");
 
-    const parsedAudio = audioLangs
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    const parsedSubs = subtitleLangs
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
+    const viewerLangs = extractViewerLanguages(viewersRule);
     const parsedCountries = countries
       .split(",")
       .map((s) => s.trim())
@@ -104,10 +92,10 @@ export default function PreferencesPage() {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          audio_languages: parsedAudio,
-          subtitle_languages: parsedSubs,
+          audio_languages: viewerLangs,
+          subtitle_languages: viewerLangs,
           candidate_countries: parsedCountries,
-          language_rule: languageRule,
+          language_rule: viewersRule,
         }),
       });
 
@@ -116,11 +104,9 @@ export default function PreferencesPage() {
       }
 
       const updated: PreferencesData = await res.json();
-      setAudioLangs(formatArrayToCommaString(updated.audio_languages));
-      setSubtitleLangs(formatArrayToCommaString(updated.subtitle_languages));
       setCountries(formatArrayToCommaString(updated.candidate_countries));
-      if (updated.language_rule && updated.language_rule.type === "group") {
-        setLanguageRule(updated.language_rule);
+      if (updated.language_rule && typeof updated.language_rule === "object" && (updated.language_rule as ViewersRuleNode).type === "viewers") {
+        setViewersRule(updated.language_rule as ViewersRuleNode);
       }
       setSaveSuccess(true);
     } catch (err: unknown) {
@@ -128,10 +114,6 @@ export default function PreferencesPage() {
     } finally {
       setSaving(false);
     }
-  };
-
-  const applyTwoViewerPreset = () => {
-    setLanguageRule(TWO_VIEWER_PRESET);
   };
 
   return (
@@ -201,85 +183,30 @@ export default function PreferencesPage() {
       {/* Interactive Preferences Form */}
       {!loading && !fetchError && (
         <form onSubmit={handleSave} className="space-y-8">
-          {/* Custom Boolean Language Rule Section */}
+          {/* V2 Viewer Language Rule Section */}
           <div>
-            <div className="mb-3 flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-bold text-gray-900 dark:text-gray-100">
-                  Custom Boolean Language Rule
-                </h2>
-                <p className="text-xs text-gray-500 dark:text-gray-400">
-                  Build AND/OR condition groups for multi-person viewing requirements.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={applyTwoViewerPreset}
-                className="rounded-lg border border-amber-500 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100 dark:border-amber-600 dark:bg-amber-950/40 dark:text-amber-300 dark:hover:bg-amber-900/60"
-              >
-                ⚡ Add Two-Viewer Preset (EN/IT + JA)
-              </button>
-            </div>
-
-            <LanguageRuleBuilder rule={languageRule} onChange={setLanguageRule} />
+            <ViewerLanguageBuilder rule={viewersRule} onChange={setViewersRule} />
           </div>
 
           <hr className="border-gray-200 dark:border-gray-800" />
 
-          {/* Simple Fallback Language Preferences */}
+          {/* Candidate Countries Section */}
           <div className="space-y-4">
             <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">
-              Fallback Language Preferences
+              Candidate VPN Regions & Countries
             </h2>
 
-            {/* Audio Languages */}
-            <div>
-              <label htmlFor="audio-languages" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                Audio Languages
-              </label>
-              <p className="mb-1.5 text-xs text-gray-500 dark:text-gray-400">
-                Comma-separated canonical language codes (e.g. <code className="font-mono">EN, IT, FR</code>)
-              </p>
-              <input
-                id="audio-languages"
-                type="text"
-                placeholder="EN, IT, FR"
-                value={audioLangs}
-                onChange={(e) => setAudioLangs(e.target.value)}
-                className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm shadow-sm placeholder-gray-400 focus:border-blue-500 focus:outline-none dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
-              />
-            </div>
-
-            {/* Subtitle Languages */}
-            <div>
-              <label htmlFor="subtitle-languages" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                Subtitle Languages
-              </label>
-              <p className="mb-1.5 text-xs text-gray-500 dark:text-gray-400">
-                Comma-separated canonical language codes (e.g. <code className="font-mono">EN, IT, JA</code>)
-              </p>
-              <input
-                id="subtitle-languages"
-                type="text"
-                placeholder="EN, IT, JA"
-                value={subtitleLangs}
-                onChange={(e) => setSubtitleLangs(e.target.value)}
-                className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm shadow-sm placeholder-gray-400 focus:border-blue-500 focus:outline-none dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
-              />
-            </div>
-
-            {/* Candidate Countries */}
             <div>
               <label htmlFor="candidate-countries" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                 Candidate Countries
               </label>
               <p className="mb-1.5 text-xs text-gray-500 dark:text-gray-400">
-                Comma-separated ISO 3166-1 country codes (e.g. <code className="font-mono">us, gb, nl, it</code>)
+                Comma-separated ISO 3166-1 country codes (e.g. <code className="font-mono">us, gb, nl, it, th</code>)
               </p>
               <input
                 id="candidate-countries"
                 type="text"
-                placeholder="us, gb, nl, it"
+                placeholder="us, gb, nl, it, th"
                 value={countries}
                 onChange={(e) => setCountries(e.target.value)}
                 className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm shadow-sm placeholder-gray-400 focus:border-blue-500 focus:outline-none dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
