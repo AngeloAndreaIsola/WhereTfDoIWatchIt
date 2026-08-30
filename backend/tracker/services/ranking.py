@@ -57,11 +57,44 @@ def evaluate_language_rule(
     offer_audio: Iterable[str],
     offer_subs: Iterable[str],
 ) -> bool:
-    """Evaluate nested AND/OR language rule against offer's audio & subtitle languages."""
+    """Evaluate language rule against offer's audio & subtitle languages.
+
+    Supports V1 nested AND/OR group rules and V2 viewers intersection rules:
+    V2 structure:
+      {
+        "type": "viewers",
+        "viewers": [
+          {"name": "Andrea", "languages": ["EN", "IT"]},
+          {"name": "Mayu", "languages": ["JA"]}
+        ]
+      }
+    For V2, an offer is understood if for EVERY viewer, at least one of their spoken languages
+    matches either the offer's audio OR subtitle languages.
+    """
     if not rule or not isinstance(rule, dict):
         return True
 
     node_type = rule.get("type")
+
+    if node_type == "viewers":
+        viewers = rule.get("viewers") or []
+        if not viewers:
+            return True
+
+        offer_audio_langs = set(_normalize_lang_list(offer_audio))
+        offer_sub_langs = set(_normalize_lang_list(offer_subs))
+        offer_all_langs = offer_audio_langs.union(offer_sub_langs)
+
+        for v in viewers:
+            if not isinstance(v, dict):
+                continue
+            v_langs = set(_normalize_lang_list(v.get("languages") or []))
+            if not v_langs:
+                continue
+            if not v_langs.intersection(offer_all_langs):
+                return False
+        return True
+
     if node_type == "group":
         op = (rule.get("op") or "AND").upper()
         children = rule.get("rules") or rule.get("children") or []

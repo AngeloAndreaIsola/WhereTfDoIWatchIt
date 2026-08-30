@@ -2,13 +2,13 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import LanguageRuleBuilder, { GroupNode } from "@/components/LanguageRuleBuilder";
+import ViewerLanguageBuilder, { ViewersRuleNode } from "@/components/ViewerLanguageBuilder";
 
 interface PreferencesData {
   audio_languages: string[];
   subtitle_languages: string[];
   candidate_countries: string[];
-  language_rule?: GroupNode | null;
+  language_rule?: ViewersRuleNode | unknown;
 }
 
 function formatArrayToCommaString(arr: string[] | undefined): string {
@@ -16,26 +16,11 @@ function formatArrayToCommaString(arr: string[] | undefined): string {
   return arr.join(", ");
 }
 
-const TWO_VIEWER_PRESET: GroupNode = {
-  type: "group",
-  op: "OR",
-  rules: [
-    {
-      type: "group",
-      op: "AND",
-      rules: [
-        { type: "condition", field: "audio", languages: ["EN", "IT"] },
-        { type: "condition", field: "subtitle", languages: ["JA"] },
-      ],
-    },
-    {
-      type: "group",
-      op: "AND",
-      rules: [
-        { type: "condition", field: "audio", languages: ["JA"] },
-        { type: "condition", field: "subtitle", languages: ["EN", "IT"] },
-      ],
-    },
+const DEFAULT_VIEWERS_RULE: ViewersRuleNode = {
+  type: "viewers",
+  viewers: [
+    { name: "Andrea", languages: ["EN", "IT"] },
+    { name: "Mayu", languages: ["JA"] },
   ],
 };
 
@@ -43,11 +28,7 @@ export default function PreferencesPage() {
   const [audioLangs, setAudioLangs] = useState("");
   const [subtitleLangs, setSubtitleLangs] = useState("");
   const [countries, setCountries] = useState("");
-  const [languageRule, setLanguageRule] = useState<GroupNode>({
-    type: "group",
-    op: "AND",
-    rules: [],
-  });
+  const [viewersRule, setViewersRule] = useState<ViewersRuleNode>(DEFAULT_VIEWERS_RULE);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -66,8 +47,8 @@ export default function PreferencesPage() {
       setAudioLangs(formatArrayToCommaString(data.audio_languages));
       setSubtitleLangs(formatArrayToCommaString(data.subtitle_languages));
       setCountries(formatArrayToCommaString(data.candidate_countries));
-      if (data.language_rule && data.language_rule.type === "group") {
-        setLanguageRule(data.language_rule);
+      if (data.language_rule && typeof data.language_rule === "object" && (data.language_rule as ViewersRuleNode).type === "viewers") {
+        setViewersRule(data.language_rule as ViewersRuleNode);
       }
     } catch (err: unknown) {
       setFetchError(err instanceof Error ? err.message : "Failed to load preferences");
@@ -107,7 +88,7 @@ export default function PreferencesPage() {
           audio_languages: parsedAudio,
           subtitle_languages: parsedSubs,
           candidate_countries: parsedCountries,
-          language_rule: languageRule,
+          language_rule: viewersRule,
         }),
       });
 
@@ -119,8 +100,8 @@ export default function PreferencesPage() {
       setAudioLangs(formatArrayToCommaString(updated.audio_languages));
       setSubtitleLangs(formatArrayToCommaString(updated.subtitle_languages));
       setCountries(formatArrayToCommaString(updated.candidate_countries));
-      if (updated.language_rule && updated.language_rule.type === "group") {
-        setLanguageRule(updated.language_rule);
+      if (updated.language_rule && typeof updated.language_rule === "object" && (updated.language_rule as ViewersRuleNode).type === "viewers") {
+        setViewersRule(updated.language_rule as ViewersRuleNode);
       }
       setSaveSuccess(true);
     } catch (err: unknown) {
@@ -128,10 +109,6 @@ export default function PreferencesPage() {
     } finally {
       setSaving(false);
     }
-  };
-
-  const applyTwoViewerPreset = () => {
-    setLanguageRule(TWO_VIEWER_PRESET);
   };
 
   return (
@@ -201,27 +178,9 @@ export default function PreferencesPage() {
       {/* Interactive Preferences Form */}
       {!loading && !fetchError && (
         <form onSubmit={handleSave} className="space-y-8">
-          {/* Custom Boolean Language Rule Section */}
+          {/* V2 Viewer Language Rule Section */}
           <div>
-            <div className="mb-3 flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-bold text-gray-900 dark:text-gray-100">
-                  Custom Boolean Language Rule
-                </h2>
-                <p className="text-xs text-gray-500 dark:text-gray-400">
-                  Build AND/OR condition groups for multi-person viewing requirements.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={applyTwoViewerPreset}
-                className="rounded-lg border border-amber-500 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100 dark:border-amber-600 dark:bg-amber-950/40 dark:text-amber-300 dark:hover:bg-amber-900/60"
-              >
-                ⚡ Add Two-Viewer Preset (EN/IT + JA)
-              </button>
-            </div>
-
-            <LanguageRuleBuilder rule={languageRule} onChange={setLanguageRule} />
+            <ViewerLanguageBuilder rule={viewersRule} onChange={setViewersRule} />
           </div>
 
           <hr className="border-gray-200 dark:border-gray-800" />

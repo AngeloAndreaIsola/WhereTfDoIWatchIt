@@ -210,6 +210,27 @@ class PreferenceSerializer(serializers.ModelSerializer):
                 cleaned.append(c)
         return cleaned
 
+    def validate_language_rule(self, value):
+        if value is None:
+            return value
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("Language rule must be a JSON object.")
+
+        rule_type = value.get("type")
+        if rule_type == "viewers":
+            viewers = value.get("viewers")
+            if not isinstance(viewers, list):
+                raise serializers.ValidationError("Viewers field must be a list.")
+            for viewer in viewers:
+                if not isinstance(viewer, dict):
+                    raise serializers.ValidationError("Each viewer must be an object.")
+                langs = viewer.get("languages")
+                if langs is not None:
+                    if not isinstance(langs, list):
+                        raise serializers.ValidationError("Viewer languages must be a list.")
+                    viewer["languages"] = validate_language_codes(langs)
+        return value
+
 
 class WatchlistItemSerializer(serializers.ModelSerializer):
     movie = MovieSerializer(read_only=True)
