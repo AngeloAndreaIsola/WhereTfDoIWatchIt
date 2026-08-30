@@ -87,8 +87,8 @@ describe("frontend page smoke tests", () => {
 
     render(React.createElement(PreferencesPage));
 
-    const audioInput = await screen.findByLabelText("Audio Languages");
-    expect(audioInput).toHaveValue("EN, IT");
+    const countriesInput = await screen.findByLabelText("Candidate Countries");
+    expect(countriesInput).toHaveValue("us, gb");
   });
 
   it("renders watchlist report summary and unavailable rows", async () => {

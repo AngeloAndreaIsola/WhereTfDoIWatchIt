@@ -126,8 +126,8 @@ export default function ViewerLanguageBuilder({ rule, onChange }: ViewerLanguage
         )}
       </div>
 
-      {/* Form to add a new viewer */}
-      <form onSubmit={handleAddViewer} className="rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-900/60">
+      {/* Container to add a new viewer */}
+      <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-900/60">
         <h4 className="mb-3 text-xs font-bold uppercase tracking-wider text-gray-700 dark:text-gray-300">
           + Add Person
         </h4>
@@ -148,6 +148,7 @@ export default function ViewerLanguageBuilder({ rule, onChange }: ViewerLanguage
               placeholder="e.g. Andrea"
               value={newViewerName}
               onChange={(e) => setNewViewerName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleAddViewer(e); }}
               className="w-full rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
             />
           </div>
@@ -161,20 +162,22 @@ export default function ViewerLanguageBuilder({ rule, onChange }: ViewerLanguage
               placeholder="e.g. EN, IT"
               value={newViewerLangsInput}
               onChange={(e) => setNewViewerLangsInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleAddViewer(e); }}
               className="w-full rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-mono text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
             />
           </div>
 
           <div className="sm:col-span-2 flex items-end">
             <button
-              type="submit"
+              type="button"
+              onClick={handleAddViewer}
               className="w-full rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-blue-500 dark:bg-blue-500 dark:hover:bg-blue-400"
             >
               Add Person
             </button>
           </div>
         </div>
-      </form>
+      </div>
     </div>
   );
 }
