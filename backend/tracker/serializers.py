@@ -21,7 +21,19 @@ from .models import (
 class MovieSerializer(serializers.ModelSerializer):
     class Meta:
         model = Movie
-        fields = ["id", "tmdb_id", "title", "year", "poster_path"]
+        fields = [
+            "id",
+            "tmdb_id",
+            "title",
+            "year",
+            "content_type",
+            "poster_path",
+            "overview",
+            "genres",
+            "genre_ids",
+            "cast",
+            "seasons_data",
+        ]
 
 
 class ExternalProviderMappingSerializer(serializers.ModelSerializer):

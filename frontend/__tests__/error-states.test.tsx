@@ -103,17 +103,35 @@ vi.mock(
 function mockFetch(
   responses: Array<{ ok?: boolean; status?: number; body: unknown }>
 ) {
-  const fetchMock = vi.fn();
-  for (const response of responses) {
+  let responseIndex = 0;
+  const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+    if (typeof url === "string" && (url.includes("/api/genres/") || url.includes("/api/search/person/"))) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ results: [] }),
+      };
+    }
+    const response = responses[responseIndex] || responses[responses.length - 1];
+    if (responseIndex < responses.length) {
+      responseIndex++;
+    }
+    if (!response) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({}),
+      };
+    }
     const isOk =
       response.ok ??
       (response.status ? response.status >= 200 && response.status < 300 : true);
-    fetchMock.mockResolvedValueOnce({
+    return {
       ok: isOk,
       status: response.status ?? 200,
       json: async () => response.body,
-    });
-  }
+    };
+  });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
