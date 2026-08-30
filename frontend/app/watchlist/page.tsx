@@ -23,6 +23,7 @@ interface WatchlistItemRow {
     best_offer?: {
       country: string;
       service: string;
+      service_display?: string;
       url: string;
       is_current_country: boolean;
     };
@@ -166,7 +167,7 @@ export default function WatchlistPage() {
         </p>
       </div>
 
-      <FilterBar filters={filters} onChange={setFilters} showStatusFilter={true} />
+      <FilterBar filters={filters} onChange={setFilters} showStatusFilter={true} tab="official" />
 
       {error ? (
         <div className="p-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-xl text-red-800 dark:text-red-200 text-sm font-medium">
@@ -242,7 +243,9 @@ export default function WatchlistPage() {
                             Best way to watch:
                           </p>
                           <p className="text-indigo-600 dark:text-indigo-400 font-semibold">
-                            {bestOffer.service} ({bestOffer.country})
+                            {bestOffer.country
+                              ? `${bestOffer.service_display || bestOffer.service} (${bestOffer.country})`
+                              : (bestOffer.service_display || bestOffer.service)}
                           </p>
                         </div>
                         <button

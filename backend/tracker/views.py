@@ -1104,6 +1104,7 @@ def prime_movie(request, tmdb_id: int):
     from django.conf import settings
     from .services.preferences import resolve_preferences
     from .services.streaming_api import service_display_name
+    from .models import Provider, ProviderCategory
 
     # Resolve or auto-create the Movie row via TMDb.
     try:
@@ -1167,25 +1168,53 @@ def prime_movie(request, tmdb_id: int):
             logger.exception("Live availability fetch failed for tmdb %s", tmdb_id)
         offers = cache._read_offers(movie)
 
-    # Filter to the Prime provider + subscription/free offers only. The provider
-    # is matched against the stable service id ("prime"), which is what
-    # cache._write_result stores in Region.provider.
+    # Filter to Official (Major) + Free Streaming providers, subscription/free
+    # offers only. The provider is matched against the stable service id stored in
+    # Region.provider (e.g. "prime", "bbc_iplayer"). Free providers such as BBC
+    # iPlayer are region-specific and must surface in the official section too.
     provider = getattr(settings, "DEFAULT_PREFERENCE_PROVIDER", "prime")
-    qualifying = [
-        o for o in offers
-        if o.get("service", "").lower() == provider.lower()
-        and o.get("offer_type", "").lower() in ("subscription", "free")
-    ]
 
-    # Rank with the (hardcoded) preference. No country filter — Prime Video
-    # covers all countries, so candidate_countries is empty/unused here.
+    # Build a slug -> Provider lookup so we can classify each offer and resolve
+    # its display name + (fallback) country without N+1 queries.
+    provider_map = {p.slug: p for p in Provider.objects.all()}
+    official_categories = {ProviderCategory.OFFICIAL, ProviderCategory.FREE}
+
+    qualifying = []
+    for o in offers:
+        if o.get("offer_type", "").lower() not in ("subscription", "free"):
+            continue
+        slug = o.get("service", "")
+        prov = provider_map.get(slug)
+        if prov is None:
+            # No known provider row: keep Prime-compatible offers (legacy
+            # behaviour) and skip anything unrecognised to avoid noise.
+            if slug.lower() == provider.lower():
+                qualifying.append(o)
+            continue
+        if prov.category in official_categories:
+            qualifying.append(o)
+
+    # Rank with the (hardcoded) preference. No country filter — these providers
+    # cover all their candidate countries, so candidate_countries is unused here.
     ranked = rank_offers(qualifying, preference)
 
-    # Present the stable service id as its display name ("prime" -> "Prime Video").
+    # Present the stable service id as its display name and expose a source
+    # indicator (Official / Free) so the detail page can badge each offer.
     offers_out = []
     for offer in ranked:
         offer_dict = offer.to_dict()
-        offer_dict["service"] = service_display_name(offer_dict.get("service", ""))
+        slug = offer_dict.get("service", "")
+        prov = provider_map.get(slug)
+        if prov is not None:
+            offer_dict["service"] = prov.name
+            offer_dict["source_indicator"] = prov.source_indicator
+            # Fall back to the provider's primary country when the offer has
+            # none (e.g. a region-specific free provider with country_code set).
+            if not offer_dict.get("country"):
+                offer_dict["country"] = prov.country_code or ""
+        else:
+            # Legacy: Prime-compatible service with no Provider row.
+            offer_dict["service"] = service_display_name(slug)
         offers_out.append(offer_dict)
 
     user_data = UserMovieData.objects.filter(user_id=1, movie=movie).first()

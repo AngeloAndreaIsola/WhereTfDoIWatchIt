@@ -20,6 +20,7 @@ import {
 interface BestOffer {
   country: string;
   service: string;
+  service_display?: string;
   url: string;
   is_current_country: boolean;
 }
@@ -271,7 +272,7 @@ export default function CatalogPage() {
         </button>
       </div>
 
-      <FilterBar filters={filters} onChange={setFilters} showStatusFilter={activeTab === "official"} />
+      <FilterBar filters={filters} onChange={setFilters} showStatusFilter={activeTab === "official"} tab={activeTab} />
 
       {/* Unofficial: Scrape panel */}
       {activeTab === "unofficial" && (
@@ -410,7 +411,9 @@ export default function CatalogPage() {
                                 Best way to watch:
                               </p>
                               <p className="text-indigo-600 dark:text-indigo-400 font-semibold">
-                                {bestOffer.service} ({bestOffer.country})
+                                {bestOffer.country
+                                  ? `${bestOffer.service_display || bestOffer.service} (${bestOffer.country})`
+                                  : (bestOffer.service_display || bestOffer.service)}
                               </p>
                             </div>
                             <button

@@ -31,6 +31,7 @@ export interface PrimeOffer {
   country: string;
   service: string;
   offer_type: "subscription" | "free";
+  source_indicator?: "Official" | "Free" | "Unofficial" | "Scraper";
   quality: string;
   url?: string;
   audio_languages: string[];

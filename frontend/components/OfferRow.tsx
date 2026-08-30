@@ -71,6 +71,21 @@ export default function OfferRow({
           <span className="rounded-md bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700 dark:bg-gray-700 dark:text-gray-300">
             {offer.service}
           </span>
+          {offer.source_indicator && (
+            <span
+              className={`rounded-md px-2 py-0.5 text-xs font-medium ${
+                offer.source_indicator === "Free"
+                  ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300"
+                  : offer.source_indicator === "Official"
+                  ? "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300"
+                  : offer.source_indicator === "Unofficial"
+                  ? "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+                  : "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300"
+              }`}
+            >
+              {offer.source_indicator}
+            </span>
+          )}
           <span
             className={`rounded-md px-2 py-0.5 text-xs font-medium ${
               offer.offer_type === "free"

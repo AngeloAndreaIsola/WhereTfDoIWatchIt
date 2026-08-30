@@ -15,6 +15,7 @@ from tracker.services.ranking import (
     _normalize_lang_list,
     evaluate_language_rule,
 )
+from tracker.services.streaming_api import service_display_name
 
 
 class WatchabilityStatus:
@@ -32,6 +33,7 @@ class EvaluatedOffer:
     quality: str
     url: str
     price_info: str = ""
+    service_display: str = ""
     is_qualifying_offer_type: bool = False
     is_user_subscribed: bool = False
     is_language_match: bool = True
@@ -49,6 +51,7 @@ class EvaluatedOffer:
             "quality": self.quality,
             "url": self.url,
             "price_info": self.price_info,
+            "service_display": self.service_display,
             "is_qualifying_offer_type": self.is_qualifying_offer_type,
             "is_user_subscribed": self.is_user_subscribed,
             "is_language_match": self.is_language_match,
@@ -114,6 +117,14 @@ def evaluate_watchability(
     curr_country = (current_country or "").upper().strip()
     candidate_countries = {c.upper().strip() for c in (preference.candidate_countries or [])}
 
+    # Provider lookup for display names + country fallback. Scraped/free sources
+    # may carry no country on their offer; fall back to the provider's own
+    # country_code so the UI can show e.g. "BBC iPlayer (GB)" instead of "()".
+    provider_map = {
+        p.slug: p
+        for p in Provider.objects.only("slug", "name", "country_code")
+    }
+
     if not offers:
         return WatchabilityResult(
             movie_id=movie.id,
@@ -150,6 +161,11 @@ def evaluate_watchability(
         country = (raw.get("country") or "").upper().strip()
         service = raw.get("service") or raw.get("provider") or ""
         service_clean = service.lower().strip()
+        provider_rec = provider_map.get(service_clean)
+        service_display = provider_rec.name if provider_rec else service_display_name(service)
+        country_display = country or (
+            provider_rec.country_code if (provider_rec and provider_rec.country_code) else ""
+        )
         offer_type = (raw.get("offer_type") or "").lower().strip()
         quality = raw.get("quality") or ""
         url = raw.get("url") or ""
@@ -219,8 +235,9 @@ def evaluate_watchability(
         is_watchable = is_qualifying_type and is_subscribed and is_lang_match and (is_curr or is_cand)
 
         eval_offer = EvaluatedOffer(
-            country=country,
+            country=country_display,
             service=service,
+            service_display=service_display,
             offer_type=offer_type,
             quality=quality,
             url=url,

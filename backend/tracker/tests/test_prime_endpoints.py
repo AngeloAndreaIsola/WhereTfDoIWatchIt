@@ -152,8 +152,8 @@ class PrimeMovieEndpointTests(TestCase):
 
     @patch("tracker.views.TMDbClient")
     @patch("tracker.views.AvailabilityCache")
-    def test_returns_ranked_prime_offers(self, mock_cache_cls, mock_tmdb_cls):
-        """Prime movie endpoint returns ranked, filtered offers."""
+    def test_returns_ranked_official_and_free_offers(self, mock_cache_cls, mock_tmdb_cls):
+        """Detail endpoint returns ranked Official (Major) + Free offers, not scrapers."""
         from tracker.services.tmdb import TMDbMovie
 
         # Create a movie in the DB
@@ -169,8 +169,16 @@ class PrimeMovieEndpointTests(TestCase):
              "quality": "4k", "audio": ["JA", "EN"], "subs": ["EN", "JA"]},
             {"country": "US", "service": "prime", "offer_type": "subscription",
              "quality": "hd", "audio": ["EN"], "subs": ["EN"]},
+            # A Free Streaming Provider (e.g. BBC iPlayer) — must be included.
+            {"country": "GB", "service": "bbc_iplayer", "offer_type": "free",
+             "quality": "hd", "audio": ["EN"], "subs": ["EN"]},
+            # A Major (Netflix) — included now that the section is Official + Free.
             {"country": "GB", "service": "netflix", "offer_type": "subscription",
-             "quality": "hd", "audio": ["EN"], "subs": ["EN"]},  # Should be filtered out
+             "quality": "hd", "audio": ["EN"], "subs": ["EN"]},
+            # A scraper (Imported Small Source) — must be filtered out of the
+            # official section (it lives in the separate Unofficial Sources block).
+            {"country": "", "service": "hydrahd", "offer_type": "free",
+             "quality": "hd", "audio": ["EN"], "subs": ["EN"], "is_scraped_source": True},
         ]
         mock_cache.get_or_refresh.return_value = None
 
@@ -181,14 +189,23 @@ class PrimeMovieEndpointTests(TestCase):
         data = response.json()
         self.assertEqual(data["movie"]["tmdb_id"], 550)
         self.assertEqual(data["movie"]["title"], "Fight Club")
-        # Only Prime offers should be present (Netflix filtered out)
-        self.assertEqual(len(data["offers"]), 2)
+        # Prime + Free (bbc_iplayer) + Major (netflix); hydrahd scraper excluded.
+        services = [o["service"] for o in data["offers"]]
+        self.assertEqual(len(data["offers"]), 4)
+        self.assertIn("BBC iPlayer", services)
+        self.assertIn("Netflix", services)
+        self.assertNotIn("HydraHD", services)
         # JA audio should be ranked first (rank 0)
         self.assertEqual(data["offers"][0]["country"], "JP")
         self.assertEqual(data["offers"][0]["audio_languages"], ["JA", "EN"])
         self.assertEqual(data["offers"][0]["ranking"]["audio_rank"], 0)
         # The stable service id "prime" is presented as its display name.
         self.assertEqual(data["offers"][0]["service"], "Prime Video")
+        # Free providers carry a "Free" source indicator.
+        bbc = next(o for o in data["offers"] if o["service"] == "BBC iPlayer")
+        self.assertEqual(bbc["source_indicator"], "Free")
+        # Free provider offers get a country fallback from the Provider row.
+        self.assertEqual(bbc["country"], "GB")
 
     @patch("tracker.views.TMDbClient")
     @patch("tracker.views.AvailabilityCache")

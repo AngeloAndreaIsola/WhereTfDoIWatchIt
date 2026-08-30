@@ -18,11 +18,12 @@ interface FilterBarProps {
   filters: FilterState;
   onChange: (newFilters: FilterState) => void;
   showStatusFilter?: boolean;
+  tab?: "official" | "unofficial";
 }
 
-export function FilterBar({ filters, onChange, showStatusFilter = true }: FilterBarProps) {
+export function FilterBar({ filters, onChange, showStatusFilter = true, tab }: FilterBarProps) {
   const [genres, setGenres] = useState<{ id: number; name: string }[]>([]);
-  const [providers, setProviders] = useState<{ id: number; slug: string; name: string }[]>([]);
+  const [providers, setProviders] = useState<{ id: number; slug: string; name: string; category?: string; is_major?: boolean }[]>([]);
   const [actorSearch, setActorSearch] = useState("");
   const [actorSuggestions, setActorSuggestions] = useState<{ id: number; name: string }[]>([]);
   const [showActorDropdown, setShowActorSuggestions] = useState(false);
@@ -40,11 +41,23 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
       .then((data) => {
         if (Array.isArray(data)) {
           const active = data.filter((p: { is_subscribed?: boolean }) => p.is_subscribed);
-          setProviders(active.length > 0 ? active : data);
+          const base = active.length > 0 ? active : data;
+          // Restrict the provider filter to sources relevant for the active tab:
+          //   official   → Major + Free streaming providers (no scrapers/small sources)
+          //   unofficial → Major + Free streaming providers (the user confirmed small
+          //                imported sources should NOT appear in the official filter, and
+          //                Major + Free should appear in the unofficial filter)
+          const filtered = tab
+            ? base.filter(
+                (p: { category?: string; is_major?: boolean }) =>
+                  p.is_major || p.category === "free" || p.category === "official"
+              )
+            : base;
+          setProviders(filtered);
         }
       })
       .catch(() => {});
-  }, []);
+  }, [tab]);
 
   useEffect(() => {
     if (actorSearch.trim().length < 2) {

@@ -44,7 +44,13 @@ export default function SubscriptionsPage() {
     try {
       const res = await fetch(`/api/providers/${slug}/toggle/`, { method: "POST" });
       if (res.ok) {
-        await fetchProviders();
+        // Update just this provider's subscription flag in place so the page
+        // doesn't flash back to the loading state (which jumps the scroll to top).
+        setProviders((prev) =>
+          prev.map((p) =>
+            p.slug === slug ? { ...p, is_subscribed: !p.is_subscribed } : p
+          )
+        );
       }
     } catch (err) {
       console.error(`Failed to toggle provider ${slug}:`, err);
