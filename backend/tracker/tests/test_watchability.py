@@ -42,6 +42,8 @@ class WatchabilityEvaluationTests(TestCase):
             "offer_type": "subscription",
             "quality": "4k",
             "url": "https://netflix.com/watch/1",
+            "audio_languages": ["EN"],
+            "subtitle_languages": ["EN"],
         }]
         res = evaluate_watchability(
             self.movie,
@@ -112,3 +114,71 @@ class WatchabilityEvaluationTests(TestCase):
         self.assertEqual(res.status_symbol, "⚫")
         self.assertEqual(len(res.excluded_offers), 1)
         self.assertIn("Only available to rent", res.excluded_offers[0].rejection_reasons[0])
+
+    def test_scraped_source_bypasses_vpn_but_respects_language_match(self):
+        offers = [{
+            "country": "BR",  # Brazil is not in candidate_countries
+            "service": "scraped_site",
+            "offer_type": "free",
+            "quality": "hd",
+            "url": "https://scraped.site/watch",
+            "audio_languages": ["EN"],
+            "subtitle_languages": ["EN"],
+            "is_scraped_source": True,
+        }]
+        res = evaluate_watchability(
+            self.movie,
+            offers,
+            self.pref,
+            current_country="US",
+            user_subscriptions={"scraped_site"},
+        )
+        self.assertEqual(res.status, WatchabilityStatus.WATCHABLE_HERE)
+        self.assertEqual(len(res.watchable_offers), 1)
+        self.assertTrue(res.watchable_offers[0].is_language_match)
+
+    def test_scraped_source_fails_language_match(self):
+        offers = [{
+            "country": "BR",
+            "service": "scraped_site",
+            "offer_type": "free",
+            "quality": "hd",
+            "url": "https://scraped.site/watch",
+            "audio_languages": ["FR"],
+            "subtitle_languages": ["FR"],
+            "is_scraped_source": True,
+        }]
+        res = evaluate_watchability(
+            self.movie,
+            offers,
+            self.pref,
+            current_country="US",
+            user_subscriptions={"scraped_site"},
+        )
+        self.assertEqual(res.status, WatchabilityStatus.NOT_WATCHABLE)
+        self.assertEqual(len(res.excluded_offers), 1)
+        self.assertFalse(res.excluded_offers[0].is_language_match)
+        self.assertIn("Does not satisfy language rules", res.excluded_offers[0].rejection_reasons)
+
+    def test_unknown_language_marked_as_unknown(self):
+        offers = [{
+            "country": "US",
+            "service": "scraped_site",
+            "offer_type": "free",
+            "quality": "hd",
+            "url": "https://scraped.site/watch",
+            "audio_languages": [],
+            "subtitle_languages": [],
+            "is_scraped_source": True,
+        }]
+        res = evaluate_watchability(
+            self.movie,
+            offers,
+            self.pref,
+            current_country="US",
+            user_subscriptions={"scraped_site"},
+        )
+        self.assertEqual(res.status, WatchabilityStatus.NOT_WATCHABLE)
+        self.assertEqual(len(res.excluded_offers), 1)
+        self.assertFalse(res.excluded_offers[0].is_language_match)
+        self.assertIn("Language information unknown", res.excluded_offers[0].rejection_reasons)
