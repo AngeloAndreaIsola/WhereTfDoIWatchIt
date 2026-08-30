@@ -43,14 +43,14 @@ export function FilterBar({ filters, onChange, showStatusFilter = true, tab }: F
           const active = data.filter((p: { is_subscribed?: boolean }) => p.is_subscribed);
           const base = active.length > 0 ? active : data;
           // Restrict the provider filter to sources relevant for the active tab:
-          //   official   → Major + Free streaming providers (no scrapers/small sources)
-          //   unofficial → Major + Free streaming providers (the user confirmed small
-          //                imported sources should NOT appear in the official filter, and
-          //                Major + Free should appear in the unofficial filter)
+          //   official   → Major (Official) + Free Streaming Providers
+          //                (Imported Small Providers & Sources / scrapers excluded)
+          //   unofficial → scrapers only (Imported Small Providers & Sources)
           const filtered = tab
-            ? base.filter(
-                (p: { category?: string; is_major?: boolean }) =>
-                  p.is_major || p.category === "free" || p.category === "official"
+            ? base.filter((p: { category?: string; is_major?: boolean }) =>
+                tab === "official"
+                  ? p.is_major || p.category === "free" || p.category === "official"
+                  : p.category === "scraper"
               )
             : base;
           setProviders(filtered);

@@ -5,10 +5,14 @@ from django.core.management.base import BaseCommand
 from tracker.models import Provider, ProviderCategory
 
 # Unofficial / priority scraper sources per docs/PLAN.md Phase A/B.
+# NOTE: bbc_iplayer, rai-play and nhk are seeded as Free Streaming Providers by
+# the migrations (0011 / 0014 / 0018) — they are public broadcasters, not scrapers.
+# This command only seeds the small imported scraper sources (KissKH, HydraHD,
+# AnimeWorld) when missing; it will not downgrade a Free provider back to scraper.
 UNOFFICIAL_PROVIDERS = [
-    {"slug": "rai-play", "name": "RaiPlay", "country": "IT", "domain": "raiplay.it", "url": "https://www.raiplay.it"},
-    {"slug": "bbc", "name": "BBC", "country": "GB", "domain": "bbc.co.uk", "url": "https://www.bbc.co.uk"},
-    {"slug": "nhk", "name": "NHK", "country": "JP", "domain": "nhk.or.jp", "url": "https://www.nhk.or.jp"},
+    {"slug": "kisskh", "name": "KissKH", "country": "", "domain": "kisskh.co", "url": "https://kisskh.co"},
+    {"slug": "hydrahd", "name": "HydraHD", "country": "", "domain": "hydrahd.org", "url": "https://hydrahd.org"},
+    {"slug": "animeworld", "name": "AnimeWorld", "country": "", "domain": "animeworld.to", "url": "https://animeworld.to"},
 ]
 
 

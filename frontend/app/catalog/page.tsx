@@ -237,7 +237,7 @@ export default function CatalogPage() {
           Catalog
         </h1>
         <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-          Browse titles from official streaming services and unofficial sources.
+          Browse titles from official streaming services and free providers.
         </p>
       </div>
 

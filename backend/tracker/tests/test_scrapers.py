@@ -124,7 +124,7 @@ class NHKScraperTest(TestCase):
         items = self.scraper.run(query="Japan Railway Journal")
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0].title, "Japan Railway Journal")
-        self.assertEqual(items[0].provider_slug, "nhk")
+        self.assertEqual(items[0].provider_slug, "nhk_world")
         self.assertIn("JA", items[0].audio_languages)
         self.assertTrue({"EN", "JA"}.issubset(set(items[0].subtitle_languages)))
 
@@ -167,7 +167,7 @@ class ScraperRegistryTest(TestCase):
     """The registry drives both the v1 scraper views and the v2/unofficial API."""
 
     def test_priority_sources_registered(self):
-        for slug in ("bbc_iplayer", "nhk", "rai-play"):
+        for slug in ("bbc_iplayer", "nhk_world", "rai-play"):
             self.assertIn(slug, SCRAPER_REGISTRY)
             # resolve_scraper_class returns an instantiable scraper class
             cls = resolve_scraper_class(slug)
@@ -182,17 +182,21 @@ class ScraperRegistryTest(TestCase):
         self.assertIsInstance(instance, BBCScraper)
 
     def test_get_or_create_provider_from_registry_slug(self):
-        """Providers referenced by the registry exist or can be created."""
-        for slug in ("bbc_iplayer", "nhk", "rai-play"):
+        """Providers referenced by the registry exist or can be created.
+
+        bbc_iplayer / rai-play / nhk are seeded as Free Streaming Providers by
+        the migrations, so they are NOT scrapers — assert that here.
+        """
+        for slug in ("bbc_iplayer", "nhk_world", "rai-play"):
             provider, _ = Provider.objects.get_or_create(
                 slug=slug,
                 defaults={
                     "name": slug,
-                    "category": ProviderCategory.SCRAPER,
+                    "category": ProviderCategory.FREE,
                     "is_enabled": True,
                 },
             )
-            # Migration 0011 seeds some as 'free'; ensure they're SCRAPER now.
-            provider.category = ProviderCategory.SCRAPER
+            # Migrations seed these public broadcasters as 'free'.
+            provider.category = ProviderCategory.FREE
             provider.save()
-            self.assertEqual(provider.category, ProviderCategory.SCRAPER)
+            self.assertEqual(provider.category, ProviderCategory.FREE)

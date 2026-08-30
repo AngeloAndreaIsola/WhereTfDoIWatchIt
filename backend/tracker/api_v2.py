@@ -78,12 +78,16 @@ def unofficial_catalog(request):
     subtitle_lang = (request.GET.get("subtitle_lang") or "").strip().upper()
     query = (request.GET.get("q") or "").strip()
     available_only = request.GET.get("available", "true").lower() != "false"
+    # The Unofficial Sources tab lists Imported Small Providers & Sources (scrapers).
+    # Official Free Streaming Providers (bbc_iplayer, raiplay, nhk, ...) are served
+    # by the official /api/catalog/ endpoint, so they are excluded here by default.
+    # include_official=true re-adds them for the combined scrape view.
     include_official = request.GET.get("include_official", "").lower() == "true"
 
-    # Start with unofficial + scraper providers (and optionally official/free)
-    categories = ["unofficial", "scraper"]
+    # Default: scrapers only. Official + Free providers live in the official tab.
+    categories = ["scraper"]
     if include_official:
-        categories = ["official", "free", "unofficial", "scraper"]
+        categories = ["official", "free", "scraper"]
 
     qs = ScrapedContentMapping.objects.select_related("provider", "movie")
     qs = qs.filter(provider__category__in=categories, provider__is_enabled=True)
@@ -342,12 +346,14 @@ def unofficial_movie_offers(request, tmdb_id: int):
 def unofficial_providers(request):
     """GET /api/v2/unofficial/providers/
 
-    List unofficial + scraper providers with their source indicators and
-    staleness status.
+    List scraper (Imported Small Providers & Sources) providers with their
+    source indicators and staleness status. Official Free Streaming Providers
+    are not part of the Unofficial Sources tab.
     """
-    categories = ["unofficial", "scraper"]
+    # Scrapers only by default. include_official=true re-adds Major + Free.
+    categories = ["scraper"]
     if request.GET.get("include_official", "") == "true":
-        categories = ["official", "free", "unofficial", "scraper"]
+        categories = ["official", "free", "scraper"]
 
     providers = Provider.objects.filter(
         category__in=categories, is_enabled=True

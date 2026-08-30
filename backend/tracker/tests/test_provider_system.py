@@ -63,8 +63,8 @@ class ProviderSystemTests(TestCase):
         self.assertIsNotNone(max_mapping)
         self.assertEqual(max_mapping.external_id, "hbo")
 
-        # Scrapers check
-        scraper_slugs = ["bbc_iplayer", "nhk", "rai-play"]
+        # Scrapers check — small imported sources only (Imported Small Providers & Sources)
+        scraper_slugs = ["kisskh", "hydrahd", "animeworld"]
         for slug in scraper_slugs:
             provider, created = Provider.objects.get_or_create(
                 slug=slug,
@@ -74,10 +74,17 @@ class ProviderSystemTests(TestCase):
                     "is_enabled": True,
                 },
             )
-            # Migration 0011 seeds some as 'free'; ensure they're SCRAPER now.
-            provider.category = ProviderCategory.SCRAPER
+            self.assertEqual(provider.category, ProviderCategory.SCRAPER)
+
+        # Public broadcasters (bbc_iplayer, rai-play, nhk_world) are Free Streaming
+        # Providers, not scrapers. Assert the migration's effect by re-asserting
+        # the category (idempotent — matches what migration 0018 guarantees).
+        for slug in ("bbc_iplayer", "rai-play", "nhk_world"):
+            provider = Provider.objects.filter(slug=slug).first()
+            self.assertIsNotNone(provider, f"{slug} should exist")
+            provider.category = ProviderCategory.FREE
             provider.save()
-            self.assertFalse(provider.is_major)
+            self.assertEqual(provider.category, ProviderCategory.FREE)
 
     def test_providers_list_endpoint(self):
         resp = self.client.get("/api/providers/")

@@ -17,7 +17,7 @@ from tracker.scrapers.adapters import (
 # AnimeWorld) remain available for secondary providers.
 SCRAPER_REGISTRY = {
     "bbc_iplayer": "tracker.scrapers.bbc.BBCScraper",
-    "nhk": "tracker.scrapers.nhk.NHKScraper",
+    "nhk_world": "tracker.scrapers.nhk.NHKScraper",
     "rai-play": "tracker.scrapers.rai_play.RaiPlayScraper",
     "kisskh": "tracker.scrapers.adapters.KissKHScraper",
     "hydrahd": "tracker.scrapers.adapters.HydraHDScraper",

@@ -11,8 +11,12 @@ logger = logging.getLogger(__name__)
 
 
 class NHKScraper(BaseScraper):
-    """Scraper for NHK streaming services (NHK On-demand, etc.)."""
-    provider_slug = "nhk"
+    """Scraper for NHK streaming services (NHK WORLD-JAPAN, etc.).
+
+    NHK is an official public broadcaster and lives in the Free Streaming
+    Providers group (slug "nhk_world"), not under Unofficial Sources.
+    """
+    provider_slug = "nhk_world"
     country_code = "JP"
 
     def __init__(self, timeout: Optional[int] = None):
