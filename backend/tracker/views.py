@@ -72,6 +72,7 @@ from .services.cache import AvailabilityCache
 from .services.letterboxd import import_rows, parse_file_or_zip
 from .services.ranking import rank_offers
 from .services.rate_limit import RateLimitExceeded
+from .services.enrichment import enrich_movie_from_tmdb, sync_movie_fields
 from .services.tmdb import TMDbClient, TMDbMovie
 
 logger = logging.getLogger(__name__)
@@ -1042,54 +1043,6 @@ def _popular_movie_dict(movie: TMDbMovie) -> dict:
     }
 
 
-def _enrich_movie_from_tmdb(movie: Movie) -> None:
-    """Refresh sparse TMDb metadata on a Movie row (overview/cast/director/rating/etc).
-
-    No-op if TMDb is unconfigured or the fetch fails, so the detail page still
-    renders with whatever is already cached. Only writes fields that are empty
-    or changed, to avoid needless UPDATEs.
-    """
-    if not TMDbClient.is_configured():
-        return
-    client = TMDbClient(settings.TMDB_API_KEY)
-    try:
-        details = client.details(movie.tmdb_id, content_type=movie.content_type)
-    except Exception:
-        logger.exception("TMDb details fetch failed for movie %s", movie.pk)
-        return
-
-    # Guard against non-TMDbItem returns (e.g. an unconfigured mock in tests).
-    if not isinstance(details, TMDbMovie):
-        return
-
-    needs_update = False
-    if details.overview and movie.overview != details.overview:
-        movie.overview = details.overview
-        needs_update = True
-    if details.poster_path and movie.poster_path != details.poster_path:
-        movie.poster_path = details.poster_path
-        needs_update = True
-    if details.genres and movie.genres != details.genres:
-        movie.genres = details.genres
-        needs_update = True
-    if details.genre_ids and movie.genre_ids != details.genre_ids:
-        movie.genre_ids = details.genre_ids
-        needs_update = True
-    if details.cast and movie.cast != details.cast:
-        movie.cast = details.cast
-        needs_update = True
-    if details.director is not None and movie.director != details.director:
-        movie.director = details.director
-        needs_update = True
-    if details.rating is not None and movie.tmdb_rating != details.rating:
-        movie.tmdb_rating = details.rating
-        needs_update = True
-    if details.year and movie.year != details.year:
-        movie.year = details.year
-        needs_update = True
-    if needs_update:
-        movie.save()
-
 
 @api_view(["GET"])
 def prime_movie(request, tmdb_id: int):
@@ -1135,10 +1088,8 @@ def prime_movie(request, tmdb_id: int):
     # Resolve preferences (hardcoded defaults if no DB row).
     pref_dict = resolve_preferences(user_id=1)
 
-    # Backfill sparse TMDb metadata (overview/cast/director/rating/poster) so the
-    # detail page has something to show even when the Movie row was created from a
-    # shallow source. Non-fatal: any TMDb failure is logged and ignored.
-    _enrich_movie_from_tmdb(movie)
+    # Backfill sparse TMDb metadata so the detail page has something to show.
+    enrich_movie_from_tmdb(movie)
 
     # Build a Preference-like object for rank_offers (which expects a Preference
     # instance with audio_languages, subtitle_languages, candidate_countries).
@@ -1338,30 +1289,8 @@ def movie_detail(request, pk: int):
     client = TMDbClient(settings.TMDB_API_KEY)
     try:
         details = client.details(movie.tmdb_id, content_type=movie.content_type)
-        needs_update = False
-        if details.overview and movie.overview != details.overview:
-            movie.overview = details.overview
-            needs_update = True
-        if details.poster_path and movie.poster_path != details.poster_path:
-            movie.poster_path = details.poster_path
-            needs_update = True
-        if details.genres and movie.genres != details.genres:
-            movie.genres = details.genres
-            needs_update = True
-        if details.genre_ids and movie.genre_ids != details.genre_ids:
-            movie.genre_ids = details.genre_ids
-            needs_update = True
-        if details.cast and movie.cast != details.cast:
-            movie.cast = details.cast
-            needs_update = True
-        if details.director is not None and movie.director != details.director:
-            movie.director = details.director
-            needs_update = True
-        if details.rating is not None and movie.tmdb_rating != details.rating:
-            movie.tmdb_rating = details.rating
-            needs_update = True
-        if needs_update:
-            movie.save()
+        if isinstance(details, TMDbMovie):
+            sync_movie_fields(movie, details)
     except Exception:
         logger.exception("TMDb details fetch failed for movie %s", pk)
 
@@ -1411,13 +1340,10 @@ def link_tmdb(request, pk: int):
         movie.title = new_title
         movie.year = details.year
         movie.content_type = details.content_type
-        movie.poster_path = details.poster_path or ""
-        movie.overview = details.overview or ""
-        movie.genres = details.genres or []
-        movie.genre_ids = details.genre_ids or []
-        movie.cast = details.cast or []
-        movie.seasons_data = details.seasons_data or []
-        movie.tmdb_rating = details.rating
+        sync_movie_fields(movie, details)
+        # tmdb_id / title / year / content_type are set above but may not
+        # trigger a save inside sync_movie_fields (those fields aren't tracked
+        # there). Force a save so the full set of changes lands atomically.
         movie.save()
 
         # Invalidate cached availability for the old tmdb_id if it differs
