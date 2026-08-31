@@ -17,6 +17,7 @@ from typing import Iterable, Optional
 
 from tracker.languages import normalize_language_code
 from tracker.models import Preference
+from .offers import Offer
 
 QUALITY_RANK = {"4k": 0, "uhd": 0, "hdr": 1, "qhd": 1, "hd": 2, "sd": 3}
 
@@ -123,13 +124,12 @@ def evaluate_language_rule(
 
 
 def score_offer(
-    offer: dict,
+    offer: Offer | dict,
     preference: Preference,
 ) -> ScoredOffer:
     """Score a single offer against a preference.
 
-    Returns a ScoredOffer with is_match, score_tuple, audio_rank, sub_rank,
-    and quality_rank. Consumers build their own output shapes from these values.
+    Accepts either an Offer dataclass or a legacy dict.
     """
     lang_rule = getattr(preference, "language_rule", None)
     if lang_rule and isinstance(lang_rule, dict) and lang_rule.get("type") == "viewers":
@@ -150,14 +150,20 @@ def score_offer(
     audio_priority = {code: i for i, code in enumerate(pref_audio)}
     sub_priority = {code: i for i, code in enumerate(pref_subs)}
 
-    raw_audio = offer.get("audio") or offer.get("audio_languages") or []
-    raw_subs = offer.get("subs") or offer.get("subtitle_languages") or []
+    if isinstance(offer, Offer):
+        raw_audio = offer.audio_languages
+        raw_subs = offer.subtitle_languages
+        quality = (offer.quality or "").lower()
+    else:
+        raw_audio = offer.get("audio") or offer.get("audio_languages") or []
+        raw_subs = offer.get("subs") or offer.get("subtitle_languages") or []
+        quality = (offer.get("quality") or "").lower()
+
     audio = _normalize_lang_list(raw_audio)
     subs = _normalize_lang_list(raw_subs)
 
     audio_rank = _min_rank(audio, audio_priority)
     sub_rank = _min_rank(subs, sub_priority)
-    quality = (offer.get("quality") or "").lower()
     quality_rank = QUALITY_RANK.get(quality, 99)
 
     if lang_rule and isinstance(lang_rule, dict) and bool(lang_rule):

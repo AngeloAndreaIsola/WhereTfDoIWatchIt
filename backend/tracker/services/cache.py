@@ -17,6 +17,7 @@ from django.utils import timezone
 
 from tracker.languages import normalize_language_code
 from ..models import Availability, LanguageEntry, LanguageInfo, Movie, Region
+from .offers import Offer
 from .rate_limit import RateLimitExceeded, RateLimiter
 from .streaming_api import StreamingAvailabilityClient, StreamingResult
 
@@ -124,8 +125,8 @@ class AvailabilityCache:
             written += 1
         return written
 
-    def _read_offers(self, movie: Movie) -> list[dict]:
-        rows = []
+    def _read_offers(self, movie: Movie) -> list[Offer]:
+        rows: list[Offer] = []
         for avail in movie.availabilities.select_related("region").all():
             info = (
                 LanguageInfo.objects.filter(movie=movie, region=avail.region)
@@ -142,15 +143,15 @@ class AvailabilityCache:
                     elif entry.kind == "subtitle" and norm not in subs:
                         subs.append(norm)
             rows.append(
-                {
-                    "country": avail.region.country,
-                    "service": avail.region.provider,
-                    "offer_type": avail.offer_type,
-                    "quality": avail.quality,
-                    "url": avail.url,
-                    "audio": audio,
-                    "subs": subs,
-                }
+                Offer(
+                    country=avail.region.country,
+                    service=avail.region.provider,
+                    offer_type=avail.offer_type,
+                    quality=avail.quality,
+                    url=avail.url,
+                    audio_languages=audio,
+                    subtitle_languages=subs,
+                )
             )
 
         from tracker.models import ScrapedContentMapping
@@ -165,16 +166,16 @@ class AvailabilityCache:
             audio = payload.get("audio_languages", []) if isinstance(payload, dict) else []
             subs = payload.get("subtitle_languages", []) if isinstance(payload, dict) else []
             rows.append(
-                {
-                    "country": payload.get("country", "") if isinstance(payload, dict) else (mapping.country_code or ""),
-                    "service": mapping.provider.slug,
-                    "offer_type": "free",
-                    "quality": mapping.provider.config.get("quality", "") if mapping.provider.config else "",
-                    "url": mapping.scraped_url or "",
-                    "audio": [str(a).upper() for a in audio],
-                    "subs": [str(s).upper() for s in subs],
-                    "is_scraped_source": True,
-                }
+                Offer(
+                    country=payload.get("country", "") if isinstance(payload, dict) else (mapping.country_code or ""),
+                    service=mapping.provider.slug,
+                    offer_type="free",
+                    quality=mapping.provider.config.get("quality", "") if mapping.provider.config else "",
+                    url=mapping.scraped_url or "",
+                    audio_languages=[str(a).upper() for a in audio],
+                    subtitle_languages=[str(s).upper() for s in subs],
+                    is_scraped_source=True,
+                )
             )
 
         return rows
