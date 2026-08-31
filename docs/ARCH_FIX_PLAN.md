@@ -1,7 +1,7 @@
 # Architecture Fix — Implementation Plan
 
 Completed: Candidate 1 (enrichment scatter) — `e6e3ce8`.
-Completed: Candidate 4 (presentation seam) — set after first commit.
+Completed: Candidate 4 (presentation seam) — `b21130e`.
 
 ---
 
