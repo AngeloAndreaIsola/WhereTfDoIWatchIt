@@ -135,6 +135,13 @@ class GenericURLAdapter(BaseScraper):
 class HydraHDScraper(BaseScraper):
     provider_slug = "hydrahd"
 
+    HEADERS = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://hydrahd.ws/",
+    }
+
     def _execute_run(self, query: Optional[str] = None) -> list[ScrapedItem]:
         if not query:
             logger.info("HydraHD scraper: no query provided, scraping recently added...")
@@ -144,7 +151,7 @@ class HydraHDScraper(BaseScraper):
                     for domain in ["hydrahd.ws", "hydrahd.ru"]:
                         url = f"https://{domain}/{category}/date/{page}"
                         logger.info("HydraHD scraper: fetching %s", url)
-                        resp_data = self.fetch_url_with_headers(url)
+                        resp_data = self.fetch_url(url, headers=self.HEADERS)
                         if resp_data and isinstance(resp_data, str):
                             page_items = getattr(self, "parse_html", lambda x: [])(resp_data)
                             if page_items:
@@ -160,7 +167,7 @@ class HydraHDScraper(BaseScraper):
 
         for url in urls_to_try:
             logger.info("HydraHD scraper: trying %s", url)
-            resp_data = self.fetch_url_with_headers(url)
+            resp_data = self.fetch_url(url, headers=self.HEADERS)
             if resp_data:
                 if isinstance(resp_data, dict):
                     results = resp_data.get("results") or []
@@ -174,32 +181,6 @@ class HydraHDScraper(BaseScraper):
 
         logger.warning("HydraHD scraper: all URLs failed")
         return []
-
-    def fetch_url_with_headers(self, url: str) -> Optional[dict | str]:
-        """Fetch URL with proper headers to avoid 403 blocks."""
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Referer": "https://hydrahd.ws/",
-        }
-
-        for attempt in range(1 + self.max_retries):
-            try:
-                resp = self.session.get(url, timeout=self.timeout, headers=headers, allow_redirects=True)
-                resp.raise_for_status()
-                try:
-                    return resp.json()
-                except ValueError:
-                    return resp.text
-            except Exception as exc:
-                logger.warning(
-                    "HydraHD scraper attempt %d for %s failed: %s",
-                    attempt + 1,
-                    url,
-                    exc,
-                )
-        return None
 
     def parse_items(self, raw_data: Any) -> list[ScrapedItem]:
         items: list[ScrapedItem] = []
