@@ -1192,11 +1192,19 @@ def prime_movie(request, tmdb_id: int):
                 qualifying.append(o)
             continue
         if prov.category in official_categories:
+            # Backfill the offer's country from the provider's primary country so
+            # region-specific Free providers (e.g. bbc_iplayer -> GB) rank and
+            # display correctly. Without this the offer carries an empty country
+            # and rank_offers would drop it against candidate_countries.
+            if not o.get("country") and prov.country_code:
+                o["country"] = prov.country_code
             qualifying.append(o)
 
-    # Rank with the (hardcoded) preference. No country filter — these providers
-    # cover all their candidate countries, so candidate_countries is unused here.
-    ranked = rank_offers(qualifying, preference)
+    # Rank with the (hardcoded) preference. The official section intentionally
+    # applies NO country filter — region-specific Free providers (BBC iPlayer,
+    # RaiPlay, ...) surface regardless of the user's candidate_countries, exactly
+    # like the catalog tab. An empty country_filter disables the restriction.
+    ranked = rank_offers(qualifying, preference, country_filter=set())
 
     # Present the stable service id as its display name and expose a source
     # indicator (Official / Free) so the detail page can badge each offer.
