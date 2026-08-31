@@ -1,6 +1,7 @@
 """Unit tests for watchability evaluation engine."""
 from django.test import TestCase
 from tracker.models import Movie, Preference, Provider, Subscription
+from tracker.services.offers import Offer
 from tracker.services.watchability import (
     WatchabilityStatus,
     evaluate_watchability,
@@ -36,15 +37,15 @@ class WatchabilityEvaluationTests(TestCase):
         )
 
     def test_watchable_here(self):
-        offers = [{
-            "country": "US",
-            "service": "netflix",
-            "offer_type": "subscription",
-            "quality": "4k",
-            "url": "https://netflix.com/watch/1",
-            "audio_languages": ["EN"],
-            "subtitle_languages": ["EN"],
-        }]
+        offers = [Offer(
+            country="US",
+            service="netflix",
+            offer_type="subscription",
+            quality="4k",
+            url="https://netflix.com/watch/1",
+            audio_languages=["EN"],
+            subtitle_languages=["EN"],
+        )]
         res = evaluate_watchability(
             self.movie,
             offers,
@@ -57,15 +58,15 @@ class WatchabilityEvaluationTests(TestCase):
         self.assertEqual(res.best_offer.country, "US")
 
     def test_watchable_vpn(self):
-        offers = [{
-            "country": "JP",
-            "service": "netflix",
-            "offer_type": "subscription",
-            "quality": "hd",
-            "url": "https://netflix.com/watch/jp",
-            "audio_languages": ["EN"],
-            "subtitle_languages": ["EN"],
-        }]
+        offers = [Offer(
+            country="JP",
+            service="netflix",
+            offer_type="subscription",
+            quality="hd",
+            url="https://netflix.com/watch/jp",
+            audio_languages=["EN"],
+            subtitle_languages=["EN"],
+        )]
         res = evaluate_watchability(
             self.movie,
             offers,
@@ -77,13 +78,13 @@ class WatchabilityEvaluationTests(TestCase):
         self.assertEqual(res.best_offer.country, "JP")
 
     def test_unconfigured_vpn_country_not_recommended(self):
-        offers = [{
-            "country": "BR",  # Brazil is not in candidate_countries ["JP", "IT"]
-            "service": "netflix",
-            "offer_type": "subscription",
-            "quality": "4k",
-            "url": "https://netflix.com/watch/br",
-        }]
+        offers = [Offer(
+            country="BR",
+            service="netflix",
+            offer_type="subscription",
+            quality="4k",
+            url="https://netflix.com/watch/br",
+        )]
         res = evaluate_watchability(
             self.movie,
             offers,
@@ -96,14 +97,13 @@ class WatchabilityEvaluationTests(TestCase):
         self.assertTrue(any("not in your configured VPN regions" in exp for exp in res.explanation))
 
     def test_rent_buy_excluded(self):
-        offers = [{
-            "country": "US",
-            "service": "prime",
-            "offer_type": "rent",
-            "price_info": "$3.99",
-            "quality": "hd",
-            "url": "https://amazon.com/rent",
-        }]
+        offers = [Offer(
+            country="US",
+            service="prime",
+            offer_type="rent",
+            quality="hd",
+            url="https://amazon.com/rent",
+        )]
         res = evaluate_watchability(
             self.movie,
             offers,
@@ -116,16 +116,16 @@ class WatchabilityEvaluationTests(TestCase):
         self.assertIn("Only available to rent", res.excluded_offers[0].rejection_reasons[0])
 
     def test_scraped_source_bypasses_vpn_but_respects_language_match(self):
-        offers = [{
-            "country": "BR",  # Brazil is not in candidate_countries
-            "service": "scraped_site",
-            "offer_type": "free",
-            "quality": "hd",
-            "url": "https://scraped.site/watch",
-            "audio_languages": ["EN"],
-            "subtitle_languages": ["EN"],
-            "is_scraped_source": True,
-        }]
+        offers = [Offer(
+            country="BR",
+            service="scraped_site",
+            offer_type="free",
+            quality="hd",
+            url="https://scraped.site/watch",
+            audio_languages=["EN"],
+            subtitle_languages=["EN"],
+            is_scraped_source=True,
+        )]
         res = evaluate_watchability(
             self.movie,
             offers,
@@ -138,16 +138,16 @@ class WatchabilityEvaluationTests(TestCase):
         self.assertTrue(res.watchable_offers[0].is_language_match)
 
     def test_scraped_source_fails_language_match(self):
-        offers = [{
-            "country": "BR",
-            "service": "scraped_site",
-            "offer_type": "free",
-            "quality": "hd",
-            "url": "https://scraped.site/watch",
-            "audio_languages": ["FR"],
-            "subtitle_languages": ["FR"],
-            "is_scraped_source": True,
-        }]
+        offers = [Offer(
+            country="BR",
+            service="scraped_site",
+            offer_type="free",
+            quality="hd",
+            url="https://scraped.site/watch",
+            audio_languages=["FR"],
+            subtitle_languages=["FR"],
+            is_scraped_source=True,
+        )]
         res = evaluate_watchability(
             self.movie,
             offers,
@@ -162,16 +162,16 @@ class WatchabilityEvaluationTests(TestCase):
         self.assertIn("Does not satisfy language rules", res.excluded_offers[0].rejection_reasons)
 
     def test_unknown_language_marked_as_unknown(self):
-        offers = [{
-            "country": "US",
-            "service": "scraped_site",
-            "offer_type": "free",
-            "quality": "hd",
-            "url": "https://scraped.site/watch",
-            "audio_languages": [],
-            "subtitle_languages": [],
-            "is_scraped_source": True,
-        }]
+        offers = [Offer(
+            country="US",
+            service="scraped_site",
+            offer_type="free",
+            quality="hd",
+            url="https://scraped.site/watch",
+            audio_languages=[],
+            subtitle_languages=[],
+            is_scraped_source=True,
+        )]
         res = evaluate_watchability(
             self.movie,
             offers,

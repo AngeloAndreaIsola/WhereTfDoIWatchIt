@@ -55,7 +55,7 @@ class RankedOffer:
 
 
 def rank_offers(
-    offers: Iterable[Offer | dict],
+    offers: Iterable[Offer],
     preference: Preference,
     country_filter: Optional[set[str]] = None,
 ) -> list[RankedOffer]:
@@ -68,24 +68,16 @@ def rank_offers(
 
     ranked: list[RankedOffer] = []
     for offer in offers:
-        if isinstance(offer, Offer):
-            country = (offer.country or "").upper()
-            service = offer.service
-            offer_type = offer.offer_type
-            quality = (offer.quality or "").lower()
-            url = offer.url
-            audio = _normalize_lang_list(offer.audio_languages)
-            subs = _normalize_lang_list(offer.subtitle_languages)
-        else:
-            country = (offer.get("country") or "").upper()
-            service = offer.get("service", "")
-            offer_type = offer.get("offer_type", "")
-            quality = (offer.get("quality") or "").lower()
-            url = offer.get("url", "")
-            raw_audio = offer.get("audio") or offer.get("audio_languages") or []
-            raw_subs = offer.get("subs") or offer.get("subtitle_languages") or []
-            audio = _normalize_lang_list(raw_audio)
-            subs = _normalize_lang_list(raw_subs)
+        if not isinstance(offer, Offer):
+            raise TypeError(f"Expected Offer, got {type(offer).__name__}")
+
+        country = (offer.country or "").upper()
+        service = offer.service
+        offer_type = offer.offer_type
+        quality = (offer.quality or "").lower()
+        url = offer.url
+        audio = _normalize_lang_list(offer.audio_languages)
+        subs = _normalize_lang_list(offer.subtitle_languages)
 
         if allowed_countries and country not in allowed_countries:
             continue

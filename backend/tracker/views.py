@@ -764,7 +764,7 @@ def watchlist_report(request):
         raw_offers = cache._read_offers(movie)
         qualifying_offers = [
             o for o in raw_offers
-            if (o.get("offer_type") or "").lower() in ("subscription", "free")
+            if (o.offer_type or "").lower() in ("subscription", "free")
         ]
         ranked = rank_offers(qualifying_offers, preference)
 
@@ -1132,23 +1132,17 @@ def prime_movie(request, tmdb_id: int):
 
     qualifying = []
     for o in offers:
-        if o.get("offer_type", "").lower() not in ("subscription", "free"):
+        if (o.offer_type or "").lower() not in ("subscription", "free"):
             continue
-        slug = o.get("service", "")
+        slug = o.service or ""
         prov = provider_map.get(slug)
         if prov is None:
-            # No known provider row: keep Prime-compatible offers (legacy
-            # behaviour) and skip anything unrecognised to avoid noise.
             if slug.lower() == provider.lower():
                 qualifying.append(o)
             continue
         if prov.category in official_categories:
-            # Backfill the offer's country from the provider's primary country so
-            # region-specific Free providers (e.g. bbc_iplayer -> GB) rank and
-            # display correctly. Without this the offer carries an empty country
-            # and rank_offers would drop it against candidate_countries.
-            if not o.get("country") and prov.country_code:
-                o["country"] = prov.country_code
+            if not o.country and prov.country_code:
+                o.country = prov.country_code
             qualifying.append(o)
 
     # Rank with the (hardcoded) preference. The official section intentionally
@@ -1159,21 +1153,15 @@ def prime_movie(request, tmdb_id: int):
 
     # Present the stable service id as its display name and expose a source
     # indicator (Official / Free) so the detail page can badge each offer.
+    from .services.presentation import present_offer
+
     offers_out = []
     for offer in ranked:
+        presented = present_offer(offer, provider_map)
         offer_dict = offer.to_dict()
-        slug = offer_dict.get("service", "")
-        prov = provider_map.get(slug)
-        if prov is not None:
-            offer_dict["service"] = prov.name
-            offer_dict["source_indicator"] = prov.source_indicator
-            # Fall back to the provider's primary country when the offer has
-            # none (e.g. a region-specific free provider with country_code set).
-            if not offer_dict.get("country"):
-                offer_dict["country"] = prov.country_code or ""
-        else:
-            # Legacy: Prime-compatible service with no Provider row.
-            offer_dict["service"] = service_display_name(slug)
+        offer_dict["service"] = presented.service_display
+        offer_dict["source_indicator"] = presented.source_indicator
+        offer_dict["country"] = presented.country
         offers_out.append(offer_dict)
 
     user_data = UserMovieData.objects.filter(user_id=1, movie=movie).first()
@@ -1238,14 +1226,13 @@ def watch_redirect(request, tmdb_id: int):
     offers = cache._read_offers(movie)
     qualifying = [
         o for o in offers
-        if (o.get("offer_type") or "").lower() in ("subscription", "free")
+        if (o.offer_type or "").lower() in ("subscription", "free")
     ]
 
     if subscribed_slugs:
         matched = [
             o for o in qualifying
-            if (o.get("service") or "").lower() in subscribed_slugs
-            or (o.get("service_id") or "").lower() in subscribed_slugs
+            if (o.service or "").lower() in subscribed_slugs
         ]
         if matched:
             qualifying = matched

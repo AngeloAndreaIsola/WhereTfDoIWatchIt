@@ -124,13 +124,13 @@ def evaluate_language_rule(
 
 
 def score_offer(
-    offer: Offer | dict,
+    offer: Offer,
     preference: Preference,
 ) -> ScoredOffer:
-    """Score a single offer against a preference.
+    """Score a single offer against a preference."""
+    if not isinstance(offer, Offer):
+        raise TypeError(f"Expected Offer, got {type(offer).__name__}")
 
-    Accepts either an Offer dataclass or a legacy dict.
-    """
     lang_rule = getattr(preference, "language_rule", None)
     if lang_rule and isinstance(lang_rule, dict) and lang_rule.get("type") == "viewers":
         viewer_langs = []
@@ -150,14 +150,9 @@ def score_offer(
     audio_priority = {code: i for i, code in enumerate(pref_audio)}
     sub_priority = {code: i for i, code in enumerate(pref_subs)}
 
-    if isinstance(offer, Offer):
-        raw_audio = offer.audio_languages
-        raw_subs = offer.subtitle_languages
-        quality = (offer.quality or "").lower()
-    else:
-        raw_audio = offer.get("audio") or offer.get("audio_languages") or []
-        raw_subs = offer.get("subs") or offer.get("subtitle_languages") or []
-        quality = (offer.get("quality") or "").lower()
+    raw_audio = offer.audio_languages
+    raw_subs = offer.subtitle_languages
+    quality = (offer.quality or "").lower()
 
     audio = _normalize_lang_list(raw_audio)
     subs = _normalize_lang_list(raw_subs)

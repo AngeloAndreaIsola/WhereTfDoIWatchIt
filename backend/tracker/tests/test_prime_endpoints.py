@@ -14,6 +14,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from tracker.models import Movie, Availability, Region, LanguageInfo, LanguageEntry
+from tracker.services.offers import Offer
 
 
 class PrimeUrlRoutingTests(TestCase):
@@ -165,20 +166,20 @@ class PrimeMovieEndpointTests(TestCase):
         # Mock availability cache
         mock_cache = mock_cache_cls.return_value
         mock_cache._read_offers.return_value = [
-            {"country": "JP", "service": "prime", "offer_type": "subscription",
-             "quality": "4k", "audio": ["JA", "EN"], "subs": ["EN", "JA"]},
-            {"country": "US", "service": "prime", "offer_type": "subscription",
-             "quality": "hd", "audio": ["EN"], "subs": ["EN"]},
+            Offer(country="JP", service="prime", offer_type="subscription",
+             quality="4k", audio_languages=["JA", "EN"], subtitle_languages=["EN", "JA"]),
+            Offer(country="US", service="prime", offer_type="subscription",
+             quality="hd", audio_languages=["EN"], subtitle_languages=["EN"]),
             # A Free Streaming Provider (e.g. BBC iPlayer) — must be included.
-            {"country": "GB", "service": "bbc_iplayer", "offer_type": "free",
-             "quality": "hd", "audio": ["EN"], "subs": ["EN"]},
+            Offer(country="GB", service="bbc_iplayer", offer_type="free",
+             quality="hd", audio_languages=["EN"], subtitle_languages=["EN"]),
             # A Major (Netflix) — included now that the section is Official + Free.
-            {"country": "GB", "service": "netflix", "offer_type": "subscription",
-             "quality": "hd", "audio": ["EN"], "subs": ["EN"]},
+            Offer(country="GB", service="netflix", offer_type="subscription",
+             quality="hd", audio_languages=["EN"], subtitle_languages=["EN"]),
             # A scraper (Imported Small Source) — must be filtered out of the
             # official section (it lives in the separate Unofficial Sources block).
-            {"country": "", "service": "hydrahd", "offer_type": "free",
-             "quality": "hd", "audio": ["EN"], "subs": ["EN"], "is_scraped_source": True},
+            Offer(country="", service="hydrahd", offer_type="free",
+             quality="hd", audio_languages=["EN"], subtitle_languages=["EN"], is_scraped_source=True),
         ]
         mock_cache.get_or_refresh.return_value = None
 
@@ -254,12 +255,12 @@ class PrimeMovieEndpointTests(TestCase):
 
         mock_cache = mock_cache_cls.return_value
         mock_cache._read_offers.return_value = [
-            {"country": "US", "service": "prime", "offer_type": "subscription",
-             "quality": "hd", "audio": ["EN"], "subs": ["EN"]},
-            {"country": "US", "service": "prime", "offer_type": "rent",
-             "quality": "4k", "audio": ["EN"], "subs": ["EN"]},  # Should be filtered
-            {"country": "US", "service": "prime", "offer_type": "buy",
-             "quality": "4k", "audio": ["EN"], "subs": ["EN"]},  # Should be filtered
+            Offer(country="US", service="prime", offer_type="subscription",
+             quality="hd", audio_languages=["EN"], subtitle_languages=["EN"]),
+            Offer(country="US", service="prime", offer_type="rent",
+             quality="4k", audio_languages=["EN"], subtitle_languages=["EN"]),
+            Offer(country="US", service="prime", offer_type="buy",
+             quality="4k", audio_languages=["EN"], subtitle_languages=["EN"]),
         ]
         mock_cache.get_or_refresh.return_value = None
 
@@ -279,11 +280,11 @@ class PrimeMovieEndpointTests(TestCase):
         mock_cache = mock_cache_cls.return_value
         mock_cache._read_offers.return_value = [
             # US: EN audio, EN subs — lower priority
-            {"country": "US", "service": "prime", "offer_type": "subscription",
-             "quality": "hd", "audio": ["EN"], "subs": ["EN"]},
+            Offer(country="US", service="prime", offer_type="subscription",
+             quality="hd", audio_languages=["EN"], subtitle_languages=["EN"]),
             # JP: JA audio, EN subs — highest priority (JA audio rank 0)
-            {"country": "JP", "service": "prime", "offer_type": "subscription",
-             "quality": "hd", "audio": ["JA", "EN"], "subs": ["EN", "JA"]},
+            Offer(country="JP", service="prime", offer_type="subscription",
+             quality="hd", audio_languages=["JA", "EN"], subtitle_languages=["EN", "JA"]),
         ]
         mock_cache.get_or_refresh.return_value = None
 

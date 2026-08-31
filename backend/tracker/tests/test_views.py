@@ -5,6 +5,7 @@ from django.test import TestCase
 from django.urls import reverse
 
 from tracker.models import Movie, Preference, Provider, Subscription
+from tracker.services.offers import Offer
 
 
 class ProvidersEndpointTests(TestCase):
@@ -141,7 +142,7 @@ class MovieAvailabilityTests(TestCase):
         instance = mock_cache_cls.return_value
         instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=2)
         instance._read_offers.return_value = [
-            {"country": "us", "service": "Netflix", "offer_type": "subscription", "quality": "4k", "audio": ["EN"], "subs": ["EN"]}
+            Offer(country="us", service="Netflix", offer_type="subscription", quality="4k", audio_languages=["EN"], subtitle_languages=["EN"])
         ]
         resp = self.client.get("/api/movie/42/availability/")
         self.assertEqual(resp.status_code, 200)
@@ -228,8 +229,8 @@ class WatchlistReportEndpointTests(TestCase):
         def mock_read_offers(movie):
             if movie.tmdb_id == 201:
                 return [
-                    {"country": "us", "service": "Netflix", "offer_type": "subscription", "quality": "4k", "audio": ["EN"], "subs": ["EN"]},
-                    {"country": "gb", "service": "Prime", "offer_type": "subscription", "quality": "hd", "audio": ["EN"], "subs": ["EN"]},
+                    Offer(country="us", service="Netflix", offer_type="subscription", quality="4k", audio_languages=["EN"], subtitle_languages=["EN"]),
+                    Offer(country="gb", service="Prime", offer_type="subscription", quality="hd", audio_languages=["EN"], subtitle_languages=["EN"]),
                 ]
             return []
 
@@ -267,15 +268,15 @@ class WatchlistReportEndpointTests(TestCase):
         def mock_read_offers(movie):
             if movie.tmdb_id == 501:
                 return [
-                    {"country": "us", "service": "Netflix", "offer_type": "subscription", "quality": "4k", "audio": ["EN"], "subs": ["EN"]},
-                    {"country": "us", "service": "Netflix", "offer_type": "subscription", "quality": "hd", "audio": ["EN"], "subs": ["EN"]},
-                    {"country": "gb", "service": "Prime", "offer_type": "subscription", "quality": "hd", "audio": ["EN"], "subs": ["EN"]},
-                    {"country": "us", "service": "Apple", "offer_type": "buy", "quality": "hd", "audio": ["EN"], "subs": ["EN"]},
+                    Offer(country="us", service="Netflix", offer_type="subscription", quality="4k", audio_languages=["EN"], subtitle_languages=["EN"]),
+                    Offer(country="us", service="Netflix", offer_type="subscription", quality="hd", audio_languages=["EN"], subtitle_languages=["EN"]),
+                    Offer(country="gb", service="Prime", offer_type="subscription", quality="hd", audio_languages=["EN"], subtitle_languages=["EN"]),
+                    Offer(country="us", service="Apple", offer_type="buy", quality="hd", audio_languages=["EN"], subtitle_languages=["EN"]),
                 ]
             if movie.tmdb_id == 502:
                 return [
-                    {"country": "us", "service": "Netflix", "offer_type": "free", "quality": "hd", "audio": ["EN"], "subs": ["EN"]},
-                    {"country": "ca", "service": "Apple", "offer_type": "rent", "quality": "hd", "audio": ["EN"], "subs": ["EN"]},
+                    Offer(country="us", service="Netflix", offer_type="free", quality="hd", audio_languages=["EN"], subtitle_languages=["EN"]),
+                    Offer(country="ca", service="Apple", offer_type="rent", quality="hd", audio_languages=["EN"], subtitle_languages=["EN"]),
                 ]
             return []
 
@@ -384,15 +385,15 @@ class WatchEndpointTests(TestCase):
         instance = mock_cache_cls.return_value
         instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=1)
         instance._read_offers.return_value = [
-            {
-                "country": "US",
-                "service": "netflix",
-                "offer_type": "subscription",
-                "quality": "hd",
-                "url": "https://www.netflix.com/title/123",
-                "audio": ["EN"],
-                "subs": ["EN"],
-            }
+            Offer(
+                country="US",
+                service="netflix",
+                offer_type="subscription",
+                quality="hd",
+                url="https://www.netflix.com/title/123",
+                audio_languages=["EN"],
+                subtitle_languages=["EN"],
+            )
         ]
         resp = self.client.get(f"/api/watch/{self.movie.tmdb_id}/")
         self.assertEqual(resp.status_code, 200)
@@ -411,24 +412,24 @@ class WatchEndpointTests(TestCase):
         instance = mock_cache_cls.return_value
         instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=2)
         instance._read_offers.return_value = [
-            {
-                "country": "US",
-                "service": "netflix",
-                "offer_type": "subscription",
-                "quality": "4k",
-                "url": "https://www.netflix.com/title/123",
-                "audio": ["EN"],
-                "subs": ["EN"],
-            },
-            {
-                "country": "US",
-                "service": "disney",
-                "offer_type": "subscription",
-                "quality": "hd",
-                "url": "https://www.disneyplus.com/movies/456",
-                "audio": ["EN"],
-                "subs": ["EN"],
-            },
+            Offer(
+                country="US",
+                service="netflix",
+                offer_type="subscription",
+                quality="4k",
+                url="https://www.netflix.com/title/123",
+                audio_languages=["EN"],
+                subtitle_languages=["EN"],
+            ),
+            Offer(
+                country="US",
+                service="disney",
+                offer_type="subscription",
+                quality="hd",
+                url="https://www.disneyplus.com/movies/456",
+                audio_languages=["EN"],
+                subtitle_languages=["EN"],
+            ),
         ]
         resp = self.client.get(f"/api/watch/{self.movie.tmdb_id}/")
         self.assertEqual(resp.status_code, 200)
