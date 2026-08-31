@@ -302,6 +302,50 @@ class WatchlistReportEndpointTests(TestCase):
         ])
 
     @patch("tracker.views.AvailabilityCache")
+    def test_watchlist_report_actor_and_genre_filters(self, mock_cache_cls):
+        """Actor (actor_id) and genre filters must match against Movie.cast / genre_ids.
+
+        Regression guard: search-by-actor and search-by-category returned nothing
+        in production because bulk-created Movie rows had empty cast/genre_ids. The
+        filter uses the populated JSON fields, so this asserts both filters work
+        when the metadata actually exists.
+        """
+        from tracker.models import WatchlistItem
+
+        m1 = Movie.objects.create(
+            tmdb_id=701, title="Has Gosling", year=2017,
+            genre_ids=[18], genres=[{"id": 18, "name": "Drama"}],
+            cast=[{"id": 819, "name": "Ryan Gosling", "character": "X"}],
+        )
+        m2 = Movie.objects.create(
+            tmdb_id=702, title="No Gosling", year=2017,
+            genre_ids=[35], genres=[{"id": 35, "name": "Comedy"}],
+            cast=[{"id": 287, "name": "Brad Pitt", "character": "Y"}],
+        )
+        WatchlistItem.objects.create(user_id=1, movie=m1, source="manual")
+        WatchlistItem.objects.create(user_id=1, movie=m2, source="manual")
+
+        instance = mock_cache_cls.return_value
+        instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=0)
+        instance._read_offers.return_value = []
+
+        # Genre filter (by id) should keep only m1.
+        resp = self.client.get("/api/watchlist/report/?genre=18")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual([r["movie"]["tmdb_id"] for r in data["report"]], [701])
+
+        # Actor filter (by id) should keep only m1.
+        resp = self.client.get("/api/watchlist/report/?actor_id=819")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual([r["movie"]["tmdb_id"] for r in data["report"]], [701])
+
+        # Actor filter excludes m2.
+        resp = self.client.get("/api/watchlist/report/?actor_id=287")
+        self.assertEqual([r["movie"]["tmdb_id"] for r in resp.json()["report"]], [702])
+
+    @patch("tracker.views.AvailabilityCache")
     def test_watchlist_report_with_content_type_filter(self, mock_cache_cls):
         from tracker.models import WatchlistItem
         m1 = Movie.objects.create(tmdb_id=601, title="Movie Title", year=2020, content_type="movie")
