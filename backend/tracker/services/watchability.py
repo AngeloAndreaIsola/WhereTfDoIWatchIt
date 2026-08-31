@@ -9,12 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
 from tracker.models import Movie, Preference, Provider, Subscription
-from tracker.services.ranking import (
-    QUALITY_RANK,
-    _min_rank,
-    _normalize_lang_list,
-    evaluate_language_rule,
-)
+from tracker.services.score import score_offer
 from tracker.services.streaming_api import service_display_name
 
 
@@ -138,25 +133,6 @@ def evaluate_watchability(
     excluded_offers: list[EvaluatedOffer] = []
     explanations: list[str] = []
 
-    lang_rule = getattr(preference, "language_rule", None)
-    if lang_rule and isinstance(lang_rule, dict) and lang_rule.get("type") == "viewers":
-        viewer_langs = []
-        seen = set()
-        for v in lang_rule.get("viewers") or []:
-            if isinstance(v, dict):
-                for l in _normalize_lang_list(v.get("languages") or []):
-                    if l not in seen:
-                        seen.add(l)
-                        viewer_langs.append(l)
-        pref_audio = viewer_langs
-        pref_subs = viewer_langs
-    else:
-        pref_audio = _normalize_lang_list(preference.audio_languages or [])
-        pref_subs = _normalize_lang_list(preference.subtitle_languages or [])
-
-    audio_priority = {code: i for i, code in enumerate(pref_audio)}
-    sub_priority = {code: i for i, code in enumerate(pref_subs)}
-
     for raw in offers:
         country = (raw.get("country") or "").upper().strip()
         service = raw.get("service") or raw.get("provider") or ""
@@ -174,27 +150,11 @@ def evaluate_watchability(
 
         raw_audio = raw.get("audio") or raw.get("audio_languages") or []
         raw_subs = raw.get("subs") or raw.get("subtitle_languages") or []
-        audio = _normalize_lang_list(raw_audio)
-        subs = _normalize_lang_list(raw_subs)
-        has_lang_info = bool(audio or subs)
+        has_lang_info = bool(raw_audio or raw_subs)
 
-        audio_rank = _min_rank(audio, audio_priority)
-        sub_rank = _min_rank(subs, sub_priority)
-        quality_clean = quality.lower()
-        quality_rank = QUALITY_RANK.get(quality_clean, 99)
-
-        if lang_rule and isinstance(lang_rule, dict) and bool(lang_rule):
-            is_lang_match = evaluate_language_rule(lang_rule, audio, subs)
-            match_score = 0 if is_lang_match else 1
-            ranking_score = (match_score, quality_rank, audio_rank, sub_rank)
-        elif pref_audio or pref_subs:
-            is_lang_match = (audio_rank < 99) or (sub_rank < 99)
-            match_score = 0 if is_lang_match else 1
-            ranking_score = (match_score, audio_rank, sub_rank, quality_rank)
-        else:
-            is_lang_match = True
-            match_score = 0
-            ranking_score = (match_score, quality_rank, audio_rank, sub_rank)
+        scored = score_offer(raw, preference)
+        is_lang_match = scored.is_match
+        ranking_score = scored.score_tuple
 
         reasons = []
 
