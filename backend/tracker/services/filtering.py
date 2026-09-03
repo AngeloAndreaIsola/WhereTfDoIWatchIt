@@ -122,7 +122,7 @@ def apply_composable_filters(
 
     evaluated_items = []
     for m in movie_list:
-        offers = cache._read_offers(m)
+        offers = cache.read_offers(m)
         watch_res = evaluate_watchability(
             m,
             offers,

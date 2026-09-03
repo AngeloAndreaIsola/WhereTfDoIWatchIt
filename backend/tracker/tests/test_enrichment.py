@@ -5,7 +5,7 @@ from django.test import TestCase, override_settings
 from unittest.mock import patch, MagicMock
 
 from tracker.models import Movie
-from tracker.services.enrichment import enrich_movie_from_tmdb, sync_movie_fields
+from tracker.services.enrichment import enrich_movie_from_tmdb, resolve_or_create_movie, sync_movie_fields
 from tracker.services.tmdb import TMDbItem
 
 
@@ -136,6 +136,32 @@ class EnrichMovieFromTmdbTests(TestCase):
         movie.refresh_from_db()
         self.assertEqual(movie.overview, "from api")
         self.assertEqual(movie.year, 2021)
+
+    def test_resolve_or_create_movie_creates_new(self, MockClient):
+        details = _details(tmdb_id=20, title="New Movie", year=2022, content_type="movie")
+        instance = MockClient.return_value
+        instance.details.return_value = details
+
+        movie = resolve_or_create_movie(20)
+        self.assertEqual(movie.tmdb_id, 20)
+        self.assertEqual(movie.title, "New Movie")
+        self.assertEqual(movie.year, 2022)
+        instance.details.assert_called_once_with(20)
+
+    def test_resolve_or_create_movie_updates_existing(self, MockClient):
+        details = _details(tmdb_id=30, title="Updated Title", year=2023, poster_path="/new-poster.jpg")
+        instance = MockClient.return_value
+        instance.details.return_value = details
+
+        movie = Movie.objects.create(
+            tmdb_id=30, title="Old Title", year=2020, poster_path="", content_type="movie",
+            overview="", genres=[], genre_ids=[], cast=[], director=[], tmdb_rating=None, seasons_data=[],
+        )
+        result = resolve_or_create_movie(30)
+        self.assertEqual(result.title, "Updated Title")
+        self.assertEqual(result.year, 2023)
+        self.assertEqual(result.poster_path, "/new-poster.jpg")
+        instance.details.assert_called_once_with(30)
 
     @override_settings(TMDB_API_KEY="")
     def test_noop_when_unconfigured(self):

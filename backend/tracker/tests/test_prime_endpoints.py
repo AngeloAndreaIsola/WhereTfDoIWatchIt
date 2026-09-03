@@ -165,7 +165,7 @@ class PrimeMovieEndpointTests(TestCase):
 
         # Mock availability cache
         mock_cache = mock_cache_cls.return_value
-        mock_cache._read_offers.return_value = [
+        mock_cache.read_offers.return_value = [
             Offer(country="JP", service="prime", offer_type="subscription",
              quality="4k", audio_languages=["JA", "EN"], subtitle_languages=["EN", "JA"]),
             Offer(country="US", service="prime", offer_type="subscription",
@@ -220,7 +220,7 @@ class PrimeMovieEndpointTests(TestCase):
         )
 
         mock_cache = mock_cache_cls.return_value
-        mock_cache._read_offers.return_value = []
+        mock_cache.read_offers.return_value = []
         mock_cache.get_or_refresh.return_value = None
 
         from django.test import Client
@@ -254,7 +254,7 @@ class PrimeMovieEndpointTests(TestCase):
         movie = Movie.objects.create(tmdb_id=777, title="Test Movie", year=2024)
 
         mock_cache = mock_cache_cls.return_value
-        mock_cache._read_offers.return_value = [
+        mock_cache.read_offers.return_value = [
             Offer(country="US", service="prime", offer_type="subscription",
              quality="hd", audio_languages=["EN"], subtitle_languages=["EN"]),
             Offer(country="US", service="prime", offer_type="rent",
@@ -278,7 +278,7 @@ class PrimeMovieEndpointTests(TestCase):
         movie = Movie.objects.create(tmdb_id=888, title="Sort Test", year=2024)
 
         mock_cache = mock_cache_cls.return_value
-        mock_cache._read_offers.return_value = [
+        mock_cache.read_offers.return_value = [
             # US: EN audio, EN subs — lower priority
             Offer(country="US", service="prime", offer_type="subscription",
              quality="hd", audio_languages=["EN"], subtitle_languages=["EN"]),

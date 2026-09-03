@@ -141,7 +141,7 @@ class MovieAvailabilityTests(TestCase):
         Movie.objects.create(tmdb_id=42, title="Cached", year=2020)
         instance = mock_cache_cls.return_value
         instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=2)
-        instance._read_offers.return_value = [
+        instance.read_offers.return_value = [
             Offer(country="us", service="Netflix", offer_type="subscription", quality="4k", audio_languages=["EN"], subtitle_languages=["EN"])
         ]
         resp = self.client.get("/api/movie/42/availability/")
@@ -201,7 +201,7 @@ class WatchlistReportEndpointTests(TestCase):
 
         instance = mock_cache_cls.return_value
         instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=0)
-        instance._read_offers.return_value = []
+        instance.read_offers.return_value = []
 
         resp = self.client.get("/api/watchlist/report/")
         self.assertEqual(resp.status_code, 200)
@@ -226,7 +226,7 @@ class WatchlistReportEndpointTests(TestCase):
         instance = mock_cache_cls.return_value
         instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=1)
 
-        def mock_read_offers(movie):
+        def mockread_offers(movie):
             if movie.tmdb_id == 201:
                 return [
                     Offer(country="us", service="Netflix", offer_type="subscription", quality="4k", audio_languages=["EN"], subtitle_languages=["EN"]),
@@ -234,7 +234,7 @@ class WatchlistReportEndpointTests(TestCase):
                 ]
             return []
 
-        instance._read_offers.side_effect = mock_read_offers
+        instance.read_offers.side_effect = mockread_offers
 
         resp = self.client.get("/api/watchlist/report/")
         self.assertEqual(resp.status_code, 200)
@@ -265,7 +265,7 @@ class WatchlistReportEndpointTests(TestCase):
         instance = mock_cache_cls.return_value
         instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=1)
 
-        def mock_read_offers(movie):
+        def mockread_offers(movie):
             if movie.tmdb_id == 501:
                 return [
                     Offer(country="us", service="Netflix", offer_type="subscription", quality="4k", audio_languages=["EN"], subtitle_languages=["EN"]),
@@ -280,7 +280,7 @@ class WatchlistReportEndpointTests(TestCase):
                 ]
             return []
 
-        instance._read_offers.side_effect = mock_read_offers
+        instance.read_offers.side_effect = mockread_offers
 
         resp = self.client.get("/api/watchlist/report/")
         self.assertEqual(resp.status_code, 200)
@@ -328,7 +328,7 @@ class WatchlistReportEndpointTests(TestCase):
 
         instance = mock_cache_cls.return_value
         instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=0)
-        instance._read_offers.return_value = []
+        instance.read_offers.return_value = []
 
         # Genre filter (by id) should keep only m1.
         resp = self.client.get("/api/watchlist/report/?genre=18")
@@ -356,7 +356,7 @@ class WatchlistReportEndpointTests(TestCase):
 
         instance = mock_cache_cls.return_value
         instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=0)
-        instance._read_offers.return_value = []
+        instance.read_offers.return_value = []
 
         resp = self.client.get("/api/watchlist/report/?type=series")
         self.assertEqual(resp.status_code, 200)
@@ -384,7 +384,7 @@ class WatchEndpointTests(TestCase):
         Preference.objects.create(user_id=1, audio_languages=["EN"], subtitle_languages=["EN"])
         instance = mock_cache_cls.return_value
         instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=1)
-        instance._read_offers.return_value = [
+        instance.read_offers.return_value = [
             Offer(
                 country="US",
                 service="netflix",
@@ -411,7 +411,7 @@ class WatchEndpointTests(TestCase):
 
         instance = mock_cache_cls.return_value
         instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=2)
-        instance._read_offers.return_value = [
+        instance.read_offers.return_value = [
             Offer(
                 country="US",
                 service="netflix",
@@ -441,7 +441,7 @@ class WatchEndpointTests(TestCase):
     def test_watch_endpoint_returns_found_false_when_no_valid_url(self, mock_cache_cls):
         instance = mock_cache_cls.return_value
         instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=0)
-        instance._read_offers.return_value = []
+        instance.read_offers.return_value = []
         resp = self.client.get(f"/api/watch/{self.movie.tmdb_id}/")
         self.assertEqual(resp.status_code, 200)
         data = resp.json()

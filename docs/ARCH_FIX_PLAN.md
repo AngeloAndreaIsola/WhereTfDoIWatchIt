@@ -186,3 +186,157 @@ The review's claim of "already differ subtly" may have been based on an
 older version. Confirm before proceeding — if they're the same, #2 is
 pure dedup. If they differ in a way I missed, flag it explicitly in the
 commit message.
+
+---
+
+## Candidate 6 — Promote `_read_offers` to public seam on `AvailabilityCache` [Strong]
+
+### Problem
+`cache._read_offers()` is a private method called from 5 distinct call
+sites across 3 modules (`movie_availability`, `prime_movie`,
+`watch_redirect`, `watchlist_report` in `views.py`, and `filtering.py`).
+Tests mock it by name. The cache module's internal read shape leaks to
+every caller — a textbook private-method-crossing-a-seam leak.
+
+**Deletion test:** delete the name and all 5 callers must reimplement
+the same ORM/SQL query + `LanguageInfo` prefetch. The method is clearly
+load-bearing.
+
+### Solution
+In `tracker/services/cache.py`: rename `_read_offers` → `read_offers`
+(or `get_offers`). Update all 5 call sites and any test mocks. Consider
+splitting the class: cache orchestration (`get_or_refresh`) stays on the
+class; `read_offers` is the stable public seam.
+
+### Files involved
+| File | Change |
+|---|---|
+| `tracker/services/cache.py` | Rename `_read_offers` → `read_offers` |
+| `tracker/views.py` | Update 4 call sites |
+| `tracker/services/filtering.py` | Update 1 call site |
+| `tracker/tests/test_prime_endpoints.py` | Update mock target |
+| `tracker/tests/test_views.py` | Update mock target |
+
+### Benefits
+- Bugs in offer-extraction surface at one module, not 5 call sites
+- One interface, 6 call sites (leverage)
+- Callers stop knowing about `LanguageInfo` prefetch internals
+
+### Risk
+Very low. Pure rename — no logic change. All callers are already
+exercised by existing tests.
+
+### Estimated effort
+30 min — grep + rename + run suite.
+
+---
+
+## Candidate 7 — Deepen the Offer pipeline — collapse `prime_movie`'s inline orchestration [Strong]
+
+### Problem
+The `prime_movie` view (~80 lines) does all of the following inline:
+movie resolution, preference resolution, cache orchestration, offer
+filtering, provider mapping, ranking, presentation, and response
+assembly. Deletion test: delete the view and all logic moves to the
+caller — the module is shallow despite being the core feature path.
+
+`watchlist_report` and `movie_availability` partially duplicate the
+same pipeline steps.
+
+### Solution
+Create `tracker/services/offer_pipeline.py` with `OfficialOffersPipeline`
+(or `OfficialOfferResolver`). It encapsulates:
+
+1. `get_cached_offers(movie)` — cache hit/refresh
+2. `filter_qualifying_offers(offers)` — subscription/free only
+3. `rank_offers(filtered, pref)` — existing ranking module
+4. `present_offers(ranked, provider_map)` — existing presentation module
+
+The `prime_movie` view becomes a thin adapter: resolve movie → delegate
+to pipeline → serialize response. Same pipeline can be reused by
+`watchlist_report` and `movie_availability`.
+
+### Files involved
+| File | Change |
+|---|---|
+| `tracker/services/offer_pipeline.py` | **Create** — `OfficialOffersPipeline` class |
+| `tracker/views.py` (`prime_movie`, lines ~1048–1177) | Thin adapter: resolve + delegate |
+| `tracker/services/filtering.py` | Called by pipeline (no change to module interface) |
+| `tracker/services/ranking.py` | Called by pipeline (no change) |
+| `tracker/services/presentation.py` | Called by pipeline (no change) |
+| `tracker/services/cache.py` | Called by pipeline (no change) |
+| `tracker/tests/` | New `test_offer_pipeline.py`; simplify existing prime_movie tests |
+
+### Benefits
+- All filtering + ranking + presentation logic in one module (locality)
+- One pipeline, 3 view call sites (leverage)
+- Views no longer know about `provider_map`, `rank_offers`, `present_offer`
+
+### Risk
+Medium. Requires moving ~80 lines of interleaved logic into a new
+module without changing output shape. Existing `test_prime_endpoints.py`
+suite acts as regression harness.
+
+### Estimated effort
+2–3 hrs — extract + rewire + pipeline tests + verify view tests pass.
+
+---
+
+## Candidate 8 — Unify TMDb enrichment — kill 4 duplicated inline enrich blocks [Worth exploring]
+
+### Problem
+Four call sites each do their own version of "fetch TMDb details + sync
+to Movie row":
+
+| Call site | Pattern |
+|---|---|
+| `views.py:movie_detail` | `client.details()` + `sync_movie_fields()` inline (red — bypasses enrichment module) |
+| `views.py:prime_movie` | Calls `enrich_movie_from_tmdb` ✅ |
+| `views.py:watch_redirect` | `client.details()` + `get_or_create` + manual poster backfill inline |
+| `admin.py:link_tmdb_view` | Manual field-by-field copy (no enrichment module at all) |
+
+`services/enrichment.py` already has `sync_movie_fields` and
+`enrich_movie_from_tmdb` but callers use them inconsistently.
+
+### Solution
+Add `resolve_or_create_movie(tmdb_id)` to `services/enrichment.py`.
+It does: TMDb fetch → `get_or_create(tmdb_id=…)` → poster backfill →
+`sync_movie_fields`. All four call sites call it. Admin's manual
+field-by-field copy becomes a single `sync_movie_fields` call.
+
+### Files involved
+| File | Change |
+|---|---|
+| `tracker/services/enrichment.py` | Add `resolve_or_create_movie(tmdb_id)` |
+| `tracker/views.py` (`movie_detail`, `watch_redirect`) | Replace inline TMDb blocks with `resolve_or_create_movie` |
+| `tracker/admin.py` (`link_tmdb_view`) | Replace manual field copy with `sync_movie_fields` |
+| `tracker/views.py` (`prime_movie`) | Already correct; verify it calls new function |
+
+### Benefits
+- TMDb resolution + enrichment bugs live in one module
+- One entry point, 4 call sites
+- `resolve_or_create_movie` is mockable at the HTTP client boundary
+
+### Risk
+Low-medium. Each call site has slightly different error handling; need
+to consolidate without dropping any. Admin path is the trickiest
+(currently bypasses the service layer entirely).
+
+### Estimated effort
+2–3 hrs — new function + three caller rewrites + test coverage for the
+merged path.
+
+---
+
+## Updated execution order (all candidates)
+
+| Priority | Candidate | Rationale |
+|---|---|---|
+| ✅ Done | **#1 enrichment scatter** | `e6e3ce8` |
+| ✅ Done | **#4 presentation seam** | `b21130e` |
+| 1 | **#2 scoring unification** | Fixes potential drift on core feature; lowest risk |
+| 2 | **#6 `_read_offers` seam** | 30 min; pure rename; unblocks #7 |
+| 3 | **#3 Offer dataclass** | Cleans dict-drift; medium risk |
+| 4 | **#7 Offer pipeline** | High value; do after #6 and #3 so pipeline internals are already clean |
+| 5 | **#8 TMDb enrichment** | Worth doing; low-medium risk; independent of above |
+| 6 | **#5 scraper seam** | Lowest priority; do as hygiene when 6th scraper added |

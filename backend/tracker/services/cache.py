@@ -60,7 +60,7 @@ class AvailabilityCache:
         Used by watchlist_report to avoid timing out on multiple movies.
         Returns whatever is in cache (fresh, stale, or missing).
         """
-        offers = self._read_offers(movie)
+        offers = self.read_offers(movie)
         if not self.is_stale(movie):
             return CacheStatus(refreshed=False, reason="fresh", offers_written=len(offers))
 
@@ -72,14 +72,14 @@ class AvailabilityCache:
     def get_or_refresh(self, movie: Movie) -> CacheStatus:
         """Return cached/fresh Availability rows for movie, refreshing if stale."""
         if not self.is_stale(movie):
-            offers = self._read_offers(movie)
+            offers = self.read_offers(movie)
             return CacheStatus(refreshed=False, reason="fresh", offers_written=len(offers))
 
         try:
             self.limiter.acquire()
         except RateLimitExceeded as exc:
             logger.warning("Rate limit hit, serving stale cache: %s", exc)
-            offers = self._read_offers(movie)
+            offers = self.read_offers(movie)
             return CacheStatus(refreshed=False, reason="rate_limited", offers_written=len(offers))
 
         result = self.client.get_availability(movie.tmdb_id)
@@ -125,7 +125,7 @@ class AvailabilityCache:
             written += 1
         return written
 
-    def _read_offers(self, movie: Movie) -> list[Offer]:
+    def read_offers(self, movie: Movie) -> list[Offer]:
         rows: list[Offer] = []
         for avail in movie.availabilities.select_related("region").all():
             info = (

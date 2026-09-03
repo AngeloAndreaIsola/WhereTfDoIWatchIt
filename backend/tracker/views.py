@@ -217,7 +217,7 @@ def movie_availability(request, tmdb_id: int):
     except RateLimitExceeded as exc:
         return Response({"error": str(exc), "rate_limited": True}, status=429)
 
-    offers = cache._read_offers(movie)
+    offers = cache.read_offers(movie)
     ranked = rank_offers(offers, preference)
 
     user_data = UserMovieData.objects.filter(user_id=1, movie=movie).first()
@@ -761,7 +761,7 @@ def watchlist_report(request):
         movie = eval_item["movie"]
         watch_res = eval_item["watchability"]
 
-        raw_offers = cache._read_offers(movie)
+        raw_offers = cache.read_offers(movie)
         qualifying_offers = [
             o for o in raw_offers
             if (o.offer_type or "").lower() in ("subscription", "free")
@@ -1047,35 +1047,19 @@ def _popular_movie_dict(movie: TMDbMovie) -> dict:
 @api_view(["GET"])
 def prime_movie(request, tmdb_id: int):
     """GET /api/prime/movie/<tmdb_id>/ — ranked Prime Video offers for one movie.
-
-    Filters to subscription/free offers only, provider=DEFAULT_PREFERENCE_PROVIDER
-    ("prime"), across all countries. Uses the hardcoded DEFAULT_PREFERENCE (JA/EN)
-    via resolve_preferences(). On cache miss:
-      - If PRIME_LIVE_FETCH is True (default): hits Streaming Availability API.
-      - If PRIME_LIVE_FETCH is False: returns only cached rows.
+    Filters to subscription/free offers only.
     """
     from django.conf import settings
-    from .services.preferences import resolve_preferences
-    from .services.streaming_api import service_display_name
-    from .models import Provider, ProviderCategory
+    from tracker.models import ProviderCategory
 
-    # Resolve or auto-create the Movie row via TMDb.
+    from .services.offer_pipeline import OfficialOffersPipeline
+
     try:
         movie = Movie.objects.get(tmdb_id=tmdb_id)
     except Movie.DoesNotExist:
-        # Auto-create from TMDb details so the runtime join is non-empty.
-        client = TMDbClient(settings.TMDB_API_KEY)
         try:
-            details = client.details(tmdb_id)
-            movie, created = Movie.objects.get_or_create(
-                tmdb_id=details.tmdb_id,
-                defaults={"title": details.title, "year": details.year, "poster_path": details.poster_path or ""},
-            )
-            if not created and details.poster_path and not movie.poster_path:
-                movie.poster_path = details.poster_path
-                movie.save()
+            movie = resolve_or_create_movie(tmdb_id)
         except Exception:
-            # TMDb lookup failed and movie not in DB.
             return Response(
                 {
                     "movie": {"tmdb_id": tmdb_id, "title": None, "year": None},
@@ -1085,88 +1069,15 @@ def prime_movie(request, tmdb_id: int):
                 status=404,
             )
 
-    # Resolve preferences (hardcoded defaults if no DB row).
-    pref_dict = resolve_preferences(user_id=1)
-
-    # Backfill sparse TMDb metadata so the detail page has something to show.
-    enrich_movie_from_tmdb(movie)
-
-    # Build a Preference-like object for rank_offers (which expects a Preference
-    # instance with audio_languages, subtitle_languages, candidate_countries).
-    preference = Preference(
+    pipeline = OfficialOffersPipeline(
         user_id=1,
-        audio_languages=pref_dict["audio_languages"],
-        subtitle_languages=pref_dict["subtitle_languages"],
-        candidate_countries=pref_dict["candidate_countries"],
+        default_provider_slug=getattr(settings, "DEFAULT_PREFERENCE_PROVIDER", "prime"),
+        provider_category_set={ProviderCategory.OFFICIAL, ProviderCategory.FREE},
     )
-
-    # Get cached/fresh availability, gated by PRIME_LIVE_FETCH.
-    cache = AvailabilityCache()
-    if not getattr(settings, "PRIME_LIVE_FETCH", True):
-        # Offline mode: only return cached rows, never fetch live.
-        offers = cache._read_offers(movie)
-    else:
-        try:
-            cache.get_or_refresh(movie)
-        except RateLimitExceeded as exc:
-            return Response(
-                {"error": str(exc), "rate_limited": True}, status=429
-            )
-        except Exception:
-            # A live availability fetch failure (provider outage, an unsubscribed
-            # RapidAPI key, a network error) must not 500 the detail page — fall
-            # back to whatever is already cached (possibly nothing).
-            logger.exception("Live availability fetch failed for tmdb %s", tmdb_id)
-        offers = cache._read_offers(movie)
-
-    # Filter to Official (Major) + Free Streaming providers, subscription/free
-    # offers only. The provider is matched against the stable service id stored in
-    # Region.provider (e.g. "prime", "bbc_iplayer"). Free providers such as BBC
-    # iPlayer are region-specific and must surface in the official section too.
-    provider = getattr(settings, "DEFAULT_PREFERENCE_PROVIDER", "prime")
-
-    # Build a slug -> Provider lookup so we can classify each offer and resolve
-    # its display name + (fallback) country without N+1 queries.
-    provider_map = {p.slug: p for p in Provider.objects.all()}
-    official_categories = {ProviderCategory.OFFICIAL, ProviderCategory.FREE}
-
-    qualifying = []
-    for o in offers:
-        if (o.offer_type or "").lower() not in ("subscription", "free"):
-            continue
-        slug = o.service or ""
-        prov = provider_map.get(slug)
-        if prov is None:
-            if slug.lower() == provider.lower():
-                qualifying.append(o)
-            continue
-        if prov.category in official_categories:
-            if not o.country and prov.country_code:
-                o.country = prov.country_code
-            qualifying.append(o)
-
-    # Rank with the (hardcoded) preference. The official section intentionally
-    # applies NO country filter — region-specific Free providers (BBC iPlayer,
-    # RaiPlay, ...) surface regardless of the user's candidate_countries, exactly
-    # like the catalog tab. An empty country_filter disables the restriction.
-    ranked = rank_offers(qualifying, preference, country_filter=set())
-
-    # Present the stable service id as its display name and expose a source
-    # indicator (Official / Free) so the detail page can badge each offer.
-    from .services.presentation import present_offer
-
-    offers_out = []
-    for offer in ranked:
-        presented = present_offer(offer, provider_map)
-        offer_dict = offer.to_dict()
-        offer_dict["service"] = presented.service_display
-        offer_dict["source_indicator"] = presented.source_indicator
-        offer_dict["country"] = presented.country
-        offers_out.append(offer_dict)
+    offers_out = pipeline.run(movie).offers_out
 
     user_data = UserMovieData.objects.filter(user_id=1, movie=movie).first()
     watch_events = MovieWatchEvent.objects.filter(user_id=1, movie=movie).order_by("-watched_date", "-created_at")
-
     return Response(
         {
             "movie": MovieDetailSerializer(movie).data,
@@ -1177,22 +1088,15 @@ def prime_movie(request, tmdb_id: int):
     )
 
 
+
 @api_view(["GET"])
 def watch_redirect(request, tmdb_id: int):
     """Resolve top ranked watch destination for a movie."""
     try:
         movie = Movie.objects.get(tmdb_id=tmdb_id)
     except Movie.DoesNotExist:
-        client = TMDbClient(settings.TMDB_API_KEY)
         try:
-            details = client.details(tmdb_id)
-            movie, created = Movie.objects.get_or_create(
-                tmdb_id=details.tmdb_id,
-                defaults={"title": details.title, "year": details.year, "poster_path": details.poster_path or ""},
-            )
-            if not created and details.poster_path and not movie.poster_path:
-                movie.poster_path = details.poster_path
-                movie.save()
+            movie = resolve_or_create_movie(tmdb_id)
         except Exception:
             return Response(
                 {
@@ -1223,7 +1127,7 @@ def watch_redirect(request, tmdb_id: int):
     except Exception:
         logger.exception("Live availability refresh failed for watch redirect tmdb %s", tmdb_id)
 
-    offers = cache._read_offers(movie)
+    offers = cache.read_offers(movie)
     qualifying = [
         o for o in offers
         if (o.offer_type or "").lower() in ("subscription", "free")
@@ -1273,11 +1177,8 @@ def movie_detail(request, pk: int):
         return Response({"error": "movie not found"}, status=404)
 
     # Fetch full TMDb metadata if missing or stale
-    client = TMDbClient(settings.TMDB_API_KEY)
     try:
-        details = client.details(movie.tmdb_id, content_type=movie.content_type)
-        if isinstance(details, TMDbMovie):
-            sync_movie_fields(movie, details)
+        movie = resolve_or_create_movie(movie.tmdb_id)
     except Exception:
         logger.exception("TMDb details fetch failed for movie %s", pk)
 
