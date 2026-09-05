@@ -192,7 +192,9 @@ def evaluate_watchability(
                 elif curr_country and country != curr_country:
                     reasons.append(f"Available in {country}, but no VPN regions are configured")
 
-        is_watchable = is_qualifying_type and is_subscribed and is_lang_match and (is_curr or is_cand)
+        # Empty candidate_countries means "whole world" — all countries accessible
+        whole_world = not candidate_countries
+        is_watchable = is_qualifying_type and is_subscribed and is_lang_match and (whole_world or is_curr or is_cand)
 
         eval_offer = EvaluatedOffer(
             country=country_display,

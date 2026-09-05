@@ -13,7 +13,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from tracker.models import Movie, Availability, Region, LanguageInfo, LanguageEntry
+from tracker.models import Movie, Availability, Region, LanguageInfo, LanguageEntry, Provider, Subscription
 from tracker.services.offers import Offer
 
 
@@ -160,6 +160,14 @@ class PrimeMovieEndpointTests(TestCase):
         # Create a movie in the DB
         movie = Movie.objects.create(tmdb_id=550, title="Fight Club", year=1999)
 
+        # Set up subscriptions so the pipeline includes these providers
+        prime_provider = Provider.objects.get(slug="prime")
+        netflix_provider = Provider.objects.get(slug="netflix")
+        bbc_provider = Provider.objects.get(slug="bbc_iplayer")
+        Subscription.objects.create(user_id=1, provider=prime_provider, name="Prime Video")
+        Subscription.objects.create(user_id=1, provider=netflix_provider, name="Netflix")
+        Subscription.objects.create(user_id=1, provider=bbc_provider, name="BBC iPlayer")
+
         # Mock TMDb details (not called since movie exists)
         mock_tmdb = mock_tmdb_cls.return_value
 
@@ -253,6 +261,9 @@ class PrimeMovieEndpointTests(TestCase):
         """Only subscription/free offers are returned, rent/buy excluded."""
         movie = Movie.objects.create(tmdb_id=777, title="Test Movie", year=2024)
 
+        prime_provider = Provider.objects.get(slug="prime")
+        Subscription.objects.create(user_id=1, provider=prime_provider, name="Prime Video")
+
         mock_cache = mock_cache_cls.return_value
         mock_cache.read_offers.return_value = [
             Offer(country="US", service="prime", offer_type="subscription",
@@ -276,6 +287,9 @@ class PrimeMovieEndpointTests(TestCase):
     def test_offers_sorted_by_priority(self, mock_cache_cls):
         """Offers are sorted: JA audio > EN audio > quality."""
         movie = Movie.objects.create(tmdb_id=888, title="Sort Test", year=2024)
+
+        prime_provider = Provider.objects.get(slug="prime")
+        Subscription.objects.create(user_id=1, provider=prime_provider, name="Prime Video")
 
         mock_cache = mock_cache_cls.return_value
         mock_cache.read_offers.return_value = [

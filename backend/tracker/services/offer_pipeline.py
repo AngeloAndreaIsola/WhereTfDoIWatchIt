@@ -13,6 +13,7 @@ from .ranking import rank_offers
 from .presentation import present_offer
 from .tmdb import TMDbClient
 from .streaming_api import service_display_name
+from .watchability import get_user_subscriptions
 
 
 @dataclass
@@ -48,6 +49,8 @@ class OfficialOffersPipeline:
         if official_categories is None:
             official_categories = {ProviderCategory.OFFICIAL, ProviderCategory.FREE}
 
+        user_subs = get_user_subscriptions(self.user_id)
+
         qualifying = []
         for o in offers:
             if (o.offer_type or "").lower() not in ("subscription", "free"):
@@ -62,9 +65,14 @@ class OfficialOffersPipeline:
                 continue
 
             if prov.category in official_categories:
-                if not o.country and prov.country_code:
-                    o.country = prov.country_code
-                qualifying.append(o)
+                service_clean = slug.lower().strip()
+                is_subscribed = service_clean in user_subs or any(
+                    sub in service_clean or service_clean in sub for sub in user_subs if len(sub) >= 3
+                )
+                if is_subscribed:
+                    if not o.country and prov.country_code:
+                        o.country = prov.country_code
+                    qualifying.append(o)
 
         return qualifying
 
