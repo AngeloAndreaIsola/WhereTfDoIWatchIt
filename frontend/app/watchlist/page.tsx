@@ -44,6 +44,8 @@ export default function WatchlistPage() {
     country: "",
     status: "",
     quality: "",
+    score_min: "",
+    sort_by: "",
   });
 
   const [items, setItems] = useState<WatchlistItemRow[]>([]);
@@ -99,6 +101,8 @@ export default function WatchlistPage() {
       params.set("provider", filters.providers.join(","));
     }
     if (filters.status) params.set("status", filters.status);
+    if (filters.score_min) params.set("score_min", filters.score_min);
+    if (filters.sort_by) params.set("sort_by", filters.sort_by);
     filters.actors.forEach((a) => params.append("actor_id", a.id.toString()));
 
     setError(null);

@@ -777,6 +777,32 @@ class UnifiedCatalogEndpointTests(TestCase):
         self.assertEqual(data["count"], 1)
         self.assertEqual(data["results"][0]["tmdb_id"], 101)
 
+    @patch("tracker.services.filtering.AvailabilityCache")
+    def test_unified_catalog_filters_by_score_and_sorts(self, mock_cache_cls):
+        Movie.objects.create(tmdb_id=201, title="Movie Low", year=2020, tmdb_rating=5.5)
+        Movie.objects.create(tmdb_id=202, title="Movie Mid", year=2022, tmdb_rating=7.5)
+        Movie.objects.create(tmdb_id=203, title="Movie High", year=2021, tmdb_rating=8.9)
+
+        instance = mock_cache_cls.return_value
+        instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=0)
+        instance.read_offers.return_value = []
+
+        # Min score filter
+        resp = self.client.get("/api/catalog/unified/?score_min=7.0")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["count"], 2)
+        tmdb_ids = [item["tmdb_id"] for item in data["results"]]
+        self.assertIn(202, tmdb_ids)
+        self.assertIn(203, tmdb_ids)
+
+        # Sort by rating desc
+        resp_sort = self.client.get("/api/catalog/unified/?sort_by=rating_desc")
+        self.assertEqual(resp_sort.status_code, 200)
+        data_sort = resp_sort.json()
+        sorted_ids = [item["tmdb_id"] for item in data_sort["results"]]
+        self.assertEqual(sorted_ids, [203, 202, 201])
+
 
 class LinkTMDBEndpointTests(TestCase):
     @patch("tracker.views.TMDbClient")

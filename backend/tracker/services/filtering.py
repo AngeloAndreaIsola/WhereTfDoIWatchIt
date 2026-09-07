@@ -108,6 +108,18 @@ def apply_composable_filters(
                 filtered_by_actor.append(m)
         queryset = filtered_by_actor
 
+    # 6. Score / Rating Filter
+    score_min = params.get("score_min") or params.get("min_score") or params.get("rating_min")
+    if score_min is not None and str(score_min).strip() != "":
+        try:
+            min_val = float(score_min)
+            if isinstance(queryset, QuerySet):
+                queryset = queryset.filter(tmdb_rating__gte=min_val)
+            else:
+                queryset = [m for m in queryset if getattr(m, "tmdb_rating", None) is not None and getattr(m, "tmdb_rating") >= min_val]
+        except (ValueError, TypeError):
+            pass
+
     # Convert queryset to list if it was evaluated
     movie_list = list(queryset)
 
@@ -200,5 +212,21 @@ def apply_composable_filters(
             "movie": m,
             "watchability": watch_res,
         })
+
+    # Sort results
+    sort_by = (params.get("sort_by") or params.get("sort") or "").lower().strip()
+    if sort_by:
+        if sort_by in ("rating_desc", "rating_high"):
+            evaluated_items.sort(key=lambda x: (getattr(x["movie"], "tmdb_rating", None) or -1, getattr(x["movie"], "id", 0) or 0), reverse=True)
+        elif sort_by in ("rating_asc", "rating_low"):
+            evaluated_items.sort(key=lambda x: (getattr(x["movie"], "tmdb_rating", None) if getattr(x["movie"], "tmdb_rating", None) is not None else 999, getattr(x["movie"], "id", 0) or 0))
+        elif sort_by in ("year_desc", "year_newest"):
+            evaluated_items.sort(key=lambda x: (getattr(x["movie"], "year", None) or -1, getattr(x["movie"], "id", 0) or 0), reverse=True)
+        elif sort_by in ("year_asc", "year_oldest"):
+            evaluated_items.sort(key=lambda x: (getattr(x["movie"], "year", None) if getattr(x["movie"], "year", None) is not None else 9999, getattr(x["movie"], "id", 0) or 0))
+        elif sort_by in ("title_asc", "title"):
+            evaluated_items.sort(key=lambda x: (getattr(x["movie"], "title", "") or "").lower())
+        elif sort_by in ("title_desc", "-title"):
+            evaluated_items.sort(key=lambda x: (getattr(x["movie"], "title", "") or "").lower(), reverse=True)
 
     return evaluated_items, len(evaluated_items)

@@ -359,6 +359,33 @@ def unified_catalog(request):
                 "watch_url": mapping.scraped_url,
             })
 
+    # Sort combined results if sort_by parameter is provided
+    sort_by = (request.GET.get("sort_by") or request.GET.get("sort") or "").lower().strip()
+    if sort_by:
+        def get_item_rating(item):
+            if item.get("source") == "official":
+                return getattr(item.get("watchability"), "tmdb_rating", None) or getattr(Movie.objects.filter(tmdb_id=item.get("tmdb_id")).first(), "tmdb_rating", None)
+            return None
+
+        def get_item_year(item):
+            return item.get("year")
+
+        def get_item_title(item):
+            return (item.get("title") or "").lower()
+
+        if sort_by in ("rating_desc", "rating_high"):
+            unified_items.sort(key=lambda x: (get_item_rating(x) or -1, get_item_year(x) or -1), reverse=True)
+        elif sort_by in ("rating_asc", "rating_low"):
+            unified_items.sort(key=lambda x: (get_item_rating(x) if get_item_rating(x) is not None else 999, get_item_year(x) if get_item_year(x) is not None else 9999))
+        elif sort_by in ("year_desc", "year_newest"):
+            unified_items.sort(key=lambda x: get_item_year(x) or -1, reverse=True)
+        elif sort_by in ("year_asc", "year_oldest"):
+            unified_items.sort(key=lambda x: get_item_year(x) if get_item_year(x) is not None else 9999)
+        elif sort_by in ("title_asc", "title"):
+            unified_items.sort(key=get_item_title)
+        elif sort_by in ("title_desc", "-title"):
+            unified_items.sort(key=get_item_title, reverse=True)
+
     page = int(request.GET.get("page", 1)) if str(request.GET.get("page", "")).isdigit() else 1
     page_size = int(request.GET.get("page_size", 24)) if str(request.GET.get("page_size", "")).isdigit() else 24
     paged_results, pagination = paginate_list(unified_items, page, page_size)
