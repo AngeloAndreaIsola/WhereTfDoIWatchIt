@@ -16,8 +16,11 @@ vi.mock("next/link", () => ({
 }));
 
 const routerPush = vi.fn();
+const routerReplace = vi.fn();
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: routerPush }),
+  useRouter: () => ({ push: routerPush, replace: routerReplace }),
+  usePathname: () => "/catalog",
+  useSearchParams: () => new URLSearchParams(),
 }));
 
 describe("Unified catalog page", () => {
