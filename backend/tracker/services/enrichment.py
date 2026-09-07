@@ -74,6 +74,7 @@ def enrich_movie_from_tmdb(movie: Movie) -> bool:
         return False
     return sync_movie_fields(movie, details)
 
+
 def resolve_or_create_movie(tmdb_id: int) -> Movie:
     """Fetch TMDb details for tmdb_id, create Movie if needed, and sync fields.
 
@@ -89,24 +90,12 @@ def resolve_or_create_movie(tmdb_id: int) -> Movie:
             "content_type": details.content_type,
         },
     )
-    if not created and details.poster_path and not movie.poster_path:
-        movie.poster_path = details.poster_path
-        movie.save()
+    if not created:
+        if details.title and movie.title != details.title:
+            movie.title = details.title
+            movie.save()
+        if details.poster_path and not movie.poster_path:
+            movie.poster_path = details.poster_path
+            movie.save()
     sync_movie_fields(movie, details)
     return movie
-    """Fetch TMDb details for *movie* and sync changed fields.
-
-    No-op (returns False) if TMDb is unconfigured or the fetch fails.
-    Callers that already fetched details should use sync_movie_fields instead.
-    """
-    if not TMDbClient.is_configured():
-        return False
-    client = TMDbClient(settings.TMDB_API_KEY)
-    try:
-        details = client.details(movie.tmdb_id, content_type=movie.content_type)
-    except Exception:
-        logger.exception("TMDb details fetch failed for movie %s", movie.pk)
-        return False
-    if not isinstance(details, TMDbItem):
-        return False
-    return sync_movie_fields(movie, details)

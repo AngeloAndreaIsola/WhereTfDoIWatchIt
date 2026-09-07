@@ -137,6 +137,7 @@ class EnrichMovieFromTmdbTests(TestCase):
         self.assertEqual(movie.overview, "from api")
         self.assertEqual(movie.year, 2021)
 
+    @patch("tracker.services.enrichment.TMDbClient")
     def test_resolve_or_create_movie_creates_new(self, MockClient):
         details = _details(tmdb_id=20, title="New Movie", year=2022, content_type="movie")
         instance = MockClient.return_value
@@ -148,6 +149,7 @@ class EnrichMovieFromTmdbTests(TestCase):
         self.assertEqual(movie.year, 2022)
         instance.details.assert_called_once_with(20)
 
+    @patch("tracker.services.enrichment.TMDbClient")
     def test_resolve_or_create_movie_updates_existing(self, MockClient):
         details = _details(tmdb_id=30, title="Updated Title", year=2023, poster_path="/new-poster.jpg")
         instance = MockClient.return_value

@@ -113,6 +113,70 @@ export interface SearchResult {
   year: number | null;
 }
 
+// ─── Unified Catalog ─────────────────────────────────────────────────────────
+
+export interface UnifiedCatalogItem {
+  id: string;
+  tmdb_id: number | null;
+  source: "official" | "unofficial";
+  source_indicator: string;
+  title: string;
+  year: number | null;
+  poster_path: string | null;
+  content_type: string;
+  provider: {
+    slug: string;
+    name: string;
+    category: string;
+  } | null;
+  watchability?: {
+    status?: string;
+    status_symbol?: string;
+    status_label?: string;
+    best_offer?: {
+      country: string;
+      service: string;
+      service_display?: string;
+      url: string;
+      is_current_country: boolean;
+    };
+    explanation?: string[];
+    excluded_offers?: unknown[];
+  } | null;
+  unofficial_details?: {
+    scraped_url: string;
+    confidence_score: number;
+    is_confirmed: boolean;
+    audio_languages: string[];
+    subtitle_languages: string[];
+  } | null;
+  watch_url: string | null;
+}
+
+export interface UnifiedCatalogResponse {
+  count: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+  has_next: boolean;
+  has_previous: boolean;
+  results: UnifiedCatalogItem[];
+}
+
+export async function fetchUnifiedCatalog(
+  params: Record<string, string> = {}
+): Promise<UnifiedCatalogResponse> {
+  const searchParams = new URLSearchParams(params);
+  const res = await fetch(`/api/catalog/unified/?${searchParams.toString()}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(
+      body.error ?? `Failed to fetch unified catalog (${res.status})`
+    );
+  }
+  return res.json();
+}
+
 /**
  * Fetch popular movies.
  */
