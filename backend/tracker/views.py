@@ -1190,6 +1190,7 @@ GENRE_LOOKUP: dict[int, str] = {
 
 # Simple in-memory cache for the popular endpoint (10-minute TTL).
 _POPULAR_CACHE: dict[str, Any] = {}
+_POPULAR_SERIES_CACHE: dict[str, Any] = {}
 _POPULAR_TTL = 600  # seconds
 
 
@@ -1236,6 +1237,56 @@ def prime_popular(request):
                 )
 
     # Return a shallow copy so callers can't mutate the cache.
+    return Response({
+        "results": data["results"],
+        "count": data["count"],
+        "cached": cached is not None,
+        "source": data["source"],
+    })
+
+
+@api_view(["GET"])
+def prime_popular_series(request):
+    """GET /api/prime/popular-series/ — trending TV series for the homepage grid.
+
+    Returns a small set of {tmdb_id, title, year, poster_path, overview, categories}.
+    Cached in-memory for 10 minutes to avoid hitting TMDb on every page load.
+    """
+    import time as _time
+    limit = request.GET.get("limit", "24")
+    try:
+        limit_int = max(1, min(int(limit), 30))
+    except (TypeError, ValueError):
+        limit_int = 24
+
+    cached = _POPULAR_SERIES_CACHE.get("data")
+    ts = _POPULAR_SERIES_CACHE.get("ts")
+    now = _time.time()
+    if cached is not None and ts is not None and (now - ts) < _POPULAR_TTL:
+        data = cached
+    else:
+        client = TMDbClient(settings.TMDB_API_KEY)
+        try:
+            series = client.popular_series(limit=limit_int)
+            data = {
+                "results": [_popular_movie_dict(s) for s in series],
+                "count": len(series),
+                "cached": False,
+                "source": "tmdb_trending_tv",
+            }
+            _POPULAR_SERIES_CACHE["data"] = data
+            _POPULAR_SERIES_CACHE["ts"] = now
+        except Exception as exc:
+            logger.exception("TMDb popular series fetch failed")
+            if cached is not None:
+                # Serve stale cache if available
+                data = cached
+            else:
+                return Response(
+                    {"error": f"TMDb fetch failed: {exc}", "results": [], "count": 0, "cached": False, "source": "error"},
+                    status=502,
+                )
+
     return Response({
         "results": data["results"],
         "count": data["count"],

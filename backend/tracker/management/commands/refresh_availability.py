@@ -17,7 +17,7 @@ DAILY_BUDGET = 90
 
 
 class Command(BaseCommand):
-    help = "Refresh stalest watchlist Availability rows within the daily API budget."
+    help = "Refresh stalest watchlist Availability rows for movies and series within the daily API budget."
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -29,7 +29,11 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         budget = options["budget"]
-        summary = process_watchlist_refresh(budget=budget, user_id=1)
+        summary = process_watchlist_refresh(
+            budget=budget,
+            user_id=1,
+            content_types=["movie", "series"],
+        )
 
         summary_str = json.dumps(summary, indent=2)
         if summary.get("rate_limited"):

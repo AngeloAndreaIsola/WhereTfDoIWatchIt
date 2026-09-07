@@ -46,6 +46,13 @@ class Command(BaseCommand):
             default=str(DEFAULT_FIXTURE),
             help=f"Path to a v4 Show JSON fixture (default: {DEFAULT_FIXTURE.name}).",
         )
+        parser.add_argument(
+            "--content-type",
+            type=str,
+            default="movie",
+            choices=["movie", "series"],
+            help="Content type for the item (default: movie).",
+        )
 
     def handle(self, *args, **options):
         fixture_path = Path(options["fixture"])
@@ -56,13 +63,18 @@ class Command(BaseCommand):
             payload = json.load(fh)
 
         tmdb_id = _tmdb_id_from_payload(payload)
+        content_type = options["content_type"]
         movie, created = Movie.objects.get_or_create(
             tmdb_id=tmdb_id,
             defaults={
                 "title": payload.get("title") or f"Movie {tmdb_id}",
                 "year": payload.get("releaseYear"),
+                "content_type": content_type,
             },
         )
+        if not created and movie.content_type != content_type:
+            movie.content_type = content_type
+            movie.save()
 
         offers = StreamingAvailabilityClient._parse_offers(payload)
         result = StreamingResult(tmdb_id=tmdb_id, offers=offers)

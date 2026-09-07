@@ -295,6 +295,31 @@ function CatalogPageClient() {
         </p>
       </div>
 
+      {/* Prominent Type Tabs: All | Movies | Series */}
+      <div className="flex items-center gap-2 border-b border-gray-200 dark:border-gray-800 pb-3">
+        {[
+          { label: "All", value: "all" },
+          { label: "Movies", value: "movie" },
+          { label: "Series", value: "series" },
+        ].map((tab) => {
+          const isActive = (filters.content_type || "all") === tab.value;
+          return (
+            <button
+              key={tab.value}
+              type="button"
+              onClick={() => handleFilterChange({ ...filters, content_type: tab.value })}
+              className={`px-4 py-1.5 text-xs font-bold rounded-full transition-all ${
+                isActive
+                  ? "bg-blue-600 text-white shadow-sm"
+                  : "bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700"
+              }`}
+            >
+              {tab.label}
+            </button>
+          );
+        })}
+      </div>
+
       <FilterBar filters={filters} onChange={handleFilterChange} showStatusFilter={true} />
 
       {/* Scrape panel */}
@@ -414,6 +439,11 @@ function CatalogPageClient() {
                             No Poster
                           </div>
                         )}
+                        <div className="absolute top-2 left-2 pointer-events-none z-10">
+                          <span className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded-md bg-gray-900/80 text-white backdrop-blur-xs">
+                            {item.content_type === "series" ? "SERIES" : "MOVIE"}
+                          </span>
+                        </div>
                         <div className="absolute top-2 right-2 flex flex-col items-end gap-1">
                           {renderBadge(item.source_indicator)}
                           {isOfficial && (
@@ -441,6 +471,11 @@ function CatalogPageClient() {
                           No Poster
                         </div>
                       )}
+                      <div className="absolute top-2 left-2 pointer-events-none z-10">
+                        <span className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded-md bg-gray-900/80 text-white backdrop-blur-xs">
+                          {item.content_type === "series" ? "SERIES" : "MOVIE"}
+                        </span>
+                      </div>
                       <div className="absolute top-2 right-2">
                         {renderBadge(item.source_indicator)}
                       </div>
