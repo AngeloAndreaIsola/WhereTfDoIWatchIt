@@ -20,7 +20,7 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: routerPush }),
 }));
 
-describe("Unofficial catalog (Phase C)", () => {
+describe("Unified catalog page", () => {
   const mockFetch = vi.fn();
 
   beforeEach(() => {
@@ -33,7 +33,7 @@ describe("Unofficial catalog (Phase C)", () => {
   });
 
   function setupFetch(
-    unofficialResponse: Record<string, unknown>,
+    unifiedResponse: Record<string, unknown>,
     options?: { providers?: unknown[]; prefs?: unknown }
   ) {
     mockFetch.mockImplementation((url: string) => {
@@ -55,23 +55,18 @@ describe("Unofficial catalog (Phase C)", () => {
           }),
         });
       }
-      if (urlStr.includes("/api/catalog/")) {
+      if (urlStr.includes("/api/providers/")) {
         return Promise.resolve({
           ok: true,
           status: 200,
-          json: async () => ({
-            results: [],
-            total_pages: 1,
-            has_next: false,
-            has_previous: false,
-          }),
+          json: async () => options?.providers ?? [],
         });
       }
-      if (urlStr.includes("/api/v2/unofficial/")) {
+      if (urlStr.includes("/api/catalog/unified/")) {
         return Promise.resolve({
           ok: true,
           status: 200,
-          json: async () => unofficialResponse,
+          json: async () => unifiedResponse,
         });
       }
       return Promise.resolve({
@@ -83,67 +78,74 @@ describe("Unofficial catalog (Phase C)", () => {
     vi.stubGlobal("fetch", mockFetch);
   }
 
-  it("shows the Unofficial Sources tab and switches to it", async () => {
-    setupFetch({ count: 0, results: [] });
+  it("renders the unified catalog page title and provider filter without tabs", async () => {
+    setupFetch({ count: 0, results: [], total_pages: 1 });
 
     const CatalogPage = (await import("@/app/catalog/page")).default;
     render(React.createElement(CatalogPage));
 
-    expect(screen.getByText("Official Sources")).toBeInTheDocument();
-    expect(screen.getByText("Unofficial Sources")).toBeInTheDocument();
+    expect(screen.getByText("Catalog")).toBeInTheDocument();
+    expect(
+      screen.getByText("Browse all titles across official, free, and unofficial streaming providers in one place.")
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Official Sources")).not.toBeInTheDocument();
+    expect(screen.queryByText("Unofficial Sources")).not.toBeInTheDocument();
 
-    const unofficialTab = screen.getByText("Unofficial Sources");
-    await userEvent.click(unofficialTab);
-
-    await waitFor(
-      () => {
-        expect(
-          screen.getByText(/No unofficial source results found/)
-        ).toBeInTheDocument();
-      },
-      { timeout: 5000 }
-    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/No catalog titles found matching your search and filter criteria/)
+      ).toBeInTheDocument();
+    });
   });
 
-  it("displays unofficial catalog items with language badges", async () => {
+  it("displays official and unofficial catalog items in unified grid", async () => {
     setupFetch({
-      count: 1,
+      count: 2,
+      page: 1,
+      total_pages: 1,
       results: [
         {
-          id: 1,
-          scraped_title: "Test Anime",
-          scraped_year: 2023,
-          scraped_url: "https://example.com/anime",
-          provider: {
-            id: 1,
-            slug: "kisskh",
-            name: "KissKH",
-            category: "scraper",
-            source_indicator: "Scraper",
-            is_enabled: true,
-            is_major: false,
-            icon_name: null,
-            domain: "kisskh.do",
-            last_scraped_at: null,
-            is_stale: false,
+          id: "official_1",
+          tmdb_id: 101,
+          source: "official",
+          source_indicator: "Official",
+          title: "Official Movie",
+          year: 2021,
+          poster_path: "/poster1.jpg",
+          content_type: "movie",
+          provider: { slug: "netflix", name: "Netflix", category: "official" },
+          watchability: {
+            status: "watchable_here",
+            status_symbol: "🟢",
+            status_label: "Watchable here",
+            best_offer: {
+              country: "US",
+              service: "netflix",
+              service_display: "Netflix",
+              url: "https://netflix.com",
+              is_current_country: true,
+            },
           },
-          movie: {
-            id: 10,
-            tmdb_id: 123,
-            title: "Test Anime",
-            year: 2023,
-            poster_path: "/poster.jpg",
-          },
-          is_confirmed: true,
-          confidence_score: 0.95,
-          raw_payload: {
+          watch_url: "https://netflix.com",
+        },
+        {
+          id: "unofficial_2",
+          tmdb_id: null,
+          source: "unofficial",
+          source_indicator: "Scraper",
+          title: "Test Anime",
+          year: 2023,
+          poster_path: "/poster2.jpg",
+          content_type: "series",
+          provider: { slug: "kisskh", name: "KissKH", category: "scraper" },
+          unofficial_details: {
+            scraped_url: "https://example.com/anime",
+            confidence_score: 0.95,
+            is_confirmed: true,
             audio_languages: ["JA"],
             subtitle_languages: ["EN"],
-            quality: "1080p",
           },
-          is_available: true,
-          source_indicator: "Scraper",
-          provider_category: "scraper",
+          watch_url: "https://example.com/anime",
         },
       ],
     });
@@ -151,25 +153,14 @@ describe("Unofficial catalog (Phase C)", () => {
     const CatalogPage = (await import("@/app/catalog/page")).default;
     render(React.createElement(CatalogPage));
 
-    const unofficialTab = screen.getByText("Unofficial Sources");
-    await userEvent.click(unofficialTab);
+    await waitFor(() => {
+      expect(screen.getByText("Official Movie")).toBeInTheDocument();
+      expect(screen.getByText("Test Anime")).toBeInTheDocument();
+    });
 
-    await waitFor(
-      () => {
-        expect(screen.getByText("Test Anime")).toBeInTheDocument();
-      },
-      { timeout: 5000 }
-    );
-
-    expect(screen.getByText(/→ Test Anime \(2023\)/)).toBeInTheDocument();
-    expect(screen.getByText("KissKH · kisskh.do")).toBeInTheDocument();
-    expect(screen.getByText("✓ Matched")).toBeInTheDocument();
-    expect(screen.getByText("Audio:")).toBeInTheDocument();
-    expect(screen.getByText("Subs:")).toBeInTheDocument();
-    expect(screen.getByText("Quality:")).toBeInTheDocument();
-
-    const watchLink = screen.getByText("Watch →");
-    expect(watchLink).toHaveAttribute("href", "https://example.com/anime");
+    expect(screen.getByText("Official")).toBeInTheDocument();
+    expect(screen.getByText("Scraper")).toBeInTheDocument();
+    expect(screen.getByText("Watch on KissKH")).toBeInTheDocument();
   });
 
   it("shows scrape panel when clicking Scrape Unofficial Sources", async () => {
@@ -178,17 +169,11 @@ describe("Unofficial catalog (Phase C)", () => {
     const CatalogPage = (await import("@/app/catalog/page")).default;
     render(React.createElement(CatalogPage));
 
-    const unofficialTab = screen.getByText("Unofficial Sources");
-    await userEvent.click(unofficialTab);
-
-    await waitFor(
-      () => {
-        expect(
-          screen.getByText(/No unofficial source results found/)
-        ).toBeInTheDocument();
-      },
-      { timeout: 5000 }
-    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/No catalog titles found matching your search and filter criteria/)
+      ).toBeInTheDocument();
+    });
 
     const scrapeLink = screen.getByText("Scrape Unofficial Sources");
     await userEvent.click(scrapeLink);
@@ -200,10 +185,10 @@ describe("Unofficial catalog (Phase C)", () => {
     expect(runButton).toBeDisabled();
   });
 
-  it("handles API error when loading unofficial catalog", async () => {
+  it("handles API error when loading catalog", async () => {
     mockFetch.mockImplementation((url: string) => {
       const urlStr = url.toString();
-      if (urlStr.includes("/api/v2/unofficial/")) {
+      if (urlStr.includes("/api/catalog/unified/")) {
         return Promise.resolve({
           ok: false,
           status: 500,
@@ -221,16 +206,10 @@ describe("Unofficial catalog (Phase C)", () => {
     const CatalogPage = (await import("@/app/catalog/page")).default;
     render(React.createElement(CatalogPage));
 
-    const unofficialTab = screen.getByText("Unofficial Sources");
-    await userEvent.click(unofficialTab);
-
-    await waitFor(
-      () => {
-        expect(
-          screen.getByText(/No unofficial source results found/)
-        ).toBeInTheDocument();
-      },
-      { timeout: 5000 }
-    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/No catalog titles found matching your search and filter criteria/)
+      ).toBeInTheDocument();
+    });
   });
 });
