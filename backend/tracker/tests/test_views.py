@@ -750,6 +750,33 @@ class UnifiedCatalogEndpointTests(TestCase):
         self.assertEqual(data["count"], 1)
         self.assertEqual(data["results"][0]["provider"]["slug"], "hydra")
 
+    @patch("tracker.services.filtering.AvailabilityCache")
+    def test_unified_catalog_filters_by_quality(self, mock_cache_cls):
+        m1 = Movie.objects.create(tmdb_id=101, title="4K Movie", year=2021)
+        m2 = Movie.objects.create(tmdb_id=102, title="HD Movie", year=2021)
+
+        instance = mock_cache_cls.return_value
+        instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=1)
+
+        def mock_read_offers(movie):
+            if movie.tmdb_id == 101:
+                return [
+                    Offer(country="US", service="netflix", offer_type="subscription", quality="4k", audio_languages=["EN"], subtitle_languages=["EN"])
+                ]
+            if movie.tmdb_id == 102:
+                return [
+                    Offer(country="US", service="prime", offer_type="subscription", quality="hd", audio_languages=["EN"], subtitle_languages=["EN"])
+                ]
+            return []
+
+        instance.read_offers.side_effect = mock_read_offers
+
+        resp = self.client.get("/api/catalog/unified/?quality=4k")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["count"], 1)
+        self.assertEqual(data["results"][0]["tmdb_id"], 101)
+
 
 class LinkTMDBEndpointTests(TestCase):
     @patch("tracker.views.TMDbClient")

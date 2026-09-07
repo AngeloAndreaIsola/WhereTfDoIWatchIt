@@ -13,6 +13,7 @@ export interface FilterState {
   providers: string[]; // array of provider slugs
   country: string;
   status: string; // "", "watchable_here", "watchable_vpn", "not_watchable"
+  quality: string; // "", "4k,uhd", "hdr", "hd", "sd"
 }
 
 interface FilterBarProps {
@@ -172,8 +173,8 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
         )}
       </div>
 
-      {/* Secondary Row: Genre, Provider, Year Range, Status */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
+      {/* Secondary Row: Genre, Provider, Year Range, Quality, Status */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
         <div>
           <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
             Genre
@@ -229,6 +230,23 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
             onChange={(e) => onChange({ ...filters, year_max: e.target.value })}
             className="w-full px-3 py-1.5 text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
           />
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+            Quality
+          </label>
+          <select
+            value={filters.quality}
+            onChange={(e) => onChange({ ...filters, quality: e.target.value })}
+            className="w-full px-3 py-1.5 text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+          >
+            <option value="">All Qualities</option>
+            <option value="4k,uhd">4K / UHD</option>
+            <option value="hdr">HDR</option>
+            <option value="hd">HD</option>
+            <option value="sd">SD</option>
+          </select>
         </div>
 
         {showStatusFilter && (

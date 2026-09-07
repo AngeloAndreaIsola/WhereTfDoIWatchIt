@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo, Suspense } from "react";
 import Link from "next/link";
+import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { FilterBar, FilterState } from "@/components/FilterBar";
 import { VpnWatchModal } from "@/components/VpnWatchModal";
 import { WhyCantIWatchModal, ExcludedOffer } from "@/components/WhyCantIWatchModal";
@@ -25,21 +26,55 @@ interface BestOffer {
   is_current_country: boolean;
 }
 
-export default function CatalogPage() {
-  const [filters, setFilters] = useState<FilterState>({
-    q: "",
-    content_type: "all",
-    genre: "",
-    year_min: "",
-    year_max: "",
-    actors: [],
-    providers: [],
-    country: "",
-    status: "",
-  });
+function CatalogPageClient() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
 
+  const initialUrlState = useMemo(() => {
+    const q = searchParams.get("q") || "";
+    const content_type = searchParams.get("content_type") || "all";
+    const genre = searchParams.get("genre") || "";
+    const year_min = searchParams.get("year_min") || "";
+    const year_max = searchParams.get("year_max") || "";
+    const country = searchParams.get("country") || "";
+    const status = searchParams.get("status") || "";
+    const quality = searchParams.get("quality") || "";
+    const rawProviders = searchParams.get("providers") || "";
+    const providers = rawProviders ? rawProviders.split(",").map((s) => s.trim()).filter(Boolean) : [];
+
+    let actors: { id: number; name: string }[] = [];
+    const rawActors = searchParams.get("actors");
+    if (rawActors) {
+      try {
+        actors = JSON.parse(rawActors);
+      } catch {
+        actors = [];
+      }
+    }
+
+    const initialPage = parseInt(searchParams.get("page") || "1", 10) || 1;
+
+    return {
+      filters: {
+        q,
+        content_type,
+        genre,
+        year_min,
+        year_max,
+        actors,
+        providers,
+        country,
+        status,
+        quality,
+      },
+      page: initialPage,
+    };
+  }, [searchParams]);
+
+  const [filters, setFilters] = useState<FilterState>(initialUrlState.filters);
   const [items, setItems] = useState<UnifiedCatalogItem[]>([]);
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(initialUrlState.page);
   const [paginationInfo, setPaginationInfo] = useState({
     totalPages: 1,
     hasNext: false,
@@ -103,10 +138,38 @@ export default function CatalogPage() {
       .catch(() => {});
   }, []);
 
-  // Reset to page 1 whenever filters change
+  // Sync state to URL search params whenever filters or page change
   useEffect(() => {
+    const params = new URLSearchParams();
+    if (filters.q) params.set("q", filters.q);
+    if (filters.content_type && filters.content_type !== "all") {
+      params.set("content_type", filters.content_type);
+    }
+    if (filters.genre) params.set("genre", filters.genre);
+    if (filters.year_min) params.set("year_min", filters.year_min);
+    if (filters.year_max) params.set("year_max", filters.year_max);
+    if (filters.providers && filters.providers.length > 0) {
+      params.set("providers", filters.providers.join(","));
+    }
+    if (filters.country) params.set("country", filters.country);
+    if (filters.status) params.set("status", filters.status);
+    if (filters.quality) params.set("quality", filters.quality);
+    if (filters.actors && filters.actors.length > 0) {
+      params.set("actors", JSON.stringify(filters.actors));
+    }
+    if (page > 1) {
+      params.set("page", page.toString());
+    }
+
+    const queryString = params.toString();
+    const newUrl = queryString ? `${pathname}?${queryString}` : pathname;
+    router.replace(newUrl, { scroll: false });
+  }, [filters, page, pathname, router]);
+
+  const handleFilterChange = (newFilters: FilterState) => {
+    setFilters(newFilters);
     setPage(1);
-  }, [filters]);
+  };
 
   const loadCatalog = useCallback(() => {
     setLoading(true);
@@ -123,6 +186,7 @@ export default function CatalogPage() {
       params.providers = filters.providers.join(",");
     }
     if (filters.status) params.status = filters.status;
+    if (filters.quality) params.quality = filters.quality;
     if (filters.country) params.country = filters.country;
     if (filters.actors && filters.actors.length > 0) {
       params.actor_id = filters.actors.map((a) => a.id).join(",");
@@ -223,7 +287,7 @@ export default function CatalogPage() {
         </p>
       </div>
 
-      <FilterBar filters={filters} onChange={setFilters} showStatusFilter={true} />
+      <FilterBar filters={filters} onChange={handleFilterChange} showStatusFilter={true} />
 
       {/* Scrape panel */}
       <div className="space-y-3">
@@ -483,5 +547,13 @@ export default function CatalogPage() {
         excludedOffers={whyModalState.excludedOffers}
       />
     </div>
+  );
+}
+
+export default function CatalogPage() {
+  return (
+    <Suspense fallback={<div className="py-12 text-center text-gray-500">Loading catalog...</div>}>
+      <CatalogPageClient />
+    </Suspense>
   );
 }

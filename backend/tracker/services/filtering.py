@@ -129,6 +129,13 @@ def apply_composable_filters(
     country_filter = (params.get("country") or "").upper().strip()
     status_filter = (params.get("availability_status") or params.get("status") or "").lower().strip()
     watchable_only = params.get("watchable") in ("true", "1") or params.get("watchable_only") in ("true", "1")
+    raw_quality = params.get("quality") or ""
+    quality_filter_set = None
+    if raw_quality:
+        if isinstance(raw_quality, list):
+            quality_filter_set = {q.strip().lower() for item in raw_quality for q in str(item).split(",") if q.strip()}
+        elif isinstance(raw_quality, str) and raw_quality.strip():
+            quality_filter_set = {q.strip().lower() for q in raw_quality.split(",") if q.strip()}
 
     evaluated_items = []
     for m in movie_list:
@@ -144,14 +151,18 @@ def apply_composable_filters(
         # Apply Provider Filter
         if provider_slug_set:
             all_services = {
-                (o.get("service") or "").lower() for o in offers
+                (getattr(o, "service", None) or (o.get("service") if isinstance(o, dict) else "") or "").lower()
+                for o in offers
             }
             if not any(ps in s or s in ps for ps in provider_slug_set for s in all_services):
                 continue
 
         # Apply Country Filter
         if country_filter:
-            all_countries = {(o.get("country") or "").upper() for o in offers}
+            all_countries = {
+                (getattr(o, "country", None) or (o.get("country") if isinstance(o, dict) else "") or "").upper()
+                for o in offers
+            }
             if country_filter not in all_countries:
                 continue
 
@@ -174,6 +185,15 @@ def apply_composable_filters(
             elif status_filter == "watchable_vpn" and watch_res.status != WatchabilityStatus.WATCHABLE_VPN:
                 continue
             elif status_filter == "not_watchable" and watch_res.status != WatchabilityStatus.NOT_WATCHABLE:
+                continue
+
+        # Apply Quality Filter
+        if quality_filter_set:
+            movie_qualities = {
+                (getattr(o, "quality", None) or (o.get("quality") if isinstance(o, dict) else "") or "").lower()
+                for o in offers
+            }
+            if not any(q in quality_filter_set for q in movie_qualities):
                 continue
 
         evaluated_items.append({

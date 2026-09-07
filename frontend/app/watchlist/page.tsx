@@ -43,6 +43,7 @@ export default function WatchlistPage() {
     providers: [],
     country: "",
     status: "",
+    quality: "",
   });
 
   const [items, setItems] = useState<WatchlistItemRow[]>([]);
