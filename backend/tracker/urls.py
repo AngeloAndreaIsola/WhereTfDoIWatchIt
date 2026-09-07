@@ -9,6 +9,7 @@ urlpatterns = [
     path("genres/", views.genres_list, name="genres-list"),
     path("homepage/", views.homepage_feed, name="homepage-feed"),
     path("catalog/", views.catalog_list, name="catalog-list"),
+    path("catalog/unified/", views.unified_catalog, name="catalog-unified"),
     path("movie/<int:tmdb_id>/availability/", views.movie_availability, name="movie-availability"),
     path("movie/<int:tmdb_id>/language-info/", views.movie_language_info, name="movie-language-info"),
     path("providers/", views.providers_list, name="providers-list"),

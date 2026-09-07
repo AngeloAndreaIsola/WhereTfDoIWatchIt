@@ -32,6 +32,7 @@ from tracker.services.preferences import resolve_preferences
 from tracker.services.ranking import rank_offers
 from tracker.services.cache import AvailabilityCache
 from tracker.services.streaming_api import service_display_name
+from tracker.services.offers import Offer
 from tracker.serializers import (
     ProviderSerializer,
     ScrapedContentMappingSerializer,
@@ -303,32 +304,29 @@ def unofficial_movie_offers(request, tmdb_id: int):
         payload = mapping.raw_payload or {}
         audio = payload.get("audio_languages", []) if isinstance(payload, dict) else []
         subs = payload.get("subtitle_languages", []) if isinstance(payload, dict) else []
-        offers.append({
+        offers.append(Offer.from_dict({
             "country": payload.get("country", "") if isinstance(payload, dict) else "",
             "service": mapping.provider.slug,
-            "service_display": mapping.provider.name,
-            "source_indicator": mapping.provider.source_indicator,
-            "offer_type": "free",  # unofficial sources are always "free"
+            "offer_type": "free",
             "quality": mapping.provider.config.get("quality") if mapping.provider.config else "",
             "url": mapping.scraped_url,
             "audio": [str(a).upper() for a in audio],
             "subs": [str(s).upper() for s in subs],
-        })
+            "is_scraped_source": True,
+        }))
 
     ranked = rank_offers(offers, preference)
 
     # Format for frontend
+    from tracker.services.presentation import present_offer
+    provider_map = {m.provider.slug: m.provider for m in scraped}
     offers_out = []
     for offer in ranked:
+        presented = present_offer(offer, provider_map)
         d = offer.to_dict()
-        d["service_display"] = next(
-            (m.provider.name for m in scraped if m.provider.slug == offer.service),
-            offer.service,
-        )
-        d["source_indicator"] = next(
-            (m.provider.source_indicator for m in scraped if m.provider.slug == offer.service),
-            "Unofficial",
-        )
+        d["service_display"] = presented.service_display
+        d["source_indicator"] = presented.source_indicator
+        d["country"] = presented.country
         offers_out.append(d)
 
     return Response({

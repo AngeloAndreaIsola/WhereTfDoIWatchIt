@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { ProviderFilter, ProviderItem } from "./ProviderFilter";
 
 export interface FilterState {
   q: string;
@@ -9,7 +10,7 @@ export interface FilterState {
   year_min: string;
   year_max: string;
   actors: { id: number; name: string }[];
-  provider: string;
+  providers: string[]; // array of provider slugs
   country: string;
   status: string; // "", "watchable_here", "watchable_vpn", "not_watchable"
 }
@@ -18,12 +19,11 @@ interface FilterBarProps {
   filters: FilterState;
   onChange: (newFilters: FilterState) => void;
   showStatusFilter?: boolean;
-  tab?: "official" | "unofficial";
 }
 
-export function FilterBar({ filters, onChange, showStatusFilter = true, tab }: FilterBarProps) {
+export function FilterBar({ filters, onChange, showStatusFilter = true }: FilterBarProps) {
   const [genres, setGenres] = useState<{ id: number; name: string }[]>([]);
-  const [providers, setProviders] = useState<{ id: number; slug: string; name: string; category?: string; is_major?: boolean }[]>([]);
+  const [providers, setProviders] = useState<ProviderItem[]>([]);
   const [actorSearch, setActorSearch] = useState("");
   const [actorSuggestions, setActorSuggestions] = useState<{ id: number; name: string }[]>([]);
   const [showActorDropdown, setShowActorSuggestions] = useState(false);
@@ -40,24 +40,11 @@ export function FilterBar({ filters, onChange, showStatusFilter = true, tab }: F
       .then((res) => (res.ok ? res.json() : []))
       .then((data) => {
         if (Array.isArray(data)) {
-          const active = data.filter((p: { is_subscribed?: boolean }) => p.is_subscribed);
-          const base = active.length > 0 ? active : data;
-          // Restrict the provider filter to sources relevant for the active tab:
-          //   official   → Major (Official) + Free Streaming Providers
-          //                (Imported Small Providers & Sources / scrapers excluded)
-          //   unofficial → scrapers only (Imported Small Providers & Sources)
-          const filtered = tab
-            ? base.filter((p: { category?: string; is_major?: boolean }) =>
-                tab === "official"
-                  ? p.is_major || p.category === "free" || p.category === "official"
-                  : p.category === "scraper"
-              )
-            : base;
-          setProviders(filtered);
+          setProviders(data);
         }
       })
       .catch(() => {});
-  }, [tab]);
+  }, []);
 
   useEffect(() => {
     if (actorSearch.trim().length < 2) {
@@ -207,20 +194,15 @@ export function FilterBar({ filters, onChange, showStatusFilter = true, tab }: F
 
         <div>
           <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
-            Provider
+            Provider Filter
           </label>
-          <select
-            value={filters.provider}
-            onChange={(e) => onChange({ ...filters, provider: e.target.value })}
-            className="w-full px-3 py-1.5 text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
-          >
-            <option value="">All Providers</option>
-            {providers.map((p) => (
-              <option key={p.id || p.slug} value={p.slug}>
-                {p.name}
-              </option>
-            ))}
-          </select>
+          <ProviderFilter
+            providers={providers}
+            selectedProviders={filters.providers || []}
+            onChange={(selectedSlugs) =>
+              onChange({ ...filters, providers: selectedSlugs })
+            }
+          />
         </div>
 
         <div>

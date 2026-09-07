@@ -94,25 +94,9 @@ class MovieAdmin(admin.ModelAdmin):
                 except Movie.DoesNotExist:
                     error = "Movie not found."
                 else:
-                    client = TMDbClient(settings.TMDB_API_KEY)
                     try:
-                        details = client.details(int(tmdb_id), content_type=movie.content_type)
-                        from django.db import transaction
-                        with transaction.atomic():
-                            old_tmdb = movie.tmdb_id
-                            movie.tmdb_id = details.tmdb_id
-                            movie.title = title_override or details.title
-                            movie.year = details.year
-                            movie.poster_path = details.poster_path or ""
-                            movie.overview = details.overview or ""
-                            movie.genres = details.genres or []
-                            movie.genre_ids = details.genre_ids or []
-                            movie.cast = details.cast or []
-                            movie.seasons_data = details.seasons_data or []
-                            movie.tmdb_rating = details.rating
-                            movie.save()
-                            if old_tmdb != details.tmdb_id:
-                                Availability.objects.filter(movie=movie).delete()
+                        movie = resolve_or_create_movie(int(tmdb_id))
+                        sync_movie_fields(movie, details)
                         linked = True
                     except Exception as exc:
                         error = f"TMDb fetch failed: {exc}"

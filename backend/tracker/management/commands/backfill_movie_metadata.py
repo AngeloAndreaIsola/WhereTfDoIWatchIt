@@ -2,7 +2,7 @@
 
 Catalog/Homepage/Watchlist search-by-actor and search-by-category rely on
 ``Movie.cast`` and ``Movie.genre_ids`` being populated. Those fields are only
-filled when a movie's detail page is opened (``_enrich_movie_from_tmdb``), so
+    filled when a movie's detail page is opened (``sync_movie_fields``), so
 movies created via bulk catalog seeding or watchlist import stay mostly empty,
 which makes actor/genre filtering silently match nothing.
 
@@ -22,39 +22,8 @@ from django.core.management.base import BaseCommand
 from django.db.models import Q
 
 from ...models import Movie
+from ...services.enrichment import sync_movie_fields
 from ...services.tmdb import TMDbClient, TMDbItem
-
-
-def _enrich(movie: Movie, details: TMDbItem) -> bool:
-    """Mirror the detail endpoint's enrichment; return True if anything changed."""
-    needs_update = False
-    if details.overview and movie.overview != details.overview:
-        movie.overview = details.overview
-        needs_update = True
-    if details.poster_path and movie.poster_path != details.poster_path:
-        movie.poster_path = details.poster_path
-        needs_update = True
-    if details.genres and movie.genres != details.genres:
-        movie.genres = details.genres
-        needs_update = True
-    if details.genre_ids and movie.genre_ids != details.genre_ids:
-        movie.genre_ids = details.genre_ids
-        needs_update = True
-    if details.cast and movie.cast != details.cast:
-        movie.cast = details.cast
-        needs_update = True
-    if details.director is not None and movie.director != details.director:
-        movie.director = details.director
-        needs_update = True
-    if details.rating is not None and movie.tmdb_rating != details.rating:
-        movie.tmdb_rating = details.rating
-        needs_update = True
-    if details.year and movie.year != details.year:
-        movie.year = details.year
-        needs_update = True
-    if needs_update:
-        movie.save()
-    return needs_update
 
 
 class Command(BaseCommand):
@@ -136,9 +105,7 @@ class Command(BaseCommand):
                     )
                 )
                 continue
-            if not isinstance(details, TMDbItem):
-                continue
-            if _enrich(movie, details):
+            if isinstance(details, TMDbItem) and sync_movie_fields(movie, details):
                 updated += 1
                 if (processed % 25) == 0:
                     self.stdout.write(f"  ...{processed} processed, {updated} updated")

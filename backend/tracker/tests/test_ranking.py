@@ -2,6 +2,7 @@
 from django.test import TestCase
 
 from tracker.models import Preference
+from tracker.services.offers import Offer
 from tracker.services.ranking import QUALITY_RANK, rank_offers
 
 
@@ -15,14 +16,14 @@ def _pref(audio=("EN", "IT"), subs=("EN",), countries=("US", "IT")):
 
 
 def _offer(country, service, offer_type="subscription", quality="hd", audio=(), subs=()):
-    return {
-        "country": country,
-        "service": service,
-        "offer_type": offer_type,
-        "quality": quality,
-        "audio": list(audio),
-        "subs": list(subs),
-    }
+    return Offer(
+        country=country,
+        service=service,
+        offer_type=offer_type,
+        quality=quality,
+        audio_languages=list(audio),
+        subtitle_languages=list(subs),
+    )
 
 
 class RankingTests(TestCase):

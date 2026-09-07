@@ -72,6 +72,7 @@ from .services.cache import AvailabilityCache
 from .services.letterboxd import import_rows, parse_file_or_zip
 from .services.ranking import rank_offers
 from .services.rate_limit import RateLimitExceeded
+from .services.enrichment import enrich_movie_from_tmdb, resolve_or_create_movie, sync_movie_fields
 from .services.tmdb import TMDbClient, TMDbMovie
 
 logger = logging.getLogger(__name__)
@@ -177,6 +178,195 @@ def homepage_feed(request):
 
 
 @api_view(["GET"])
+def unified_catalog(request):
+    """GET /api/catalog/unified/ — Unified catalog endpoint merging official and unofficial sources."""
+    curr_country = request.GET.get("country") or "US"
+    pref = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
+    user_subs = get_user_subscriptions(user_id=1)
+
+    raw_providers = request.GET.get("providers") or request.GET.get("provider") or ""
+    raw_categories = request.GET.get("provider_categories") or ""
+
+    requested_slugs: set[str] = set()
+    if raw_providers:
+        for p in raw_providers.split(","):
+            if p.strip():
+                requested_slugs.add(p.strip().lower())
+
+    if raw_categories:
+        cats = [c.strip().lower() for c in raw_categories.split(",") if c.strip()]
+        cat_providers = Provider.objects.filter(is_enabled=True)
+        cat_slugs = set()
+        for c in cats:
+            if c == "major":
+                cat_slugs.update(cat_providers.filter(is_major=True).values_list("slug", flat=True))
+            elif c == "free":
+                cat_slugs.update(cat_providers.filter(category="free", is_major=False).values_list("slug", flat=True))
+            elif c in ("unofficial", "scraper"):
+                cat_slugs.update(cat_providers.filter(category__in=["scraper", "unofficial"]).values_list("slug", flat=True))
+            else:
+                cat_slugs.update(cat_providers.filter(category=c).values_list("slug", flat=True))
+        requested_slugs.update({s.lower() for s in cat_slugs})
+
+    allowed_provider_slugs = requested_slugs if (raw_providers or raw_categories) else None
+
+    # Determine whether official or unofficial or both should be queried
+    include_official = True
+    include_unofficial = True
+    if allowed_provider_slugs is not None:
+        official_providers = set(
+            Provider.objects.filter(is_enabled=True)
+            .filter(is_major=True)
+            .values_list("slug", flat=True)
+        ) | set(
+            Provider.objects.filter(is_enabled=True, category="free")
+            .values_list("slug", flat=True)
+        )
+        unofficial_providers = set(
+            Provider.objects.filter(is_enabled=True, category__in=["scraper", "unofficial"])
+            .values_list("slug", flat=True)
+        )
+
+        # Also include any provider matching allowed_provider_slugs
+        matched_official = False
+        matched_unofficial = False
+
+        for slug in allowed_provider_slugs:
+            if slug in official_providers or Provider.objects.filter(slug__iexact=slug, category__in=["official", "free"]).exists():
+                matched_official = True
+            if slug in unofficial_providers or Provider.objects.filter(slug__iexact=slug, category__in=["scraper", "unofficial"]).exists():
+                matched_unofficial = True
+
+        # If user explicitly selected provider(s), only query matching source types
+        if matched_official or matched_unofficial:
+            include_official = matched_official
+            include_unofficial = matched_unofficial
+
+    unified_items = []
+    seen_tmdb_ids = set()
+
+    # 1. Fetch Official Catalog Items
+    if include_official:
+        movies = Movie.objects.all().order_by("-id")
+        evaluated, _ = apply_composable_filters(
+            movies,
+            request.GET,
+            pref,
+            user_subscriptions=user_subs,
+            current_country=curr_country,
+            allowed_provider_slugs=allowed_provider_slugs,
+        )
+
+        for item in evaluated:
+            m = item["movie"]
+            watch_res = item["watchability"]
+            seen_tmdb_ids.add(m.tmdb_id)
+
+            best_offer = watch_res.best_offer.to_dict() if watch_res.best_offer else None
+            watch_url = best_offer.get("url") if best_offer else None
+
+            # Determine provider details from best offer or watchability
+            provider_info = None
+            if best_offer and best_offer.get("service"):
+                svc_slug = best_offer["service"]
+                p_obj = Provider.objects.filter(slug__iexact=svc_slug).first()
+                provider_info = {
+                    "slug": svc_slug,
+                    "name": p_obj.name if p_obj else svc_slug.capitalize(),
+                    "category": p_obj.category if p_obj else "official",
+                }
+
+            source_ind = "Free" if (provider_info and provider_info["category"] == "free") else "Official"
+
+            unified_items.append({
+                "id": f"official_{m.id or m.tmdb_id}",
+                "tmdb_id": m.tmdb_id,
+                "source": "official",
+                "source_indicator": source_ind,
+                "title": m.title,
+                "year": m.year,
+                "poster_path": m.poster_path,
+                "content_type": m.content_type or "movie",
+                "provider": provider_info,
+                "watchability": watch_res.to_dict(),
+                "unofficial_details": None,
+                "watch_url": watch_url,
+            })
+
+    # 2. Fetch Unofficial Scraped Content Mappings
+    if include_unofficial:
+        qs = ScrapedContentMapping.objects.select_related("provider", "movie").filter(
+            provider__is_enabled=True,
+            is_available=True,
+        )
+
+        # Apply provider filtering
+        if allowed_provider_slugs is not None:
+            qs = qs.filter(provider__slug__in=list(allowed_provider_slugs))
+
+        # Text search filter
+        q = (request.GET.get("q") or request.GET.get("query") or "").strip()
+        if q:
+            qs = qs.filter(scraped_title__icontains=q)
+
+        # Country filter
+        country_code = (request.GET.get("country") or "").strip().upper()
+        if country_code:
+            qs = qs.filter(provider__country_code=country_code) | qs.filter(country_code=country_code)
+
+        # Year filter
+        year_min = request.GET.get("year_min")
+        year_max = request.GET.get("year_max")
+        if year_min and str(year_min).isdigit():
+            qs = qs.filter(scraped_year__gte=int(year_min))
+        if year_max and str(year_max).isdigit():
+            qs = qs.filter(scraped_year__lte=int(year_max))
+
+        qs = qs.order_by("-updated_at")
+
+        for mapping in qs:
+            m = mapping.movie
+            # If movie is already in official catalog results, deduplicate / skip or merge
+            if m and m.tmdb_id in seen_tmdb_ids:
+                continue
+
+            payload = mapping.raw_payload or {}
+            audio = [str(a).upper() for a in (payload.get("audio_languages") or payload.get("audio") or [])]
+            subs = [str(s).upper() for s in (payload.get("subtitle_languages") or payload.get("subtitles") or [])]
+
+            unified_items.append({
+                "id": f"unofficial_{mapping.id}",
+                "tmdb_id": m.tmdb_id if m else None,
+                "source": "unofficial",
+                "source_indicator": mapping.provider.source_indicator or "Scraper",
+                "title": m.title if m else mapping.scraped_title,
+                "year": m.year if m else mapping.scraped_year,
+                "poster_path": m.poster_path if m else "",
+                "content_type": m.content_type if m else "movie",
+                "provider": {
+                    "slug": mapping.provider.slug,
+                    "name": mapping.provider.name,
+                    "category": mapping.provider.category,
+                },
+                "watchability": None,
+                "unofficial_details": {
+                    "scraped_url": mapping.scraped_url,
+                    "confidence_score": mapping.confidence_score,
+                    "is_confirmed": mapping.is_confirmed,
+                    "audio_languages": audio,
+                    "subtitle_languages": subs,
+                },
+                "watch_url": mapping.scraped_url,
+            })
+
+    page = int(request.GET.get("page", 1)) if str(request.GET.get("page", "")).isdigit() else 1
+    page_size = int(request.GET.get("page_size", 24)) if str(request.GET.get("page_size", "")).isdigit() else 24
+    paged_results, pagination = paginate_list(unified_items, page, page_size)
+
+    return Response({**pagination, "results": paged_results})
+
+
+@api_view(["GET"])
 def search(request):
     """Search TMDb by title (and optional year)."""
     query = request.GET.get("q") or request.GET.get("query") or ""
@@ -216,7 +406,7 @@ def movie_availability(request, tmdb_id: int):
     except RateLimitExceeded as exc:
         return Response({"error": str(exc), "rate_limited": True}, status=429)
 
-    offers = cache._read_offers(movie)
+    offers = cache.read_offers(movie)
     ranked = rank_offers(offers, preference)
 
     user_data = UserMovieData.objects.filter(user_id=1, movie=movie).first()
@@ -760,10 +950,10 @@ def watchlist_report(request):
         movie = eval_item["movie"]
         watch_res = eval_item["watchability"]
 
-        raw_offers = cache._read_offers(movie)
+        raw_offers = cache.read_offers(movie)
         qualifying_offers = [
             o for o in raw_offers
-            if (o.get("offer_type") or "").lower() in ("subscription", "free")
+            if (o.offer_type or "").lower() in ("subscription", "free")
         ]
         ranked = rank_offers(qualifying_offers, preference)
 
@@ -1042,87 +1232,23 @@ def _popular_movie_dict(movie: TMDbMovie) -> dict:
     }
 
 
-def _enrich_movie_from_tmdb(movie: Movie) -> None:
-    """Refresh sparse TMDb metadata on a Movie row (overview/cast/director/rating/etc).
-
-    No-op if TMDb is unconfigured or the fetch fails, so the detail page still
-    renders with whatever is already cached. Only writes fields that are empty
-    or changed, to avoid needless UPDATEs.
-    """
-    if not TMDbClient.is_configured():
-        return
-    client = TMDbClient(settings.TMDB_API_KEY)
-    try:
-        details = client.details(movie.tmdb_id, content_type=movie.content_type)
-    except Exception:
-        logger.exception("TMDb details fetch failed for movie %s", movie.pk)
-        return
-
-    # Guard against non-TMDbItem returns (e.g. an unconfigured mock in tests).
-    if not isinstance(details, TMDbMovie):
-        return
-
-    needs_update = False
-    if details.overview and movie.overview != details.overview:
-        movie.overview = details.overview
-        needs_update = True
-    if details.poster_path and movie.poster_path != details.poster_path:
-        movie.poster_path = details.poster_path
-        needs_update = True
-    if details.genres and movie.genres != details.genres:
-        movie.genres = details.genres
-        needs_update = True
-    if details.genre_ids and movie.genre_ids != details.genre_ids:
-        movie.genre_ids = details.genre_ids
-        needs_update = True
-    if details.cast and movie.cast != details.cast:
-        movie.cast = details.cast
-        needs_update = True
-    if details.director is not None and movie.director != details.director:
-        movie.director = details.director
-        needs_update = True
-    if details.rating is not None and movie.tmdb_rating != details.rating:
-        movie.tmdb_rating = details.rating
-        needs_update = True
-    if details.year and movie.year != details.year:
-        movie.year = details.year
-        needs_update = True
-    if needs_update:
-        movie.save()
-
 
 @api_view(["GET"])
 def prime_movie(request, tmdb_id: int):
     """GET /api/prime/movie/<tmdb_id>/ — ranked Prime Video offers for one movie.
-
-    Filters to subscription/free offers only, provider=DEFAULT_PREFERENCE_PROVIDER
-    ("prime"), across all countries. Uses the hardcoded DEFAULT_PREFERENCE (JA/EN)
-    via resolve_preferences(). On cache miss:
-      - If PRIME_LIVE_FETCH is True (default): hits Streaming Availability API.
-      - If PRIME_LIVE_FETCH is False: returns only cached rows.
+    Filters to subscription/free offers only.
     """
     from django.conf import settings
-    from .services.preferences import resolve_preferences
-    from .services.streaming_api import service_display_name
-    from .models import Provider, ProviderCategory
+    from tracker.models import ProviderCategory
 
-    # Resolve or auto-create the Movie row via TMDb.
+    from .services.offer_pipeline import OfficialOffersPipeline
+
     try:
         movie = Movie.objects.get(tmdb_id=tmdb_id)
     except Movie.DoesNotExist:
-        # Auto-create from TMDb details so the runtime join is non-empty.
-        client = TMDbClient(settings.TMDB_API_KEY)
         try:
-            details = client.details(tmdb_id)
-            movie, created = Movie.objects.get_or_create(
-                tmdb_id=details.tmdb_id,
-                defaults={"title": details.title, "year": details.year, "poster_path": details.poster_path or ""},
-            )
-            if not created and details.poster_path and not movie.poster_path:
-                movie.poster_path = details.poster_path
-                movie.save()
+            movie = resolve_or_create_movie(tmdb_id)
         except Exception:
-            # TMDb lookup failed and movie not in DB.
             return Response(
                 {
                     "movie": {"tmdb_id": tmdb_id, "title": None, "year": None},
@@ -1132,102 +1258,15 @@ def prime_movie(request, tmdb_id: int):
                 status=404,
             )
 
-    # Resolve preferences (hardcoded defaults if no DB row).
-    pref_dict = resolve_preferences(user_id=1)
-
-    # Backfill sparse TMDb metadata (overview/cast/director/rating/poster) so the
-    # detail page has something to show even when the Movie row was created from a
-    # shallow source. Non-fatal: any TMDb failure is logged and ignored.
-    _enrich_movie_from_tmdb(movie)
-
-    # Build a Preference-like object for rank_offers (which expects a Preference
-    # instance with audio_languages, subtitle_languages, candidate_countries).
-    preference = Preference(
+    pipeline = OfficialOffersPipeline(
         user_id=1,
-        audio_languages=pref_dict["audio_languages"],
-        subtitle_languages=pref_dict["subtitle_languages"],
-        candidate_countries=pref_dict["candidate_countries"],
+        default_provider_slug=getattr(settings, "DEFAULT_PREFERENCE_PROVIDER", "prime"),
+        provider_category_set={ProviderCategory.OFFICIAL, ProviderCategory.FREE},
     )
-
-    # Get cached/fresh availability, gated by PRIME_LIVE_FETCH.
-    cache = AvailabilityCache()
-    if not getattr(settings, "PRIME_LIVE_FETCH", True):
-        # Offline mode: only return cached rows, never fetch live.
-        offers = cache._read_offers(movie)
-    else:
-        try:
-            cache.get_or_refresh(movie)
-        except RateLimitExceeded as exc:
-            return Response(
-                {"error": str(exc), "rate_limited": True}, status=429
-            )
-        except Exception:
-            # A live availability fetch failure (provider outage, an unsubscribed
-            # RapidAPI key, a network error) must not 500 the detail page — fall
-            # back to whatever is already cached (possibly nothing).
-            logger.exception("Live availability fetch failed for tmdb %s", tmdb_id)
-        offers = cache._read_offers(movie)
-
-    # Filter to Official (Major) + Free Streaming providers, subscription/free
-    # offers only. The provider is matched against the stable service id stored in
-    # Region.provider (e.g. "prime", "bbc_iplayer"). Free providers such as BBC
-    # iPlayer are region-specific and must surface in the official section too.
-    provider = getattr(settings, "DEFAULT_PREFERENCE_PROVIDER", "prime")
-
-    # Build a slug -> Provider lookup so we can classify each offer and resolve
-    # its display name + (fallback) country without N+1 queries.
-    provider_map = {p.slug: p for p in Provider.objects.all()}
-    official_categories = {ProviderCategory.OFFICIAL, ProviderCategory.FREE}
-
-    qualifying = []
-    for o in offers:
-        if o.get("offer_type", "").lower() not in ("subscription", "free"):
-            continue
-        slug = o.get("service", "")
-        prov = provider_map.get(slug)
-        if prov is None:
-            # No known provider row: keep Prime-compatible offers (legacy
-            # behaviour) and skip anything unrecognised to avoid noise.
-            if slug.lower() == provider.lower():
-                qualifying.append(o)
-            continue
-        if prov.category in official_categories:
-            # Backfill the offer's country from the provider's primary country so
-            # region-specific Free providers (e.g. bbc_iplayer -> GB) rank and
-            # display correctly. Without this the offer carries an empty country
-            # and rank_offers would drop it against candidate_countries.
-            if not o.get("country") and prov.country_code:
-                o["country"] = prov.country_code
-            qualifying.append(o)
-
-    # Rank with the (hardcoded) preference. The official section intentionally
-    # applies NO country filter — region-specific Free providers (BBC iPlayer,
-    # RaiPlay, ...) surface regardless of the user's candidate_countries, exactly
-    # like the catalog tab. An empty country_filter disables the restriction.
-    ranked = rank_offers(qualifying, preference, country_filter=set())
-
-    # Present the stable service id as its display name and expose a source
-    # indicator (Official / Free) so the detail page can badge each offer.
-    offers_out = []
-    for offer in ranked:
-        offer_dict = offer.to_dict()
-        slug = offer_dict.get("service", "")
-        prov = provider_map.get(slug)
-        if prov is not None:
-            offer_dict["service"] = prov.name
-            offer_dict["source_indicator"] = prov.source_indicator
-            # Fall back to the provider's primary country when the offer has
-            # none (e.g. a region-specific free provider with country_code set).
-            if not offer_dict.get("country"):
-                offer_dict["country"] = prov.country_code or ""
-        else:
-            # Legacy: Prime-compatible service with no Provider row.
-            offer_dict["service"] = service_display_name(slug)
-        offers_out.append(offer_dict)
+    offers_out = pipeline.run(movie).offers_out
 
     user_data = UserMovieData.objects.filter(user_id=1, movie=movie).first()
     watch_events = MovieWatchEvent.objects.filter(user_id=1, movie=movie).order_by("-watched_date", "-created_at")
-
     return Response(
         {
             "movie": MovieDetailSerializer(movie).data,
@@ -1238,22 +1277,15 @@ def prime_movie(request, tmdb_id: int):
     )
 
 
+
 @api_view(["GET"])
 def watch_redirect(request, tmdb_id: int):
     """Resolve top ranked watch destination for a movie."""
     try:
         movie = Movie.objects.get(tmdb_id=tmdb_id)
     except Movie.DoesNotExist:
-        client = TMDbClient(settings.TMDB_API_KEY)
         try:
-            details = client.details(tmdb_id)
-            movie, created = Movie.objects.get_or_create(
-                tmdb_id=details.tmdb_id,
-                defaults={"title": details.title, "year": details.year, "poster_path": details.poster_path or ""},
-            )
-            if not created and details.poster_path and not movie.poster_path:
-                movie.poster_path = details.poster_path
-                movie.save()
+            movie = resolve_or_create_movie(tmdb_id)
         except Exception:
             return Response(
                 {
@@ -1284,17 +1316,16 @@ def watch_redirect(request, tmdb_id: int):
     except Exception:
         logger.exception("Live availability refresh failed for watch redirect tmdb %s", tmdb_id)
 
-    offers = cache._read_offers(movie)
+    offers = cache.read_offers(movie)
     qualifying = [
         o for o in offers
-        if (o.get("offer_type") or "").lower() in ("subscription", "free")
+        if (o.offer_type or "").lower() in ("subscription", "free")
     ]
 
     if subscribed_slugs:
         matched = [
             o for o in qualifying
-            if (o.get("service") or "").lower() in subscribed_slugs
-            or (o.get("service_id") or "").lower() in subscribed_slugs
+            if (o.service or "").lower() in subscribed_slugs
         ]
         if matched:
             qualifying = matched
@@ -1335,33 +1366,8 @@ def movie_detail(request, pk: int):
         return Response({"error": "movie not found"}, status=404)
 
     # Fetch full TMDb metadata if missing or stale
-    client = TMDbClient(settings.TMDB_API_KEY)
     try:
-        details = client.details(movie.tmdb_id, content_type=movie.content_type)
-        needs_update = False
-        if details.overview and movie.overview != details.overview:
-            movie.overview = details.overview
-            needs_update = True
-        if details.poster_path and movie.poster_path != details.poster_path:
-            movie.poster_path = details.poster_path
-            needs_update = True
-        if details.genres and movie.genres != details.genres:
-            movie.genres = details.genres
-            needs_update = True
-        if details.genre_ids and movie.genre_ids != details.genre_ids:
-            movie.genre_ids = details.genre_ids
-            needs_update = True
-        if details.cast and movie.cast != details.cast:
-            movie.cast = details.cast
-            needs_update = True
-        if details.director is not None and movie.director != details.director:
-            movie.director = details.director
-            needs_update = True
-        if details.rating is not None and movie.tmdb_rating != details.rating:
-            movie.tmdb_rating = details.rating
-            needs_update = True
-        if needs_update:
-            movie.save()
+        enrich_movie_from_tmdb(movie)
     except Exception:
         logger.exception("TMDb details fetch failed for movie %s", pk)
 
@@ -1411,13 +1417,10 @@ def link_tmdb(request, pk: int):
         movie.title = new_title
         movie.year = details.year
         movie.content_type = details.content_type
-        movie.poster_path = details.poster_path or ""
-        movie.overview = details.overview or ""
-        movie.genres = details.genres or []
-        movie.genre_ids = details.genre_ids or []
-        movie.cast = details.cast or []
-        movie.seasons_data = details.seasons_data or []
-        movie.tmdb_rating = details.rating
+        sync_movie_fields(movie, details)
+        # tmdb_id / title / year / content_type are set above but may not
+        # trigger a save inside sync_movie_fields (those fields aren't tracked
+        # there). Force a save so the full set of changes lands atomically.
         movie.save()
 
         # Invalidate cached availability for the old tmdb_id if it differs

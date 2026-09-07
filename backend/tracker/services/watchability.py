@@ -9,12 +9,9 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
 from tracker.models import Movie, Preference, Provider, Subscription
-from tracker.services.ranking import (
-    QUALITY_RANK,
-    _min_rank,
-    _normalize_lang_list,
-    evaluate_language_rule,
-)
+from tracker.services.offers import Offer
+from tracker.services.presentation import present_offer
+from tracker.services.score import score_offer
 from tracker.services.streaming_api import service_display_name
 
 
@@ -105,7 +102,7 @@ def get_user_subscriptions(user_id: int = 1) -> set[str]:
 
 def evaluate_watchability(
     movie: Movie,
-    offers: Iterable[dict],
+    offers: Iterable[Offer],
     preference: Preference,
     current_country: Optional[str] = None,
     user_subscriptions: Optional[set[str]] = None,
@@ -117,9 +114,6 @@ def evaluate_watchability(
     curr_country = (current_country or "").upper().strip()
     candidate_countries = {c.upper().strip() for c in (preference.candidate_countries or [])}
 
-    # Provider lookup for display names + country fallback. Scraped/free sources
-    # may carry no country on their offer; fall back to the provider's own
-    # country_code so the UI can show e.g. "BBC iPlayer (GB)" instead of "()".
     provider_map = {
         p.slug: p
         for p in Provider.objects.only("slug", "name", "country_code")
@@ -138,63 +132,29 @@ def evaluate_watchability(
     excluded_offers: list[EvaluatedOffer] = []
     explanations: list[str] = []
 
-    lang_rule = getattr(preference, "language_rule", None)
-    if lang_rule and isinstance(lang_rule, dict) and lang_rule.get("type") == "viewers":
-        viewer_langs = []
-        seen = set()
-        for v in lang_rule.get("viewers") or []:
-            if isinstance(v, dict):
-                for l in _normalize_lang_list(v.get("languages") or []):
-                    if l not in seen:
-                        seen.add(l)
-                        viewer_langs.append(l)
-        pref_audio = viewer_langs
-        pref_subs = viewer_langs
-    else:
-        pref_audio = _normalize_lang_list(preference.audio_languages or [])
-        pref_subs = _normalize_lang_list(preference.subtitle_languages or [])
-
-    audio_priority = {code: i for i, code in enumerate(pref_audio)}
-    sub_priority = {code: i for i, code in enumerate(pref_subs)}
-
     for raw in offers:
-        country = (raw.get("country") or "").upper().strip()
-        service = raw.get("service") or raw.get("provider") or ""
+        if not isinstance(raw, Offer):
+            raise TypeError(f"Expected Offer, got {type(raw).__name__}")
+
+        country = (raw.country or "").upper().strip()
+        service = raw.service or ""
+        offer_type = (raw.offer_type or "").lower().strip()
+        quality = raw.quality or ""
+        url = raw.url or ""
+        price_info = ""
+        is_scraped = raw.is_scraped_source
+        raw_audio = raw.audio_languages
+        raw_subs = raw.subtitle_languages
+
         service_clean = service.lower().strip()
-        provider_rec = provider_map.get(service_clean)
-        service_display = provider_rec.name if provider_rec else service_display_name(service)
-        country_display = country or (
-            provider_rec.country_code if (provider_rec and provider_rec.country_code) else ""
-        )
-        offer_type = (raw.get("offer_type") or "").lower().strip()
-        quality = raw.get("quality") or ""
-        url = raw.get("url") or ""
-        price_info = raw.get("price_info") or ""
-        is_scraped = raw.get("is_scraped_source", False)
+        presented = present_offer(raw, provider_map)
+        service_display = presented.service_display
+        country_display = presented.country
+        has_lang_info = bool(raw_audio or raw_subs)
 
-        raw_audio = raw.get("audio") or raw.get("audio_languages") or []
-        raw_subs = raw.get("subs") or raw.get("subtitle_languages") or []
-        audio = _normalize_lang_list(raw_audio)
-        subs = _normalize_lang_list(raw_subs)
-        has_lang_info = bool(audio or subs)
-
-        audio_rank = _min_rank(audio, audio_priority)
-        sub_rank = _min_rank(subs, sub_priority)
-        quality_clean = quality.lower()
-        quality_rank = QUALITY_RANK.get(quality_clean, 99)
-
-        if lang_rule and isinstance(lang_rule, dict) and bool(lang_rule):
-            is_lang_match = evaluate_language_rule(lang_rule, audio, subs)
-            match_score = 0 if is_lang_match else 1
-            ranking_score = (match_score, quality_rank, audio_rank, sub_rank)
-        elif pref_audio or pref_subs:
-            is_lang_match = (audio_rank < 99) or (sub_rank < 99)
-            match_score = 0 if is_lang_match else 1
-            ranking_score = (match_score, audio_rank, sub_rank, quality_rank)
-        else:
-            is_lang_match = True
-            match_score = 0
-            ranking_score = (match_score, quality_rank, audio_rank, sub_rank)
+        scored = score_offer(raw, preference)
+        is_lang_match = scored.is_match
+        ranking_score = scored.score_tuple
 
         reasons = []
 
@@ -232,7 +192,9 @@ def evaluate_watchability(
                 elif curr_country and country != curr_country:
                     reasons.append(f"Available in {country}, but no VPN regions are configured")
 
-        is_watchable = is_qualifying_type and is_subscribed and is_lang_match and (is_curr or is_cand)
+        # Empty candidate_countries means "whole world" — all countries accessible
+        whole_world = not candidate_countries
+        is_watchable = is_qualifying_type and is_subscribed and is_lang_match and (whole_world or is_curr or is_cand)
 
         eval_offer = EvaluatedOffer(
             country=country_display,

@@ -1,5 +1,6 @@
 from django.test import TestCase
 from tracker.models import Preference
+from tracker.services.offers import Offer
 from tracker.services.ranking import rank_offers, evaluate_language_rule
 
 
@@ -79,9 +80,9 @@ class LanguageRuleTests(TestCase):
         )
 
         offers = [
-            {"country": "US", "service": "Netflix", "quality": "hd", "audio": ["EN"], "subs": ["EN"]},  # Non-matching
-            {"country": "JP", "service": "Prime", "quality": "sd", "audio": ["JA"], "subs": ["IT"]},   # Matching SD
-            {"country": "IT", "service": "Disney", "quality": "4k", "audio": ["IT"], "subs": ["JA"]},  # Matching 4K
+            Offer(country="US", service="Netflix", quality="hd", audio_languages=["EN"], subtitle_languages=["EN"]),
+            Offer(country="JP", service="Prime", quality="sd", audio_languages=["JA"], subtitle_languages=["IT"]),
+            Offer(country="IT", service="Disney", quality="4k", audio_languages=["IT"], subtitle_languages=["JA"]),
         ]
 
         ranked = rank_offers(offers, pref)

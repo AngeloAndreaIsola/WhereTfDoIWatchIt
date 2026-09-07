@@ -10,7 +10,7 @@
 
 ## Current status as of 2026-08-18
 
-Phase 0 through Phase 4 are implemented and merged. The original checklist is retained below as the build history, with current status reflected in the checkboxes.
+Phase 0 through Phase 5 are implemented and merged. The original checklist is retained below as the build history, with current status reflected in the checkboxes.
 
 - Docker Compose, Django, Next.js, and PostgreSQL scaffolding are in place.
 - Core data model and Django admin support are in place.
@@ -18,6 +18,7 @@ Phase 0 through Phase 4 are implemented and merged. The original checklist is re
 - Cron-driven background refresh and audit logging are implemented with a default budget of 90 requests/day.
 - Letterboxd CSV upload, ambiguous TMDb match resolution, quota-aware bulk refresh, watchlist reporting, and report analytics are implemented.
 - Frontend smoke tests now cover the search, preferences, watchlist report, and ambiguous-match resolver flows.
+- Unofficial sources are implemented and merged.
 
 ## Phase 0 — Project setup
 

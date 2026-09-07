@@ -7,6 +7,7 @@ from tracker.models import Provider, ProviderCategory
 from tracker.scrapers import (
     BaseScraper,
     BBCScraper,
+    HydraHDScraper,
     NHKScraper,
     RaiPlayScraper,
     SCRAPER_REGISTRY,
@@ -161,6 +162,51 @@ class RaiPlayScraperTest(TestCase):
         mock_fetch.return_value = None
         items = self.scraper.run(query="x")
         self.assertEqual(items, [])
+
+
+class HydraHDScraperTest(TestCase):
+    def setUp(self):
+        self.scraper = HydraHDScraper()
+
+    @patch.object(HydraHDScraper, "fetch_url")
+    def test_search_uses_unified_fetch_url(self, mock_fetch):
+        mock_fetch.return_value = {
+            "results": [
+                {
+                    "title": "Inception",
+                    "year": "2010",
+                    "audio": ["EN"],
+                    "subtitles": ["ES", "FR"],
+                    "res": "2160p",
+                    "link": "https://hydrahd.ws/watch/inception",
+                    "id": "42",
+                }
+            ]
+        }
+        items = self.scraper.run(query="Inception")
+        mock_fetch.assert_called()
+        call_kwargs = mock_fetch.call_args
+        self.assertIn("headers", call_kwargs.kwargs or {})
+        headers = call_kwargs.kwargs["headers"]
+        self.assertIn("User-Agent", headers)
+        self.assertIn("Referer", headers)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].title, "Inception")
+        self.assertEqual(items[0].provider_slug, "hydrahd")
+        self.assertIn("EN", items[0].audio_languages)
+
+    @patch.object(HydraHDScraper, "fetch_url")
+    def test_search_all_urls_fail_returns_empty(self, mock_fetch):
+        mock_fetch.return_value = None
+        items = self.scraper.run(query="NonexistentMovie")
+        self.assertEqual(items, [])
+
+    @patch.object(HydraHDScraper, "fetch_url")
+    def test_no_query_browse_uses_unified_fetch_url(self, mock_fetch):
+        mock_fetch.return_value = None
+        items = self.scraper.run(query=None)
+        self.assertEqual(items, [])
+        mock_fetch.assert_called()
 
 
 class ScraperRegistryTest(TestCase):

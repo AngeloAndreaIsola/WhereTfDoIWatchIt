@@ -22,6 +22,7 @@ def apply_composable_filters(
     preference: Preference,
     user_subscriptions: Optional[set[str]] = None,
     current_country: Optional[str] = None,
+    allowed_provider_slugs: Optional[set[str]] = None,
 ) -> tuple[list[dict], int]:
     """Filter Movie queryset or list using AND semantics for structured parameters & watchability."""
     # 1. Text Search (Title/Overview)
@@ -115,14 +116,23 @@ def apply_composable_filters(
     if user_subscriptions is None:
         user_subscriptions = get_user_subscriptions(preference.user_id if preference else 1)
 
-    provider_filter = (params.get("provider") or params.get("service") or "").lower().strip()
+    raw_providers = params.get("providers") or params.get("provider") or params.get("service") or ""
+    provider_slug_set = None
+    if allowed_provider_slugs is not None:
+        provider_slug_set = {s.lower() for s in allowed_provider_slugs}
+    elif raw_providers:
+        if isinstance(raw_providers, list):
+            provider_slug_set = {s.strip().lower() for p in raw_providers for s in str(p).split(",") if s.strip()}
+        elif isinstance(raw_providers, str) and raw_providers.strip():
+            provider_slug_set = {s.strip().lower() for s in raw_providers.split(",") if s.strip()}
+
     country_filter = (params.get("country") or "").upper().strip()
     status_filter = (params.get("availability_status") or params.get("status") or "").lower().strip()
     watchable_only = params.get("watchable") in ("true", "1") or params.get("watchable_only") in ("true", "1")
 
     evaluated_items = []
     for m in movie_list:
-        offers = cache._read_offers(m)
+        offers = cache.read_offers(m)
         watch_res = evaluate_watchability(
             m,
             offers,
@@ -132,11 +142,11 @@ def apply_composable_filters(
         )
 
         # Apply Provider Filter
-        if provider_filter:
+        if provider_slug_set:
             all_services = {
                 (o.get("service") or "").lower() for o in offers
             }
-            if not any(provider_filter in s for s in all_services):
+            if not any(ps in s or s in ps for ps in provider_slug_set for s in all_services):
                 continue
 
         # Apply Country Filter
