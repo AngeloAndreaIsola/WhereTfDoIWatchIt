@@ -280,6 +280,33 @@ export default function ProviderIcon({ slug, name, className = "h-8 w-8" }: Prov
           </text>
         </svg>
       );
+    case "pbs":
+      return (
+        <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+          <rect width="24" height="24" rx="5" fill="#005DAB" />
+          <text x="12" y="15" fontSize="8" fontWeight="extrabold" fill="#FFFFFF" textAnchor="middle">
+            PBS
+          </text>
+        </svg>
+      );
+    case "abc_iview":
+      return (
+        <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+          <rect width="24" height="24" rx="5" fill="#008080" />
+          <text x="12" y="15" fontSize="7" fontWeight="bold" fill="#FFFFFF" textAnchor="middle">
+            iview
+          </text>
+        </svg>
+      );
+    case "mediaset_infinity":
+      return (
+        <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+          <rect width="24" height="24" rx="5" fill="#1C2237" />
+          <text x="12" y="15" fontSize="6" fontWeight="bold" fill="#38B6FF" textAnchor="middle">
+            Infinity
+          </text>
+        </svg>
+      );
     case "sbs_ondemand":
       return (
         <svg className={className} viewBox="0 0 24 24" fill="currentColor">

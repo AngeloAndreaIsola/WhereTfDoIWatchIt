@@ -28,6 +28,33 @@ class ProvidersEndpointTests(TestCase):
         self.assertTrue(len(free_providers) > 0)
         self.assertEqual(free_providers[0]["slug"], "raiplay")
 
+    def test_get_providers_includes_new_free_streaming_providers(self):
+        for slug, name, domain, country in [
+            ("pbs", "PBS", "pbs.org", "US"),
+            ("abc_iview", "ABC iview", "iview.abc.net.au", "AU"),
+            ("mediaset_infinity", "Mediaset Infinity", "mediasetinfinity.mediaset.it", "IT"),
+            ("cbc_gem", "CBC Gem", "gem.cbc.ca", "CA"),
+        ]:
+            Provider.objects.get_or_create(
+                slug=slug,
+                defaults={
+                    "name": name,
+                    "category": "free",
+                    "is_major": False,
+                    "is_enabled": True,
+                    "icon_name": slug,
+                    "domain": domain,
+                    "country_code": country,
+                },
+            )
+
+        resp = self.client.get("/api/providers/")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        free_slugs = {p["slug"] for p in data if p.get("category") == "free"}
+        for expected_slug in ["pbs", "abc_iview", "mediaset_infinity", "cbc_gem"]:
+            self.assertIn(expected_slug, free_slugs)
+
     def test_toggle_free_provider_subscription(self):
         p, _ = Provider.objects.get_or_create(
             slug="bbc_iplayer",
@@ -449,7 +476,7 @@ class WatchEndpointTests(TestCase):
         self.assertNotIn("watch_url", data)
         self.assertIn("message", data)
 
-    @patch("tracker.views.TMDbClient")
+    @patch("tracker.services.enrichment.TMDbClient")
     def test_watch_endpoint_404_when_movie_not_found(self, mock_tmdb):
         mock_instance = mock_tmdb.return_value
         mock_instance.details.side_effect = Exception("Not found on TMDb")
