@@ -72,7 +72,7 @@ from .services.cache import AvailabilityCache
 from .services.letterboxd import import_rows, parse_file_or_zip
 from .services.ranking import rank_offers
 from .services.rate_limit import RateLimitExceeded
-from .services.enrichment import enrich_movie_from_tmdb, sync_movie_fields
+from .services.enrichment import enrich_movie_from_tmdb, resolve_or_create_movie, sync_movie_fields
 from .services.tmdb import TMDbClient, TMDbMovie
 
 logger = logging.getLogger(__name__)
@@ -173,6 +173,195 @@ def homepage_feed(request):
     page = int(request.GET.get("page", 1)) if str(request.GET.get("page", "")).isdigit() else 1
     page_size = int(request.GET.get("page_size", 24)) if str(request.GET.get("page_size", "")).isdigit() else 24
     paged_results, pagination = paginate_list(results, page, page_size)
+
+    return Response({**pagination, "results": paged_results})
+
+
+@api_view(["GET"])
+def unified_catalog(request):
+    """GET /api/catalog/unified/ — Unified catalog endpoint merging official and unofficial sources."""
+    curr_country = request.GET.get("country") or "US"
+    pref = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
+    user_subs = get_user_subscriptions(user_id=1)
+
+    raw_providers = request.GET.get("providers") or request.GET.get("provider") or ""
+    raw_categories = request.GET.get("provider_categories") or ""
+
+    requested_slugs: set[str] = set()
+    if raw_providers:
+        for p in raw_providers.split(","):
+            if p.strip():
+                requested_slugs.add(p.strip().lower())
+
+    if raw_categories:
+        cats = [c.strip().lower() for c in raw_categories.split(",") if c.strip()]
+        cat_providers = Provider.objects.filter(is_enabled=True)
+        cat_slugs = set()
+        for c in cats:
+            if c == "major":
+                cat_slugs.update(cat_providers.filter(is_major=True).values_list("slug", flat=True))
+            elif c == "free":
+                cat_slugs.update(cat_providers.filter(category="free", is_major=False).values_list("slug", flat=True))
+            elif c in ("unofficial", "scraper"):
+                cat_slugs.update(cat_providers.filter(category__in=["scraper", "unofficial"]).values_list("slug", flat=True))
+            else:
+                cat_slugs.update(cat_providers.filter(category=c).values_list("slug", flat=True))
+        requested_slugs.update({s.lower() for s in cat_slugs})
+
+    allowed_provider_slugs = requested_slugs if (raw_providers or raw_categories) else None
+
+    # Determine whether official or unofficial or both should be queried
+    include_official = True
+    include_unofficial = True
+    if allowed_provider_slugs is not None:
+        official_providers = set(
+            Provider.objects.filter(is_enabled=True)
+            .filter(is_major=True)
+            .values_list("slug", flat=True)
+        ) | set(
+            Provider.objects.filter(is_enabled=True, category="free")
+            .values_list("slug", flat=True)
+        )
+        unofficial_providers = set(
+            Provider.objects.filter(is_enabled=True, category__in=["scraper", "unofficial"])
+            .values_list("slug", flat=True)
+        )
+
+        # Also include any provider matching allowed_provider_slugs
+        matched_official = False
+        matched_unofficial = False
+
+        for slug in allowed_provider_slugs:
+            if slug in official_providers or Provider.objects.filter(slug__iexact=slug, category__in=["official", "free"]).exists():
+                matched_official = True
+            if slug in unofficial_providers or Provider.objects.filter(slug__iexact=slug, category__in=["scraper", "unofficial"]).exists():
+                matched_unofficial = True
+
+        # If user explicitly selected provider(s), only query matching source types
+        if matched_official or matched_unofficial:
+            include_official = matched_official
+            include_unofficial = matched_unofficial
+
+    unified_items = []
+    seen_tmdb_ids = set()
+
+    # 1. Fetch Official Catalog Items
+    if include_official:
+        movies = Movie.objects.all().order_by("-id")
+        evaluated, _ = apply_composable_filters(
+            movies,
+            request.GET,
+            pref,
+            user_subscriptions=user_subs,
+            current_country=curr_country,
+            allowed_provider_slugs=allowed_provider_slugs,
+        )
+
+        for item in evaluated:
+            m = item["movie"]
+            watch_res = item["watchability"]
+            seen_tmdb_ids.add(m.tmdb_id)
+
+            best_offer = watch_res.best_offer.to_dict() if watch_res.best_offer else None
+            watch_url = best_offer.get("url") if best_offer else None
+
+            # Determine provider details from best offer or watchability
+            provider_info = None
+            if best_offer and best_offer.get("service"):
+                svc_slug = best_offer["service"]
+                p_obj = Provider.objects.filter(slug__iexact=svc_slug).first()
+                provider_info = {
+                    "slug": svc_slug,
+                    "name": p_obj.name if p_obj else svc_slug.capitalize(),
+                    "category": p_obj.category if p_obj else "official",
+                }
+
+            source_ind = "Free" if (provider_info and provider_info["category"] == "free") else "Official"
+
+            unified_items.append({
+                "id": f"official_{m.id or m.tmdb_id}",
+                "tmdb_id": m.tmdb_id,
+                "source": "official",
+                "source_indicator": source_ind,
+                "title": m.title,
+                "year": m.year,
+                "poster_path": m.poster_path,
+                "content_type": m.content_type or "movie",
+                "provider": provider_info,
+                "watchability": watch_res.to_dict(),
+                "unofficial_details": None,
+                "watch_url": watch_url,
+            })
+
+    # 2. Fetch Unofficial Scraped Content Mappings
+    if include_unofficial:
+        qs = ScrapedContentMapping.objects.select_related("provider", "movie").filter(
+            provider__is_enabled=True,
+            is_available=True,
+        )
+
+        # Apply provider filtering
+        if allowed_provider_slugs is not None:
+            qs = qs.filter(provider__slug__in=list(allowed_provider_slugs))
+
+        # Text search filter
+        q = (request.GET.get("q") or request.GET.get("query") or "").strip()
+        if q:
+            qs = qs.filter(scraped_title__icontains=q)
+
+        # Country filter
+        country_code = (request.GET.get("country") or "").strip().upper()
+        if country_code:
+            qs = qs.filter(provider__country_code=country_code) | qs.filter(country_code=country_code)
+
+        # Year filter
+        year_min = request.GET.get("year_min")
+        year_max = request.GET.get("year_max")
+        if year_min and str(year_min).isdigit():
+            qs = qs.filter(scraped_year__gte=int(year_min))
+        if year_max and str(year_max).isdigit():
+            qs = qs.filter(scraped_year__lte=int(year_max))
+
+        qs = qs.order_by("-updated_at")
+
+        for mapping in qs:
+            m = mapping.movie
+            # If movie is already in official catalog results, deduplicate / skip or merge
+            if m and m.tmdb_id in seen_tmdb_ids:
+                continue
+
+            payload = mapping.raw_payload or {}
+            audio = [str(a).upper() for a in (payload.get("audio_languages") or payload.get("audio") or [])]
+            subs = [str(s).upper() for s in (payload.get("subtitle_languages") or payload.get("subtitles") or [])]
+
+            unified_items.append({
+                "id": f"unofficial_{mapping.id}",
+                "tmdb_id": m.tmdb_id if m else None,
+                "source": "unofficial",
+                "source_indicator": mapping.provider.source_indicator or "Scraper",
+                "title": m.title if m else mapping.scraped_title,
+                "year": m.year if m else mapping.scraped_year,
+                "poster_path": m.poster_path if m else "",
+                "content_type": m.content_type if m else "movie",
+                "provider": {
+                    "slug": mapping.provider.slug,
+                    "name": mapping.provider.name,
+                    "category": mapping.provider.category,
+                },
+                "watchability": None,
+                "unofficial_details": {
+                    "scraped_url": mapping.scraped_url,
+                    "confidence_score": mapping.confidence_score,
+                    "is_confirmed": mapping.is_confirmed,
+                    "audio_languages": audio,
+                    "subtitle_languages": subs,
+                },
+                "watch_url": mapping.scraped_url,
+            })
+
+    page = int(request.GET.get("page", 1)) if str(request.GET.get("page", "")).isdigit() else 1
+    page_size = int(request.GET.get("page_size", 24)) if str(request.GET.get("page_size", "")).isdigit() else 24
+    paged_results, pagination = paginate_list(unified_items, page, page_size)
 
     return Response({**pagination, "results": paged_results})
 
@@ -1178,7 +1367,7 @@ def movie_detail(request, pk: int):
 
     # Fetch full TMDb metadata if missing or stale
     try:
-        movie = resolve_or_create_movie(movie.tmdb_id)
+        enrich_movie_from_tmdb(movie)
     except Exception:
         logger.exception("TMDb details fetch failed for movie %s", pk)
 

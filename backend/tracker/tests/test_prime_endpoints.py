@@ -151,9 +151,12 @@ class PrimePopularEndpointTests(TestCase):
 class PrimeMovieEndpointTests(TestCase):
     """Tests for GET /api/prime/movie/<tmdb_id>/."""
 
+    @patch("tracker.services.offer_pipeline.AvailabilityCache")
+    @patch("tracker.services.enrichment.TMDbClient")
     @patch("tracker.views.TMDbClient")
     @patch("tracker.views.AvailabilityCache")
-    def test_returns_ranked_official_and_free_offers(self, mock_cache_cls, mock_tmdb_cls):
+    def test_returns_ranked_official_and_free_offers(self, mock_cache_cls, mock_tmdb_cls, mock_enrich_tmdb_cls, mock_pipeline_cache_cls):
+        mock_pipeline_cache_cls.return_value = mock_cache_cls.return_value
         """Detail endpoint returns ranked Official (Major) + Free offers, not scrapers."""
         from tracker.services.tmdb import TMDbMovie
 
@@ -216,14 +219,18 @@ class PrimeMovieEndpointTests(TestCase):
         # Free provider offers get a country fallback from the Provider row.
         self.assertEqual(bbc["country"], "GB")
 
+    @patch("tracker.services.enrichment.TMDbClient")
     @patch("tracker.views.TMDbClient")
     @patch("tracker.views.AvailabilityCache")
-    def test_auto_creates_movie_from_tmdb(self, mock_cache_cls, mock_tmdb_cls):
+    def test_auto_creates_movie_from_tmdb(self, mock_cache_cls, mock_tmdb_cls, mock_enrich_tmdb_cls):
         """If movie not in DB, prime_movie auto-creates from TMDb."""
         from tracker.services.tmdb import TMDbMovie
 
         mock_tmdb = mock_tmdb_cls.return_value
         mock_tmdb.details.return_value = TMDbMovie(
+            tmdb_id=999, title="New Movie", year=2025
+        )
+        mock_enrich_tmdb_cls.return_value.details.return_value = TMDbMovie(
             tmdb_id=999, title="New Movie", year=2025
         )
 
@@ -240,14 +247,16 @@ class PrimeMovieEndpointTests(TestCase):
         self.assertEqual(data["offers"], [])
         self.assertTrue(Movie.objects.filter(tmdb_id=999).exists())
 
+    @patch("tracker.services.enrichment.TMDbClient")
     @patch("tracker.views.TMDbClient")
-    def test_movie_not_tracked_tmdb_resolve_fails(self, mock_tmdb_cls):
+    def test_movie_not_tracked_tmdb_resolve_fails(self, mock_tmdb_cls, mock_enrich_tmdb_cls):
         """If movie is not tracked and TMDb can't resolve it, return 404 with clean JSON.
 
         Mocked so this stays offline and deterministic regardless of whether a
         real TMDb credential happens to be present in the environment.
         """
         mock_tmdb_cls.return_value.details.side_effect = Exception("404 Not Found")
+        mock_enrich_tmdb_cls.return_value.details.side_effect = Exception("404 Not Found")
 
         from django.test import Client
         response = Client().get("/api/prime/movie/99999/")
@@ -256,8 +265,10 @@ class PrimeMovieEndpointTests(TestCase):
         data = response.json()
         self.assertEqual(data["offers"], [])
 
+    @patch("tracker.services.offer_pipeline.AvailabilityCache")
     @patch("tracker.views.AvailabilityCache")
-    def test_filters_to_subscription_free_only(self, mock_cache_cls):
+    def test_filters_to_subscription_free_only(self, mock_cache_cls, mock_pipeline_cache_cls):
+        mock_pipeline_cache_cls.return_value = mock_cache_cls.return_value
         """Only subscription/free offers are returned, rent/buy excluded."""
         movie = Movie.objects.create(tmdb_id=777, title="Test Movie", year=2024)
 
@@ -283,8 +294,10 @@ class PrimeMovieEndpointTests(TestCase):
         self.assertEqual(len(data["offers"]), 1)
         self.assertEqual(data["offers"][0]["offer_type"], "subscription")
 
+    @patch("tracker.services.offer_pipeline.AvailabilityCache")
     @patch("tracker.views.AvailabilityCache")
-    def test_offers_sorted_by_priority(self, mock_cache_cls):
+    def test_offers_sorted_by_priority(self, mock_cache_cls, mock_pipeline_cache_cls):
+        mock_pipeline_cache_cls.return_value = mock_cache_cls.return_value
         """Offers are sorted: JA audio > EN audio > quality."""
         movie = Movie.objects.create(tmdb_id=888, title="Sort Test", year=2024)
 

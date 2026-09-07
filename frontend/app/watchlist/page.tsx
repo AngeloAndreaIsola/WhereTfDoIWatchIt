@@ -40,7 +40,7 @@ export default function WatchlistPage() {
     year_min: "",
     year_max: "",
     actors: [],
-    provider: "",
+    providers: [],
     country: "",
     status: "",
   });
@@ -94,7 +94,9 @@ export default function WatchlistPage() {
     if (filters.genre) params.set("genre", filters.genre);
     if (filters.year_min) params.set("year_min", filters.year_min);
     if (filters.year_max) params.set("year_max", filters.year_max);
-    if (filters.provider) params.set("provider", filters.provider);
+    if (filters.providers && filters.providers.length > 0) {
+      params.set("provider", filters.providers.join(","));
+    }
     if (filters.status) params.set("status", filters.status);
     filters.actors.forEach((a) => params.append("actor_id", a.id.toString()));
 
@@ -167,7 +169,7 @@ export default function WatchlistPage() {
         </p>
       </div>
 
-      <FilterBar filters={filters} onChange={setFilters} showStatusFilter={true} tab="official" />
+      <FilterBar filters={filters} onChange={setFilters} showStatusFilter={true} />
 
       {error ? (
         <div className="p-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-xl text-red-800 dark:text-red-200 text-sm font-medium">
