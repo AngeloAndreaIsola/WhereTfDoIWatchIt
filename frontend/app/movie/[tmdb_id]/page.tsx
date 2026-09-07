@@ -164,12 +164,19 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
     <main className="mx-auto max-w-4xl px-4 py-8 sm:px-6">
       {/* Back link */}
       <div className="mb-6 flex items-center justify-between">
-        <Link
-          href="/watchlist"
+        <button
+          type="button"
+          onClick={() => {
+            if (window.history.length > 1) {
+              router.back();
+            } else {
+              router.push("/catalog");
+            }
+          }}
           className="text-sm font-medium text-blue-600 hover:underline dark:text-blue-400"
         >
-          ← Back to Watchlist
-        </Link>
+          ← Back
+        </button>
         <Link
           href="/"
           className="text-sm font-medium text-gray-500 hover:underline dark:text-gray-400"

@@ -13,6 +13,9 @@ export interface FilterState {
   providers: string[]; // array of provider slugs
   country: string;
   status: string; // "", "watchable_here", "watchable_vpn", "not_watchable"
+  quality: string; // "", "4k,uhd", "hdr", "hd", "sd"
+  score_min: string; // "", "8.0", "7.0", "6.0", "5.0"
+  sort_by: string; // "", "rating_desc", "year_desc", "year_asc", "title_asc", "title_desc"
 }
 
 interface FilterBarProps {
@@ -172,8 +175,8 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
         )}
       </div>
 
-      {/* Secondary Row: Genre, Provider, Year Range, Status */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
+      {/* Secondary Row: Genre, Provider, Year Range, Quality, Min Score, Sort, Status */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-8 gap-3">
         <div>
           <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
             Genre
@@ -229,6 +232,58 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
             onChange={(e) => onChange({ ...filters, year_max: e.target.value })}
             className="w-full px-3 py-1.5 text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
           />
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+            Quality
+          </label>
+          <select
+            value={filters.quality}
+            onChange={(e) => onChange({ ...filters, quality: e.target.value })}
+            className="w-full px-3 py-1.5 text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+          >
+            <option value="">All Qualities</option>
+            <option value="4k,uhd">4K / UHD</option>
+            <option value="hdr">HDR</option>
+            <option value="hd">HD</option>
+            <option value="sd">SD</option>
+          </select>
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+            Min Rating
+          </label>
+          <select
+            value={filters.score_min}
+            onChange={(e) => onChange({ ...filters, score_min: e.target.value })}
+            className="w-full px-3 py-1.5 text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+          >
+            <option value="">All Ratings</option>
+            <option value="8.0">★ 8.0+</option>
+            <option value="7.0">★ 7.0+</option>
+            <option value="6.0">★ 6.0+</option>
+            <option value="5.0">★ 5.0+</option>
+          </select>
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+            Sort By
+          </label>
+          <select
+            value={filters.sort_by}
+            onChange={(e) => onChange({ ...filters, sort_by: e.target.value })}
+            className="w-full px-3 py-1.5 text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+          >
+            <option value="">Default / Newest</option>
+            <option value="rating_desc">Rating (High to Low)</option>
+            <option value="year_desc">Year (Newest First)</option>
+            <option value="year_asc">Year (Oldest First)</option>
+            <option value="title_asc">Title (A-Z)</option>
+            <option value="title_desc">Title (Z-A)</option>
+          </select>
         </div>
 
         {showStatusFilter && (
