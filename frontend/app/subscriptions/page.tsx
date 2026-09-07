@@ -17,6 +17,7 @@ export default function SubscriptionsPage() {
 
   const [actionSlug, setActionSlug] = useState<string | null>(null);
   const [refreshingFree, setRefreshingFree] = useState(false);
+  const [refreshingScrapers, setRefreshingScrapers] = useState(false);
   const [refreshResults, setRefreshResults] = useState<Record<string, string>>({});
 
   const fetchProviders = useCallback(async () => {
@@ -105,6 +106,34 @@ export default function SubscriptionsPage() {
     await fetchProviders();
   };
 
+  const handleRefreshScraperProviders = async () => {
+    setRefreshingScrapers(true);
+    setRefreshResults((prev) => ({ ...prev, __scrapers__: "Refreshing…" }));
+    let lastError: string | null = null;
+    for (const provider of scraperProviders) {
+      try {
+        const data = await triggerScraperRun(provider.slug);
+        setRefreshResults((prev) => ({
+          ...prev,
+          [provider.slug]: `Done — ${data.count} item(s) scraped`,
+        }));
+      } catch (err) {
+        lastError = err instanceof Error ? err.message : String(err);
+        setRefreshResults((prev) => ({
+          ...prev,
+          [provider.slug]: `Error: ${lastError}`,
+        }));
+      }
+    }
+    setRefreshingScrapers(false);
+    if (lastError) {
+      setRefreshResults((prev) => ({ ...prev, __scrapers__: `Finished with errors: ${lastError}` }));
+    } else {
+      setRefreshResults((prev) => ({ ...prev, __scrapers__: "All imported sources refreshed" }));
+    }
+    await fetchProviders();
+  };
+
   const handleDeleteProvider = async (slug: string) => {
     if (!confirm(`Are you sure you want to remove source '${slug}'?`)) return;
     setActionSlug(slug);
@@ -152,9 +181,23 @@ export default function SubscriptionsPage() {
     }
   };
 
+  const PUBLIC_BROADCASTER_SLUGS = new Set([
+    "raiplay",
+    "rai-play",
+    "bbc",
+    "bbc_iplayer",
+    "nhk",
+    "nhk_world",
+  ]);
+
   const majorProviders = providers.filter((p) => p.is_major);
   const freeProviders = providers.filter((p) => p.category === "free");
-  const scraperProviders = providers.filter((p) => !p.is_major && p.category === "scraper");
+  const scraperProviders = providers.filter(
+    (p) =>
+      !p.is_major &&
+      p.category === "scraper" &&
+      !PUBLIC_BROADCASTER_SLUGS.has(p.slug.toLowerCase())
+  );
 
   return (
     <main className="mx-auto max-w-4xl px-4 py-10 sm:px-6">
@@ -270,14 +313,48 @@ export default function SubscriptionsPage() {
 
           {/* Section 3: Imported Small Providers & Sources */}
           <section className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-            <div className="mb-4">
-              <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-                Imported Small Providers & Sources
-              </h2>
-              <p className="text-xs text-gray-500 dark:text-gray-400">
-                Import custom sources by URL (e.g., KissKH, HydraHD, AnimeWorld, or any custom domain) to trigger automated scrapers.
-              </p>
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                  Imported Small Providers & Sources
+                </h2>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  Import custom sources by URL (e.g., KissKH, HydraHD, AnimeWorld, or any custom domain) to trigger automated scrapers.
+                </p>
+              </div>
+              {scraperProviders.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleRefreshScraperProviders}
+                  disabled={refreshingScrapers}
+                  title="Refresh all imported custom scraper sources"
+                  className="flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+                >
+                  <svg
+                    className={`h-4 w-4 ${refreshingScrapers ? "animate-spin" : ""}`}
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  {refreshingScrapers ? "Refreshing…" : "Refresh All"}
+                </button>
+              )}
             </div>
+
+            {refreshResults.__scrapers__ && (
+              <div
+                className={`mb-4 rounded-lg border px-4 py-2.5 text-xs ${
+                  refreshResults.__scrapers__.startsWith("Error")
+                    ? "border-red-300 bg-red-50 text-red-700 dark:border-red-700 dark:bg-red-900/30 dark:text-red-400"
+                    : "border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
+                }`}
+              >
+                {refreshResults.__scrapers__}
+              </div>
+            )}
 
             {/* URL Import Form */}
             <form onSubmit={handleImportUrl} className="mb-6 flex gap-2">
