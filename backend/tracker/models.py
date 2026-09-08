@@ -146,10 +146,12 @@ class Provider(models.Model):
     @property
     def source_indicator(self) -> str:
         """Return a short label for the source type badge in the UI."""
+        if isinstance(self.config, dict) and self.config.get("business_model"):
+            return str(self.config["business_model"]).upper()
         if self.category == ProviderCategory.OFFICIAL:
-            return "Official"
+            return "SVOD" if self.is_major else "Official"
         if self.category == ProviderCategory.FREE:
-            return "Free"
+            return "BVOD"
         if self.category == ProviderCategory.UNOFFICIAL:
             return "Unofficial"
         return "Scraper"

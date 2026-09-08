@@ -66,8 +66,14 @@ class OfficialOffersPipeline:
 
             if prov.category in official_categories:
                 service_clean = slug.lower().strip()
-                is_subscribed = service_clean in user_subs or any(
-                    sub in service_clean or service_clean in sub for sub in user_subs if len(sub) >= 3
+                is_subscribed = (
+                    prov.category == ProviderCategory.FREE
+                    or service_clean in user_subs
+                    or any(
+                        sub in service_clean or service_clean in sub
+                        for sub in user_subs
+                        if len(sub) >= 3
+                    )
                 )
                 if is_subscribed:
                     if not o.country and prov.country_code:

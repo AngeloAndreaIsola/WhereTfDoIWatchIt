@@ -128,6 +128,34 @@ class UnofficialMovieOffersEndpointTests(TestCase):
         self.assertEqual(offer["offer_type"], "free")
         self.assertEqual(offer["source_indicator"], "Scraper")
 
+    def test_offers_excludes_free_category_providers_by_default(self):
+        free_provider, _ = Provider.objects.get_or_create(
+            slug="bbc_iplayer",
+            defaults={
+                "name": "BBC iPlayer",
+                "category": ProviderCategory.FREE,
+                "is_enabled": True,
+                "country_code": "GB",
+            },
+        )
+        free_provider.category = ProviderCategory.FREE
+        free_provider.save()
+        ScrapedContentMapping.objects.create(
+            provider=free_provider,
+            scraped_title="Rank Me",
+            scraped_year=2020,
+            scraped_url="https://bbc.co.uk/iplayer/rankme",
+            movie=self.movie,
+            is_confirmed=True,
+            is_available=True,
+        )
+        resp = self.client.get("/api/v2/unofficial/movie/999/offers/")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        services = [o["service"] for o in data["offers"]]
+        self.assertNotIn("bbc_iplayer", services)
+        self.assertIn("rai-play", services)
+
     def test_offers_404_for_untracked_movie(self):
         resp = self.client.get("/api/v2/unofficial/movie/1/offers/")
         self.assertEqual(resp.status_code, 404)

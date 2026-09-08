@@ -92,9 +92,11 @@ def get_user_subscriptions(user_id: int = 1) -> set[str]:
         if name:
             subscribed.add(name.lower().strip())
 
-    # Free scraped providers that are enabled also count as subscribed sources
-    scrapers = Provider.objects.filter(category="scraper", is_enabled=True).values_list("slug", flat=True)
-    for s in scrapers:
+    # Free streaming providers and scrapers that are enabled count as available sources
+    free_or_scrapers = Provider.objects.filter(
+        category__in=["free", "scraper"], is_enabled=True
+    ).values_list("slug", flat=True)
+    for s in free_or_scrapers:
         subscribed.add(s.lower().strip())
 
     return subscribed

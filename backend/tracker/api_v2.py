@@ -293,10 +293,17 @@ def unofficial_movie_offers(request, tmdb_id: int):
         language_rule=pref_dict.get("language_rule"),
     )
 
+    include_official = request.GET.get("include_official", "").lower() == "true"
+    categories = ["scraper", "unofficial"]
+    if include_official:
+        categories = ["official", "free", "scraper", "unofficial"]
+
     # Gather unofficial scraped offers for this movie
     scraped = ScrapedContentMapping.objects.filter(
         movie=movie,
         is_available=True,
+        provider__category__in=categories,
+        provider__is_enabled=True,
     ).select_related("provider").order_by("-updated_at")
 
     offers = []

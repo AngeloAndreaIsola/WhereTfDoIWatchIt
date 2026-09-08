@@ -37,8 +37,18 @@ const SOURCE_BADGE_COLORS: Record<string, string> = {
     "bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-300",
   Free:
     "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300",
+  BVOD:
+    "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300",
+  AVOD:
+    "bg-teal-100 text-teal-800 dark:bg-teal-900/60 dark:text-teal-300",
+  FAST:
+    "bg-cyan-100 text-cyan-800 dark:bg-cyan-900/60 dark:text-cyan-300",
   Official:
     "bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-300",
+  SVOD:
+    "bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-300",
+  TVOD:
+    "bg-indigo-100 text-indigo-800 dark:bg-indigo-900/60 dark:text-indigo-300",
   Scraper:
     "bg-purple-100 text-purple-800 dark:bg-purple-900/60 dark:text-purple-300",
 };

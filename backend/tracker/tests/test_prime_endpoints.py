@@ -300,9 +300,9 @@ class PrimeMovieEndpointTests(TestCase):
         self.assertEqual(data["offers"][0]["ranking"]["audio_rank"], 0)
         # The stable service id "prime" is presented as its display name.
         self.assertEqual(data["offers"][0]["service"], "Prime Video")
-        # Free providers carry a "Free" source indicator.
+        # Free providers carry a "BVOD" source indicator.
         bbc = next(o for o in data["offers"] if o["service"] == "BBC iPlayer")
-        self.assertEqual(bbc["source_indicator"], "Free")
+        self.assertEqual(bbc["source_indicator"], "BVOD")
         # Free provider offers get a country fallback from the Provider row.
         self.assertEqual(bbc["country"], "GB")
 
