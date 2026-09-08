@@ -167,6 +167,9 @@ class PrimePopularSeriesEndpointTests(TestCase):
     def test_returns_200_with_series_results(self, mock_tmdb_cls):
         from tracker.services.tmdb import TMDbItem
 
+        # Create a series in DB
+        Movie.objects.create(tmdb_id=200, title="DB Series", year=2023, content_type="series")
+
         mock_client = mock_tmdb_cls.return_value
         mock_client.popular_series.return_value = [
             TMDbItem(tmdb_id=101, title="Test Series", year=2024, content_type="series",
@@ -174,27 +177,31 @@ class PrimePopularSeriesEndpointTests(TestCase):
         ]
 
         from django.test import Client
-        response = Client().get("/api/prime/popular-series/")
+        response = Client().get("/api/prime/popular-series/?limit=48")
 
         self.assertEqual(response.status_code, 200)
         data = response.json()
-        self.assertEqual(data["count"], 1)
-        self.assertEqual(data["source"], "tmdb_trending_tv")
-        self.assertEqual(len(data["results"]), 1)
-        self.assertEqual(data["results"][0]["tmdb_id"], 101)
-        self.assertEqual(data["results"][0]["title"], "Test Series")
+        self.assertEqual(data["count"], 2)
+        self.assertEqual(data["source"], "active_providers_and_tmdb")
+        self.assertEqual(data["results"][0]["tmdb_id"], 200)
+        self.assertEqual(data["results"][0]["title"], "DB Series")
+        self.assertEqual(data["results"][1]["tmdb_id"], 101)
+        self.assertEqual(data["results"][1]["title"], "Test Series")
 
     @patch("tracker.views.TMDbClient")
-    def test_returns_502_on_tmdb_failure(self, mock_tmdb_cls):
+    def test_returns_db_series_when_tmdb_fails(self, mock_tmdb_cls):
+        Movie.objects.create(tmdb_id=300, title="Fallback Series", year=2022, content_type="series")
+
         mock_client = mock_tmdb_cls.return_value
         mock_client.popular_series.side_effect = Exception("401 Unauthorized")
 
         from django.test import Client
         response = Client().get("/api/prime/popular-series/")
 
-        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.status_code, 200)
         data = response.json()
-        self.assertIn("TMDb fetch failed", data["error"])
+        self.assertEqual(data["count"], 1)
+        self.assertEqual(data["results"][0]["title"], "Fallback Series")
 
 
 class StreamingApiSeriesTests(TestCase):

@@ -73,7 +73,7 @@ from .services.letterboxd import import_rows, parse_file_or_zip
 from .services.ranking import rank_offers
 from .services.rate_limit import RateLimitExceeded
 from .services.enrichment import enrich_movie_from_tmdb, resolve_or_create_movie, sync_movie_fields
-from .services.tmdb import TMDbClient, TMDbMovie
+from .services.tmdb import TMDbClient, TMDbItem, TMDbMovie
 
 logger = logging.getLogger(__name__)
 
@@ -1247,45 +1247,65 @@ def prime_popular(request):
 
 @api_view(["GET"])
 def prime_popular_series(request):
-    """GET /api/prime/popular-series/ — trending TV series for the homepage grid.
+    """GET /api/prime/popular-series/ — series across all active providers (up to limit).
 
-    Returns a small set of {tmdb_id, title, year, poster_path, overview, categories}.
-    Cached in-memory for 10 minutes to avoid hitting TMDb on every page load.
+    Combines tracked series from active providers in the database with TMDb series
+    up to limit (default 48, max 100).
     """
     import time as _time
-    limit = request.GET.get("limit", "24")
+    limit = request.GET.get("limit", "48")
     try:
-        limit_int = max(1, min(int(limit), 30))
+        limit_int = max(1, min(int(limit), 100))
     except (TypeError, ValueError):
-        limit_int = 24
+        limit_int = 48
 
-    cached = _POPULAR_SERIES_CACHE.get("data")
-    ts = _POPULAR_SERIES_CACHE.get("ts")
+    cache_key = f"data_{limit_int}"
+    cached = _POPULAR_SERIES_CACHE.get(cache_key)
+    ts = _POPULAR_SERIES_CACHE.get(f"ts_{limit_int}")
     now = _time.time()
     if cached is not None and ts is not None and (now - ts) < _POPULAR_TTL:
         data = cached
     else:
-        client = TMDbClient(settings.TMDB_API_KEY)
-        try:
-            series = client.popular_series(limit=limit_int)
-            data = {
-                "results": [_popular_movie_dict(s) for s in series],
-                "count": len(series),
-                "cached": False,
-                "source": "tmdb_trending_tv",
-            }
-            _POPULAR_SERIES_CACHE["data"] = data
-            _POPULAR_SERIES_CACHE["ts"] = now
-        except Exception as exc:
-            logger.exception("TMDb popular series fetch failed")
-            if cached is not None:
-                # Serve stale cache if available
-                data = cached
-            else:
-                return Response(
-                    {"error": f"TMDb fetch failed: {exc}", "results": [], "count": 0, "cached": False, "source": "error"},
-                    status=502,
+        # Fetch series in DB across active providers
+        db_series_qs = Movie.objects.filter(content_type="series").order_by("-id")[:limit_int]
+        results = [
+            _popular_movie_dict(
+                TMDbItem(
+                    tmdb_id=m.tmdb_id,
+                    title=m.title,
+                    year=m.year,
+                    content_type="series",
+                    poster_path=m.poster_path,
+                    overview=m.overview,
+                    genre_ids=m.genre_ids,
                 )
+            )
+            for m in db_series_qs
+        ]
+        seen_tmdb_ids = {m.tmdb_id for m in db_series_qs}
+
+        # Fill remaining slots with trending TV series from TMDb if below limit
+        if len(results) < limit_int:
+            client = TMDbClient(settings.TMDB_API_KEY)
+            try:
+                tmdb_series = client.popular_series(limit=limit_int)
+                for s in tmdb_series:
+                    if s.tmdb_id not in seen_tmdb_ids:
+                        results.append(_popular_movie_dict(s))
+                        seen_tmdb_ids.add(s.tmdb_id)
+                        if len(results) >= limit_int:
+                            break
+            except Exception as exc:
+                logger.warning("TMDb popular_series fallback failed: %s", exc)
+
+        data = {
+            "results": results[:limit_int],
+            "count": len(results[:limit_int]),
+            "cached": False,
+            "source": "active_providers_and_tmdb",
+        }
+        _POPULAR_SERIES_CACHE[cache_key] = data
+        _POPULAR_SERIES_CACHE[f"ts_{limit_int}"] = now
 
     return Response({
         "results": data["results"],

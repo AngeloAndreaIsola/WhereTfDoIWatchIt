@@ -21,7 +21,7 @@ export default function HomePage() {
     setLoading(true);
     setError(null);
 
-    Promise.all([fetchPopularMovies(24), fetchPopularSeries(24)])
+    Promise.all([fetchPopularMovies(24), fetchPopularSeries(48)])
       .then(([moviesData, seriesData]) => {
         if (!cancelled) {
           setMovies(moviesData.results || []);
@@ -116,14 +116,14 @@ export default function HomePage() {
             )}
           </section>
 
-          {/* Popular Series section */}
+          {/* Series section */}
           <section className="space-y-4 pt-4 border-t border-gray-200 dark:border-gray-800">
             <div>
               <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">
-                Popular Series
+                Series Across Active Providers
               </h2>
               <p className="text-xs text-gray-500 dark:text-gray-400">
-                Trending TV shows and series this week
+                Browse series available across active providers
               </p>
             </div>
             {series.length > 0 ? (
