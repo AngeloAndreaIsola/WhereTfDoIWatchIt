@@ -295,31 +295,6 @@ function CatalogPageClient() {
         </p>
       </div>
 
-      {/* Prominent Type Tabs: All | Movies | Series */}
-      <div className="flex items-center gap-2 border-b border-gray-200 dark:border-gray-800 pb-3">
-        {[
-          { label: "All", value: "all" },
-          { label: "Movies", value: "movie" },
-          { label: "Series", value: "series" },
-        ].map((tab) => {
-          const isActive = (filters.content_type || "all") === tab.value;
-          return (
-            <button
-              key={tab.value}
-              type="button"
-              onClick={() => handleFilterChange({ ...filters, content_type: tab.value })}
-              className={`px-4 py-1.5 text-xs font-bold rounded-full transition-all ${
-                isActive
-                  ? "bg-blue-600 text-white shadow-sm"
-                  : "bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700"
-              }`}
-            >
-              {tab.label}
-            </button>
-          );
-        })}
-      </div>
-
       <FilterBar filters={filters} onChange={handleFilterChange} showStatusFilter={true} />
 
       {/* Scrape panel */}
