@@ -119,7 +119,7 @@ class ManagementCommandTests(TestCase):
 
         call_command("refresh_availability", "--budget", "50")
 
-        mock_process.assert_called_once_with(budget=50, user_id=1)
+        mock_process.assert_called_once_with(budget=50, user_id=1, content_types=["movie", "series"])
 
 
 class WatchlistRefreshApiTests(TestCase):

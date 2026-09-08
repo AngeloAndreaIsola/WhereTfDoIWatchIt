@@ -69,8 +69,8 @@ describe("frontend page smoke tests", () => {
     const input = screen.getByPlaceholderText("Search for a movie by title...");
     await user.type(input, "matrix");
 
-    const matrixCard = await screen.findByRole("heading", { name: "The Matrix" });
-    expect(matrixCard).toBeInTheDocument();
+    const matrixCards = await screen.findAllByRole("heading", { name: "The Matrix" });
+    expect(matrixCards[0]).toBeInTheDocument();
   });
 
   it("loads preferences and displays canonical uppercase values", async () => {

@@ -24,6 +24,10 @@ class PrimeUrlRoutingTests(TestCase):
         url = reverse("prime-popular")
         self.assertEqual(url, "/api/prime/popular/")
 
+    def test_prime_popular_series_route_resolves(self):
+        url = reverse("prime-popular-series")
+        self.assertEqual(url, "/api/prime/popular-series/")
+
     def test_prime_movie_route_resolves(self):
         url = reverse("prime-movie", kwargs={"tmdb_id": 550})
         self.assertEqual(url, "/api/prime/movie/550/")
@@ -146,6 +150,89 @@ class PrimePopularEndpointTests(TestCase):
 
         # Clean up
         _POPULAR_CACHE.clear()
+
+
+class PrimePopularSeriesEndpointTests(TestCase):
+    """Tests for GET /api/prime/popular-series/."""
+
+    def setUp(self):
+        from tracker.views import _POPULAR_SERIES_CACHE
+        _POPULAR_SERIES_CACHE.clear()
+
+    def tearDown(self):
+        from tracker.views import _POPULAR_SERIES_CACHE
+        _POPULAR_SERIES_CACHE.clear()
+
+    @patch("tracker.views.TMDbClient")
+    def test_returns_200_with_series_results(self, mock_tmdb_cls):
+        from tracker.services.tmdb import TMDbItem
+
+        # Create a series in DB
+        Movie.objects.create(tmdb_id=200, title="DB Series", year=2023, content_type="series")
+
+        mock_client = mock_tmdb_cls.return_value
+        mock_client.popular_series.return_value = [
+            TMDbItem(tmdb_id=101, title="Test Series", year=2024, content_type="series",
+                     poster_path="/tv.jpg", overview="A test series.", genre_ids=[18]),
+        ]
+
+        from django.test import Client
+        response = Client().get("/api/prime/popular-series/?limit=48")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["count"], 2)
+        self.assertEqual(data["source"], "active_providers_and_tmdb")
+        self.assertEqual(data["results"][0]["tmdb_id"], 200)
+        self.assertEqual(data["results"][0]["title"], "DB Series")
+        self.assertEqual(data["results"][1]["tmdb_id"], 101)
+        self.assertEqual(data["results"][1]["title"], "Test Series")
+
+    @patch("tracker.views.TMDbClient")
+    def test_returns_db_series_when_tmdb_fails(self, mock_tmdb_cls):
+        Movie.objects.create(tmdb_id=300, title="Fallback Series", year=2022, content_type="series")
+
+        mock_client = mock_tmdb_cls.return_value
+        mock_client.popular_series.side_effect = Exception("401 Unauthorized")
+
+        from django.test import Client
+        response = Client().get("/api/prime/popular-series/")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["count"], 1)
+        self.assertEqual(data["results"][0]["title"], "Fallback Series")
+
+
+class StreamingApiSeriesTests(TestCase):
+    """Verify series support in StreamingAvailabilityClient."""
+
+    @patch("tracker.services.streaming_api.requests.get")
+    def test_get_availability_series_endpoint(self, mock_get):
+        from tracker.services.streaming_api import StreamingAvailabilityClient
+
+        mock_resp = mock_get.return_value
+        mock_resp.json.return_value = {"streamingOptions": {}}
+        mock_resp.raise_for_status.return_value = None
+
+        client = StreamingAvailabilityClient(api_key="test_key")
+        client.get_availability(12345, content_type="series")
+
+        mock_get.assert_called_once()
+        url = mock_get.call_args[0][0]
+        self.assertIn("/shows/series/12345", url)
+
+
+class SeedFixtureSeriesTests(TestCase):
+    """Verify seed_prime_fixture --content-type argument."""
+
+    def test_seed_prime_fixture_with_content_type_series(self):
+        from django.core.management import call_command
+
+        call_command("seed_prime_fixture", "--content-type", "series")
+        movie = Movie.objects.filter(content_type="series").first()
+        self.assertIsNotNone(movie)
+        self.assertEqual(movie.content_type, "series")
 
 
 class PrimeMovieEndpointTests(TestCase):

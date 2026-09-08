@@ -29,6 +29,7 @@ urlpatterns = [
     path("watchlist/report/", views.watchlist_report, name="watchlist-report"),
     path("watchlist/resolve/", views.watchlist_resolve, name="watchlist-resolve"),
     path("prime/popular/", views.prime_popular, name="prime-popular"),
+    path("prime/popular-series/", views.prime_popular_series, name="prime-popular-series"),
     path("prime/movie/<int:tmdb_id>/", views.prime_movie, name="prime-movie"),
     path("movie/<int:pk>/", views.movie_detail, name="movie-detail"),
     path("movie/<int:pk>/link-tmdb/", views.link_tmdb, name="link-tmdb"),

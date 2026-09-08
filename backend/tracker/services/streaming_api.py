@@ -124,10 +124,11 @@ class StreamingAvailabilityClient:
         self.api_key = api_key or os.environ.get("RAPIDAPI_KEY", "")
         self.timeout = timeout
 
-    def get_availability(self, tmdb_id: int) -> StreamingResult:
-        # v4 /shows/movie/{tmdbId} returns every country's options in one call;
+    def get_availability(self, tmdb_id: int, content_type: str = "movie") -> StreamingResult:
+        # v4 /shows/{show_type}/{tmdbId} returns every country's options in one call;
         # no country param is needed (the legacy "country=all" is not valid v4).
-        url = f"https://{RAPIDAPI_HOST}/shows/movie/{tmdb_id}"
+        show_type = "series" if content_type in ("series", "tv") else "movie"
+        url = f"https://{RAPIDAPI_HOST}/shows/{show_type}/{tmdb_id}"
         headers = {
             "x-rapidapi-key": self.api_key,
             "x-rapidapi-host": RAPIDAPI_HOST,

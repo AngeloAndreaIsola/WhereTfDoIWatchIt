@@ -210,6 +210,16 @@ class TMDbClient:
         movies = [self._parse_search_result(r) for r in results]
         return movies[:limit]
 
+    def popular_series(self, limit: int = 24) -> list[TMDbItem]:
+        """Fetch trending/popular TV series from TMDb (trending/tv/week)."""
+        params, headers = self._auth()
+        url = f"{TMDB_BASE}/trending/tv/week"
+        resp = requests.get(url, params=params, headers=headers, timeout=self.timeout)
+        resp.raise_for_status()
+        results = resp.json().get("results", [])
+        series = [self._parse_search_result(r, "series") for r in results]
+        return series[:limit]
+
     def resolve(self, query: str, year: Optional[int] = None) -> Optional[TMDbMovie]:
         """Resolve a single movie; returns first match or None.
 

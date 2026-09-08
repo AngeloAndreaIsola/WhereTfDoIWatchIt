@@ -189,7 +189,7 @@ describe("Frontend Unhappy-Path Test Coverage", () => {
 
       expect(
         await screen.findByText(
-          /No movies found\.|No results — try a different title\./
+          /No popular movies found\.|No movies found\.|No results — try a different title\./
         )
       ).toBeInTheDocument();
     });

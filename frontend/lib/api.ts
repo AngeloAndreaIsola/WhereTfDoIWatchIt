@@ -199,6 +199,27 @@ export async function fetchPopularMovies(
 }
 
 /**
+ * Fetch popular TV series.
+ */
+export async function fetchPopularSeries(
+  limit: number = 24
+): Promise<PopularResponse> {
+  const res = await fetch(
+    `/api/prime/popular-series/?limit=${encodeURIComponent(limit)}`
+  );
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+
+    throw new Error(
+      body.error ?? `Failed to load popular series (${res.status})`
+    );
+  }
+
+  return res.json();
+}
+
+/**
  * Fetch Prime Video offers for a movie.
  */
 export async function fetchPrimeMovieOffers(

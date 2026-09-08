@@ -82,7 +82,7 @@ class AvailabilityCache:
             offers = self.read_offers(movie)
             return CacheStatus(refreshed=False, reason="rate_limited", offers_written=len(offers))
 
-        result = self.client.get_availability(movie.tmdb_id)
+        result = self.client.get_availability(movie.tmdb_id, content_type=movie.content_type)
         written = self._write_result(movie, result)
         return CacheStatus(refreshed=True, reason="stale", offers_written=written)
 

@@ -39,6 +39,7 @@ def process_watchlist_refresh(
     budget: int = 90,
     user_id: int = 1,
     cache: Optional[AvailabilityCache] = None,
+    content_types: tuple[str, ...] | list[str] = ("movie", "series"),
 ) -> dict:
     """Batch refresh watchlist movie availability up to budget limit.
 
@@ -71,17 +72,29 @@ def process_watchlist_refresh(
         started_at=timezone.now(),
     )
 
-    # Watchlist items for user_id
-    items = WatchlistItem.objects.filter(user_id=user_id).select_related("movie")
+    # Watchlist items for user_id (covering specified content_types, defaulting to movie & series)
+    items = WatchlistItem.objects.filter(
+        user_id=user_id,
+        movie__content_type__in=list(content_types),
+    ).select_related("movie")
 
-    # Order candidates: NULL last_checked_at first, then oldest last_checked_at
-    candidates_qs = (
-        items.values("movie_id")
-        .annotate(latest_checked=Max("movie__availabilities__last_checked_at"))
-        .order_by(F("latest_checked").asc(nulls_first=True))
-    )
-
-    candidate_movie_ids = [row["movie_id"] for row in candidates_qs]
+    if not items.exists():
+        # Fallback to querying catalog movies and series directly
+        candidates_qs = (
+            Movie.objects.filter(content_type__in=list(content_types))
+            .values("id")
+            .annotate(latest_checked=Max("availabilities__last_checked_at"))
+            .order_by(F("latest_checked").asc(nulls_first=True))
+        )
+        candidate_movie_ids = [row["id"] for row in candidates_qs]
+    else:
+        # Order candidates: NULL last_checked_at first, then oldest last_checked_at
+        candidates_qs = (
+            items.values("movie_id")
+            .annotate(latest_checked=Max("movie__availabilities__last_checked_at"))
+            .order_by(F("latest_checked").asc(nulls_first=True))
+        )
+        candidate_movie_ids = [row["movie_id"] for row in candidates_qs]
     summary.attempted = len(candidate_movie_ids)
 
     if candidate_movie_ids:
