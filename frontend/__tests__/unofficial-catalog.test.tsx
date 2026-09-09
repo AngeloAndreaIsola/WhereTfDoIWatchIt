@@ -178,7 +178,7 @@ describe("Unified catalog page", () => {
       ).toBeInTheDocument();
     });
 
-    const scrapeLink = screen.getByText("Scrape Unofficial Sources");
+    const scrapeLink = screen.getByText("Scrape Sources");
     await userEvent.click(scrapeLink);
 
     expect(screen.getByText(/Search Query \(optional\)/)).toBeInTheDocument();
