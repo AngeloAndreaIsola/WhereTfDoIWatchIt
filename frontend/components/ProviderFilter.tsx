@@ -26,22 +26,22 @@ export function ProviderFilter({
 
   // Categorize providers
   const majorProviders = providers.filter((p) => p.is_major);
-  const freeProviders = providers.filter((p) => p.category === "free" && !p.is_major);
-  const unofficialProviders = providers.filter(
-    (p) => (p.category === "scraper" || p.category === "unofficial") && !p.is_major
+  const bvodProviders = providers.filter((p) => p.category === "bvod" && !p.is_major);
+  const scraperProviders = providers.filter(
+    (p) => p.category === "scraper" && !p.is_major
   );
 
   const majorSlugs = majorProviders.map((p) => p.slug);
-  const freeSlugs = freeProviders.map((p) => p.slug);
-  const unofficialSlugs = unofficialProviders.map((p) => p.slug);
+  const bvodSlugs = bvodProviders.map((p) => p.slug);
+  const scraperSlugs = scraperProviders.map((p) => p.slug);
 
   const isAllMajorSelected =
     majorSlugs.length > 0 && majorSlugs.every((s) => selectedProviders.includes(s));
-  const isAllFreeSelected =
-    freeSlugs.length > 0 && freeSlugs.every((s) => selectedProviders.includes(s));
-  const isAllUnofficialSelected =
-    unofficialSlugs.length > 0 &&
-    unofficialSlugs.every((s) => selectedProviders.includes(s));
+  const isAllBvodSelected =
+    bvodSlugs.length > 0 && bvodSlugs.every((s) => selectedProviders.includes(s));
+  const isAllScraperSelected =
+    scraperSlugs.length > 0 &&
+    scraperSlugs.every((s) => selectedProviders.includes(s));
 
   const handleTogglePreset = (presetSlugs: string[]) => {
     const isCurrentlyAllSelected = presetSlugs.every((s) =>
@@ -177,25 +177,25 @@ export function ProviderFilter({
             </div>
           )}
 
-          {/* Free Providers */}
-          {freeProviders.length > 0 && (
+          {/* BVOD Providers (Free Broadcasters) */}
+          {bvodProviders.length > 0 && (
             <div className="space-y-2">
               <div className="flex items-center justify-between bg-gray-50 dark:bg-gray-700/50 px-2 py-1 rounded">
                 <span className="text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
-                  Free Providers
+                  BVOD / Free
                 </span>
                 <label className="flex items-center gap-1.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400 cursor-pointer">
                   <input
                     type="checkbox"
-                    checked={isAllFreeSelected}
-                    onChange={() => handleTogglePreset(freeSlugs)}
+                    checked={isAllBvodSelected}
+                    onChange={() => handleTogglePreset(bvodSlugs)}
                     className="rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
                   />
-                  All Free
+                  All BVOD
                 </label>
               </div>
               <div className="grid grid-cols-2 gap-1.5 pl-2">
-                {freeProviders.map((p) => (
+                {bvodProviders.map((p) => (
                   <label
                     key={p.slug}
                     className="flex items-center gap-2 text-xs text-gray-700 dark:text-gray-300 cursor-pointer hover:text-emerald-600"
@@ -213,25 +213,25 @@ export function ProviderFilter({
             </div>
           )}
 
-          {/* Unofficial Providers */}
-          {unofficialProviders.length > 0 && (
+          {/* Scraper Providers */}
+          {scraperProviders.length > 0 && (
             <div className="space-y-2">
               <div className="flex items-center justify-between bg-gray-50 dark:bg-gray-700/50 px-2 py-1 rounded">
                 <span className="text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
-                  Unofficial Providers
+                  Scraper Sources
                 </span>
                 <label className="flex items-center gap-1.5 text-xs font-semibold text-purple-600 dark:text-purple-400 cursor-pointer">
                   <input
                     type="checkbox"
-                    checked={isAllUnofficialSelected}
-                    onChange={() => handleTogglePreset(unofficialSlugs)}
+                    checked={isAllScraperSelected}
+                    onChange={() => handleTogglePreset(scraperSlugs)}
                     className="rounded border-gray-300 text-purple-600 focus:ring-purple-500"
                   />
-                  All Unofficial
+                  All Scrapers
                 </label>
               </div>
               <div className="grid grid-cols-2 gap-1.5 pl-2">
-                {unofficialProviders.map((p) => (
+                {scraperProviders.map((p) => (
                   <label
                     key={p.slug}
                     className="flex items-center gap-2 text-xs text-gray-700 dark:text-gray-300 cursor-pointer hover:text-purple-600"

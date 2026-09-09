@@ -1,7 +1,7 @@
-"""API v2 views for unofficial sources integration (Phase C).
+"""API v2 views for scraper sources integration (Phase C).
 
 Provides endpoints for:
-- Searching unofficial sources with filtering by user preferences (language, country)
+- Searching scraper sources with filtering by user preferences (language, country)
 - Caching with staleness tracking
 - Unified ranking: audio match → subtitle match → quality
 """
@@ -40,7 +40,7 @@ from tracker.serializers import (
 
 logger = logging.getLogger(__name__)
 
-# Staleness thresholds for unofficial sources (they change more frequently than
+# Staleness thresholds for scraper sources (they change more frequently than
 # official streaming availability data)
 UNOFFICIAL_STALE_AFTER = dt.timedelta(hours=12)
 
@@ -62,16 +62,16 @@ def _resolve_scraper(provider_slug: str):
 def unofficial_catalog(request):
     """GET /api/v2/unofficial/
 
-    List scraped unofficial content with filtering by user preferences.
+    List scraped content with filtering by user preferences.
 
     Query params:
-      - provider: filter by provider slug (e.g. 'rai-play', 'bbc')
+      - provider: filter by provider slug (e.g. 'kisskh', 'hydrahd')
       - country: filter by country code (via provider domain/country config)
       - audio_lang: ISO 639-1 code to filter by available audio language
       - subtitle_lang: ISO 639-1 code to filter by available subtitle language
       - q: search query (title filter)
       - available: 'true' (default) to filter only available titles
-      - include_official: 'true' to also include official/free providers
+      - include_bvod: 'true' to also include BVOD/free providers
     """
     provider_slug = request.GET.get("provider", "")
     country_code = (request.GET.get("country") or "").strip().upper()
@@ -79,16 +79,11 @@ def unofficial_catalog(request):
     subtitle_lang = (request.GET.get("subtitle_lang") or "").strip().upper()
     query = (request.GET.get("q") or "").strip()
     available_only = request.GET.get("available", "true").lower() != "false"
-    # The Unofficial Sources tab lists Imported Small Providers & Sources (scrapers).
-    # Official Free Streaming Providers (bbc_iplayer, raiplay, nhk, ...) are served
-    # by the official /api/catalog/ endpoint, so they are excluded here by default.
-    # include_official=true re-adds them for the combined scrape view.
-    include_official = request.GET.get("include_official", "").lower() == "true"
+    include_bvod = request.GET.get("include_bvod", "").lower() == "true"
 
-    # Default: scrapers only. Official + Free providers live in the official tab.
     categories = ["scraper"]
-    if include_official:
-        categories = ["official", "free", "scraper"]
+    if include_bvod:
+        categories.extend(["bvod", "avod", "tvod", "fast"])
 
     qs = ScrapedContentMapping.objects.select_related("provider", "movie")
     qs = qs.filter(provider__category__in=categories, provider__is_enabled=True)
@@ -141,7 +136,7 @@ def unofficial_catalog(request):
             "audio_lang": audio_lang or None,
             "subtitle_lang": subtitle_lang or None,
             "available_only": available_only,
-            "include_official": include_official,
+            "include_bvod": include_bvod,
         },
         "results": results,
     })
@@ -276,7 +271,7 @@ def unofficial_scrape(request):
 def unofficial_movie_offers(request, tmdb_id: int):
     """GET /api/v2/unofficial/movie/<tmdb_id>/offers/
 
-    Return unofficial source offers for a movie, filtered by user preferences
+    Return scraper source offers for a movie, filtered by user preferences
     and ranked by: audio match → subtitle match → quality.
     """
     try:
@@ -293,10 +288,17 @@ def unofficial_movie_offers(request, tmdb_id: int):
         language_rule=pref_dict.get("language_rule"),
     )
 
-    # Gather unofficial scraped offers for this movie
+    include_bvod = request.GET.get("include_bvod", "").lower() == "true"
+    categories = ["scraper"]
+    if include_bvod:
+        categories.extend(["bvod", "avod", "tvod", "fast"])
+
+    # Gather scraper offers for this movie
     scraped = ScrapedContentMapping.objects.filter(
         movie=movie,
         is_available=True,
+        provider__category__in=categories,
+        provider__is_enabled=True,
     ).select_related("provider").order_by("-updated_at")
 
     offers = []
@@ -344,14 +346,11 @@ def unofficial_movie_offers(request, tmdb_id: int):
 def unofficial_providers(request):
     """GET /api/v2/unofficial/providers/
 
-    List scraper (Imported Small Providers & Sources) providers with their
-    source indicators and staleness status. Official Free Streaming Providers
-    are not part of the Unofficial Sources tab.
+    List scraper providers with their source indicators and staleness status.
     """
-    # Scrapers only by default. include_official=true re-adds Major + Free.
     categories = ["scraper"]
-    if request.GET.get("include_official", "") == "true":
-        categories = ["official", "free", "scraper"]
+    if request.GET.get("include_bvod", "") == "true":
+        categories.extend(["bvod", "avod", "tvod", "fast"])
 
     providers = Provider.objects.filter(
         category__in=categories, is_enabled=True

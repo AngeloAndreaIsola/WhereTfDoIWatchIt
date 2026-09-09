@@ -10,7 +10,7 @@
 
 ## Current status as of 2026-08-18
 
-Phase 0 through Phase 5 are implemented and merged. The original checklist is retained below as the build history, with current status reflected in the checkboxes.
+Phase 0 through Phase 5 are implemented and merged. The original checklist is retained below as the build history, with current status reflected in the checkboxes. Phase 6 is in progress.
 
 - Docker Compose, Django, Next.js, and PostgreSQL scaffolding are in place.
 - Core data model and Django admin support are in place.
@@ -114,7 +114,7 @@ Prime MVP hardening above and editable preferences stay with Claude Code.
 - [x] Add CI to run backend tests and frontend test/lint/build on every pull request — **delegated: Task 16**
 - [x] Homepage search box (find a specific movie, not just browse trending) — **delegated: Task 17**
 - [x] Enhance ambiguous TMDb match review with posters and richer metadata — **delegated: Task 18**
-- [ ] Add broader frontend coverage for unhappy paths and API error states — **delegated: Task 19**
+- [x] Add broader frontend coverage for unhappy paths and API error states — **delegated: Task 19**
    - [ ] Add manual poster matching and title editing for movies — **delegated: Task 20**
    - [ ] Add detail view for movies with rating, synopsis, actors, and director — **delegated: Task 21**
 - [ ] Fix search by actor and category — **delegated: Task 22**

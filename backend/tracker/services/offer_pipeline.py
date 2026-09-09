@@ -47,7 +47,7 @@ class OfficialOffersPipeline:
     def _qualify_offers(self, offers, provider_map: dict[str, Provider], provider_slug: str):
         official_categories = self.provider_category_set
         if official_categories is None:
-            official_categories = {ProviderCategory.OFFICIAL, ProviderCategory.FREE}
+            official_categories = {ProviderCategory.OFFICIAL, ProviderCategory.BVOD, ProviderCategory.AVOD, ProviderCategory.TVOD, ProviderCategory.FAST}
 
         user_subs = get_user_subscriptions(self.user_id)
 
@@ -66,8 +66,14 @@ class OfficialOffersPipeline:
 
             if prov.category in official_categories:
                 service_clean = slug.lower().strip()
-                is_subscribed = service_clean in user_subs or any(
-                    sub in service_clean or service_clean in sub for sub in user_subs if len(sub) >= 3
+                is_subscribed = (
+                    prov.category in (ProviderCategory.BVOD, ProviderCategory.AVOD, ProviderCategory.TVOD, ProviderCategory.FAST)
+                    or service_clean in user_subs
+                    or any(
+                        sub in service_clean or service_clean in sub
+                        for sub in user_subs
+                        if len(sub) >= 3
+                    )
                 )
                 if is_subscribed:
                     if not o.country and prov.country_code:

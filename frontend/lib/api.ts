@@ -31,7 +31,7 @@ export interface PrimeOffer {
   country: string;
   service: string;
   offer_type: "subscription" | "free";
-  source_indicator?: "Official" | "Free" | "Unofficial" | "Scraper";
+  source_indicator?: "Official" | "SVOD" | "BVOD" | "AVOD" | "FAST" | "TVOD" | "Scraper" | string;
   quality: string;
   url?: string;
   audio_languages: string[];
@@ -118,7 +118,7 @@ export interface SearchResult {
 export interface UnifiedCatalogItem {
   id: string;
   tmdb_id: number | null;
-  source: "official" | "unofficial";
+  source: "official" | "scraper";
   source_indicator: string;
   title: string;
   year: number | null;
@@ -363,7 +363,7 @@ export interface UnofficialCatalogFilters {
   subtitle_lang?: string;
   q?: string;
   available?: boolean;
-  include_official?: boolean;
+  include_bvod?: boolean;
 }
 
 export async function fetchUnofficialCatalog(
@@ -377,8 +377,8 @@ export async function fetchUnofficialCatalog(
   if (filters.q) params.set("q", filters.q);
   if (filters.available !== undefined)
     params.set("available", filters.available ? "true" : "false");
-  if (filters.include_official)
-    params.set("include_official", "true");
+  if (filters.include_bvod)
+    params.set("include_bvod", "true");
 
   const res = await fetch(`/api/v2/unofficial/?${params.toString()}`);
   if (!res.ok) {
@@ -391,7 +391,7 @@ export async function fetchUnofficialCatalog(
 }
 
 export async function fetchUnofficialProviders(): Promise<UnofficialProvidersResponse> {
-  const res = await fetch("/api/v2/unofficial/providers/?include_official=true");
+  const res = await fetch("/api/v2/unofficial/providers/?include_bvod=true");
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(

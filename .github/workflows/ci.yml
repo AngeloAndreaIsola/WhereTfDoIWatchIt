@@ -58,7 +58,7 @@ jobs:
         run: python manage.py migrate
 
       - name: Run backend tests
-        run: python manage.py test tracker -v 2
+        run: python manage.py test tracker -v 2 --noinput
 
   frontend:
     name: Frontend Lint, Build & Test

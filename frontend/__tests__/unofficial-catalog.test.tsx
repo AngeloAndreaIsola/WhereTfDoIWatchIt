@@ -89,7 +89,7 @@ describe("Unified catalog page", () => {
 
     expect(screen.getByText("Catalog")).toBeInTheDocument();
     expect(
-      screen.getByText("Browse all titles across official, free, and unofficial streaming providers in one place.")
+      screen.getByText("Browse all titles across major, bvod, and scraper streaming providers in one place.")
     ).toBeInTheDocument();
     expect(screen.queryByText("Official Sources")).not.toBeInTheDocument();
     expect(screen.queryByText("Unofficial Sources")).not.toBeInTheDocument();
@@ -101,7 +101,7 @@ describe("Unified catalog page", () => {
     });
   });
 
-  it("displays official and unofficial catalog items in unified grid", async () => {
+  it("displays official and scraper catalog items in unified grid", async () => {
     setupFetch({
       count: 2,
       page: 1,
@@ -134,7 +134,7 @@ describe("Unified catalog page", () => {
         {
           id: "unofficial_2",
           tmdb_id: null,
-          source: "unofficial",
+          source: "scraper",
           source_indicator: "Scraper",
           title: "Test Anime",
           year: 2023,
@@ -178,7 +178,7 @@ describe("Unified catalog page", () => {
       ).toBeInTheDocument();
     });
 
-    const scrapeLink = screen.getByText("Scrape Unofficial Sources");
+    const scrapeLink = screen.getByText("Scrape Sources");
     await userEvent.click(scrapeLink);
 
     expect(screen.getByText(/Search Query \(optional\)/)).toBeInTheDocument();

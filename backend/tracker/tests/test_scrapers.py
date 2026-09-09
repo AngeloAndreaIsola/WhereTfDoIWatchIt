@@ -230,7 +230,7 @@ class ScraperRegistryTest(TestCase):
     def test_get_or_create_provider_from_registry_slug(self):
         """Providers referenced by the registry exist or can be created.
 
-        bbc_iplayer / rai-play / nhk are seeded as Free Streaming Providers by
+        bbc_iplayer / rai-play / nhk are seeded as BVOD providers by
         the migrations, so they are NOT scrapers — assert that here.
         """
         for slug in ("bbc_iplayer", "nhk_world", "rai-play"):
@@ -238,11 +238,11 @@ class ScraperRegistryTest(TestCase):
                 slug=slug,
                 defaults={
                     "name": slug,
-                    "category": ProviderCategory.FREE,
+                    "category": ProviderCategory.BVOD,
                     "is_enabled": True,
                 },
             )
-            # Migrations seed these public broadcasters as 'free'.
-            provider.category = ProviderCategory.FREE
+            # Migrations seed these public broadcasters as 'bvod'.
+            provider.category = ProviderCategory.BVOD
             provider.save()
-            self.assertEqual(provider.category, ProviderCategory.FREE)
+            self.assertEqual(provider.category, ProviderCategory.BVOD)

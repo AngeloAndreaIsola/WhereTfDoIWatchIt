@@ -81,7 +81,7 @@ export default function SubscriptionsPage() {
     setRefreshingFree(true);
     setRefreshResults((prev) => ({ ...prev, __free__: "Refreshing…" }));
     let lastError: string | null = null;
-    for (const provider of freeProviders) {
+    for (const provider of bvodProviders) {
       if (!provider.has_scraper) continue;
       try {
         const data = await triggerScraperRun(provider.slug);
@@ -191,7 +191,7 @@ export default function SubscriptionsPage() {
   ]);
 
   const majorProviders = providers.filter((p) => p.is_major);
-  const freeProviders = providers.filter((p) => p.category === "free");
+  const bvodProviders = providers.filter((p) => p.category === "bvod");
   const scraperProviders = providers.filter(
     (p) =>
       !p.is_major &&
@@ -242,7 +242,7 @@ export default function SubscriptionsPage() {
           <section className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900">
             <div className="mb-4">
               <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-                Major Streaming Providers
+                SVOD - Subscription Video on Demand
               </h2>
               <p className="text-xs text-gray-500 dark:text-gray-400">
                 Fixed canonical catalog. Click a provider card to toggle your active subscription status.
@@ -260,13 +260,13 @@ export default function SubscriptionsPage() {
             <div className="mb-4 flex items-center justify-between">
               <div>
                 <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-                  Free Streaming Providers
+                  BVOD - Broadcaster Video on Demand
                 </h2>
                 <p className="text-xs text-gray-500 dark:text-gray-400">
                   European public broadcasters and free ad-supported streaming services across 20+ countries. Click a provider card to enable or disable it for watch availability matching.
                 </p>
               </div>
-              {freeProviders.some((p) => p.has_scraper) && (
+              {bvodProviders.some((p) => p.has_scraper) && (
                 <button
                   type="button"
                   onClick={handleRefreshFreeProviders}
@@ -287,13 +287,13 @@ export default function SubscriptionsPage() {
                 </button>
               )}
             </div>
-            {freeProviders.length === 0 ? (
+            {bvodProviders.length === 0 ? (
               <p className="text-xs text-gray-400 italic">
                 No free providers configured yet.
               </p>
             ) : (
               <ProviderGrid
-                providers={freeProviders}
+                providers={bvodProviders}
                 onToggle={handleToggleProvider}
                 loading={loading}
               />

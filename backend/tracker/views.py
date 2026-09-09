@@ -200,47 +200,47 @@ def unified_catalog(request):
         for c in cats:
             if c == "major":
                 cat_slugs.update(cat_providers.filter(is_major=True).values_list("slug", flat=True))
-            elif c == "free":
-                cat_slugs.update(cat_providers.filter(category="free", is_major=False).values_list("slug", flat=True))
-            elif c in ("unofficial", "scraper"):
-                cat_slugs.update(cat_providers.filter(category__in=["scraper", "unofficial"]).values_list("slug", flat=True))
+            elif c in ("bvod", "free"):
+                cat_slugs.update(cat_providers.filter(category="bvod", is_major=False).values_list("slug", flat=True))
+            elif c in ("scraper", "unofficial"):
+                cat_slugs.update(cat_providers.filter(category="scraper").values_list("slug", flat=True))
             else:
                 cat_slugs.update(cat_providers.filter(category=c).values_list("slug", flat=True))
         requested_slugs.update({s.lower() for s in cat_slugs})
 
     allowed_provider_slugs = requested_slugs if (raw_providers or raw_categories) else None
 
-    # Determine whether official or unofficial or both should be queried
+    # Determine whether official or scraper or both should be queried
     include_official = True
-    include_unofficial = True
+    include_scraper = True
     if allowed_provider_slugs is not None:
         official_providers = set(
             Provider.objects.filter(is_enabled=True)
             .filter(is_major=True)
             .values_list("slug", flat=True)
         ) | set(
-            Provider.objects.filter(is_enabled=True, category="free")
+            Provider.objects.filter(is_enabled=True, category__in=["bvod", "avod", "tvod", "fast"])
             .values_list("slug", flat=True)
         )
-        unofficial_providers = set(
-            Provider.objects.filter(is_enabled=True, category__in=["scraper", "unofficial"])
+        scraper_providers = set(
+            Provider.objects.filter(is_enabled=True, category="scraper")
             .values_list("slug", flat=True)
         )
 
         # Also include any provider matching allowed_provider_slugs
         matched_official = False
-        matched_unofficial = False
+        matched_scraper = False
 
         for slug in allowed_provider_slugs:
-            if slug in official_providers or Provider.objects.filter(slug__iexact=slug, category__in=["official", "free"]).exists():
+            if slug in official_providers or Provider.objects.filter(slug__iexact=slug, category__in=["official", "bvod", "avod", "tvod", "fast"]).exists():
                 matched_official = True
-            if slug in unofficial_providers or Provider.objects.filter(slug__iexact=slug, category__in=["scraper", "unofficial"]).exists():
-                matched_unofficial = True
+            if slug in scraper_providers or Provider.objects.filter(slug__iexact=slug, category="scraper").exists():
+                matched_scraper = True
 
         # If user explicitly selected provider(s), only query matching source types
-        if matched_official or matched_unofficial:
+        if matched_official or matched_scraper:
             include_official = matched_official
-            include_unofficial = matched_unofficial
+            include_scraper = matched_scraper
 
     unified_items = []
     seen_tmdb_ids = set()
@@ -267,6 +267,7 @@ def unified_catalog(request):
 
             # Determine provider details from best offer or watchability
             provider_info = None
+            p_obj = None
             if best_offer and best_offer.get("service"):
                 svc_slug = best_offer["service"]
                 p_obj = Provider.objects.filter(slug__iexact=svc_slug).first()
@@ -276,7 +277,7 @@ def unified_catalog(request):
                     "category": p_obj.category if p_obj else "official",
                 }
 
-            source_ind = "Free" if (provider_info and provider_info["category"] == "free") else "Official"
+            source_ind = p_obj.source_indicator if p_obj else "Official"
 
             unified_items.append({
                 "id": f"official_{m.id or m.tmdb_id}",
@@ -293,8 +294,8 @@ def unified_catalog(request):
                 "watch_url": watch_url,
             })
 
-    # 2. Fetch Unofficial Scraped Content Mappings
-    if include_unofficial:
+    # 2. Fetch Scraper Content Mappings
+    if include_scraper:
         qs = ScrapedContentMapping.objects.select_related("provider", "movie").filter(
             provider__is_enabled=True,
             is_available=True,
@@ -335,9 +336,9 @@ def unified_catalog(request):
             subs = [str(s).upper() for s in (payload.get("subtitle_languages") or payload.get("subtitles") or [])]
 
             unified_items.append({
-                "id": f"unofficial_{mapping.id}",
+                "id": f"scraper_{mapping.id}",
                 "tmdb_id": m.tmdb_id if m else None,
-                "source": "unofficial",
+                "source": "scraper",
                 "source_indicator": mapping.provider.source_indicator or "Scraper",
                 "title": m.title if m else mapping.scraped_title,
                 "year": m.year if m else mapping.scraped_year,
@@ -1359,9 +1360,51 @@ def prime_movie(request, tmdb_id: int):
     pipeline = OfficialOffersPipeline(
         user_id=1,
         default_provider_slug=getattr(settings, "DEFAULT_PREFERENCE_PROVIDER", "prime"),
-        provider_category_set={ProviderCategory.OFFICIAL, ProviderCategory.FREE},
+        provider_category_set={ProviderCategory.OFFICIAL, ProviderCategory.BVOD, ProviderCategory.AVOD, ProviderCategory.TVOD, ProviderCategory.FAST},
     )
     offers_out = pipeline.run(movie).offers_out
+
+    # Include BVOD scraped offers in the main offers list
+    from tracker.models import ScrapedContentMapping
+    from tracker.services.offers import Offer
+    from tracker.services.presentation import present_offer
+    from tracker.services.ranking import rank_offers
+
+    bvod_categories = ["bvod", "avod", "tvod", "fast"]
+    scraped = ScrapedContentMapping.objects.filter(
+        movie=movie,
+        is_available=True,
+        provider__category__in=bvod_categories,
+        provider__is_enabled=True,
+    ).select_related("provider")
+
+    if scraped:
+        preference = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
+        provider_map = {p.provider.slug: p.provider for p in scraped}
+        bvod_offers = []
+        for mapping in scraped:
+            payload = mapping.raw_payload or {}
+            audio = payload.get("audio_languages", []) if isinstance(payload, dict) else []
+            subs = payload.get("subtitle_languages", []) if isinstance(payload, dict) else []
+            bvod_offers.append(Offer.from_dict({
+                "country": payload.get("country", "") if isinstance(payload, dict) else "",
+                "service": mapping.provider.slug,
+                "offer_type": "free",
+                "quality": mapping.provider.config.get("quality") if mapping.provider.config else "",
+                "url": mapping.scraped_url,
+                "audio": [str(a).upper() for a in audio],
+                "subs": [str(s).upper() for s in subs],
+                "is_scraped_source": True,
+            }))
+
+        ranked = rank_offers(bvod_offers, preference)
+        for offer in ranked:
+            presented = present_offer(offer, provider_map)
+            offer_dict = offer.to_dict()
+            offer_dict["service"] = presented.service_display
+            offer_dict["source_indicator"] = presented.source_indicator
+            offer_dict["country"] = presented.country
+            offers_out.append(offer_dict)
 
     user_data = UserMovieData.objects.filter(user_id=1, movie=movie).first()
     watch_events = MovieWatchEvent.objects.filter(user_id=1, movie=movie).order_by("-watched_date", "-created_at")

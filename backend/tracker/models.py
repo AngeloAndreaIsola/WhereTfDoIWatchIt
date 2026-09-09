@@ -119,9 +119,11 @@ class LanguageEntry(models.Model):
 
 class ProviderCategory(models.TextChoices):
     OFFICIAL = "official", "Official / Major Provider"
-    FREE = "free", "Free Streaming Provider"
+    BVOD = "bvod", "Broadcaster Video on Demand"
+    AVOD = "avod", "Ad-Supported Video on Demand"
+    TVOD = "tvod", "Transactional Video on Demand"
+    FAST = "fast", "Free Ad-Supported Streaming TV"
     SCRAPER = "scraper", "Scraper / Small Source"
-    UNOFFICIAL = "unofficial", "Unofficial / Aggregator Source"
 
 
 class Provider(models.Model):
@@ -146,13 +148,13 @@ class Provider(models.Model):
     @property
     def source_indicator(self) -> str:
         """Return a short label for the source type badge in the UI."""
+        if isinstance(self.config, dict) and self.config.get("business_model"):
+            return str(self.config["business_model"]).upper()
         if self.category == ProviderCategory.OFFICIAL:
-            return "Official"
-        if self.category == ProviderCategory.FREE:
-            return "Free"
-        if self.category == ProviderCategory.UNOFFICIAL:
-            return "Unofficial"
-        return "Scraper"
+            return "SVOD" if self.is_major else "Official"
+        if self.category == ProviderCategory.SCRAPER:
+            return "Scraper"
+        return self.category.upper()
 
 
 class ExternalProviderMapping(models.Model):

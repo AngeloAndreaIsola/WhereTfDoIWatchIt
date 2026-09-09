@@ -76,15 +76,15 @@ class ProviderSystemTests(TestCase):
             )
             self.assertEqual(provider.category, ProviderCategory.SCRAPER)
 
-        # Public broadcasters (bbc_iplayer, rai-play, nhk_world) are Free Streaming
-        # Providers, not scrapers. Assert the migration's effect by re-asserting
+        # Public broadcasters (bbc_iplayer, rai-play, nhk_world) are BVOD
+        # providers, not scrapers. Assert the migration's effect by re-asserting
         # the category (idempotent — matches what migration 0018 guarantees).
         for slug in ("bbc_iplayer", "rai-play", "nhk_world"):
             provider = Provider.objects.filter(slug=slug).first()
             self.assertIsNotNone(provider, f"{slug} should exist")
-            provider.category = ProviderCategory.FREE
+            provider.category = ProviderCategory.BVOD
             provider.save()
-            self.assertEqual(provider.category, ProviderCategory.FREE)
+            self.assertEqual(provider.category, ProviderCategory.BVOD)
 
     def test_providers_list_endpoint(self):
         resp = self.client.get("/api/providers/")
