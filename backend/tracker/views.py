@@ -267,6 +267,7 @@ def unified_catalog(request):
 
             # Determine provider details from best offer or watchability
             provider_info = None
+            p_obj = None
             if best_offer and best_offer.get("service"):
                 svc_slug = best_offer["service"]
                 p_obj = Provider.objects.filter(slug__iexact=svc_slug).first()
