@@ -92,9 +92,9 @@ def get_user_subscriptions(user_id: int = 1) -> set[str]:
         if name:
             subscribed.add(name.lower().strip())
 
-    # Free streaming providers and scrapers that are enabled count as available sources
+    # BVOD and scraper providers auto-count as available sources
     free_or_scrapers = Provider.objects.filter(
-        category__in=["free", "scraper"], is_enabled=True
+        category__in=["bvod", "scraper"], is_enabled=True
     ).values_list("slug", flat=True)
     for s in free_or_scrapers:
         subscribed.add(s.lower().strip())

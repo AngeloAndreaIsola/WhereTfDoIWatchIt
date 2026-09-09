@@ -9,12 +9,12 @@ from tracker.services.offers import Offer
 
 
 class ProvidersEndpointTests(TestCase):
-    def test_get_providers_returns_free_category(self):
+    def test_get_providers_returns_bvod_category(self):
         Provider.objects.get_or_create(
             slug="raiplay",
             defaults={
                 "name": "RaiPlay",
-                "category": "free",
+                "category": "bvod",
                 "is_major": False,
                 "is_enabled": True,
                 "icon_name": "raiplay",
@@ -24,11 +24,11 @@ class ProvidersEndpointTests(TestCase):
         resp = self.client.get("/api/providers/")
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
-        free_providers = [p for p in data if p.get("category") == "free"]
-        self.assertTrue(len(free_providers) > 0)
-        self.assertEqual(free_providers[0]["slug"], "raiplay")
+        bvod_providers = [p for p in data if p.get("category") == "bvod"]
+        self.assertTrue(len(bvod_providers) > 0)
+        self.assertEqual(bvod_providers[0]["slug"], "raiplay")
 
-    def test_get_providers_includes_new_free_streaming_providers(self):
+    def test_get_providers_includes_new_bvod_providers(self):
         for slug, name, domain, country in [
             ("pbs", "PBS", "pbs.org", "US"),
             ("abc_iview", "ABC iview", "iview.abc.net.au", "AU"),
@@ -39,7 +39,7 @@ class ProvidersEndpointTests(TestCase):
                 slug=slug,
                 defaults={
                     "name": name,
-                    "category": "free",
+                    "category": "bvod",
                     "is_major": False,
                     "is_enabled": True,
                     "icon_name": slug,
@@ -51,16 +51,16 @@ class ProvidersEndpointTests(TestCase):
         resp = self.client.get("/api/providers/")
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
-        free_slugs = {p["slug"] for p in data if p.get("category") == "free"}
+        bvod_slugs = {p["slug"] for p in data if p.get("category") == "bvod"}
         for expected_slug in ["pbs", "abc_iview", "mediaset_infinity", "cbc_gem"]:
-            self.assertIn(expected_slug, free_slugs)
+            self.assertIn(expected_slug, bvod_slugs)
 
-    def test_toggle_free_provider_subscription(self):
+    def test_toggle_bvod_provider_subscription(self):
         p, _ = Provider.objects.get_or_create(
             slug="bbc_iplayer",
             defaults={
                 "name": "BBC iPlayer",
-                "category": "free",
+                "category": "bvod",
                 "is_major": False,
                 "is_enabled": True,
                 "icon_name": "bbc_iplayer",
@@ -735,7 +735,7 @@ class UnifiedCatalogEndpointTests(TestCase):
         p = Provider.objects.create(slug="hydra", name="Hydra", category="scraper", is_enabled=True)
         ScrapedContentMapping.objects.create(
             provider=p,
-            scraped_title="Unofficial Movie",
+            scraped_title="Scraper Movie",
             scraped_year=2022,
             scraped_url="https://hydra.example/movie",
             is_available=True,
@@ -751,7 +751,7 @@ class UnifiedCatalogEndpointTests(TestCase):
         self.assertEqual(data["count"], 2)
 
         sources = {item["source"] for item in data["results"]}
-        self.assertEqual(sources, {"official", "unofficial"})
+        self.assertEqual(sources, {"official", "scraper"})
 
     @patch("tracker.views.AvailabilityCache")
     def test_unified_catalog_filters_by_provider(self, mock_cache_cls):

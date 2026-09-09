@@ -71,19 +71,19 @@ class PresentOfferTests(TestCase):
         result = present_offer(offer, provider_map)
         self.assertTrue(result.is_official)
 
-    def test_is_official_true_for_free_category(self):
-        prov = _make_provider(category=ProviderCategory.FREE)
+    def test_is_official_true_for_bvod_category(self):
+        prov = _make_provider(category=ProviderCategory.BVOD)
         provider_map = {"test": prov}
         offer = Offer(service="test", country="US")
         result = present_offer(offer, provider_map)
         self.assertTrue(result.is_official)
 
-    def test_is_official_false_for_unofficial_category(self):
-        prov = _make_provider(category=ProviderCategory.UNOFFICIAL)
+    def test_is_official_true_for_avod_category(self):
+        prov = _make_provider(category=ProviderCategory.AVOD)
         provider_map = {"test": prov}
         offer = Offer(service="test", country="US")
         result = present_offer(offer, provider_map)
-        self.assertFalse(result.is_official)
+        self.assertTrue(result.is_official)
 
     def test_is_official_false_for_scraper_category(self):
         prov = _make_provider(category=ProviderCategory.SCRAPER)

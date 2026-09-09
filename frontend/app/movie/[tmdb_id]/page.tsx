@@ -108,7 +108,7 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
         }
       });
 
-    // Fetch unofficial offers (Phase C v2 endpoint)
+    // Fetch scraper offers (Phase C v2 endpoint)
     setUnofficialLoading(true);
     fetch(`/api/v2/unofficial/movie/${tmdbId}/offers/`)
       .then((r) => (r.ok ? r.json() : null))
@@ -394,24 +394,20 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
             )}
           </section>
 
-          {/* Unofficial Offers Section (Phase C) */}
+          {/* Scraper Sources Section */}
           {unofficialLoading && (
             <div className="py-4 text-center text-sm text-gray-500 dark:text-gray-400">
-              Loading unofficial sources…
+              Loading scraper sources…
             </div>
           )}
           {unofficialOffers && unofficialOffers.length > 0 && (
             <section>
               <h2 className="mb-4 text-lg font-bold text-gray-900 dark:text-gray-100">
-                Unofficial Sources ({unofficialOffers.length})
+                Scraper Sources ({unofficialOffers.length})
               </h2>
               <div className="space-y-3">
                 {unofficialOffers.map((offer, i) => {
                   const SOURCE_BADGE_COLORS: Record<string, string> = {
-                    Unofficial:
-                      "bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-300",
-                    Free:
-                      "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300",
                     BVOD:
                       "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300",
                     AVOD:
@@ -429,7 +425,7 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
                   };
                   const badgeColor =
                     SOURCE_BADGE_COLORS[offer.source_indicator] ||
-                    SOURCE_BADGE_COLORS["Unofficial"];
+                    SOURCE_BADGE_COLORS["Scraper"];
                   return (
                     <div
                       key={`${offer.service}-${offer.quality}-${i}`}

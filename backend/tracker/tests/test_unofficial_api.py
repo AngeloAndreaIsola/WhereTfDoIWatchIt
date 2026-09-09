@@ -128,20 +128,20 @@ class UnofficialMovieOffersEndpointTests(TestCase):
         self.assertEqual(offer["offer_type"], "free")
         self.assertEqual(offer["source_indicator"], "Scraper")
 
-    def test_offers_excludes_free_category_providers_by_default(self):
-        free_provider, _ = Provider.objects.get_or_create(
+    def test_offers_excludes_bvod_category_providers_by_default(self):
+        bvod_provider, _ = Provider.objects.get_or_create(
             slug="bbc_iplayer",
             defaults={
                 "name": "BBC iPlayer",
-                "category": ProviderCategory.FREE,
+                "category": ProviderCategory.BVOD,
                 "is_enabled": True,
                 "country_code": "GB",
             },
-        )
-        free_provider.category = ProviderCategory.FREE
-        free_provider.save()
+)
+        bvod_provider.category = ProviderCategory.BVOD
+        bvod_provider.save()
         ScrapedContentMapping.objects.create(
-            provider=free_provider,
+            provider=bvod_provider,
             scraped_title="Rank Me",
             scraped_year=2020,
             scraped_url="https://bbc.co.uk/iplayer/rankme",

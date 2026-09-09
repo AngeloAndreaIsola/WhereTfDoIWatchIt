@@ -33,10 +33,6 @@ interface UnofficialCatalogItemProps {
 }
 
 const SOURCE_BADGE_COLORS: Record<string, string> = {
-  Unofficial:
-    "bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-300",
-  Free:
-    "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300",
   BVOD:
     "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300",
   AVOD:
@@ -87,7 +83,7 @@ export default function UnofficialCatalogItem({
   const movie = item.movie;
   const badgeColor =
     SOURCE_BADGE_COLORS[item.source_indicator] ||
-    SOURCE_BADGE_COLORS["Unofficial"];
+    SOURCE_BADGE_COLORS["Scraper"];
   const prefAudioSet = new Set(
     (preferredAudio || []).map((c) => c.toUpperCase())
   );

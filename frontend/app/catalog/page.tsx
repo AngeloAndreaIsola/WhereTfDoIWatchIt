@@ -263,23 +263,30 @@ function CatalogPageClient() {
 
   const renderBadge = (sourceIndicator: string) => {
     const indicator = sourceIndicator.toLowerCase();
-    if (indicator === "official") {
+    if (indicator === "official" || indicator === "svod") {
       return (
         <span className="px-2 py-0.5 text-xs font-bold rounded-md bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-200">
-          Official
+          {sourceIndicator}
         </span>
       );
     }
-    if (indicator === "free") {
+    if (indicator === "bvod" || indicator === "avod" || indicator === "fast") {
       return (
         <span className="px-2 py-0.5 text-xs font-bold rounded-md bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-200">
-          Free
+          {sourceIndicator}
+        </span>
+      );
+    }
+    if (indicator === "tvod") {
+      return (
+        <span className="px-2 py-0.5 text-xs font-bold rounded-md bg-indigo-100 text-indigo-800 dark:bg-indigo-900/60 dark:text-indigo-200">
+          {sourceIndicator}
         </span>
       );
     }
     return (
       <span className="px-2 py-0.5 text-xs font-bold rounded-md bg-purple-100 text-purple-800 dark:bg-purple-900/60 dark:text-purple-200">
-        {sourceIndicator || "Unofficial"}
+        {sourceIndicator || "Scraper"}
       </span>
     );
   };
@@ -291,7 +298,7 @@ function CatalogPageClient() {
           Catalog
         </h1>
         <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-          Browse all titles across official, free, and unofficial streaming providers in one place.
+          Browse all titles across major, bvod, and scraper streaming providers in one place.
         </p>
       </div>
 
@@ -304,7 +311,7 @@ function CatalogPageClient() {
           onClick={() => setShowScrapePanel((v) => !v)}
           className="text-sm font-medium text-purple-600 hover:text-purple-700 dark:text-purple-400 dark:hover:text-purple-300"
         >
-          {showScrapePanel ? "Hide Scrape Panel" : "Scrape Unofficial Sources"}
+          {showScrapePanel ? "Hide Scrape Panel" : "Scrape Sources"}
         </button>
         {showScrapePanel && (
           <div className="rounded-xl border border-purple-200 dark:border-purple-800 bg-purple-50 dark:bg-purple-900/20 p-4 space-y-3">
@@ -468,7 +475,7 @@ function CatalogPageClient() {
                         {item.provider && ` • ${item.provider.name}`}
                       </p>
 
-                      {/* Languages for unofficial items */}
+                      {/* Languages for scraper items */}
                       {!isOfficial && unofficialDetails && (
                         <div className="mt-2 flex flex-wrap items-center gap-1">
                           {unofficialDetails.audio_languages.map((lang) => (

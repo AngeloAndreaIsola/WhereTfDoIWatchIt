@@ -48,7 +48,7 @@ def present_offer(
     if prov is not None:
         service_display = prov.name
         source_indicator = prov.source_indicator
-        is_official = prov.category in (ProviderCategory.OFFICIAL, ProviderCategory.FREE)
+        is_official = prov.category != ProviderCategory.SCRAPER
         country = country or (prov.country_code or "")
     else:
         # Legacy: unknown slug — fall back to the mapping table.

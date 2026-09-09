@@ -96,10 +96,7 @@ for m in MAJOR_PROVIDERS:
 for f in FREE_PROVIDERS:
     upsert(f["slug"], {
         "name": f["name"],
-        "category": ProviderCategory.FREE,
-        "is_major": False,
-        "is_enabled": True,
-        "icon_name": f["icon"],
+        "category": ProviderCategory.BVOD,
         "domain": f["domain"],
         "country_code": f["country"],
     })
@@ -116,7 +113,7 @@ for s in UNOFFICIAL_PROVIDERS:
 for s in LEGACY_SCRAPERS:
     upsert(s["slug"], {
         "name": s["name"],
-        "category": ProviderCategory.FREE,
+        "category": ProviderCategory.BVOD,
         "is_major": False,
         "is_enabled": True,
         "domain": s["domain"],

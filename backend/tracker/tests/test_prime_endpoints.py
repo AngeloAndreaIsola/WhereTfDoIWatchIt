@@ -244,7 +244,7 @@ class PrimeMovieEndpointTests(TestCase):
     @patch("tracker.views.AvailabilityCache")
     def test_returns_ranked_official_and_free_offers(self, mock_cache_cls, mock_tmdb_cls, mock_enrich_tmdb_cls, mock_pipeline_cache_cls):
         mock_pipeline_cache_cls.return_value = mock_cache_cls.return_value
-        """Detail endpoint returns ranked Official (Major) + Free offers, not scrapers."""
+        """Detail endpoint returns ranked SVOD + BVOD offers, not scrapers."""
         from tracker.services.tmdb import TMDbMovie
 
         # Create a movie in the DB
