@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import ViewerLanguageBuilder from "./ViewerLanguageBuilder";
+import { useViewerPreferences } from "./ViewerPreferencesProvider";
 import { ProviderFilter, ProviderItem } from "./ProviderFilter";
 
 export interface FilterState {
@@ -30,6 +32,11 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
   const [actorSearch, setActorSearch] = useState("");
   const [actorSuggestions, setActorSuggestions] = useState<{ id: number; name: string }[]>([]);
   const [showActorDropdown, setShowActorSuggestions] = useState(false);
+  const [showViewerLanguages, setShowViewerLanguages] = useState(false);
+  const { viewersRule, setViewersRule, loading: viewerPreferencesLoading, error: viewerPreferencesError } = useViewerPreferences();
+  const viewerSummary = viewersRule.viewers
+    .map((viewer) => `${viewer.name} (${viewer.languages.join(", ") || "No languages"})`)
+    .join(" · ");
 
   useEffect(() => {
     fetch("/api/genres/")
@@ -80,6 +87,39 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
 
   return (
     <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 shadow-sm mb-6 space-y-4">
+      <div className="overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700">
+        <button
+          type="button"
+          onClick={() => setShowViewerLanguages((visible) => !visible)}
+          aria-expanded={showViewerLanguages}
+          className="flex w-full items-center justify-between gap-3 bg-gray-50 px-3 py-2.5 text-left hover:bg-gray-100 dark:bg-gray-800/60 dark:hover:bg-gray-800"
+        >
+          <span>
+            <span className="block text-sm font-semibold text-gray-900 dark:text-gray-100">Viewer Languages</span>
+            <span className="block text-xs text-gray-500 dark:text-gray-400">
+              {viewerPreferencesLoading ? "Loading preferences…" : viewerSummary || "No viewers configured"}
+            </span>
+          </span>
+          <svg
+            className={`h-4 w-4 shrink-0 text-gray-500 transition-transform ${showViewerLanguages ? "rotate-180" : ""}`}
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            aria-hidden="true"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m6 9 6 6 6-6" />
+          </svg>
+        </button>
+        {showViewerLanguages && (
+          <div className="border-t border-gray-200 p-3 dark:border-gray-700">
+            {viewerPreferencesError && (
+              <p className="mb-3 text-xs text-red-600 dark:text-red-400">{viewerPreferencesError}</p>
+            )}
+            <ViewerLanguageBuilder rule={viewersRule} onChange={setViewersRule} />
+          </div>
+        )}
+      </div>
+
       {/* Top Search & Content Type */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <div className="md:col-span-2">

@@ -8,6 +8,7 @@ import { VpnWatchModal } from "@/components/VpnWatchModal";
 import { WhyCantIWatchModal, ExcludedOffer } from "@/components/WhyCantIWatchModal";
 import { Pagination } from "@/components/Pagination";
 import LanguageBadge from "@/components/LanguageBadge";
+import { extractViewerLanguages, useViewerPreferences } from "@/components/ViewerPreferencesProvider";
 import type {
   UnifiedCatalogItem,
   UnofficialProvider,
@@ -94,9 +95,8 @@ function CatalogPageClient() {
   const [scrapeResult, setScrapeResult] = useState<string | null>(null);
   const [showScrapePanel, setShowScrapePanel] = useState(false);
 
-  // Language preferences for badges
-  const [preferredAudio, setPreferredAudio] = useState<string[]>([]);
-  const [preferredSubtitles, setPreferredSubtitles] = useState<string[]>([]);
+  const { viewersRule } = useViewerPreferences();
+  const preferredLanguages = useMemo(() => extractViewerLanguages(viewersRule), [viewersRule]);
 
   const [vpnModalState, setVpnModalState] = useState<{
     isOpen: boolean;
@@ -121,19 +121,6 @@ function CatalogPageClient() {
     explanations: [],
     excludedOffers: [],
   });
-
-  // Load user preferences once
-  useEffect(() => {
-    fetch("/api/preferences/")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((p) => {
-        if (p) {
-          setPreferredAudio(p.audio_languages || []);
-          setPreferredSubtitles(p.subtitle_languages || []);
-        }
-      })
-      .catch(() => {});
-  }, []);
 
   // Load providers for scrape panel once
   useEffect(() => {
@@ -483,7 +470,7 @@ function CatalogPageClient() {
                               key={`audio-${lang}`}
                               code={lang}
                               type="audio"
-                              isPreferred={preferredAudio.includes(lang.toUpperCase())}
+                              isPreferred={preferredLanguages.includes(lang.toUpperCase())}
                               compact
                             />
                           ))}
@@ -492,7 +479,7 @@ function CatalogPageClient() {
                               key={`sub-${lang}`}
                               code={lang}
                               type="subtitle"
-                              isPreferred={preferredSubtitles.includes(lang.toUpperCase())}
+                              isPreferred={preferredLanguages.includes(lang.toUpperCase())}
                               compact
                             />
                           ))}

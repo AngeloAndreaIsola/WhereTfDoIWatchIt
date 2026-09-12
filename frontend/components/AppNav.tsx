@@ -7,7 +7,7 @@ const navItems = [
   { href: "/", label: "Home" },
   { href: "/catalog", label: "Catalog" },
   { href: "/watchlist", label: "Watchlist" },
-  { href: "/preferences", label: "Preferences" },
+  { href: "/preferences", label: "Preferences", hidden: true },
   { href: "/subscriptions", label: "Subscriptions" },
 ];
 
@@ -16,7 +16,7 @@ export function AppNav() {
 
   return (
     <nav className="flex items-center gap-1 sm:gap-2">
-      {navItems.map((item) => {
+      {navItems.filter((item) => !item.hidden).map((item) => {
         const isActive =
           item.href === "/"
             ? pathname === "/"
