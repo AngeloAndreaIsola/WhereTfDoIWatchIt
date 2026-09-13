@@ -557,3 +557,73 @@ export async function linkTmdb(
   }
   return res.json();
 }
+
+// ─── Google Interests importer ──────────────────────────────────────────────
+
+export interface GoogleInterestsResolvedRow {
+  movie?: {
+    id?: number;
+    tmdb_id?: number;
+    title?: string;
+    content_type?: string;
+    year?: number;
+    poster_path?: string;
+  };
+  watchability?: {
+    status?: string;
+    status_symbol?: string;
+    status_label?: string;
+    best_offer?: {
+      country: string;
+      service: string;
+      service_display?: string;
+      url: string;
+      is_current_country: boolean;
+    };
+    explanation?: string[];
+    excluded_offers?: unknown[];
+  };
+}
+
+export interface GoogleInterestsAmbiguousItem {
+  title: string;
+  year: number | null;
+  uri?: string | null;
+  candidates: Array<{ tmdb_id: number; title: string; year: number | null }>;
+  reason?: string;
+}
+
+export interface GoogleInterestsSkippedItem {
+  title: string;
+  year: number | null;
+  uri?: string | null;
+  reason?: string;
+}
+
+export interface GoogleInterestsImportResult {
+  resolved: GoogleInterestsResolvedRow[];
+  ambiguous: GoogleInterestsAmbiguousItem[];
+  skipped: GoogleInterestsSkippedItem[];
+  watchlist_count: number;
+}
+
+export interface GoogleInterestsImportPayload {
+  cookies?: Record<string, string>;
+  urls: string[];
+  user_id?: number;
+}
+
+export async function importGoogleInterests(
+  payload: GoogleInterestsImportPayload
+): Promise<GoogleInterestsImportResult> {
+  const res = await fetch("/api/importers/google-interests/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `Google Interests import failed (${res.status})`);
+  }
+  return res.json();
+}

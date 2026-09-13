@@ -1630,3 +1630,69 @@ def search_movie_matches(request, tmdb_id: int):
             for r in results[:10]
         ],
     })
+
+
+# ---------------------------------------------------------------------------
+# Google Interests importer endpoint
+# ---------------------------------------------------------------------------
+
+@api_view(["POST"])
+def google_interests_import(request):
+    """POST /api/importers/google-interests/ — import Google Interests saved lists.
+
+    Request body (JSON):
+        cookies (dict, required): Google cookies keyed by cookie name, e.g.
+            {"CONSENT": "...", "NID": "...", "SOCS": "..."}.
+        urls (list[str], required): one or more Interest list page URLs.
+        user_id (int, optional): defaults to 1.
+
+    Returns the same import shape as the Letterboxd importer so the frontend
+    watchlist UI can reuse it with a different source label.
+    """
+    from tracker.services.tmdb import TMDbClient
+
+    data = request.data if isinstance(request.data, dict) else {}
+    raw_cookies = data.get("cookies") or {}
+    urls = data.get("urls") or []
+    user_id = data.get("user_id", 1)
+
+    if not isinstance(raw_cookies, dict):
+        return Response({"error": "cookies must be a JSON object (or omitted for public pages)"}, status=400)
+    if not isinstance(urls, list) or not urls:
+        return Response({"error": "urls list is required"}, status=400)
+
+    cookies: dict[str, str] = {str(k): str(v) for k, v in raw_cookies.items() if v is not None}
+
+    from tracker.services.google_interests import fetch_page, parse_and_import
+
+    client = TMDbClient(settings.TMDB_API_KEY, timeout=3)
+    all_resolved: list = []
+    all_ambiguous: list = []
+    all_skipped: list = []
+    total_watchlist_count = 0
+
+    for url in urls:
+        url_stripped = (url or "").strip()
+        if not url_stripped:
+            continue
+        try:
+            html = fetch_page(url_stripped, cookies=cookies)
+        except Exception as exc:
+            logger.exception("Google Interests fetch failed for %s", url_stripped)
+            all_skipped.append({"url": url_stripped, "reason": f"fetch_failed: {exc}"})
+            continue
+
+        result = parse_and_import(html, page_url=url_stripped, client=client, user_id=user_id)
+        all_resolved.extend(result.resolved)
+        all_ambiguous.extend(result.ambiguous)
+        all_skipped.extend(result.skipped)
+        total_watchlist_count += result.watchlist_count
+
+    return Response(
+        {
+            "resolved": WatchlistItemSerializer(all_resolved, many=True).data,
+            "ambiguous": all_ambiguous,
+            "skipped": all_skipped,
+            "watchlist_count": total_watchlist_count,
+        }
+    )

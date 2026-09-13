@@ -42,4 +42,6 @@ urlpatterns = [
     path("v2/unofficial/scrape/", api_v2.unofficial_scrape, name="v2-unofficial-scrape"),
     path("v2/unofficial/movie/<int:tmdb_id>/offers/", api_v2.unofficial_movie_offers, name="v2-unofficial-movie-offers"),
     path("v2/unofficial/providers/", api_v2.unofficial_providers, name="v2-unofficial-providers"),
+    # --- Google Interests importer ---
+    path("importers/google-interests/", views.google_interests_import, name="google-interests-import"),
 ]
