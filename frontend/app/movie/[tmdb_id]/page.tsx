@@ -7,7 +7,7 @@ import { useRouter } from "next/navigation";
 import OfferRow from "@/components/OfferRow";
 import MovieEditModal from "@/components/MovieEditModal";
 import type { PrimeOffer, PrimeMovieResponse } from "@/lib/api";
-import { fetchPrimeMovieOffers } from "@/lib/api";
+import { fetchPrimeMovieOffers, addToWatchlist, markMovieWatched, unmarkMovieWatched, removeWatchlistItem } from "@/lib/api";
 import type { LinkTmdbResponse } from "@/lib/api";
 
 interface UnofficialOffer {
@@ -160,6 +160,52 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
     [router, tmdbId]
   );
 
+  const reloadMovie = useCallback(() => {
+    fetchPrimeMovieOffers(tmdbId).then((d) => setData(d)).catch(() => {});
+  }, [tmdbId]);
+
+  const handleAddToWatchlist = async () => {
+    try {
+      await addToWatchlist(tmdbId);
+      setData((prev) => prev ? { ...prev, is_in_watchlist: true } : prev);
+      reloadMovie();
+    } catch (err) {
+      console.error("Failed to add to watchlist:", err);
+    }
+  };
+
+  const handleMarkWatched = async () => {
+    try {
+      const result = await markMovieWatched(tmdbId, {
+        watched_date: new Date().toISOString().split('T')[0],
+      });
+      setData((prev) => prev ? { ...prev, user_data: result.user_data ?? { is_watched: true } } : prev);
+      reloadMovie();
+    } catch (err) {
+      console.error("Failed to mark as watched:", err);
+    }
+  };
+
+  const handleUnmarkWatched = async () => {
+    try {
+      const result = await unmarkMovieWatched(tmdbId);
+      setData((prev) => prev ? { ...prev, user_data: result.user_data ?? { ...(prev.user_data ?? {}), is_watched: false } } : prev);
+      reloadMovie();
+    } catch (err) {
+      console.error("Failed to unmark as watched:", err);
+    }
+  };
+
+  const handleRemoveFromWatchlist = async () => {
+    try {
+      await removeWatchlistItem(tmdbId);
+      setData((prev) => prev ? { ...prev, is_in_watchlist: false } : prev);
+      reloadMovie();
+    } catch (err) {
+      console.error("Failed to remove from watchlist:", err);
+    }
+  };
+
   return (
     <main className="mx-auto max-w-4xl px-4 py-8 sm:px-6">
       {/* Back link */}
@@ -238,77 +284,112 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
             {/* Movie Info & Actions */}
             <div className="flex flex-1 flex-col justify-between">
               <div>
-                <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-gray-100">
-                  {data.movie.title}
-                  {data.movie.year && (
-                    <span className="ml-2 text-lg font-normal text-gray-500 dark:text-gray-400">
-                      ({data.movie.year})
+              <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-gray-100">
+                {data.movie.title}
+                {data.movie.year && (
+                  <span className="ml-2 text-lg font-normal text-gray-500 dark:text-gray-400">
+                    ({data.movie.year})
+                  </span>
+                )}
+              </h1>
+
+              {/* TMDb rating */}
+              {data.movie.rating && (
+                <div className="mt-2 flex items-center gap-1 text-sm text-amber-600 dark:text-amber-400">
+                  <span>★</span>
+                  <span className="font-semibold">{data.movie.rating.toFixed(1)}</span>
+                  <span className="text-xs text-gray-400 dark:text-gray-500">/10 TMDb</span>
+                </div>
+              )}
+
+              {/* Synopsis */}
+              {data.movie.overview && (
+                <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">
+                  {data.movie.overview}
+                </p>
+              )}
+
+              {/* Genres */}
+              {data.movie.genres && data.movie.genres.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {data.movie.genres.map((g) => (
+                    <span
+                      key={g.id}
+                      className="rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-600 dark:bg-gray-700 dark:text-gray-300"
+                    >
+                      {g.name}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {/* Director / Creator */}
+              {data.movie.director && data.movie.director.length > 0 && (
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                  <span className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                    {data.movie.content_type === "series" ? "Created by" : "Director"}
+                  </span>
+                  {data.movie.director.map((name) => (
+                    <span
+                      key={name}
+                      className="rounded-full bg-purple-50 px-2.5 py-0.5 text-xs text-purple-700 dark:bg-purple-900/30 dark:text-purple-300"
+                    >
+                      {name}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {/* Letterboxd User Data & History */}
+              {data.user_data && (
+                <div className="mt-3 flex flex-wrap items-center gap-3 text-xs">
+                  {data.user_data.is_watched && (
+                    <span className="rounded-full bg-emerald-100 px-3 py-1 font-semibold text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300">
+                      ✓ Watched
                     </span>
                   )}
-                </h1>
-
-                {/* TMDb rating */}
-                {data.movie.rating && (
-                  <div className="mt-2 flex items-center gap-1 text-sm text-amber-600 dark:text-amber-400">
-                    <span>★</span>
-                    <span className="font-semibold">{data.movie.rating.toFixed(1)}</span>
-                    <span className="text-xs text-gray-400 dark:text-gray-500">/10 TMDb</span>
-                  </div>
-                )}
-
-                {/* Synopsis */}
-                {data.movie.overview && (
-                  <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">
-                    {data.movie.overview}
-                  </p>
-                )}
-
-                {/* Genres */}
-                {data.movie.genres && data.movie.genres.length > 0 && (
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {data.movie.genres.map((g) => (
-                      <span
-                        key={g.id}
-                        className="rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-600 dark:bg-gray-700 dark:text-gray-300"
-                      >
-                        {g.name}
-                      </span>
-                    ))}
-                  </div>
-                )}
-
-                {/* Director / Creator */}
-                {data.movie.director && data.movie.director.length > 0 && (
-                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                    <span className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                      {data.movie.content_type === "series" ? "Created by" : "Director"}
+                  {data.user_data.rating && (
+                    <span className="rounded-full bg-amber-100 px-3 py-1 font-semibold text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+                      ★ Rating: {data.user_data.rating} / 5.0
                     </span>
-                    {data.movie.director.map((name) => (
-                      <span
-                        key={name}
-                        className="rounded-full bg-purple-50 px-2.5 py-0.5 text-xs text-purple-700 dark:bg-purple-900/30 dark:text-purple-300"
-                      >
-                        {name}
-                      </span>
-                    ))}
-                  </div>
+                  )}
+                </div>
+              )}
+
+                    {/* Manual Watchlist / Watched Management Buttons */}
+              <div className="mt-3 flex flex-wrap gap-2">
+                {data.is_in_watchlist ? (
+                  <button
+                    onClick={handleRemoveFromWatchlist}
+                    className="px-4 py-2 text-sm font-medium rounded-lg border border-red-300 dark:border-red-700 text-red-700 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-800/30 transition-colors"
+                  >
+                    ✕ Remove from Watchlist
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleAddToWatchlist}
+                    className="px-4 py-2 text-sm font-medium rounded-lg border border-green-300 dark:border-green-700 text-green-700 dark:text-green-300 hover:bg-green-50 dark:hover:bg-green-800/30 transition-colors"
+                  >
+                    + Add to Watchlist
+                  </button>
                 )}
 
-                {/* Letterboxd User Data & History */}
-                {data.user_data && (
-                  <div className="mt-3 flex flex-wrap items-center gap-3 text-xs">
-                    {data.user_data.is_watched && (
-                      <span className="rounded-full bg-emerald-100 px-3 py-1 font-semibold text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300">
-                        ✓ Watched
-                      </span>
-                    )}
-                    {data.user_data.rating && (
-                      <span className="rounded-full bg-amber-100 px-3 py-1 font-semibold text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
-                        ★ Rating: {data.user_data.rating} / 5.0
-                      </span>
-                    )}
-                  </div>
+                {data.user_data?.is_watched ? (
+                  <button
+                    onClick={handleUnmarkWatched}
+                    className="px-4 py-2 text-sm font-medium rounded-lg border border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-800/30 transition-colors"
+                  >
+                    ✓ Watched — Click to Unmark
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleMarkWatched}
+                    className="px-4 py-2 text-sm font-medium rounded-lg border border-purple-300 dark:border-purple-700 text-purple-700 dark:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-800/30 transition-colors"
+                  >
+                    ✓ Mark as Watched
+                  </button>
                 )}
+              </div>
 
                 {/* Review if present */}
                 {data.user_data?.review && (

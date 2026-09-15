@@ -297,6 +297,8 @@ class UserMovieData(models.Model):
     review = models.TextField(blank=True, default="")
     letterboxd_uri = models.CharField(max_length=255, blank=True, default="")
     updated_at = models.DateTimeField(auto_now=True)
+    # watched_date field for manual watchlist management
+    watched_date = models.DateField(null=True, blank=True)
 
     class Meta:
         constraints = [

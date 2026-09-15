@@ -71,6 +71,7 @@ export interface PrimeMovieResponse {
     content_type?: string;
   };
   user_data?: UserMovieData | null;
+  is_in_watchlist?: boolean;
   watch_events?: MovieWatchEvent[];
   offers: PrimeOffer[];
 }
@@ -624,6 +625,125 @@ export async function importGoogleInterests(
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ?? `Google Interests import failed (${res.status})`);
+  }
+  return res.json();
+}
+
+// ─── Manual watchlist management ────────────────────────────────────────────
+
+export interface AddToWatchlistRequest {
+  tmdb_id: number;
+}
+
+export interface AddToWatchlistResponse {
+  message: string;
+  watchlist_item?: {
+    id: number;
+    movie: {
+      id: number;
+      tmdb_id: number;
+      title: string;
+      year: number | null;
+      content_type: string;
+      poster_path: string | null;
+    };
+    source: string;
+    added_at: string;
+  };
+  user_data?: {
+    is_watched: boolean;
+    rating?: number | null;
+    review?: string;
+    updated_at?: string;
+  };
+}
+
+export interface MarkWatchedRequest {
+  watched_date?: string;
+  rating?: number;
+  review?: string;
+  rewatch?: boolean;
+}
+
+export interface MarkWatchedResponse {
+  message: string;
+  user_data?: {
+    is_watched: boolean;
+    rating?: number | null;
+    review?: string;
+    updated_at?: string;
+  };
+}
+
+export interface UnmarkWatchedResponse {
+  message: string;
+  user_data?: {
+    is_watched: boolean;
+    rating?: number | null;
+    review?: string;
+    updated_at?: string;
+  };
+}
+
+export interface RemoveFromWatchlistResponse {
+  message: string;
+}
+
+export async function addToWatchlist(
+  tmdbId: number
+): Promise<AddToWatchlistResponse> {
+  const res = await fetch("/api/watchlist/add/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tmdb_id: tmdbId }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `Failed to add to watchlist (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function markMovieWatched(
+  tmdbId: number,
+  data: MarkWatchedRequest = {}
+): Promise<MarkWatchedResponse> {
+  const res = await fetch(`/api/watched/${tmdbId}/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `Failed to mark as watched (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function unmarkMovieWatched(
+  tmdbId: number
+): Promise<MarkWatchedResponse> {
+  const res = await fetch(`/api/unwatched/${tmdbId}/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `Failed to unmark as watched (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function removeWatchlistItem(
+  tmdbId: number
+): Promise<{ message: string }> {
+  const res = await fetch(`/api/watchlist/remove/${tmdbId}/`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `Failed to remove from watchlist (${res.status})`);
   }
   return res.json();
 }

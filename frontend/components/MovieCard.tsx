@@ -18,6 +18,7 @@ export interface MovieCardData {
   preferred_subtitles?: string[];
   is_watched?: boolean;
   rating?: number | null;
+  is_in_watchlist?: boolean;
 }
 
 interface MovieCardProps {

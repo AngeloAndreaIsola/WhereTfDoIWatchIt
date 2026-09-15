@@ -37,6 +37,11 @@ urlpatterns = [
     path("movie/<int:tmdb_id>/search-matches/", views.search_movie_matches, name="search-movie-matches"),
     path("watch/<int:tmdb_id>/", views.watch_redirect, name="watch-redirect"),
     path("watch/<int:tmdb_id>", views.watch_redirect),
+    # --- Manual watchlist management ---
+    path("watchlist/add/", views.add_to_watchlist, name="add-to-watchlist"),
+    path("watchlist/remove/<int:tmdb_id>/", views.remove_from_watchlist, name="remove-from-watchlist"),
+    path("watched/<int:tmdb_id>/", views.mark_movie_watched, name="mark-movie-watched"),
+    path("unwatched/<int:tmdb_id>/", views.unmark_movie_watched, name="unmark-movie-watched"),
     # --- API v2: Unofficial sources (Phase C) ---
     path("v2/unofficial/", api_v2.unofficial_catalog, name="v2-unofficial-catalog"),
     path("v2/unofficial/scrape/", api_v2.unofficial_scrape, name="v2-unofficial-scrape"),

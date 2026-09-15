@@ -10,6 +10,10 @@ import { Pagination } from "@/components/Pagination";
 import {
   GoogleInterestsImportResult,
   importGoogleInterests,
+  addToWatchlist,
+  markMovieWatched,
+  unmarkMovieWatched,
+  removeWatchlistItem,
 } from "@/lib/api";
 
 interface WatchlistItemRow {
@@ -20,7 +24,17 @@ interface WatchlistItemRow {
     content_type?: string;
     year?: number;
     poster_path?: string;
+    user_data?: {
+      is_watched?: boolean;
+    };
   };
+  user_data?: {
+    is_watched?: boolean;
+    rating?: number | null;
+    review?: string;
+    updated_at?: string;
+  } | null;
+  is_watched?: boolean;
   watchability?: {
     status?: string;
     status_symbol?: string;
@@ -344,6 +358,59 @@ export default function WatchlistPage() {
     });
   };
 
+  // Manual watchlist management functions
+  const handleAddToWatchlist = async (tmdbId: number) => {
+    try {
+      const result = await addToWatchlist(tmdbId);
+      console.log("Added to watchlist:", result);
+      // Refresh watchlist data
+      refreshWatchlistData();
+    } catch (err) {
+      console.error("Failed to add to watchlist:", err);
+    }
+  };
+
+  const updateItemWatchedState = (
+    tmdbId: number,
+    userData: { is_watched?: boolean; rating?: number | null; review?: string; updated_at?: string } | null
+  ) => {
+    setItems((prev) =>
+      prev.map((item) =>
+        item.movie?.tmdb_id === tmdbId
+          ? {
+              ...item,
+              is_watched: !!userData?.is_watched,
+              user_data: userData,
+              movie: {
+                ...item.movie,
+                user_data: userData ? { is_watched: !!userData.is_watched } : undefined,
+              },
+            }
+          : item
+      )
+    );
+  };
+
+  const handleMarkWatched = async (tmdbId: number) => {
+    try {
+      const result = await markMovieWatched(tmdbId, {
+        watched_date: new Date().toISOString().split('T')[0],
+      });
+      updateItemWatchedState(tmdbId, result.user_data ?? { is_watched: true });
+    } catch (err) {
+      console.error("Failed to mark as watched:", err);
+    }
+  };
+
+  const handleUnmarkWatched = async (tmdbId: number) => {
+    try {
+      const result = await unmarkMovieWatched(tmdbId);
+      updateItemWatchedState(tmdbId, result.user_data ?? { is_watched: false });
+    } catch (err) {
+      console.error("Failed to unmark as watched:", err);
+    }
+  };
+
   return (
     <div className="max-w-4xl mx-auto px-4 py-8 space-y-6">
       <div>
@@ -627,6 +694,7 @@ https://www.google.com/interests/saved/list/...&pageNumber=2"
 
               const isWatchable =
                 status === "watchable_here" || status === "watchable_vpn";
+              const isWatched = !!(row.user_data?.is_watched ?? row.is_watched ?? movie.user_data?.is_watched);
 
               return (
                 <div
@@ -702,6 +770,67 @@ https://www.google.com/interests/saved/list/...&pageNumber=2"
                         Why can&apos;t I watch this?
                       </button>
                     )}
+
+                    {/* Manual watchlist management buttons */}
+                    <div className="space-y-2 mt-3">
+                      {movie.tmdb_id ? (
+                        <div className="space-y-2">
+                          <div className="p-2 bg-green-50 dark:bg-green-900/30 rounded-lg text-xs text-green-700 dark:text-green-300">
+                            ✓ In Watchlist
+                          </div>
+                          {isWatched ? (
+                            <button
+                              onClick={() => {
+                                if (movie.tmdb_id) {
+                                  handleUnmarkWatched(movie.tmdb_id);
+                                }
+                              }}
+                              className="w-full py-2 text-xs font-medium rounded-lg border border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-800/30 transition-colors"
+                            >
+                              ✓ Watched — Click to Unmark
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => {
+                                if (movie.tmdb_id) {
+                                  handleMarkWatched(movie.tmdb_id);
+                                }
+                              }}
+                              className="w-full py-2 text-xs font-medium rounded-lg border border-purple-300 dark:border-purple-700 text-purple-700 dark:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-800/30 transition-colors"
+                            >
+                              ✓ Mark as Watched
+                            </button>
+                          )}
+                          <button
+                            onClick={() => {
+                              if (movie.tmdb_id) {
+                                removeWatchlistItem(movie.tmdb_id)
+                                  .then(() => refreshWatchlistData())
+                                  .catch(err => console.error('Failed to remove from watchlist:', err));
+                              }
+                            }}
+                            className="w-full py-2 text-xs font-medium rounded-lg border border-red-300 dark:border-red-700 text-red-700 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-800/30 transition-colors"
+                          >
+                            ✕ Remove from Watchlist
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => {
+                            if (movie?.tmdb_id) {
+                              handleAddToWatchlist(movie.tmdb_id);
+                            }
+                          }}
+                          className={`w-full py-2 text-xs font-medium rounded-lg border transition-colors ${
+                            isWatchable
+                              ? "border-green-300 dark:border-green-700 text-green-700 dark:text-green-300 bg-green-50 dark:bg-green-800/30 cursor-not-allowed"
+                              : "border-green-300 dark:border-green-700 text-green-700 dark:text-green-300 hover:bg-green-50 dark:hover:bg-green-800/30"
+                          }`}
+                        >
+                          + Add to Watchlist
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               );

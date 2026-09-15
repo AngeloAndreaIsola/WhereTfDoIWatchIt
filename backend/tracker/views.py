@@ -978,12 +978,13 @@ def watchlist_report(request):
         movie = eval_item["movie"]
         watch_res = eval_item["watchability"]
 
+        # Check if movie is marked as watched for watchlist status
+        user_data = UserMovieData.objects.filter(user_id=1, movie=movie).first()
+        is_watched = bool(user_data and user_data.is_watched)
+
+        # Skip filtering offers - just use ranked offers for country/service breakdown
         raw_offers = cache.read_offers(movie)
-        qualifying_offers = [
-            o for o in raw_offers
-            if (o.offer_type or "").lower() in ("subscription", "free")
-        ]
-        ranked = rank_offers(qualifying_offers, preference)
+        ranked = rank_offers(raw_offers, preference)
 
         countries = sorted(list({r.country.upper() for r in ranked if r.country}))
         best = ranked[0] if ranked else None
@@ -1007,6 +1008,8 @@ def watchlist_report(request):
                 "best_country": best_country,
                 "best_service": best_service,
                 "watchability": watch_res.to_dict(),
+                "is_watched": is_watched,
+                "user_data": UserMovieDataSerializer(user_data).data if user_data else None,
             }
         )
 
@@ -1407,11 +1410,13 @@ def prime_movie(request, tmdb_id: int):
             offers_out.append(offer_dict)
 
     user_data = UserMovieData.objects.filter(user_id=1, movie=movie).first()
+    is_in_watchlist = WatchlistItem.objects.filter(user_id=1, movie=movie).exists()
     watch_events = MovieWatchEvent.objects.filter(user_id=1, movie=movie).order_by("-watched_date", "-created_at")
     return Response(
         {
             "movie": MovieDetailSerializer(movie).data,
             "user_data": UserMovieDataSerializer(user_data).data if user_data else None,
+            "is_in_watchlist": is_in_watchlist,
             "watch_events": MovieWatchEventSerializer(watch_events, many=True).data,
             "offers": offers_out,
         }
@@ -1601,6 +1606,213 @@ def update_movie(request, tmdb_id: int):
         "poster_path": movie.poster_path,
         "tmdb_rating": movie.tmdb_rating,
     })
+
+
+# ---------------------------------------------------------------------------
+# Manual watchlist management endpoints (new functionality)
+# ---------------------------------------------------------------------------
+
+@api_view(["POST"])
+def add_to_watchlist(request):
+    """POST /api/watchlist/add/ — manually add a movie to the watchlist.
+
+    Request body:
+        tmdb_id (int, required): the TMDb ID of the movie to add
+    """
+    from .services.enrichment import resolve_or_create_movie
+
+    data = request.data if isinstance(request.data, dict) else {}
+    tmdb_id = data.get("tmdb_id")
+    if not isinstance(tmdb_id, int) or tmdb_id <= 0:
+        return Response({"error": "tmdb_id is required and must be a positive integer"}, status=400)
+
+    try:
+        movie = resolve_or_create_movie(tmdb_id)
+    except Exception as exc:
+        logger.exception("Failed to resolve/create movie for tmdb_id=%s", tmdb_id)
+        return Response({"error": f"Movie lookup failed: {exc}"}, status=502)
+
+    # Check if already in watchlist
+    if WatchlistItem.objects.filter(user_id=1, movie=movie, source="manual").exists():
+        return Response({
+            "message": "Movie already in watchlist",
+            "watchlist_item": WatchlistItemSerializer(WatchlistItem.objects.filter(user_id=1, movie=movie, source="manual").first()).data,
+        })
+
+    try:
+        with transaction.atomic():
+            watchlist_item = WatchlistItem.objects.create(
+                user_id=1,
+                movie=movie,
+                source="manual",
+            )
+
+        # Create UserMovieData entry if not exists
+        user_data, _ = UserMovieData.objects.get_or_create(
+            user_id=1,
+            movie=movie,
+            defaults={"is_watched": False},
+        )
+
+        return Response({
+            "message": "Movie added to watchlist",
+            "watchlist_item": WatchlistItemSerializer(watchlist_item).data,
+            "user_data": UserMovieDataSerializer(user_data).data,
+        }, status=status.HTTP_201_CREATED)
+    except Exception as exc:
+        logger.exception("Failed to add movie to watchlist for tmdb_id=%s", tmdb_id)
+        return Response({"error": f"Failed to add to watchlist: {exc}"}, status=502)
+
+@api_view(["POST"])
+def mark_movie_watched(request, tmdb_id: int):
+    """POST /api/watched/<int:tmdb_id>/ — mark a movie as watched.
+
+    Request body (optional):
+        watched_date (str, optional): ISO date string (e.g., "2024-01-15")
+        rating (float, optional): rating 1-10
+        review (str, optional): review text
+        rewatch (bool, optional): whether this is a rewatch (default false)
+    """
+    try:
+        movie = Movie.objects.get(tmdb_id=tmdb_id)
+    except Movie.DoesNotExist:
+        return Response({"error": "Movie not found"}, status=404)
+
+    data = request.data if isinstance(request.data, dict) else {}
+    watched_date = data.get("watched_date")
+    rating = data.get("rating")
+    review = data.get("review")
+    rewatch = data.get("rewatch", False)
+    if isinstance(watched_date, str):
+        from datetime import date
+        watched_date_value = date.fromisoformat(watched_date)
+    elif watched_date:
+        watched_date_value = watched_date
+    else:
+        watched_date_value = timezone.now().date()
+
+    try:
+        with transaction.atomic():
+            # Get or create UserMovieData
+            user_data, created = UserMovieData.objects.get_or_create(
+                user_id=1,
+                movie=movie,
+                defaults={
+                    "is_watched": True,
+                    "rating": rating,
+                    "review": review or "",
+                    "watched_date": watched_date_value,
+                    "updated_at": timezone.now(),
+                },
+            )
+
+            if not created:
+                # Update existing UserMovieData
+                if watched_date:
+                    user_data.watched_date = watched_date_value
+                if rating is not None:
+                    user_data.rating = float(rating)
+                if review is not None:
+                    user_data.review = review
+                user_data.is_watched = True
+
+                user_data.updated_at = timezone.now()
+                user_data.save()
+
+            # Create watch event
+            watch_event_data = {
+                "user_id": 1,
+                "movie": movie,
+                "rating": rating,
+                "review": review or "",
+                "rewatch": rewatch,
+                "watched_date": watched_date_value,
+            }
+
+            # Add letterboxd_uri from UserMovieData if available
+            if hasattr(user_data, 'letterboxd_uri') and user_data.letterboxd_uri:
+                watch_event_data["letterboxd_uri"] = user_data.letterboxd_uri
+
+            MovieWatchEvent.objects.update_or_create(
+                user_id=1,
+                movie=movie,
+                watched_date=watch_event_data["watched_date"],
+                letterboxd_uri=watch_event_data.get("letterboxd_uri", ""),
+                defaults={
+                    "rating": rating,
+                    "review": review or "",
+                    "rewatch": rewatch,
+                },
+            )
+
+        return Response({
+            "message": "Movie marked as watched",
+            "user_data": UserMovieDataSerializer(user_data).data,
+        })
+    except Exception as exc:
+        logger.exception("Failed to mark movie as watched for tmdb_id=%s", tmdb_id)
+        return Response({"error": f"Failed to mark as watched: {exc}"}, status=502)
+
+
+@api_view(["POST"])
+def unmark_movie_watched(request, tmdb_id: int):
+    """POST /api/unwatched/<int:tmdb_id>/ — unmark a movie as watched (remove from watched list).
+
+    This removes the movie from the watched status but keeps it in watchlist.
+    """
+    try:
+        movie = Movie.objects.get(tmdb_id=tmdb_id)
+    except Movie.DoesNotExist:
+        return Response({"error": "Movie not found"}, status=404)
+
+    try:
+        with transaction.atomic():
+            # Get UserMovieData for this movie
+            user_data = UserMovieData.objects.get(user_id=1, movie=movie)
+
+            # Update the watched status
+            user_data.is_watched = False
+            user_data.updated_at = timezone.now()
+            user_data.save()
+
+        return Response({
+            "message": "Movie unmarked as watched",
+            "user_data": UserMovieDataSerializer(user_data).data,
+        })
+    except UserMovieData.DoesNotExist:
+        return Response({"error": "Movie not found in watchlist or not marked as watched"}, status=404)
+    except Exception as exc:
+        logger.exception("Failed to unmark movie as watched for tmdb_id=%s", tmdb_id)
+        return Response({"error": f"Failed to unmark as watched: {exc}"}, status=502)
+
+
+@api_view(["DELETE"])
+def remove_from_watchlist(request, tmdb_id: int):
+    """DELETE /api/watchlist/remove/<int:tmdb_id>/ — remove a movie from the watchlist.
+
+    This only removes wishlist/watchlist membership. Watched state, ratings,
+    reviews, and watch history are intentionally preserved.
+    """
+    try:
+        movie = Movie.objects.get(tmdb_id=tmdb_id)
+    except Movie.DoesNotExist:
+        return Response({"error": "Movie not found"}, status=404)
+
+    try:
+        with transaction.atomic():
+            WatchlistItem.objects.filter(user_id=1, movie=movie).delete()
+
+        return Response({
+            "message": "Movie removed from watchlist",
+        })
+    except Exception as exc:
+        logger.exception("Failed to remove movie from watchlist for tmdb_id=%s", tmdb_id)
+        return Response({"error": f"Failed to remove from watchlist: {exc}"}, status=502)
+
+
+# ---------------------------------------------------------------------------
+# Google Interests importer endpoint
+# ---------------------------------------------------------------------------
 
 
 @api_view(["GET"])
