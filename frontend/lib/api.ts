@@ -88,8 +88,9 @@ export interface WatchResult {
   message?: string;
 }
 
-export async function fetchWatchDestination(tmdbId: number): Promise<WatchResult> {
-  const res = await fetch(`/api/watch/${tmdbId}/`);
+export async function fetchWatchDestination(tmdbId: number, currentCountry?: string): Promise<WatchResult> {
+  const params = currentCountry ? `?current_country=${encodeURIComponent(currentCountry)}` : "";
+  const res = await fetch(`/api/watch/${tmdbId}/${params}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     return {
@@ -224,9 +225,11 @@ export async function fetchPopularSeries(
  * Fetch Prime Video offers for a movie.
  */
 export async function fetchPrimeMovieOffers(
-  tmdbId: number
+  tmdbId: number,
+  currentCountry?: string
 ): Promise<PrimeMovieResponse> {
-  const res = await fetch(`/api/prime/movie/${tmdbId}/`);
+  const params = currentCountry ? `?current_country=${encodeURIComponent(currentCountry)}` : "";
+  const res = await fetch(`/api/prime/movie/${tmdbId}/${params}`);
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));

@@ -5,6 +5,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import OfferRow from "@/components/OfferRow";
+import { useCurrentLocation } from "@/components/CurrentLocationProvider";
 import MovieEditModal from "@/components/MovieEditModal";
 import type { PrimeOffer, PrimeMovieResponse } from "@/lib/api";
 import { fetchPrimeMovieOffers, addToWatchlist, markMovieWatched, unmarkMovieWatched, removeWatchlistItem } from "@/lib/api";
@@ -35,6 +36,7 @@ interface MovieDetailPageProps {
 export default function MovieDetailPage({ params }: MovieDetailPageProps) {
   const tmdbId = parseInt(params.tmdb_id, 10);
   const router = useRouter();
+  const { currentCountry } = useCurrentLocation();
   const [data, setData] = useState<PrimeMovieResponse | null>(null);
   const [moviePk, setMoviePk] = useState<number | null>(null);
   const [preferences, setPreferences] = useState<{ audio_languages: string[]; subtitle_languages: string[] }>({
@@ -93,7 +95,7 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
       .catch(() => {});
 
     // Fetch official (Prime) offers
-    fetchPrimeMovieOffers(tmdbId)
+    fetchPrimeMovieOffers(tmdbId, currentCountry)
       .then((d) => {
         if (!cancelled) {
           setData(d);
@@ -123,7 +125,7 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
     return () => {
       cancelled = true;
     };
-  }, [tmdbId]);
+  }, [tmdbId, currentCountry]);
 
   const posterUrl = data?.movie?.poster_path
     ? `https://image.tmdb.org/t/p/w500${data.movie.poster_path}`
@@ -161,8 +163,8 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
   );
 
   const reloadMovie = useCallback(() => {
-    fetchPrimeMovieOffers(tmdbId).then((d) => setData(d)).catch(() => {});
-  }, [tmdbId]);
+    fetchPrimeMovieOffers(tmdbId, currentCountry).then((d) => setData(d)).catch(() => {});
+  }, [tmdbId, currentCountry]);
 
   const handleAddToWatchlist = async () => {
     try {
@@ -450,6 +452,7 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
                     isBest={true}
                     preferredAudio={preferences.audio_languages}
                     preferredSubtitles={preferences.subtitle_languages}
+                    currentCountry={currentCountry}
                   />
                 </div>
 
@@ -467,6 +470,7 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
                         isBest={false}
                         preferredAudio={preferences.audio_languages}
                         preferredSubtitles={preferences.subtitle_languages}
+                        currentCountry={currentCountry}
                       />
                     ))}
                   </div>

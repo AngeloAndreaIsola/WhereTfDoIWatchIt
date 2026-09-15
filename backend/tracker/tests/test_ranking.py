@@ -76,6 +76,32 @@ class RankingTests(TestCase):
         ranked = rank_offers(offers, _pref(countries=("US",)))
         self.assertEqual([r.country for r in ranked], ["US"])
 
+    def test_current_country_ranks_first(self):
+        offers = [
+            _offer("in", "Prime"),
+            _offer("it", "Prime"),
+            _offer("ca", "Prime"),
+        ]
+        ranked = rank_offers(offers, _pref(countries=()), current_country="IT")
+        self.assertEqual([r.country for r in ranked], ["IT", "IN", "CA"])
+
+    def test_current_country_does_not_affect_existing_ranking_without_local(self):
+        offers = [
+            _offer("in", "Prime"),
+            _offer("it", "Prime"),
+            _offer("ca", "Prime"),
+        ]
+        ranked = rank_offers(offers, _pref(countries=()), current_country="JP")
+        self.assertEqual([r.country for r in ranked], ["IN", "IT", "CA"])
+
+    def test_local_tie_preserves_existing_logic(self):
+        offers = [
+            _offer("it", "Prime", quality="hd"),
+            _offer("it", "Netflix", quality="4k"),
+        ]
+        ranked = rank_offers(offers, _pref(countries=()), current_country="IT")
+        self.assertEqual([r.service for r in ranked], ["Netflix", "Prime"])
+
     def test_empty_country_filter_includes_all(self):
         offers = [
             _offer("us", "Netflix", audio=("EN",)),

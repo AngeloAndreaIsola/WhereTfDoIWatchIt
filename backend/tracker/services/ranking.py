@@ -58,14 +58,16 @@ def rank_offers(
     offers: Iterable[Offer],
     preference: Preference,
     country_filter: Optional[set[str]] = None,
+    current_country: Optional[str] = None,
 ) -> list[RankedOffer]:
-    """Strict priority sort over a list of cached offers."""
+    """Strict priority sort over a list of cached offers, preferring the current country."""
     allowed_countries = (
         {c.upper() for c in country_filter}
         if country_filter is not None
         else {c.upper() for c in preference.candidate_countries or []}
     )
 
+    local_country = (current_country or "").upper().strip()
     ranked: list[RankedOffer] = []
     for offer in offers:
         if not isinstance(offer, Offer):
@@ -100,5 +102,5 @@ def rank_offers(
                 score=scored.score_tuple,
             )
         )
-    ranked.sort(key=lambda r: r.score)
+    ranked.sort(key=lambda r: (0 if local_country and r.country == local_country else 1, r.score))
     return ranked

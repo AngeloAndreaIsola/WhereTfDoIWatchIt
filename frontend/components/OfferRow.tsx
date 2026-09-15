@@ -34,6 +34,7 @@ interface OfferRowProps {
   isBest?: boolean;
   preferredAudio?: string[];
   preferredSubtitles?: string[];
+  currentCountry?: string;
 }
 
 export default function OfferRow({
@@ -42,6 +43,7 @@ export default function OfferRow({
   isBest = false,
   preferredAudio,
   preferredSubtitles,
+  currentCountry,
 }: OfferRowProps) {
   const prefAudioSet = new Set(
     (preferredAudio || []).map((c) => normalizeLanguageCode(c))
@@ -106,6 +108,17 @@ export default function OfferRow({
           {offer.is_language_match === false && (
             <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-semibold text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
               Language Mismatch
+            </span>
+          )}
+          {currentCountry && (
+            <span
+              className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                offer.country.toUpperCase() === currentCountry.toUpperCase()
+                  ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300"
+                  : "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+              }`}
+            >
+              {offer.country.toUpperCase() === currentCountry.toUpperCase() ? "Local" : "VPN required"}
             </span>
           )}
         </div>

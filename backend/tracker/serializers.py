@@ -219,11 +219,12 @@ class PreferenceSerializer(serializers.ModelSerializer):
     candidate_countries = serializers.ListField(
         child=serializers.CharField(), required=False, default=list
     )
+    current_country = serializers.CharField(max_length=2, required=False, allow_blank=True)
     language_rule = serializers.JSONField(required=False, allow_null=True)
 
     class Meta:
         model = Preference
-        fields = ["audio_languages", "subtitle_languages", "candidate_countries", "language_rule"]
+        fields = ["audio_languages", "subtitle_languages", "candidate_countries", "current_country", "language_rule"]
 
     def validate_audio_languages(self, value: list) -> list[str]:
         return validate_language_codes(value)
@@ -246,6 +247,12 @@ class PreferenceSerializer(serializers.ModelSerializer):
                 seen.add(c)
                 cleaned.append(c)
         return cleaned
+
+    def validate_current_country(self, value: str) -> str:
+        country = value.strip().upper()
+        if country and (len(country) != 2 or not country.isalpha()):
+            raise serializers.ValidationError("Country must be a 2-letter ISO code.")
+        return country
 
     def validate_language_rule(self, value):
         if value is None:

@@ -321,6 +321,7 @@ class WatchlistReportEndpointTests(TestCase):
 
         self.assertEqual(summary["countries"], [
             {"country": "US", "count": 2},
+            {"country": "CA", "count": 1},
             {"country": "GB", "count": 1},
         ])
 

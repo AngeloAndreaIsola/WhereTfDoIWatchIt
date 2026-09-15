@@ -9,6 +9,7 @@ import { WhyCantIWatchModal, ExcludedOffer } from "@/components/WhyCantIWatchMod
 import { Pagination } from "@/components/Pagination";
 import LanguageBadge from "@/components/LanguageBadge";
 import { extractViewerLanguages, useViewerPreferences } from "@/components/ViewerPreferencesProvider";
+import { useCurrentLocation } from "@/components/CurrentLocationProvider";
 import type {
   UnifiedCatalogItem,
   UnofficialProvider,
@@ -31,6 +32,7 @@ function CatalogPageClient() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const { currentCountry } = useCurrentLocation();
 
   const initialUrlState = useMemo(() => {
     const q = searchParams.get("q") || "";
@@ -186,6 +188,7 @@ function CatalogPageClient() {
     if (filters.actors && filters.actors.length > 0) {
       params.actor_id = filters.actors.map((a) => a.id).join(",");
     }
+    if (currentCountry) params.current_country = currentCountry;
 
     fetchUnifiedCatalog(params)
       .then((data) => {

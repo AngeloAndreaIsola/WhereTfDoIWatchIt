@@ -71,6 +71,7 @@ from .services.bulk_refresh import process_watchlist_refresh
 from .services.cache import AvailabilityCache
 from .services.letterboxd import import_rows, parse_file_or_zip
 from .services.ranking import rank_offers
+from .services.preferences import resolve_preferences
 from .services.rate_limit import RateLimitExceeded
 from .services.enrichment import enrich_movie_from_tmdb, resolve_or_create_movie, sync_movie_fields
 from .services.tmdb import TMDbClient, TMDbItem, TMDbMovie
@@ -180,7 +181,7 @@ def homepage_feed(request):
 @api_view(["GET"])
 def unified_catalog(request):
     """GET /api/catalog/unified/ — Unified catalog endpoint merging official and unofficial sources."""
-    curr_country = request.GET.get("country") or "US"
+    curr_country = request.GET.get("current_country") or request.GET.get("country") or "US"
     pref = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
     user_subs = get_user_subscriptions(user_id=1)
 
@@ -834,11 +835,13 @@ def preferences(request):
     )
     if pref_dict["audio_languages"] != list(preference.audio_languages) or \
        pref_dict["subtitle_languages"] != list(preference.subtitle_languages) or \
-       pref_dict["candidate_countries"] != list(preference.candidate_countries):
+        pref_dict["candidate_countries"] != list(preference.candidate_countries) or \
+        pref_dict["current_country"] != preference.current_country:
         # No existing row (we used defaults) — sync DB to defaults
         preference.audio_languages = pref_dict["audio_languages"]
         preference.subtitle_languages = pref_dict["subtitle_languages"]
         preference.candidate_countries = pref_dict["candidate_countries"]
+        preference.current_country = pref_dict["current_country"]
         preference.save()
     serializer = PreferenceSerializer(preference, data=request.data, partial=True)
     serializer.is_valid(raise_exception=True)
@@ -947,7 +950,7 @@ def watchlist_resolve(request):
 @api_view(["GET"])
 def watchlist_report(request):
     """Return aggregated report for watchlist items (user_id=1) with full watchability evaluation, composable filters & pagination."""
-    curr_country = request.GET.get("country") or "US"
+    curr_country = request.GET.get("current_country") or request.query_params.get("current_country") or request.GET.get("country") or "US"
     preference = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
     user_subs = get_user_subscriptions(user_id=1)
 
@@ -984,7 +987,7 @@ def watchlist_report(request):
 
         # Skip filtering offers - just use ranked offers for country/service breakdown
         raw_offers = cache.read_offers(movie)
-        ranked = rank_offers(raw_offers, preference)
+        ranked = rank_offers(raw_offers, preference, current_country=curr_country)
 
         countries = sorted(list({r.country.upper() for r in ranked if r.country}))
         best = ranked[0] if ranked else None
@@ -1365,7 +1368,8 @@ def prime_movie(request, tmdb_id: int):
         default_provider_slug=getattr(settings, "DEFAULT_PREFERENCE_PROVIDER", "prime"),
         provider_category_set={ProviderCategory.OFFICIAL, ProviderCategory.BVOD, ProviderCategory.AVOD, ProviderCategory.TVOD, ProviderCategory.FAST},
     )
-    offers_out = pipeline.run(movie).offers_out
+    current_country = request.query_params.get("current_country") or resolve_preferences(user_id=1).get("current_country")
+    offers_out = pipeline.run(movie, current_country=current_country).offers_out
 
     # Include BVOD scraped offers in the main offers list
     from tracker.models import ScrapedContentMapping
@@ -1400,7 +1404,7 @@ def prime_movie(request, tmdb_id: int):
                 "is_scraped_source": True,
             }))
 
-        ranked = rank_offers(bvod_offers, preference)
+        ranked = rank_offers(bvod_offers, preference, current_country=current_country)
         for offer in ranked:
             presented = present_offer(offer, provider_map)
             offer_dict = offer.to_dict()
@@ -1476,7 +1480,8 @@ def watch_redirect(request, tmdb_id: int):
         if matched:
             qualifying = matched
 
-    ranked = rank_offers(qualifying, preference)
+    current_country = request.query_params.get("current_country") or resolve_preferences(user_id=1).get("current_country")
+    ranked = rank_offers(qualifying, preference, current_country=current_country)
 
     top_offer = None
     for offer in ranked:

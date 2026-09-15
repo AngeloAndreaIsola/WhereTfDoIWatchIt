@@ -161,6 +161,37 @@ class WatchabilityEvaluationTests(TestCase):
         self.assertFalse(res.excluded_offers[0].is_language_match)
         self.assertIn("Does not satisfy language rules", res.excluded_offers[0].rejection_reasons)
 
+    def test_local_offer_wins_over_vpn_when_best(self):
+        offers = [
+            Offer(
+                country="IN",
+                service="prime",
+                offer_type="subscription",
+                quality="4k",
+                url="https://primevideo.in/test",
+                audio_languages=["EN"],
+                subtitle_languages=["EN"],
+            ),
+            Offer(
+                country="IT",
+                service="prime",
+                offer_type="subscription",
+                quality="hd",
+                url="https://primevideo.it/test",
+                audio_languages=["EN"],
+                subtitle_languages=["EN"],
+            ),
+        ]
+        res = evaluate_watchability(
+            self.movie,
+            offers,
+            self.pref,
+            current_country="IT",
+            user_subscriptions={"prime"},
+        )
+        self.assertEqual(res.best_offer.country, "IT")
+        self.assertTrue(res.best_offer.is_current_country)
+
     def test_unknown_language_marked_as_unknown(self):
         offers = [Offer(
             country="US",

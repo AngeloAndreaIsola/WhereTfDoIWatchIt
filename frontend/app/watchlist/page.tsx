@@ -5,6 +5,7 @@ import React from "react";
 import Link from "next/link";
 import { useSearchParams, useRouter } from "next/navigation";
 import { FilterBar, FilterState } from "@/components/FilterBar";
+import { useCurrentLocation } from "@/components/CurrentLocationProvider";
 import { VpnWatchModal } from "@/components/VpnWatchModal";
 import { WhyCantIWatchModal, ExcludedOffer } from "@/components/WhyCantIWatchModal";
 import { Pagination } from "@/components/Pagination";
@@ -55,6 +56,7 @@ interface WatchlistItemRow {
 export default function WatchlistPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { currentCountry } = useCurrentLocation();
 
   const parseFiltersFromURL = (sp: URLSearchParams): FilterState => {
     const providers = sp.get("providers");
@@ -326,6 +328,7 @@ export default function WatchlistPage() {
     if (filters.score_min) params.set("score_min", filters.score_min);
     if (filters.sort_by) params.set("sort_by", filters.sort_by);
     filters.actors.forEach((a) => params.append("actor_id", a.id.toString()));
+    if (currentCountry) params.set("current_country", currentCountry);
 
     setError(null);
     const resPromise = fetch(`/api/watchlist/report/?${params.toString()}`);

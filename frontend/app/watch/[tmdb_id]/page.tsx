@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { fetchWatchDestination, WatchResult } from "@/lib/api";
+import { useCurrentLocation } from "@/components/CurrentLocationProvider";
 
 interface WatchPageProps {
   params: { tmdb_id: string };
@@ -10,6 +11,7 @@ interface WatchPageProps {
 
 export default function WatchPage({ params }: WatchPageProps) {
   const tmdbId = parseInt(params.tmdb_id, 10);
+  const { currentCountry } = useCurrentLocation();
   const [result, setResult] = useState<WatchResult | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -17,7 +19,7 @@ export default function WatchPage({ params }: WatchPageProps) {
     let cancelled = false;
     setLoading(true);
 
-    fetchWatchDestination(tmdbId)
+    fetchWatchDestination(tmdbId, currentCountry)
       .then((res) => {
         if (!cancelled) {
           setResult(res);
@@ -41,7 +43,7 @@ export default function WatchPage({ params }: WatchPageProps) {
     return () => {
       cancelled = true;
     };
-  }, [tmdbId]);
+  }, [tmdbId, currentCountry]);
 
   return (
     <main className="mx-auto flex min-h-[60vh] max-w-xl flex-col items-center justify-center px-4 py-12 text-center sm:px-6">

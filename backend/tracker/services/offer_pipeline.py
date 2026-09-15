@@ -93,8 +93,19 @@ class OfficialOffersPipeline:
             pass
         return cache.read_offers(movie)
 
-    def rank_and_present(self, qualifying_offers, preference: Preference, provider_map: dict[str, Provider]):
-        ranked = rank_offers(qualifying_offers, preference, country_filter=set())
+    def rank_and_present(
+        self,
+        qualifying_offers,
+        preference: Preference,
+        provider_map: dict[str, Provider],
+        current_country: Optional[str] = None,
+    ):
+        ranked = rank_offers(
+            qualifying_offers,
+            preference,
+            country_filter=set(),
+            current_country=current_country,
+        )
         offers_out = []
         for offer in ranked:
             presented = present_offer(offer, provider_map)
@@ -105,7 +116,7 @@ class OfficialOffersPipeline:
             offers_out.append(offer_dict)
         return offers_out
 
-    def run(self, movie):
+    def run(self, movie, current_country: Optional[str] = None):
         pref = self.get_pref()
         provider_map = self._build_provider_map()
         provider_slug = getattr(settings, "DEFAULT_PREFERENCE_PROVIDER", self.default_provider_slug)
@@ -113,5 +124,5 @@ class OfficialOffersPipeline:
         enrich_movie_from_tmdb(movie)
         offers = self.get_cached_offers(movie)
         qualifying = self._qualify_offers(offers, provider_map, provider_slug)
-        offers_out = self.rank_and_present(qualifying, pref, provider_map)
+        offers_out = self.rank_and_present(qualifying, pref, provider_map, current_country=current_country)
         return OfficialOffersPipelineResult(offers_out=offers_out)

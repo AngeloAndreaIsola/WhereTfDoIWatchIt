@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import ViewerLanguageBuilder from "./ViewerLanguageBuilder";
 import { useViewerPreferences } from "./ViewerPreferencesProvider";
 import { ProviderFilter, ProviderItem } from "./ProviderFilter";
+import CountrySelect, { countryName } from "./CountrySelect";
+import { useCurrentLocation } from "./CurrentLocationProvider";
 
 export interface FilterState {
   q: string;
@@ -34,9 +36,20 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
   const [showActorDropdown, setShowActorSuggestions] = useState(false);
   const [showViewerLanguages, setShowViewerLanguages] = useState(false);
   const { viewersRule, setViewersRule, loading: viewerPreferencesLoading, error: viewerPreferencesError } = useViewerPreferences();
+  const { currentCountry, loading: currentLocationLoading, error: currentLocationError, setCurrentCountry } = useCurrentLocation();
+  const [currentLocationSaving, setCurrentLocationSaving] = useState(false);
   const viewerSummary = viewersRule.viewers
     .map((viewer) => `${viewer.name} (${viewer.languages.join(", ") || "No languages"})`)
     .join(" · ");
+
+  const handleCurrentLocationChange = async (country: string) => {
+    setCurrentLocationSaving(true);
+    try {
+      await setCurrentCountry(country);
+    } finally {
+      setCurrentLocationSaving(false);
+    }
+  };
 
   useEffect(() => {
     fetch("/api/genres/")
@@ -118,6 +131,23 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
             <ViewerLanguageBuilder rule={viewersRule} onChange={setViewersRule} />
           </div>
         )}
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+            Current Location
+          </label>
+          <CountrySelect
+            country={currentCountry}
+            onChange={handleCurrentLocationChange}
+            disabled={currentLocationLoading || currentLocationSaving}
+          />
+          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {currentLocationLoading ? "Determining location…" : currentCountry ? `Local results: ${countryName(currentCountry)}` : "Choose a country to prioritize local results"}
+          </p>
+          {currentLocationError && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{currentLocationError}</p>}
+        </div>
       </div>
 
       {/* Top Search & Content Type */}

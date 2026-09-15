@@ -28,7 +28,7 @@ def _norm_lang_list(langs: list) -> list[str]:
 def resolve_preferences(user_id: int = 1) -> dict[str, Any]:
     """Return preference dict for a user.
 
-    Keys: audio_languages, subtitle_languages, candidate_countries, language_rule.
+    Keys: audio_languages, subtitle_languages, candidate_countries, current_country, language_rule.
     Falls back to settings.DEFAULT_PREFERENCE when no DB row exists,
     or when the DB row has empty audio/subtitle languages (migration
     seeds an empty row in v0; server-side defaults are the source of truth).
@@ -40,6 +40,7 @@ def resolve_preferences(user_id: int = 1) -> dict[str, Any]:
             "audio_languages": _norm_lang_list(row.audio_languages),
             "subtitle_languages": _norm_lang_list(row.subtitle_languages),
             "candidate_countries": list(row.candidate_countries),
+            "current_country": row.current_country,
             "language_rule": row.language_rule,
         }
     # No DB row, or empty row (migration-seeded) — use server-side defaults.
@@ -47,5 +48,6 @@ def resolve_preferences(user_id: int = 1) -> dict[str, Any]:
         "audio_languages": _norm_lang_list(defaults.get("audio_languages", [])),
         "subtitle_languages": _norm_lang_list(defaults.get("subtitle_languages", [])),
         "candidate_countries": list(defaults.get("candidate_countries", [])),
+        "current_country": defaults.get("current_country", ""),
         "language_rule": defaults.get("language_rule", None),
     }
