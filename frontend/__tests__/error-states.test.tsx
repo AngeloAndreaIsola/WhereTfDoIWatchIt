@@ -22,7 +22,7 @@ vi.mock("next/link", () => ({
 const routerPush = vi.fn();
 
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: routerPush }),
+  useRouter: () => ({ push: routerPush, replace: vi.fn() }),
   useSearchParams: () => ({
     get: () => null,
   }),

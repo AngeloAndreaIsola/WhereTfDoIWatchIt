@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import React from "react";
 import Link from "next/link";
+import { useSearchParams, useRouter } from "next/navigation";
 import { FilterBar, FilterState } from "@/components/FilterBar";
 import { VpnWatchModal } from "@/components/VpnWatchModal";
 import { WhyCantIWatchModal, ExcludedOffer } from "@/components/WhyCantIWatchModal";
@@ -52,20 +53,34 @@ interface WatchlistItemRow {
 }
 
 export default function WatchlistPage() {
-  const [filters, setFilters] = useState<FilterState>({
-    q: "",
-    content_type: "all",
-    genre: "",
-    year_min: "",
-    year_max: "",
-    actors: [],
-    providers: [],
-    country: "",
-    status: "",
-    quality: "",
-    score_min: "",
-    sort_by: "",
-  });
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  const parseFiltersFromURL = (sp: URLSearchParams): FilterState => {
+    const providers = sp.get("providers");
+    const actors = sp.getAll("actor_id");
+    return {
+      q: sp.get("q") || "",
+      content_type: sp.get("type") || "all",
+      genre: sp.get("genre") || "",
+      year_min: sp.get("year_min") || "",
+      year_max: sp.get("year_max") || "",
+      actors: actors.map((a) => {
+        const [id, name] = a.split(":");
+        return { id: Number(id), name: name || "" };
+      }).filter((a) => a.id),
+      providers: providers ? providers.split(",") : [],
+      country: sp.get("country") || "",
+      status: sp.get("status") || "",
+      quality: sp.get("quality") || "",
+      score_min: sp.get("score_min") || "",
+      sort_by: sp.get("sort_by") || "",
+    };
+  };
+
+  const [filters, setFilters] = useState<FilterState>(() =>
+    parseFiltersFromURL(new URLSearchParams(searchParams?.toString() || ""))
+  );
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -147,14 +162,36 @@ export default function WatchlistPage() {
     excludedOffers: [],
   });
 
-  // Reset page when filters change
+  // Keep URL in sync with filters
   useEffect(() => {
-    setPage(1);
-  }, [filters]);
+    const params = new URLSearchParams();
+    if (filters.q) params.set("q", filters.q);
+    if (filters.content_type !== "all") params.set("type", filters.content_type);
+    if (filters.genre) params.set("genre", filters.genre);
+    if (filters.year_min) params.set("year_min", filters.year_min);
+    if (filters.year_max) params.set("year_max", filters.year_max);
+    if (filters.providers.length > 0) params.set("providers", filters.providers.join(","));
+    if (filters.country) params.set("country", filters.country);
+    if (filters.status) params.set("status", filters.status);
+    if (filters.quality) params.set("quality", filters.quality);
+    if (filters.score_min) params.set("score_min", filters.score_min);
+    if (filters.sort_by) params.set("sort_by", filters.sort_by);
+    filters.actors.forEach((a) => params.append("actor_id", `${a.id}:${a.name}`));
+    if (page > 1) params.set("page", page.toString());
+
+    const qs = params.toString();
+    const newUrl = qs ? `/watchlist/?${qs}` : "/watchlist/";
+    router.replace(newUrl, { scroll: false });
+  }, [filters, page, router]);
 
   const refreshWatchlistData = () => {
     setPage(1);
     setFilters({ ...filters });
+  };
+
+  const handleSetFilters = (newFilters: FilterState) => {
+    setPage(1);
+    setFilters(newFilters);
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -663,7 +700,7 @@ https://www.google.com/interests/saved/list/...&pageNumber=2"
 
       <FilterBar
         filters={filters}
-        onChange={setFilters}
+        onChange={handleSetFilters}
         showStatusFilter={true}
       />
 
