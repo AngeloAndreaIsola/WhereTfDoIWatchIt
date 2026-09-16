@@ -23,7 +23,7 @@ interface WatchlistItemRow {
     id?: number;
     tmdb_id?: number;
     title?: string;
-    content_type?: string;
+    content_type?: "movie" | "series";
     year?: number;
     poster_path?: string;
     user_data?: {
@@ -745,7 +745,7 @@ https://www.google.com/interests/saved/list/...&pageNumber=2"
                       : "border-gray-200 dark:border-gray-800/60 opacity-60 grayscale hover:opacity-100 hover:grayscale-0"
                   }`}
                 >
-                  <Link href={`/movie/${movie.tmdb_id}`}>
+                  <Link href={`/${movie.content_type === "series" ? "tv" : "movie"}/${movie.tmdb_id}`}>
                     <div className="aspect-[2/3] bg-gray-100 dark:bg-gray-800 relative">
                       {movie.poster_path ? (
                         <img

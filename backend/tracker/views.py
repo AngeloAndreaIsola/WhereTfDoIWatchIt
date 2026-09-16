@@ -1798,10 +1798,11 @@ def update_movie(request, tmdb_id: int):
 
 @api_view(["POST"])
 def add_to_watchlist(request):
-    """POST /api/watchlist/add/ — manually add a movie to the watchlist.
+    """POST /api/watchlist/add/ — manually add a movie or series to the watchlist.
 
     Request body:
         tmdb_id (int, required): the TMDb ID of the movie to add
+        content_type (string, optional): "movie" or "series" - defaults to "movie"
     """
     from .services.enrichment import resolve_or_create_movie
 
@@ -1810,8 +1811,12 @@ def add_to_watchlist(request):
     if not isinstance(tmdb_id, int) or tmdb_id <= 0:
         return Response({"error": "tmdb_id is required and must be a positive integer"}, status=400)
 
+    content_type = data.get("content_type", "movie")
+    if content_type not in ("movie", "series"):
+        return Response({"error": 'content_type must be "movie" or "series"'}, status=400)
+
     try:
-        movie = resolve_or_create_movie(tmdb_id)
+        movie = resolve_or_create_movie(tmdb_id, content_type=content_type)
     except Exception as exc:
         logger.exception("Failed to resolve/create movie for tmdb_id=%s", tmdb_id)
         return Response({"error": f"Movie lookup failed: {exc}"}, status=502)

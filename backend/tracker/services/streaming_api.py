@@ -127,7 +127,8 @@ class StreamingAvailabilityClient:
     def get_availability(self, tmdb_id: int, content_type: str = "movie") -> StreamingResult:
         # v4 /shows/{show_type}/{tmdbId} returns every country's options in one call;
         # no country param is needed (the legacy "country=all" is not valid v4).
-        show_type = "series" if content_type in ("series", "tv") else "movie"
+        # API uses "tv" for series, not "series"
+        show_type = "tv" if content_type in ("series", "tv") else "movie"
         url = f"https://{RAPIDAPI_HOST}/shows/{show_type}/{tmdb_id}"
         headers = {
             "x-rapidapi-key": self.api_key,

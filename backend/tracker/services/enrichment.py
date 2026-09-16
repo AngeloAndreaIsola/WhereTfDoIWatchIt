@@ -75,13 +75,13 @@ def enrich_movie_from_tmdb(movie: Movie) -> bool:
     return sync_movie_fields(movie, details)
 
 
-def resolve_or_create_movie(tmdb_id: int) -> Movie:
+def resolve_or_create_movie(tmdb_id: int, content_type: str = "movie") -> Movie:
     """Fetch TMDb details for tmdb_id, create Movie if needed, and sync fields.
 
     Returns the Movie instance. Raises exceptions on TMDb fetch failure.
     """
     client = TMDbClient(settings.TMDB_API_KEY)
-    details = client.details(tmdb_id)
+    details = client.details(tmdb_id, content_type=content_type)
     movie, created = Movie.objects.get_or_create(
         tmdb_id=details.tmdb_id,
         defaults={

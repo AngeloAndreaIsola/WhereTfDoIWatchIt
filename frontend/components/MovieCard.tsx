@@ -19,6 +19,7 @@ export interface MovieCardData {
   is_watched?: boolean;
   rating?: number | null;
   is_in_watchlist?: boolean;
+  content_type?: "movie" | "series";
 }
 
 interface MovieCardProps {
@@ -47,7 +48,7 @@ export default function MovieCard({ movie }: MovieCardProps) {
 
   return (
     <Link
-      href={`/movie/${movie.tmdb_id}`}
+      href={`/${movie.content_type === "series" ? "tv" : "movie"}/${movie.tmdb_id}`}
       className="group flex flex-col overflow-hidden rounded-xl border border-gray-200 bg-white text-decoration-none shadow-sm transition-all hover:-translate-y-1 hover:shadow-lg dark:border-gray-700 dark:bg-gray-800"
     >
       {/* Poster Image */}

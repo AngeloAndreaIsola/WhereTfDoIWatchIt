@@ -90,7 +90,7 @@ export default function SeriesPage({ params }: SeriesPageProps) {
         }
       });
 
-    // Fetch scraper offers (Phase C v2 endpoint)
+    // Fetch scraper offers (Phase C v2 endpoint) - both movies and series use the same endpoint
     fetch(`/api/v2/unofficial/movie/${tmdbId}/offers/`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
@@ -113,7 +113,7 @@ export default function SeriesPage({ params }: SeriesPageProps) {
 
   const handleAddToWatchlist = async () => {
     try {
-      await addToWatchlist(tmdbId);
+      await addToWatchlist(tmdbId, "series");
       setData((prev) => prev ? { ...prev, is_in_watchlist: true } : prev);
     } catch {
       console.error("Failed to add to watchlist");
@@ -188,7 +188,7 @@ export default function SeriesPage({ params }: SeriesPageProps) {
       {!loading && !error && data && (
         <div className="space-y-8">
           <div className="relative flex flex-col gap-6 rounded-2xl border border-gray-200 bg-white p-6 shadow-xs sm:flex-row dark:border-gray-700 dark:bg-gray-800">
-            <div className="relative aspect-[2/3] w-full max-w-[180px] shrink-0 overflow-hidden rounded-xl bg-gray-200 dark:bg-gray-700">
+            <div className="relative aspect-[2/3] w-full max-w-[180px] shrink-0 overflow-hidden rounded-xl bg-gray-202 dark:bg-gray-700">
               {posterUrl ? (
                 <Image
                   src={posterUrl}

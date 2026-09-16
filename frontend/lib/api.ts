@@ -737,12 +737,13 @@ export interface RemoveFromWatchlistResponse {
 }
 
 export async function addToWatchlist(
-  tmdbId: number
+  tmdbId: number,
+  contentType: "movie" | "series" = "movie"
 ): Promise<AddToWatchlistResponse> {
   const res = await fetch("/api/watchlist/add/", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tmdb_id: tmdbId }),
+    body: JSON.stringify({ tmdb_id: tmdbId, content_type: contentType }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
