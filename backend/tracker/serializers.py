@@ -36,6 +36,8 @@ class MovieSerializer(serializers.ModelSerializer):
             "seasons_data",
             "runtime_minutes",
             "tmdb_rating",
+            "first_air_date",
+            "release_date",
         ]
 
 
@@ -60,6 +62,8 @@ class MovieDetailSerializer(serializers.ModelSerializer):
             "seasons_data",
             "runtime_minutes",
             "tmdb_rating",
+            "first_air_date",
+            "release_date",
             "user_data",
             "watch_events",
         ]

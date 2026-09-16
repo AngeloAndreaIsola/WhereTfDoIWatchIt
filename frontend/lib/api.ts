@@ -69,6 +69,8 @@ export interface PrimeMovieResponse {
     cast?: TMDbCastMember[];
     director?: string[];
     content_type?: string;
+    release_date?: string | null;
+    first_air_date?: string | null;
   };
   user_data?: UserMovieData | null;
   is_in_watchlist?: boolean;
@@ -236,6 +238,48 @@ export async function fetchPrimeMovieOffers(
 
     throw new Error(
       body.error ?? `Failed to load offers (${res.status})`
+    );
+  }
+
+  return res.json();
+}
+
+
+export interface PrimeSeriesResponse {
+  series: {
+    tmdb_id: number;
+    title: string;
+    year: number | null;
+    poster_path: string | null;
+    content_type?: string;
+    first_air_date?: string | null;
+    rating?: number | null;
+    overview?: string | null;
+    genres?: { id: number; name: string }[];
+  };
+  offers: PrimeOffer[];
+  user_data?: UserMovieData;
+  is_in_watchlist: boolean;
+  watch_events?: UserMovieData[];
+  cache: {
+    refreshed: boolean;
+    reason: string;
+    offers_written: number;
+  };
+}
+
+export async function fetchPrimeSeriesOffers(
+  tmdbId: number,
+  currentCountry?: string
+): Promise<PrimeSeriesResponse> {
+  const params = currentCountry ? `?current_country=${encodeURIComponent(currentCountry)}` : "";
+  const res = await fetch(`/api/prime/series/${tmdbId}/${params}`);
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+
+    throw new Error(
+      body.error ?? `Failed to load series offers (${res.status})`
     );
   }
 

@@ -42,6 +42,8 @@ class Movie(models.Model):
     seasons_data = models.JSONField(default=list, blank=True)
     runtime_minutes = models.IntegerField(null=True, blank=True)
     tmdb_rating = models.FloatField(null=True, blank=True)
+    first_air_date = models.CharField(max_length=20, blank=True, default="")
+    release_date = models.CharField(max_length=20, blank=True, default="")
 
     def __str__(self):
         return f"{self.title} ({self.year})" if self.year else self.title

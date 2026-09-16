@@ -42,7 +42,7 @@ class KissKHScraper(BaseScraper):
         logger.info("KissKH scraper: got %d entries", len(resp_data))
         return self.parse_items(resp_data)
 
-    def parse_items(self, raw_data: Any) -> list[ScrapedItem]:
+    def parse_items(self, raw_data: Any, category: str = "movies") -> list[ScrapedItem]:
         items: list[ScrapedItem] = []
         for entry in raw_data or []:
             if not isinstance(entry, dict):
@@ -66,7 +66,7 @@ class KissKHScraper(BaseScraper):
                     title=str(title),
                     provider_slug=self.provider_slug,
                     year=year_int,
-                    content_type="movie",
+                    content_type="series" if category == "tv-shows" else "movie",
                     source_url=str(url_path),
                     audio_languages=audio if isinstance(audio, list) else [str(audio)],
                     subtitle_languages=subs if isinstance(subs, list) else [str(subs)],
@@ -153,7 +153,7 @@ class HydraHDScraper(BaseScraper):
                         logger.info("HydraHD scraper: fetching %s", url)
                         resp_data = self.fetch_url(url, headers=self.HEADERS)
                         if resp_data and isinstance(resp_data, str):
-                            page_items = getattr(self, "parse_html", lambda x: [])(resp_data)
+                            page_items = getattr(self, "parse_html", lambda x, c: [])(resp_data, category)
                             if page_items:
                                 items.extend(page_items)
                                 break  # Break domain loop
@@ -172,9 +172,9 @@ class HydraHDScraper(BaseScraper):
                 if isinstance(resp_data, dict):
                     results = resp_data.get("results") or []
                     logger.info("HydraHD scraper: got %d results from JSON %s", len(results), url)
-                    return self.parse_items(results)
+                    return self.parse_items(results, category)
                 elif isinstance(resp_data, str):
-                    items = getattr(self, "parse_html", lambda x: [])(resp_data)
+                    items = getattr(self, "parse_html", lambda x, c: [])(resp_data, category)
                     logger.info("HydraHD scraper: got %d results from HTML %s", len(items), url)
                     if items:
                         return items
@@ -182,7 +182,7 @@ class HydraHDScraper(BaseScraper):
         logger.warning("HydraHD scraper: all URLs failed")
         return []
 
-    def parse_items(self, raw_data: Any) -> list[ScrapedItem]:
+    def parse_items(self, raw_data: Any, category: str = "movies") -> list[ScrapedItem]:
         items: list[ScrapedItem] = []
         for entry in raw_data or []:
             if not isinstance(entry, dict):
@@ -206,6 +206,7 @@ class HydraHDScraper(BaseScraper):
                     title=str(title),
                     provider_slug=self.provider_slug,
                     year=year_int,
+                    content_type="series" if category == "tv-shows" else "movie",
                     source_url=str(source_url),
                     audio_languages=audio if isinstance(audio, list) else [str(audio)],
                     subtitle_languages=subs if isinstance(subs, list) else [str(subs)],
@@ -217,7 +218,7 @@ class HydraHDScraper(BaseScraper):
         return items
 
 
-    def parse_html(self, html_content: str) -> list[ScrapedItem]:
+    def parse_html(self, html_content: str, category: str = "movies") -> list[ScrapedItem]:
         import re
         items: list[ScrapedItem] = []
         pattern = re.compile(
@@ -237,6 +238,7 @@ class HydraHDScraper(BaseScraper):
                     title=title.strip(),
                     provider_slug=self.provider_slug,
                     year=year_int,
+                    content_type="series" if category == "tv-shows" else "movie",
                     source_url=source_url,
                     audio_languages=["EN"],
                     subtitle_languages=[], 
@@ -285,7 +287,7 @@ class AnimeWorldScraper(BaseScraper):
         logger.warning("AnimeWorld scraper: unexpected response type: %s", type(resp_data))
         return []
 
-    def parse_html(self, html_content: str) -> list[ScrapedItem]:
+    def parse_html(self, html_content: str, category: str = "movies") -> list[ScrapedItem]:
         """Parse HTML response containing anime items."""
         import re
         items: list[ScrapedItem] = []
@@ -318,6 +320,7 @@ class AnimeWorldScraper(BaseScraper):
                     title=title.strip(),
                     provider_slug=self.provider_slug,
                     year=year_int,
+                    content_type="series" if category == "tv-shows" else "movie",
                     source_url=source_url,
                     audio_languages=["JA"],  # Default for anime
                     subtitle_languages=["EN", "IT"],  # AnimeWorld is Italian site with subs
@@ -330,7 +333,7 @@ class AnimeWorldScraper(BaseScraper):
         logger.info("AnimeWorld scraper: parsed %d items", len(items))
         return items
 
-    def parse_items(self, raw_data: Any) -> list[ScrapedItem]:
+    def parse_items(self, raw_data: Any, category: str = "movies") -> list[ScrapedItem]:
         """Legacy method kept for compatibility. New implementation uses parse_html."""
         logger.warning("AnimeWorld parse_items called with legacy format")
         items: list[ScrapedItem] = []
@@ -355,6 +358,7 @@ class AnimeWorldScraper(BaseScraper):
                     title=str(title),
                     provider_slug=self.provider_slug,
                     year=year_int,
+                    content_type="series" if category == "tv-shows" else "movie",
                     source_url=str(source_url),
                     audio_languages=audio if isinstance(audio, list) else [str(audio)],
                     subtitle_languages=subs if isinstance(subs, list) else [str(subs)],
