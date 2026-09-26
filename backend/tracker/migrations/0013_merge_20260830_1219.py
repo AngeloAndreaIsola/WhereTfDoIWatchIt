@@ -6,8 +6,8 @@ from django.db import migrations
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('tracker', '0011_availability_price_info_and_more'),
-        ('tracker', '0012_v2_unofficial_sources'),
+        ("tracker", "0011_seed_free_streaming_providers"),
+        ("tracker", "0012_v2_unofficial_sources"),
     ]
 
     operations = [

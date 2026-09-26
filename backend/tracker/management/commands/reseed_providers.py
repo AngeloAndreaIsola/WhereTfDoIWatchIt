@@ -10,7 +10,7 @@ Replays the canonical provider inserts from migrations/commands:
 
 Safe to run multiple times — uses get_or_create and preserves existing rows.
 """
-from tracker.models import Provider, ProviderCategory, ExternalProviderMapping
+from tracker.models import Provider, ProviderCategory  # , ExternalProviderMapping
 
 MAJOR_PROVIDERS = [
     {"slug": "prime", "name": "Prime Video", "icon": "prime", "sa_id": "prime"},
@@ -87,11 +87,11 @@ for m in MAJOR_PROVIDERS:
         "is_enabled": True,
         "icon_name": m["icon"],
     })
-    ExternalProviderMapping.objects.get_or_create(
-        provider=p,
-        integration_name="streaming_availability",
-        defaults={"external_id": m["sa_id"]},
-    )
+    # ExternalProviderMapping.objects.get_or_create(
+    #     provider=p,
+    #     integration_name="streaming_availability",
+    #     defaults={"external_id": m["sa_id"]},
+    # )
 
 for f in FREE_PROVIDERS:
     upsert(f["slug"], {

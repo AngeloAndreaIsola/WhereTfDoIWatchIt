@@ -83,21 +83,35 @@ class WatchabilityResult:
 
 
 def get_user_subscriptions(user_id: int = 1) -> set[str]:
-    """Return set of normalized provider slugs and subscription names for user."""
-    subs = list(Subscription.objects.filter(user_id=user_id).values_list("provider__slug", "name"))
-    subscribed = set()
-    for slug, name in subs:
+    """Return set of normalized provider slugs and subscription names for user.
+
+    SVOD/major/avod/tvod/fast providers are only considered subscribed if an
+    explicit Subscription record exists for the user.  BVOD and scraper
+    providers are "always available" by default (free public broadcasters and
+    imported scraper sources), but an explicit Subscription record still takes
+    priority: if the user has unsubscribed from a BVOD/scraper provider that
+    subscription is honored and the provider is NOT added to the auto set.
+    """
+    subs = list(Subscription.objects.filter(user_id=user_id).values_list(
+        "provider__slug", "provider__category", "name"
+    ))
+    subscribed: set[str] = set()
+    for slug, category, name in subs:
         if slug:
             subscribed.add(slug.lower().strip())
         if name:
             subscribed.add(name.lower().strip())
 
-    # BVOD and scraper providers auto-count as available sources
-    free_or_scrapers = Provider.objects.filter(
+    # BVOD and scraper providers auto-count as available sources by default,
+    # UNLESS the user has an explicit Subscription record for that provider
+    # (in which case the explicit record above already handled it).
+    auto_bvod_scrapers = Provider.objects.filter(
         category__in=["bvod", "scraper"], is_enabled=True
     ).values_list("slug", flat=True)
-    for s in free_or_scrapers:
-        subscribed.add(s.lower().strip())
+    for s in auto_bvod_scrapers:
+        s_norm = s.lower().strip()
+        if s_norm not in subscribed:
+            subscribed.add(s_norm)
 
     return subscribed
 

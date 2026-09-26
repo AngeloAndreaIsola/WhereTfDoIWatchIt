@@ -1,4 +1,4 @@
-"""v2 unofficial sources — add Provider.config, Provider.country_code, ScrapedContentMapping.country_code/is_available/last_scraped_at, Unofficial category
+"""v2 unofficial sources — add Provider.config, Provider.country_code, Unofficial category
 
 Also seeds the priority scraper providers (RaiPlay, BBC, NHK) so the v2/unofficial
 endpoints and the catalog UI have sources to work with out of the box.
@@ -52,33 +52,6 @@ class Migration(migrations.Migration):
                 default="",
                 help_text="Primary country for this provider, if region-specific.",
                 max_length=2,
-            ),
-        ),
-        migrations.AddField(
-            model_name="scrapedcontentmapping",
-            name="country_code",
-            field=models.CharField(
-                blank=True,
-                default="",
-                help_text="Country this scrape result applies to.",
-                max_length=2,
-            ),
-        ),
-        migrations.AddField(
-            model_name="scrapedcontentmapping",
-            name="is_available",
-            field=models.BooleanField(
-                default=True,
-                help_text="Whether the title is currently available on this source.",
-            ),
-        ),
-        migrations.AddField(
-            model_name="scrapedcontentmapping",
-            name="last_scraped_at",
-            field=models.DateTimeField(
-                blank=True,
-                help_text="When the source page was last scraped; null = never or unknown.",
-                null=True,
             ),
         ),
         migrations.AlterField(

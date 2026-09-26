@@ -1,0 +1,111 @@
+  1: def prime_series(request, tmdb_id: int):
+  2:     """Return ranked, cached availability for a TV series."""
+  3:     try:
+  4:         movie = Movie.objects.get(tmdb_id=tmdb_id)
+  5:         # If movie exists but is marked as movie type, try to correct it to series
+  6:         if movie.content_type == "movie":
+  7:             try:
+  8:                 client = TMDbClient(settings.TMDB_API_KEY)
+  9:                 details = client.details(tmdb_id, content_type="series")
+ 10:                 # Update the movie record to series type with fresh data from TMDb
+ 11:                 import requests
+ 12:                 params, headers = client._auth()
+ 13:                 tv_url = f"https://api.themoviedb.org/3/tv/{tmdb_id}"
+ 14:                 tv_resp = requests.get(tv_url, params=params, headers=headers, timeout=client.timeout)
+ 15:                 tv_data = tv_resp.json() if tv_resp.ok else {}
+ 16:                 first_air_date = tv_data.get("first_air_date", "")
+ 17:                 
+ 18:                 movie.content_type = "series"
+ 19:                 movie.title = details.title
+ 20:                 movie.year = details.year
+ 21:                 movie.poster_path = details.poster_path or ""
+ 22:                 movie.overview = details.overview or ""
+ 23:                 movie.genre_ids = details.genre_ids or []
+ 24:                 movie.tmdb_rating = details.rating
+ 25:                 movie.first_air_date = first_air_date
+ 26:                 movie.save()
+ 27:             except Exception as exc:
+ 28:                 logger.warning(f"Could not update movie {tmdb_id} to series type: {exc}")
+ 29:     except Movie.DoesNotExist:
+ 30:         # Auto-fetch from TMDb if not tracked yet
+ 31:         try:
+ 32:             client = TMDbClient(settings.TMDB_API_KEY)
+ 33:             details = client.details(tmdb_id, content_type="series")
+ 34:             if details.content_type != "series":
+ 35:                 return Response({"error": "Item is not a TV series"}, status=400)
+ 36:             
+ 37:             # Fetch first_air_date directly from TMDb API for series
+ 38:             import requests
+ 39:             params, headers = client._auth()
+ 40:             tv_url = f"https://api.themoviedb.org/3/tv/{tmdb_id}"
+ 41:             tv_resp = requests.get(tv_url, params=params, headers=headers, timeout=client.timeout)
+ 42:             tv_data = tv_resp.json() if tv_resp.ok else {}
+ 43:             first_air_date = tv_data.get("first_air_date", "")
+ 44:             
+ 45:             movie = Movie.objects.create(
+ 46:                 tmdb_id=details.tmdb_id,
+ 47:                 title=details.title,
+ 48:                 year=details.year,
+ 49:                 content_type="series",
+ 50:                 poster_path=details.poster_path or "",
+ 51:                 overview=details.overview or "",
+ 52:                 genre_ids=details.genre_ids or [],
+ 53:                 tmdb_rating=details.rating,
+ 54:                 first_air_date=first_air_date,
+ 55:             )
+ 56:         except Exception as exc:
+ 57:             logger.exception(f"Failed to fetch TV series {tmdb_id} from TMDb")
+ 58:             return Response({"error": f"TV series not found: {exc}"}, status=404)
+ 59:             return Response({"error": f"TV series not found: {exc}"}, status=404)
+ 60: 
+ 61:     if movie.content_type != "series":
+ 62:         return Response({"error": "Item is not a TV series"}, status=400)
+ 63: 
+ 64:     preference = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
+ 65: 
+ 66:     try:
+ 67:         cache = AvailabilityCache()
+ 68:         status_obj = cache.get_or_refresh(movie)
+ 69:         offers = cache.read_offers(movie)
+ 70:         ranked = rank_offers(offers, preference)
+ 71:     except RateLimitExceeded as exc:
+ 72:         return Response({"error": str(exc), "rate_limited": True}, status=429)
+ 73:     except Exception as exc:
+ 74:         # If streaming API doesn't have data yet, return empty offers
+ 75:         logger.warning(f"Could not fetch availability for series {tmdb_id}: {exc}")
+ 76:         status_obj = None
+ 77:         offers = []
+ 78:         ranked = []
+ 79: 
+ 80:     provider_map_full = {p.slug: p for p in Provider.objects.all()}
+ 81: 
+ 82:     ranked_dicts: list[dict] = []
+ 83:     for offer in ranked:
+ 84:         presented = present_offer(offer, provider_map_full)
+ 85:         d = offer.to_dict()
+ 86:         d["service"] = presented.service_display
+ 87:         d["source_indicator"] = presented.source_indicator
+ 88:         d["country"] = presented.country
+ 89:         ranked_dicts.append(d)
+ 90: 
+ 91:     user_data = UserMovieData.objects.filter(user_id=1, movie=movie).first()
+ 92:     is_in_watchlist = WatchlistItem.objects.filter(user_id=1, movie=movie).exists()
+ 93:     watch_events = MovieWatchEvent.objects.filter(user_id=1, movie=movie).order_by("-watched_date", "-created_at")
+ 94: 
+ 95:     return Response(
+ 96:         {
+ 97:             "series": {"tmdb_id": movie.tmdb_id, "title": movie.title, "year": movie.year, "poster_path": movie.poster_path, "first_air_date": movie.first_air_date, "rating": movie.tmdb_rating},
+ 98:             "user_data": UserMovieDataSerializer(user_data).data if user_data else None,
+ 99:             "is_in_watchlist": is_in_watchlist,
+100:             "watch_events": MovieWatchEventSerializer(watch_events, many=True).data,
+101:             "cache": {
+102:                 "refreshed": status_obj.refreshed if status_obj else False,
+103:                 "reason": status_obj.reason if status_obj else "no_data",
+104:                 "offers": status_obj.offers_written if status_obj else 0,
+105:             },
+106:             "offers": ranked_dicts,
+107:         }
+108:     )
+109: 
+110: 
+111: @api_view(["GET"])

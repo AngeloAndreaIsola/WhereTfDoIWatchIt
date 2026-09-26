@@ -8,15 +8,18 @@ from django.shortcuts import render
 from .models import (
     ApiCallCounter,
     Availability,
+    ExternalProviderMapping,
     LanguageEntry,
     LanguageInfo,
     Movie,
+    MovieWatchEvent,
     Preference,
     Provider,
     RefreshRun,
     Region,
     ScrapedContentMapping,
     Subscription,
+    UserMovieData,
     WatchlistItem,
 )
 
@@ -24,7 +27,14 @@ from .models import (
 class LanguageEntryInline(admin.TabularInline):
     model = LanguageEntry
     extra = 1
-    help_text = "Language code must be a canonical 2-letter uppercase ISO code (e.g. 'EN', 'JA', 'ES')."
+
+
+def movie_title(obj):
+    return obj.movie.title if obj.movie else "—"
+
+
+def region_provider_country(obj):
+    return str(obj.region) if obj.region else "—"
 
 
 @admin.register(LanguageInfo)
@@ -47,20 +57,40 @@ class LanguageInfoAdmin(admin.ModelAdmin):
 
 @admin.register(Movie)
 class MovieAdmin(admin.ModelAdmin):
-    list_display = ("id", "tmdb_id", "title", "year", "content_type", "tmdb_rating", "has_poster")
+    list_display = (
+        "tmdb_id",
+        "title",
+        "year",
+        "content_type",
+        "tmdb_rating",
+        "has_poster",
+    )
     list_filter = ("content_type",)
     search_fields = ("title", "tmdb_id")
     readonly_fields = ("id",)
     fieldsets = (
         ("Basic", {"fields": ("tmdb_id", "title", "year", "content_type")}),
         ("Media", {"fields": ("poster_path", "overview")}),
-        ("Metadata", {"fields": ("genres", "genre_ids", "cast", "seasons_data", "runtime_minutes", "tmdb_rating")}),
+        (
+            "Metadata",
+            {
+                "fields": (
+                    "genres",
+                    "genre_ids",
+                    "cast",
+                    "seasons_data",
+                    "runtime_minutes",
+                    "tmdb_rating",
+                )
+            },
+        ),
     )
 
+    @admin.display(description="poster")
     def has_poster(self, obj):
         return bool(obj.poster_path)
+
     has_poster.boolean = True
-    has_poster.short_description = "poster"
 
     def get_urls(self):
         urls = super().get_urls()
@@ -118,14 +148,16 @@ class MovieAdmin(admin.ModelAdmin):
                     except Exception as exc:
                         error = f"TMDb search failed: {exc}"
 
-        context.update({
-            "title": "Link TMDB Movie" if not movie else f"Link TMDB for '{movie}'",
-            "movie": movie,
-            "results": results,
-            "linked": linked,
-            "error": error,
-            "opts": self.model._meta,
-        })
+        context.update(
+            {
+                "title": "Link TMDB Movie" if not movie else f"Link TMDB for '{movie}'",
+                "movie": movie,
+                "results": results,
+                "linked": linked,
+                "error": error,
+                "opts": self.model._meta,
+            }
+        )
         return render(request, "admin/tracker/movie/link_tmdb.html", context)
 
 
@@ -138,39 +170,71 @@ class RegionAdmin(admin.ModelAdmin):
 
 @admin.register(Provider)
 class ProviderAdmin(admin.ModelAdmin):
-    list_display = ("name", "slug", "category", "is_enabled", "is_major", "source_indicator", "last_scraped_at")
+    list_display = (
+        "name",
+        "slug",
+        "category",
+        "is_enabled",
+        "is_major",
+        "source_indicator",
+        "last_scraped_at",
+    )
     list_filter = ("category", "is_enabled", "is_major")
     search_fields = ("name", "slug", "domain")
 
 
 @admin.register(Availability)
 class AvailabilityAdmin(admin.ModelAdmin):
-    list_display = ("movie", "region", "is_available", "offer_type", "last_checked_at")
+    list_display = (
+        "movie",
+        "region",
+        "is_available",
+        "offer_type",
+        "last_checked_at",
+    )
     list_filter = ("offer_type", "is_available")
     search_fields = ("movie__title",)
 
 
 @admin.register(Subscription)
 class SubscriptionAdmin(admin.ModelAdmin):
-    list_display = ("name", "user_id")
+    list_display = ("name", "provider", "user_id")
+    list_filter = ("provider__category", "provider__slug")
     search_fields = ("name",)
+    raw_id_fields = ("provider",)
+
+    @admin.display(description="Provider")
+    def get_provider_display(self, obj):
+        return obj.provider.name if obj.provider else "—"
 
 
 @admin.register(Preference)
 class PreferenceAdmin(admin.ModelAdmin):
-    list_display = ("user_id", "audio_languages", "subtitle_languages", "candidate_countries")
+    list_display = (
+        "user_id",
+        "audio_languages",
+        "subtitle_languages",
+        "candidate_countries",
+        "current_country",
+    )
+    search_fields = ("user_id",)
 
     def formfield_for_dbfield(self, db_field, **kwargs):
         field = super().formfield_for_dbfield(db_field, **kwargs)
         if isinstance(db_field, ArrayField):
-            field.help_text = "Comma-separated canonical 2-letter uppercase codes (e.g. EN, DE, FR), first = highest priority."
+            field.help_text = (
+                "Comma-separated canonical 2-letter uppercase codes "
+                "(e.g. EN, DE, FR), first = highest priority."
+            )
         return field
 
 
 @admin.register(WatchlistItem)
 class WatchlistItemAdmin(admin.ModelAdmin):
-    list_display = ("movie", "source", "added_at")
+    list_display = ("movie", "source", "added_at", "watched", "rating")
+    list_filter = ("source", "watched")
     search_fields = ("movie__title",)
+    readonly_fields = ("added_at",)
 
 
 @admin.register(ApiCallCounter)
@@ -201,6 +265,48 @@ class RefreshRunAdmin(admin.ModelAdmin):
 
 @admin.register(ScrapedContentMapping)
 class ScrapedContentMappingAdmin(admin.ModelAdmin):
-    list_display = ("scraped_title", "scraped_year", "provider", "movie", "is_confirmed", "confidence_score", "is_available")
-    list_filter = ("provider__category", "provider__slug", "is_confirmed", "is_available")
+    list_display = (
+        "scraped_title",
+        "scraped_year",
+        "provider",
+        "movie",
+        "is_confirmed",
+        "confidence_score",
+    )
+    list_filter = (
+        "provider__category",
+        "provider__slug",
+        "is_confirmed",
+    )
     search_fields = ("scraped_title", "movie__title")
+
+
+@admin.register(ExternalProviderMapping)
+class ExternalProviderMappingAdmin(admin.ModelAdmin):
+    list_display = ("provider", "integration_name", "external_id")
+    list_filter = ("integration_name", "provider__category")
+    search_fields = ("provider__name", "external_id")
+
+
+@admin.register(MovieWatchEvent)
+class MovieWatchEventAdmin(admin.ModelAdmin):
+    list_display = (
+        "movie",
+        "user_id",
+        "watched_date",
+        "rating",
+        "rewatch",
+        "letterboxd_uri",
+        "created_at",
+    )
+    list_filter = ("watched_date", "rewatch")
+    search_fields = ("movie__title", "letterboxd_uri")
+    raw_id_fields = ("movie",)
+
+
+@admin.register(UserMovieData)
+class UserMovieDataAdmin(admin.ModelAdmin):
+    list_display = ("movie", "user_id", "is_watched", "rating")
+    list_filter = ("is_watched",)
+    search_fields = ("movie__title",)
+    raw_id_fields = ("movie",)

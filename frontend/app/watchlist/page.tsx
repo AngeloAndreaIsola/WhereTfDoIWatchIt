@@ -8,6 +8,7 @@ import { FilterBar, FilterState } from "@/components/FilterBar";
 import { useCurrentLocation } from "@/components/CurrentLocationProvider";
 import { VpnWatchModal } from "@/components/VpnWatchModal";
 import { WhyCantIWatchModal, ExcludedOffer } from "@/components/WhyCantIWatchModal";
+import { PrimeOffer } from "@/lib/api";
 import { Pagination } from "@/components/Pagination";
 import {
   GoogleInterestsImportResult,
@@ -50,6 +51,7 @@ interface WatchlistItemRow {
     };
     explanation?: string[];
     excluded_offers?: ExcludedOffer[];
+    all_offers?: PrimeOffer[];
   };
 }
 

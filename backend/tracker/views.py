@@ -15,7 +15,7 @@ from rest_framework.response import Response
 from .languages import normalize_language_code
 from .models import (
     Availability,
-    ExternalProviderMapping,
+    # ExternalProviderMapping,
     LanguageEntry,
     LanguageInfo,
     Movie,
@@ -70,6 +70,7 @@ def paginate_list(items: list, page: int, page_size: int) -> tuple[list, dict]:
 from .services.bulk_refresh import process_watchlist_refresh
 from .services.cache import AvailabilityCache
 from .services.letterboxd import import_rows, parse_file_or_zip
+from .services.presentation import present_offer
 from .services.ranking import rank_offers
 from .services.preferences import resolve_preferences
 from .services.rate_limit import RateLimitExceeded
@@ -293,13 +294,15 @@ def unified_catalog(request):
                 "watchability": watch_res.to_dict(),
                 "unofficial_details": None,
                 "watch_url": watch_url,
+                "best_service": best_service,
+                "best_country": best_country,
             })
 
     # 2. Fetch Scraper Content Mappings
     if include_scraper:
         qs = ScrapedContentMapping.objects.select_related("provider", "movie").filter(
             provider__is_enabled=True,
-            is_available=True,
+            is_confirmed=True,
         )
 
         # Apply provider filtering
@@ -528,7 +531,14 @@ def prime_series(request, tmdb_id: int):
         cache = AvailabilityCache()
         status_obj = cache.get_or_refresh(movie)
         offers = cache.read_offers(movie)
-        ranked = rank_offers(offers, preference)
+        # Filter offers by subscription status (same logic as watchlist report)
+        user_subs = get_user_subscriptions(user_id=1)
+        filtered_offers = [
+            offer for offer in offers
+            if (offer.service or "").lower().strip() in user_subs
+            or any(sub in (offer.service or "").lower() for sub in user_subs if len(sub) >= 3)
+        ]
+        ranked = rank_offers(filtered_offers, preference, current_country=current_country)
     except RateLimitExceeded as exc:
         return Response({"error": str(exc), "rate_limited": True}, status=429)
     except Exception as exc:
@@ -537,6 +547,17 @@ def prime_series(request, tmdb_id: int):
         status_obj = None
         offers = []
         ranked = []
+
+    provider_map_full = {p.slug: p for p in Provider.objects.all()}
+
+    ranked_dicts: list[dict] = []
+    for offer in ranked:
+        presented = present_offer(offer, provider_map_full)
+        d = offer.to_dict()
+        d["service"] = presented.service_display
+        d["source_indicator"] = presented.source_indicator
+        d["country"] = presented.country
+        ranked_dicts.append(d)
 
     user_data = UserMovieData.objects.filter(user_id=1, movie=movie).first()
     is_in_watchlist = WatchlistItem.objects.filter(user_id=1, movie=movie).exists()
@@ -553,7 +574,7 @@ def prime_series(request, tmdb_id: int):
                 "reason": status_obj.reason if status_obj else "no_data",
                 "offers": status_obj.offers_written if status_obj else 0,
             },
-            "offers": RankedOfferSerializer([offer.to_dict() for offer in ranked], many=True).data,
+            "offers": ranked_dicts,
         }
     )
 
@@ -767,7 +788,7 @@ def scraper_run(request):
             defaults={
                 "scraped_url": item.source_url,
                 "raw_payload": item.raw_payload,
-                "is_available": item.availability,
+                "is_confirmed": item.availability,
             },
         )
 
@@ -1482,7 +1503,7 @@ def prime_movie(request, tmdb_id: int):
     bvod_categories = ["bvod", "avod", "tvod", "fast"]
     scraped = ScrapedContentMapping.objects.filter(
         movie=movie,
-        is_available=True,
+        is_confirmed=True,
         provider__category__in=bvod_categories,
         provider__is_enabled=True,
     ).select_related("provider")

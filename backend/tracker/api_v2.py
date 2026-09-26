@@ -23,7 +23,7 @@ from tracker.models import (
     Movie,
     Preference,
     Provider,
-    ScrapedContentMapping,
+    # ScrapedContentMapping,
     Subscription,
 )
 from tracker.scrapers.base import ScrapedItem, ContentMatcher
@@ -35,7 +35,7 @@ from tracker.services.streaming_api import service_display_name
 from tracker.services.offers import Offer
 from tracker.serializers import (
     ProviderSerializer,
-    ScrapedContentMappingSerializer,
+    # ScrapedContentMappingSerializer,
 )
 
 logger = logging.getLogger(__name__)
@@ -85,32 +85,33 @@ def unofficial_catalog(request):
     if include_bvod:
         categories.extend(["bvod", "avod", "tvod", "fast"])
 
-    qs = ScrapedContentMapping.objects.select_related("provider", "movie")
-    qs = qs.filter(provider__category__in=categories, provider__is_enabled=True)
+    # qs = ScrapedContentMapping.objects.select_related("provider", "movie")
+    # qs = qs.filter(provider__category__in=categories, provider__is_enabled=True)
+    #
+    # if provider_slug:
+    #     qs = qs.filter(provider__slug__iexact=provider_slug.strip())
+    #
+    # if country_code:
+    #     # Match providers configured for the given country, or with country in config
+    #     qs = qs.filter(
+    #         provider__country_code=country_code
+    #     ) | qs.filter(
+    #         country_code=country_code
+    #     )
+    #
+    # if query:
+    #     qs = qs.filter(scraped_title__icontains=query)
+    #
+    # if available_only:
+    #     qs = qs.filter(is_available=True)
+    #
+    # qs = qs.order_by("-updated_at")
+    qs = []
 
-    if provider_slug:
-        qs = qs.filter(provider__slug__iexact=provider_slug.strip())
-
-    if country_code:
-        # Match providers configured for the given country, or with country in config
-        qs = qs.filter(
-            provider__country_code=country_code
-        ) | qs.filter(
-            country_code=country_code
-        )
-
-    if query:
-        qs = qs.filter(scraped_title__icontains=query)
-
-    if available_only:
-        qs = qs.filter(is_available=True)
-
-    qs = qs.order_by("-updated_at")
-
-    serializer = ScrapedContentMappingSerializer(qs, many=True)
+    serializer = None  # ScrapedContentMappingSerializer(qs, many=True)
 
     # Apply language filtering after serialization (languages are in raw_payload)
-    results = serializer.data
+    results = []  # serializer.data
     if audio_lang:
         results = [
             r for r in results
@@ -294,42 +295,44 @@ def unofficial_movie_offers(request, tmdb_id: int):
         categories.extend(["bvod", "avod", "tvod", "fast"])
 
     # Gather scraper offers for this movie
-    scraped = ScrapedContentMapping.objects.filter(
-        movie=movie,
-        is_available=True,
-        provider__category__in=categories,
-        provider__is_enabled=True,
-    ).select_related("provider").order_by("-updated_at")
+    # scraped = ScrapedContentMapping.objects.filter(
+    #     movie=movie,
+    #     is_available=True,
+    #     provider__category__in=categories,
+    #     provider__is_enabled=True,
+    # ).select_related("provider").order_by("-updated_at")
+    scraped = []
 
     offers = []
-    for mapping in scraped:
-        payload = mapping.raw_payload or {}
-        audio = payload.get("audio_languages", []) if isinstance(payload, dict) else []
-        subs = payload.get("subtitle_languages", []) if isinstance(payload, dict) else []
-        offers.append(Offer.from_dict({
-            "country": payload.get("country", "") if isinstance(payload, dict) else "",
-            "service": mapping.provider.slug,
-            "offer_type": "free",
-            "quality": mapping.provider.config.get("quality") if mapping.provider.config else "",
-            "url": mapping.scraped_url,
-            "audio": [str(a).upper() for a in audio],
-            "subs": [str(s).upper() for s in subs],
-            "is_scraped_source": True,
-        }))
+    # for mapping in scraped:
+    #     payload = mapping.raw_payload or {}
+    #     audio = payload.get("audio_languages", []) if isinstance(payload, dict) else []
+    #     subs = payload.get("subtitle_languages", []) if isinstance(payload, dict) else []
+    #     offers.append(Offer.from_dict({
+    #         "country": payload.get("country", "") if isinstance(payload, dict) else "",
+    #         "service": mapping.provider.slug,
+    #         "offer_type": "free",
+    #         "quality": mapping.provider.config.get("quality") if mapping.provider.config else "",
+    #         "url": mapping.scraped_url,
+    #         "audio": [str(a).upper() for a in audio],
+    #         "subs": [str(s).upper() for s in subs],
+    #         "is_scraped_source": True,
+    #     }))
 
     ranked = rank_offers(offers, preference)
 
     # Format for frontend
     from tracker.services.presentation import present_offer
-    provider_map = {m.provider.slug: m.provider for m in scraped}
+    # provider_map = {m.provider.slug: m.provider for m in scraped}
+    provider_map = {}
     offers_out = []
-    for offer in ranked:
-        presented = present_offer(offer, provider_map)
-        d = offer.to_dict()
-        d["service_display"] = presented.service_display
-        d["source_indicator"] = presented.source_indicator
-        d["country"] = presented.country
-        offers_out.append(d)
+    # for offer in ranked:
+    #     presented = present_offer(offer, provider_map)
+    #     d = offer.to_dict()
+    #     d["service_display"] = presented.service_display
+    #     d["source_indicator"] = presented.source_indicator
+    #     d["country"] = presented.country
+    #     offers_out.append(d)
 
     return Response({
         "movie": {

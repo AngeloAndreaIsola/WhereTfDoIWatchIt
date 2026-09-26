@@ -16,7 +16,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from tracker.languages import normalize_language_code
-from ..models import Availability, LanguageEntry, LanguageInfo, Movie, Region
+from ..models import Availability, LanguageEntry, LanguageInfo, Movie, Region, ScrapedContentMapping
 from .offers import Offer
 from .rate_limit import RateLimitExceeded, RateLimiter
 from .streaming_api import StreamingAvailabilityClient, StreamingResult
@@ -127,9 +127,12 @@ class AvailabilityCache:
 
     def read_offers(self, movie: Movie) -> list[Offer]:
         rows: list[Offer] = []
+        regions: list[Region] = []
         for avail in movie.availabilities.select_related("region").all():
+            region = avail.region
+            regions.append(region)
             info = (
-                LanguageInfo.objects.filter(movie=movie, region=avail.region)
+                LanguageInfo.objects.filter(movie=movie, region=region)
                 .prefetch_related("entries")
                 .first()
             )
@@ -144,30 +147,29 @@ class AvailabilityCache:
                         subs.append(norm)
             rows.append(
                 Offer(
-                    country=avail.region.country,
-                    service=avail.region.provider,
-                    offer_type=avail.offer_type,
-                    quality=avail.quality,
-                    url=avail.url,
+                    country=region.country,
+                    service=region.provider,
+                    offer_type=avail.offer_type or "free",
+                    quality=avail.quality or "",
+                    url=avail.url or "",
                     audio_languages=audio,
                     subtitle_languages=subs,
                 )
             )
 
-        from tracker.models import ScrapedContentMapping
-
         scraped_mappings = ScrapedContentMapping.objects.filter(
             movie=movie,
-            is_available=True,
+            is_confirmed=True,
         ).select_related("provider")
 
         for mapping in scraped_mappings:
             payload = mapping.raw_payload or {}
             audio = payload.get("audio_languages", []) if isinstance(payload, dict) else []
             subs = payload.get("subtitle_languages", []) if isinstance(payload, dict) else []
+            first_region = regions[0] if regions else None
             rows.append(
                 Offer(
-                    country=payload.get("country", "") if isinstance(payload, dict) else (mapping.country_code or ""),
+                    country=payload.get("country", "") if isinstance(payload, dict) else (first_region.country if first_region else ""),
                     service=mapping.provider.slug,
                     offer_type="free",
                     quality=mapping.provider.config.get("quality", "") if mapping.provider.config else "",

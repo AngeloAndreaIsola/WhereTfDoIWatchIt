@@ -10,7 +10,7 @@ from typing import Any, Optional, Sequence
 from django.conf import settings
 
 from tracker.languages import normalize_language_code
-from tracker.models import Movie, Provider, ScrapedContentMapping
+from tracker.models import Movie, Provider  # , ScrapedContentMapping
 from tracker.services.tmdb import TMDbClient, TMDbMovie
 
 logger = logging.getLogger(__name__)
@@ -143,14 +143,15 @@ class ContentMatcher:
             return None, 0.0, [], False
 
         # 1. Check existing ScrapedContentMapping in database
-        existing = ScrapedContentMapping.objects.filter(
-            provider=provider,
-            scraped_title__iexact=item.title,
-            scraped_year=item.year,
-        ).first()
-
-        if existing and existing.movie:
-            return existing.movie, existing.confidence_score, [], existing.is_confirmed
+        # existing = ScrapedContentMapping.objects.filter(
+        #     provider=provider,
+        #     scraped_title__iexact=item.title,
+        #     scraped_year=item.year,
+        # ).first()
+        #
+        # if existing and existing.movie:
+        #     return existing.movie, existing.confidence_score, [], existing.is_confirmed
+        existing = None
 
         # Check local DB Movie table before external API
         exact_movie = Movie.objects.filter(title__iexact=item.title, year=item.year).first()
@@ -210,41 +211,7 @@ class ContentMatcher:
     @staticmethod
     def _upsert_mapping(provider, item, movie=None, confidence=0.0):
         """Safely update-or-create a ScrapedContentMapping, deduping on conflict."""
-        try:
-            ScrapedContentMapping.objects.update_or_create(
-                provider=provider,
-                scraped_title=item.title,
-                scraped_year=item.year,
-                defaults={
-                    "scraped_url": item.source_url,
-                    "movie": movie,
-                    "is_confirmed": False,
-                    "confidence_score": confidence,
-                    "raw_payload": item.raw_payload,
-                },
-            )
-        except ScrapedContentMapping.MultipleObjectsReturned:
-            ScrapedContentMapping.objects.filter(
-                provider=provider,
-                scraped_title=item.title,
-                scraped_year=item.year,
-            ).exclude(id=ScrapedContentMapping.objects.filter(
-                provider=provider,
-                scraped_title=item.title,
-                scraped_year=item.year,
-            ).values_list('id', flat=True).first()).delete()
-            ScrapedContentMapping.objects.update_or_create(
-                provider=provider,
-                scraped_title=item.title,
-                scraped_year=item.year,
-                defaults={
-                    "scraped_url": item.source_url,
-                    "movie": movie,
-                    "is_confirmed": False,
-                    "confidence_score": confidence,
-                    "raw_payload": item.raw_payload,
-                },
-            )
+        pass  # ScrapedContentMapping no longer needed
 
     @staticmethod
     def calculate_confidence(item: ScrapedItem, candidate: TMDbMovie) -> float:

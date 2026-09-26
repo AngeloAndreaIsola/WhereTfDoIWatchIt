@@ -25,7 +25,7 @@ from typing import Iterable, Optional
 
 from django.conf import settings
 
-from ..models import Movie, MovieWatchEvent, UserMovieData, WatchlistItem
+from ..models import Movie, WatchlistItem  # , MovieWatchEvent, UserMovieData
 from .tmdb import TMDbClient, TMDbMovie
 
 logger = logging.getLogger(__name__)
@@ -247,9 +247,9 @@ def import_rows(
             if m.year is not None:
                 local_movies_by_title_year[(m.title.lower().strip(), None)] = m
 
-    for umd in UserMovieData.objects.select_related("movie").filter(user_id=user_id):
-        if umd.letterboxd_uri:
-            local_movies_by_uri[umd.letterboxd_uri] = umd.movie
+    # for umd in UserMovieData.objects.select_related("movie").filter(user_id=user_id):
+    #     if umd.letterboxd_uri:
+    #         local_movies_by_uri[umd.letterboxd_uri] = umd.movie
 
     for row in rows:
         title_key = (row.title.lower().strip(), row.year)
@@ -322,46 +322,51 @@ def import_rows(
             result.resolved.append(item)
 
         # Update UserMovieData
-        user_data, _ = UserMovieData.objects.get_or_create(user_id=user_id, movie=movie)
-
-        if row.file_type in ("watched", "ratings", "reviews", "diary"):
-            user_data.is_watched = True
-            result.watched_count += 1
-
-        if row.rating is not None:
-            user_data.rating = row.rating
-            result.ratings_count += 1
-
-        if row.review:
-            user_data.review = row.review
-            result.reviews_count += 1
-
-        if row.uri:
-            user_data.letterboxd_uri = row.uri
-
-        user_data.save()
-
+        # user_data, _ = UserMovieData.objects.get_or_create(user_id=user_id, movie=movie)
+        #
+        # if row.file_type in ("watched", "ratings", "reviews", "diary"):
+        #     user_data.is_watched = True
+        #     result.watched_count += 1
+        #
+        # if row.rating is not None:
+        #     user_data.rating = row.rating
+        #     result.ratings_count += 1
+        #
+        # if row.review:
+        #     user_data.review = row.review
+        #     result.reviews_count += 1
+        #
+        # if row.uri:
+        #     user_data.letterboxd_uri = row.uri
+        #
+        # user_data.save()
+        #
         # Update MovieWatchEvent for diary entries
-        if row.file_type == "diary" or row.watched_date:
-            event, created_event = MovieWatchEvent.objects.get_or_create(
-                user_id=user_id,
-                movie=movie,
-                watched_date=row.watched_date,
-                letterboxd_uri=row.uri or "",
-                defaults={
-                    "rating": row.rating,
-                    "review": row.review or "",
-                    "rewatch": row.rewatch,
-                },
-            )
-            if not created_event:
-                if row.rating is not None:
-                    event.rating = row.rating
-                if row.review:
-                    event.review = row.review
-                event.rewatch = row.rewatch
-                event.save()
-            result.diary_events_count += 1
+        # if row.file_type == "diary" or row.watched_date:
+        #     event, created_event = MovieWatchEvent.objects.get_or_create(
+        #         user_id=user_id,
+        #         movie=movie,
+        #         watched_date=row.watched_date,
+        #     letterboxd_uri=row.uri or "",
+        #     defaults={
+        #         "rating": row.rating,
+        #         "review": row.review or "",
+        #         "rewatch": row.rewatch,
+        #     },
+        # )
+        # if not created_event:
+        #     if row.rating is not None:
+        #         event.rating = row.rating
+        #     },
+        # )
+        # if not created_event:
+        #     if row.rating is not None:
+        #         event.rating = row.rating
+        #     if row.review:
+        #         event.review = row.review
+        #     event.rewatch = row.rewatch
+        #     event.save()
+        # result.diary_events_count += 1
 
     return result
 
