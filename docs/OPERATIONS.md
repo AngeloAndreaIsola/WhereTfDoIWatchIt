@@ -105,3 +105,30 @@ Request shape:
   `skipped`; public Collections pages never need cookies.
 - Failure of one URL does not abort the others — each failure is reported in the
   `skipped` list as `fetch_failed: …`.
+
+### Cookies must come from `www.google.com`
+
+Google auth cookies (`SID`, `HSID`, `SSID`, `APISID`, `SAPISID`,
+`__Secure-1PSID`, …) are domain-scoped. Export them from
+DevTools → Application → Cookies → **`www.google.com`** only (the list URLs
+above are `www.google.com`). Merging cookies from other Google hosts
+(`google.nl`, `google.it`, `accounts.google.com`, …) produces a jar Google
+rejects: the request is bounced `accounts.google.com/ServiceLogin` → account
+chooser → a support article (`support.google.com/accounts/answer/32050`), which
+is no longer parsed as a list — it is reported as `fetch_failed: Google
+answered with a sign-in or help page …`.
+
+### Pagination, empty pages, and response time
+
+- Long lists are followed across every page automatically: the importer reads
+  Google's own counter (`1-200 of 256`) and requests `pageNumber=2`, `3`, … up
+  to `MAX_LIST_PAGES = 10`. Pass the list URL without a `pageNumber`, or with
+  `pageNumber=1` — both work.
+- A page that parses to zero rows is never silent: it adds a
+  `no_items_found: …` entry to `skipped` instead of returning `0/0/0`.
+- The import is synchronous and does one TMDb lookup per title (movie + TV), so
+  a 250-title list takes roughly 20–30 s. The Next.js proxy to Django defaults
+  to 30 s, which would cut the connection off mid-import (`Error: socket hang
+  up` in the frontend log); `experimental.proxyTimeout` in
+  `frontend/next.config.mjs` raises it to 180 s for exactly this reason. Keep
+  that setting if you add other bulk endpoints.

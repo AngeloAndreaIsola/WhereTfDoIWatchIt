@@ -39,9 +39,11 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from dataclasses import dataclass, field
+from html import unescape
 from typing import Iterable, Optional
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlencode, urlparse
 
 import requests
 from django.conf import settings
@@ -72,17 +74,71 @@ class GoogleInterestsImportResult:
 
 
 # ---------------------------------------------------------------------------
+# URL classification + errors
+# ---------------------------------------------------------------------------
+
+INTERESTS_PATH = "/interests/saved/list"
+COLLECTIONS_PATH = "/collections/s/list"
+
+# Google paginates long saved lists ("1-200 of 256") through a ``pageNumber``
+# query parameter.  Follow at most this many pages per list URL.
+MAX_LIST_PAGES = 10
+
+_PAGE_COUNTER_RE = re.compile(r"\b(\d+)-(\d+) of (\d+)\b")
+
+
+class GoogleAuthRequiredError(ValueError):
+    """Google served a sign-in / consent wall instead of the list page."""
+
+
+def url_kind(url: str) -> str:
+    """Classify a Google list URL as ``"interests"``, ``"collections"`` or ``"unknown"``.
+
+    ``urlparse().path`` never carries the host, so only the path fragment is
+    compared.  (An earlier version matched the *full* base URL — e.g.
+    ``https://www.google.com/interests/saved/list`` — against ``path``, which
+    never matched, so every URL fell through to the generic branch: Interests
+    pages were fetched without cookies and parsed with the wrong parser.)
+    """
+    path = urlparse(url or "").path or ""
+    if INTERESTS_PATH in path:
+        return "interests"
+    if COLLECTIONS_PATH in path:
+        return "collections"
+    return "unknown"
+
+
+# ---------------------------------------------------------------------------
 # HTML parsing
 # ---------------------------------------------------------------------------
 
-_TITLE_RE = re.compile(
-    r'<h3[^>]*class="[^"]*title[^"]*"[^>]*>.*?<a[^>]*href="[^"]*"[^>]*>(.*?)</a>',
-    re.DOTALL,
-)
-
 _YEAR_RE = re.compile(r'\b((?:19|20)\d{2})\b')
+_TRAILING_YEAR_RE = re.compile(r"\b((?:19|20)\d{2})\)?\s*$")
 
 _TAG_RE = re.compile(r'<[^>]+>')
+
+# Card markup shared by Interests and Collections lists (verified against live
+# Google HTML): each titled card renders one anchor per item.
+_ANCHOR_RE = re.compile(r"<a\b([^>]*?)>", re.DOTALL | re.IGNORECASE)
+_HREF_ATTR_RE = re.compile(r"""\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')""", re.IGNORECASE)
+_LABEL_ATTR_RE = re.compile(r"""\baria-label\s*=\s*(?:"([^"]*)"|'([^']*)')""", re.IGNORECASE)
+_HIDDEN_ATTR_RE = re.compile(r"""\baria-hidden\s*=\s*(?:"true"|'true')""", re.IGNORECASE)
+
+
+def _valid_year(value: Optional[int]) -> Optional[int]:
+    """Reject implausible years (e.g. ``2049`` scraped out of a title)."""
+    if value is None:
+        return None
+    if 1880 <= value <= time.gmtime().tm_year + 1:
+        return value
+    return None
+
+
+def _attr(pattern: re.Pattern, attrs: str) -> Optional[str]:
+    m = pattern.search(attrs)
+    if not m:
+        return None
+    return m.group(1) if m.group(1) is not None else m.group(2)
 
 
 def _strip_tags(html: str) -> str:
@@ -90,10 +146,26 @@ def _strip_tags(html: str) -> str:
 
 
 def _extract_year(text: str) -> Optional[int]:
-    m = _YEAR_RE.search(text)
+    m = _YEAR_RE.search(text or "")
     if m:
         try:
-            return int(m.group(1))
+            return _valid_year(int(m.group(1)))
+        except ValueError:
+            return None
+    return None
+
+
+def _extract_trailing_year(text: str) -> Optional[int]:
+    """Take a year only when it terminates the title (``Some Movie 1996``).
+
+    Trailing-only keeps titles such as ``2001: A Space Odyssey`` or
+    ``Blade Runner 2049`` from being read as a release year and pushed into
+    TMDb with a filter that can never match.
+    """
+    m = _TRAILING_YEAR_RE.search(text or "")
+    if m:
+        try:
+            return _valid_year(int(m.group(1)))
         except ValueError:
             return None
     return None
@@ -122,45 +194,97 @@ def _parse_interests_query(query_qs: str) -> tuple[str, Optional[int]]:
     return title, year
 
 
-def parse_interests_page(html: str, page_url: str) -> list[GoogleInterestRow]:
-    """Extract title/year pairs from a Google Interests saved-list HTML page."""
+def _is_placeholder(label: str) -> bool:
+    """True for untitled cards that Google renders with a URL as their label."""
+    lowered = (label or "").strip().lower()
+    if not lowered or lowered in ("q", "search"):
+        return True
+    return lowered.startswith("http") and "/search" in lowered
+
+
+def _parse_card_rows(html: str, page_url: str, source: str) -> list[GoogleInterestRow]:
+    """Extract titled cards from an Interests / Collections list page.
+
+    Each card renders as ``<a href="…/search?q=…" class="ir4l5" aria-label="Title">``.
+    An anchor is skipped when it is an image link (``aria-hidden``), carries no
+    ``aria-label``, or when Google failed to resolve the entry and used the raw
+    search URL as its label (such cards have no title anywhere).
+    """
     rows: list[GoogleInterestRow] = []
-    # Each interest card title usually lives inside an <h3> with a link.
-    for m in _TITLE_RE.finditer(html):
-        anchor_inner = m.group(1)
-        title = _strip_tags(anchor_inner)
-        if not title:
+    seen: set[tuple[str, Optional[int]]] = set()
+
+    for m in _ANCHOR_RE.finditer(html):
+        attrs = m.group(1)
+        if _HIDDEN_ATTR_RE.search(attrs):
             continue
-        year = _extract_year(anchor_inner)
+        href_raw = _attr(_HREF_ATTR_RE, attrs)
+        if not href_raw or "/search?" not in href_raw:
+            continue
+        label_raw = _attr(_LABEL_ATTR_RE, attrs)
+        if label_raw is None:
+            continue
+
+        href = unescape(href_raw)
+        label = unescape(label_raw).strip()
+        if _is_placeholder(label):
+            continue
+
+        q_value = ""
+        try:
+            qs = parse_qs(urlparse(href).query, keep_blank_values=True)
+            q_value = unquote(qs.get("q", [""])[0])
+        except Exception:
+            q_value = ""
+
+        title = label or q_value.splitlines()[0].strip()
+        if not title or _is_placeholder(title):
+            continue
+
+        _, year_from_q = _parse_interests_query(q_value)
+        year = year_from_q if year_from_q is not None else _extract_trailing_year(title)
+
+        key = (title.lower(), year)
+        if key in seen:
+            continue
+        seen.add(key)
+
         rows.append(
             GoogleInterestRow(
                 title=title,
                 year=year,
                 source_url=page_url,
-                source="google_interests",
+                source=source,
             )
         )
-    # Fallback: if the above didn't match (class names change), try a broader
-    # scan for <h3> title anchors inside the body.
-    if not rows:
-        body = re.search(r'<body[^>]*>(.*?)</body>', html, re.DOTALL)
-        if body:
-            for m in re.finditer(
-                r'<h3[^>]*>.*?<a[^>]+href="[^"]+"[^>]*>(.*?)</a>',
-                body.group(1),
-                re.DOTALL,
-            ):
-                title = _strip_tags(m.group(1))
-                if title:
-                    year = _extract_year(m.group(0))
-                    rows.append(
-                        GoogleInterestRow(
-                            title=title,
-                            year=year,
-                            source_url=page_url,
-                            source="google_interests",
-                        )
+
+    return rows
+
+
+def parse_interests_page(html: str, page_url: str) -> list[GoogleInterestRow]:
+    """Extract title/year pairs from a Google Interests saved-list HTML page."""
+    rows = _parse_card_rows(html, page_url, source="google_interests")
+    if rows:
+        return rows
+
+    # Fallback: if the card markup did not match (class names change), try a
+    # broader scan for <h3> title anchors inside the body.
+    body = re.search(r'<body[^>]*>(.*?)</body>', html, re.DOTALL)
+    if body:
+        for m in re.finditer(
+            r'<h3[^>]*>.*?<a[^>]+href="[^"]+"[^>]*>(.*?)</a>',
+            body.group(1),
+            re.DOTALL,
+        ):
+            title = _strip_tags(m.group(1))
+            if title:
+                rows.append(
+                    GoogleInterestRow(
+                        title=title,
+                        year=_extract_trailing_year(title),
+                        source_url=page_url,
+                        source="google_interests",
                     )
+                )
     return rows
 
 
@@ -168,79 +292,18 @@ def parse_interests_page(html: str, page_url: str) -> list[GoogleInterestRow]:
 # Collections parser (public Google TV / "Save" pages, no auth)
 # ---------------------------------------------------------------------------
 
-# Each collection item renders as:
-#   <a href="https://www.google.com/search?q=TITLE_HERE&stick=..." aria-label="TITLE" ...>
-# The ``q`` query parameter holds the full title (sometimes with the year
-# separated by newlines / blank lines).  The visible title is also in
-# ``aria-label``.
-_COLLECTIONS_LINK_RE = re.compile(
-    r'<a[^>]+href="[^"]*/search\?q=([^&"]+)[^"]*"\s[^>]*aria-label="([^"]*)"',
-    re.DOTALL,
-)
-
-
+# Collections, Google TV watchlists and Interests saved lists all render the
+# same card markup (see ``_parse_card_rows``): one anchor per titled item, with
+# the readable title in ``aria-label`` and the raw title (sometimes with the
+# year on its own line) URL-encoded in the ``q`` query parameter.
 def parse_collections_page(html: str, page_url: str) -> list[GoogleInterestRow]:
-    """Extract title/year pairs from a public Google Collections list page."""
-    rows: list[GoogleInterestRow] = []
-
-    for m in _COLLECTIONS_LINK_RE.finditer(html):
-        href = m.group(0)
-        aria_label = m.group(2).strip()
-        if not aria_label:
-            continue
-
-        # Extract the ``q`` query parameter from the href URL properly.
-        href_match = re.search(r'href="([^"]+)"', m.group(0))
-        q_val = ""
-        year_from_q: Optional[int] = None
-        if href_match:
-            href_url = href_match.group(1).replace("&amp;", "&")
-            try:
-                parsed_href = urlparse(href_url)
-                qs = parse_qs(parsed_href.query, keep_blank_values=True)
-                raw_q = qs.get("q", [""])[0]
-                q_val = unquote(raw_q)
-                # Try to extract year from the q value (may contain newlines).
-                _, year_from_q = _parse_interests_query(q_val)
-            except Exception:
-                pass
-
-        # Determine the title: use the aria-label (always present and human-readable),
-        # then fall back to the decoded q value only when aria-label is absent.
-        title = aria_label or q_val.strip()
-
-        # If we couldn't pull a title out of the aria-label, fall back to the
-        # q param (which is always present on Google collection links).
-        if not title or title.lower() in ("", "q", "search"):
-            title = q_val.strip() or aria_label
-
-        # If the year is still missing, try the aria-label text itself.
-        year: Optional[int] = year_from_q
-        if year is None:
-            year = _extract_year(aria_label)
-
-        # Skip blank / junk entries (e.g. "https://www.google.com/search?q&...")
-        if not title or title.lower() in ("", "q", "search"):
-            continue
-
-        rows.append(
-            GoogleInterestRow(
-                title=title.strip(),
-                year=year,
-                source_url=page_url,
-                source="google_collections",
-            )
-        )
-
-    return rows
+    """Extract title/year pairs from a Google Collections / Google TV list page."""
+    return _parse_card_rows(html, page_url, source="google_collections")
 
 
 # ---------------------------------------------------------------------------
 # Fetcher
 # ---------------------------------------------------------------------------
-
-GOOGLE_INTERESTS_BASE = "https://www.google.com/interests/saved/list"
-GOOGLE_COLLECTIONS_BASE = "https://www.google.com/collections/s/list"
 
 _SESSION: Optional[requests.Session] = None
 
@@ -263,16 +326,56 @@ def _get_session() -> requests.Session:
     return _SESSION
 
 
+def _looks_like_auth_wall(resp: requests.Response, requested_url: str | None = None) -> bool:
+    """True when Google answered with a sign-in / help wall, not the list.
+
+    Expired or wrong-domain cookies do not always land on a sign-in page:
+    Google bounces the request through ``accounts.google.com/ServiceLogin`` and
+    ends on a support article (``support.google.com/accounts/answer/32050``),
+    which would otherwise be parsed as a (nearly empty) list page.
+    """
+    final = urlparse(resp.url or "")
+    host = final.netloc.lower()
+    if host.startswith(("accounts.google.", "consent.google.", "support.google.")):
+        return True
+    if "signin" in final.path or "/answer/" in final.path:
+        return True
+    if requested_url:
+        wanted = urlparse(requested_url).netloc.lower()
+        if (
+            host
+            and wanted
+            and host != wanted
+            and not (host.startswith("www.google.") and wanted.startswith("www.google."))
+        ):
+            return True
+    head = resp.text[:20000]
+    return '<base href="https://accounts.google.com/v3/signin/' in head
+
+
 def fetch_interests_page(
     url: str,
     cookies: dict[str, str],
     timeout: int = 20,
 ) -> str:
     """Fetch a Google Interests list page using the supplied Google cookies."""
+    if not cookies:
+        raise GoogleAuthRequiredError(
+            f"URL {url} is a Google Interests page and needs Google cookies, "
+            "but none were supplied."
+        )
     session = _get_session()
-    session.cookies.update(cookies)
-    resp = session.get(url, timeout=timeout)
+    # Per-request cookies: the shared session must never keep one import's
+    # credentials around for the next one.
+    resp = session.get(url, timeout=timeout, cookies=cookies)
     resp.raise_for_status()
+    if _looks_like_auth_wall(resp, requested_url=url):
+        raise GoogleAuthRequiredError(
+            "Google answered with a sign-in or help page — the cookies are "
+            "missing, expired, or belong to another Google domain. Copy them "
+            "from DevTools → Application → Cookies → www.google.com and paste "
+            "them into the cookies field."
+        )
     return resp.text
 
 
@@ -281,6 +384,11 @@ def fetch_collections_page(url: str, timeout: int = 20) -> str:
     session = _get_session()
     resp = session.get(url, timeout=timeout)
     resp.raise_for_status()
+    if _looks_like_auth_wall(resp, requested_url=url):
+        raise GoogleAuthRequiredError(
+            "Google answered with a sign-in page instead of the list — this "
+            "URL may be private. Supply Google cookies for it."
+        )
     return resp.text
 
 
@@ -290,13 +398,12 @@ def fetch_page(url: str, cookies: dict[str, str] | None = None, timeout: int = 2
     Public Collections URLs (``/collections/s/list/...``) need no cookies.
     Interests URLs (``/interests/saved/list/...``) require a cookie dict.
     """
-    parsed = urlparse(url)
-    if GOOGLE_COLLECTIONS_BASE in parsed.path and "interests" not in parsed.path:
-        # Public collections page — no auth
+    kind = url_kind(url)
+    if kind == "collections":
         return fetch_collections_page(url, timeout=timeout)
-    if GOOGLE_INTERESTS_BASE in parsed.path:
+    if kind == "interests":
         if not cookies:
-            raise ValueError(
+            raise GoogleAuthRequiredError(
                 f"URL {url} appears to be a Google Interests page and requires cookies, "
                 "but none were supplied."
             )
@@ -308,9 +415,92 @@ def fetch_page(url: str, cookies: dict[str, str] | None = None, timeout: int = 2
 
 
 # ---------------------------------------------------------------------------
+# Pagination
+# ---------------------------------------------------------------------------
+
+def _page_counter(html: str) -> Optional[tuple[int, int, int]]:
+    """Read Google's ``1-200 of 256`` range counter, if the page has one."""
+    m = _PAGE_COUNTER_RE.search(html or "")
+    if not m:
+        return None
+    try:
+        return int(m.group(1)), int(m.group(2)), int(m.group(3))
+    except ValueError:
+        return None
+
+
+def _with_page_number(url: str, page_number: int) -> str:
+    """Return ``url`` with its ``pageNumber`` query parameter replaced."""
+    parsed = urlparse(url)
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    query["pageNumber"] = [str(page_number)]
+    return parsed._replace(query=urlencode(query, doseq=True)).geturl()
+
+
+def fetch_list_pages(
+    url: str,
+    cookies: dict[str, str] | None = None,
+    timeout: int = 20,
+    max_pages: int = MAX_LIST_PAGES,
+) -> list[str]:
+    """Fetch one list URL, following Google's ``pageNumber`` pagination.
+
+    Long saved lists render only the first chunk ("1-200 of 256"); the rest
+    lives behind ``&pageNumber=2``.  Stops when the counter says the list is
+    complete, when Google repeats a page (it clamps out-of-range numbers), or
+    after ``max_pages`` fetches.
+    """
+    pages: list[str] = []
+    seen_ranges: set[tuple[int, int]] = set()
+
+    html = fetch_page(url, cookies=cookies, timeout=timeout)
+    pages.append(html)
+
+    while len(pages) < max_pages:
+        counter = _page_counter(pages[-1])
+        if not counter:
+            break
+        _start, end, total = counter
+        if end >= total:
+            break
+        if (_start, end) in seen_ranges:
+            break
+        seen_ranges.add((_start, end))
+
+        next_html = fetch_page(
+            _with_page_number(url, len(pages) + 1),
+            cookies=cookies,
+            timeout=timeout,
+        )
+        if next_html == pages[-1]:
+            break
+        pages.append(next_html)
+
+    return pages
+
+
+# ---------------------------------------------------------------------------
 # Import orchestration (mirrors ``letterboxd.import_rows`` so the watchlist
 # view can call both importers with the same result contract).
 # ---------------------------------------------------------------------------
+
+def _search_all(client, title: str, year: Optional[int], attempts: int = 2) -> list:
+    """Search TMDb for movies *and* series, retrying once on a transient error.
+
+    ``content_type="all"`` matters here: Google TV watchlists mix films and
+    series, and the client's default (``movie`` only) silently dropped every
+    series title.
+    """
+    last_exc: Optional[Exception] = None
+    for attempt in range(attempts):
+        try:
+            return client.search(title, year=year, content_type="all")
+        except Exception as exc:  # noqa: BLE001 - TMDb raises requests errors
+            last_exc = exc
+            if attempt + 1 < attempts:
+                time.sleep(1.0)
+    raise last_exc  # type: ignore[misc]
+
 
 def import_interests(
     rows: Iterable[GoogleInterestRow],
@@ -336,8 +526,15 @@ def import_interests(
             if m.year is not None:
                 local_movies_by_title_year[(m.title.lower().strip(), None)] = m
 
+    seen_rows: set[tuple[str, Optional[int]]] = set()
     for row in rows:
+        if not (row.title or "").strip():
+            continue
         title_key = (row.title.lower().strip(), row.year)
+        if title_key in seen_rows:
+            continue
+        seen_rows.add(title_key)
+
         movie: Optional[Movie] = local_movies_by_title_year.get(title_key)
 
         if movie is None and row.year is None:
@@ -345,7 +542,7 @@ def import_interests(
 
         if movie is None:
             try:
-                matches = client.search(row.title, year=row.year)
+                matches = _search_all(client, row.title, row.year)
             except Exception as exc:
                 logger.warning("TMDb search failed for Google Interest '%s': %s", row.title, exc)
                 result.skipped.append(
@@ -414,6 +611,13 @@ def import_interests(
 # Public helpers used by the view
 # ---------------------------------------------------------------------------
 
+def parse_page(html: str, page_url: str) -> list[GoogleInterestRow]:
+    """Parse one page of Google list HTML, dispatching on the URL kind."""
+    if url_kind(page_url) == "collections":
+        return parse_collections_page(html, page_url)
+    return parse_interests_page(html, page_url)
+
+
 def parse_and_import(
     html: str,
     page_url: str,
@@ -424,11 +628,7 @@ def parse_and_import(
 
     Dispatches to the right parser based on the URL path.
     """
-    parsed = urlparse(page_url)
-    if GOOGLE_COLLECTIONS_BASE in parsed.path and "interests" not in parsed.path:
-        rows = parse_collections_page(html, page_url)
-    else:
-        rows = parse_interests_page(html, page_url)
+    rows = parse_page(html, page_url)
     if not rows:
         logger.warning("No interests parsed from %s", page_url)
     return import_interests(rows, client=client, user_id=user_id)

@@ -776,8 +776,9 @@ export default function WatchlistPage() {
         </h2>
         <p className="mb-4 text-xs text-gray-500 dark:text-gray-400">
           Paste one or more Google Interests / Google TV list page URLs (one per
-          line). Cookies are only needed for private Google Interests lists —
-          public Google Collections pages work without them.
+          line). Interests and Google TV lists sit behind your Google account,
+          so they need cookies — public Google Collections pages work without
+          them. Multi-page lists import every page automatically.
         </p>
 
         <form onSubmit={handleUrlImport} className="space-y-4">
@@ -859,6 +860,31 @@ https://www.google.com/interests/saved/list/...&pageNumber=2"
               </span>
             </div>
           </div>
+
+          {urlImportResult.skipped.length > 0 && (
+            <div className="rounded-xl border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20">
+              <h4 className="font-semibold text-red-800 dark:text-red-300">
+                {urlImportResult.skipped.length} Skipped
+              </h4>
+              <p className="text-xs text-red-700 dark:text-red-400">
+                These entries could not be imported. Expired or missing cookies
+                are the usual cause for Google Interests / Google TV lists.
+              </p>
+              <ul className="mt-2 max-h-48 space-y-1 overflow-y-auto text-xs text-red-700 dark:text-red-400">
+                {urlImportResult.skipped.slice(0, 25).map((item, index) => (
+                  <li key={index} className="break-words">
+                    <span className="font-medium">
+                      {item.title || item.url || "Entry"}
+                    </span>
+                    {item.reason ? ` — ${item.reason}` : ""}
+                  </li>
+                ))}
+                {urlImportResult.skipped.length > 25 && (
+                  <li>…and {urlImportResult.skipped.length - 25} more</li>
+                )}
+              </ul>
+            </div>
+          )}
 
           {urlImportResult.ambiguous.length > 0 && (
             <div className="flex items-center justify-between rounded-xl border border-amber-300 bg-amber-50 p-4 dark:border-amber-700 dark:bg-amber-900/30">

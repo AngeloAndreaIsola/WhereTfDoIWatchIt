@@ -666,9 +666,11 @@ export interface AmbiguousMatchItem {
 }
 
 export interface SkippedImportItem {
-  title: string;
-  year: number | null;
+  title?: string;
+  year?: number | null;
   uri?: string | null;
+  /** Present instead of `title` when a whole URL failed to fetch. */
+  url?: string;
   reason?: string;
 }
 

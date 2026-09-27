@@ -2130,7 +2130,7 @@ def google_interests_import(request):
 
     cookies: dict[str, str] = {str(k): str(v) for k, v in raw_cookies.items() if v is not None}
 
-    from tracker.services.google_interests import fetch_page, parse_and_import
+    from tracker.services import google_interests as gi
 
     client = TMDbClient(settings.TMDB_API_KEY, timeout=3)
     all_resolved: list = []
@@ -2143,13 +2143,33 @@ def google_interests_import(request):
         if not url_stripped:
             continue
         try:
-            html = fetch_page(url_stripped, cookies=cookies)
+            # Follows Google's own pagination ("1-200 of 256") so a long list
+            # imports completely instead of only its first chunk.
+            html_pages = gi.fetch_list_pages(url_stripped, cookies=cookies)
         except Exception as exc:
-            logger.exception("Google Interests fetch failed for %s", url_stripped)
+            logger.warning("Google Interests fetch failed for %s: %s", url_stripped, exc)
             all_skipped.append({"url": url_stripped, "reason": f"fetch_failed: {exc}"})
             continue
 
-        result = parse_and_import(html, page_url=url_stripped, client=client, user_id=user_id)
+        rows = []
+        for html in html_pages:
+            rows.extend(gi.parse_page(html, url_stripped))
+
+        result = gi.import_interests(rows, client=client, user_id=user_id)
+        if not rows:
+            # Never report a silent 0/0/0: an empty parse means the page was
+            # not a list we understand (consent page, empty list, untitled
+            # cards) and the caller should see why.
+            logger.warning("No titles parsed from %s", url_stripped)
+            all_skipped.append(
+                {
+                    "url": url_stripped,
+                    "reason": (
+                        "no_items_found: page contained no list entries "
+                        "(empty list, consent page, or cards without titles)"
+                    ),
+                }
+            )
         all_resolved.extend(result.resolved)
         all_ambiguous.extend(result.ambiguous)
         all_skipped.extend(result.skipped)
