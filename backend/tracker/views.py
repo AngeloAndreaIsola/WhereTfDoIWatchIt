@@ -1113,9 +1113,25 @@ def watchlist_report(request):
     )
 
 
+def _canonical_provider(provider: str) -> str:
+    """Resolve a provider string to the slug Regions are keyed by.
+
+    Offer cards show display names ("Prime Video"), and the manual-entry modal
+    sends that display name back, while the cache writes Regions keyed by
+    service id ("prime"). Resolve through the Provider table so a manual
+    language entry lands on the same row the offers pipeline reads; unknown
+    strings pass through unchanged so the endpoint keeps working for
+    providers with no Provider row.
+    """
+    prov = Provider.objects.filter(slug__iexact=provider).first()
+    if prov is None:
+        prov = Provider.objects.filter(name__iexact=provider).first()
+    return prov.slug if prov else provider
+
+
 @api_view(["GET", "PUT"])
 def movie_language_info(request, tmdb_id: int):
-    """Read or update LanguageInfo for a movie/region pair."""
+    """Read or update LanguageInfo for a movie/region pair (show-level)."""
     try:
         movie = Movie.objects.get(tmdb_id=tmdb_id)
     except Movie.DoesNotExist:
@@ -1136,8 +1152,9 @@ def movie_language_info(request, tmdb_id: int):
         info = (
             LanguageInfo.objects.filter(
                 movie=movie,
-                region__provider__iexact=provider_clean,
+                region__provider__iexact=_canonical_provider(provider_clean),
                 region__country__iexact=country_clean,
+                season__isnull=True,
             )
             .prefetch_related("entries")
             .first()
@@ -1175,12 +1192,13 @@ def movie_language_info(request, tmdb_id: int):
 
     with transaction.atomic():
         region, _ = Region.objects.get_or_create(
-            provider=provider,
+            provider=_canonical_provider(provider),
             country=country,
         )
         info, _ = LanguageInfo.objects.get_or_create(
             movie=movie,
             region=region,
+            season=None,
         )
         info.entries.all().delete()
         for code in audio_languages:

@@ -89,14 +89,28 @@ class Availability(models.Model):
 class LanguageInfo(models.Model):
     movie = models.ForeignKey(Movie, on_delete=models.CASCADE, related_name="language_infos")
     region = models.ForeignKey(Region, on_delete=models.CASCADE, related_name="language_infos")
+    # Series rows may be per-season (season 1..N); NULL means show-level —
+    # the only shape movies use and the fallback when a season has no row.
+    season = models.IntegerField(null=True, blank=True)
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=["movie", "region"], name="uniq_languageinfo_movie_region")
+            # One row per (movie, region, season). Postgres treats NULL seasons
+            # as distinct, so show-level uniqueness is enforced separately.
+            models.UniqueConstraint(
+                fields=["movie", "region", "season"],
+                name="uniq_languageinfo_movie_region_season",
+            ),
+            models.UniqueConstraint(
+                fields=["movie", "region"],
+                condition=models.Q(season__isnull=True),
+                name="uniq_languageinfo_show_level",
+            ),
         ]
 
     def __str__(self):
-        return f"{self.movie} @ {self.region}"
+        suffix = f" S{self.season}" if self.season is not None else ""
+        return f"{self.movie} @ {self.region}{suffix}"
 
 
 class LanguageEntry(models.Model):

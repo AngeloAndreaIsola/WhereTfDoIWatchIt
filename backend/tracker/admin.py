@@ -29,7 +29,7 @@ class LanguageEntryInline(admin.TabularInline):
 
 @admin.register(LanguageInfo)
 class LanguageInfoAdmin(admin.ModelAdmin):
-    list_display = ("movie", "region", "get_audio_count", "get_subtitle_count")
+    list_display = ("movie", "region", "season", "get_audio_count", "get_subtitle_count")
     list_filter = ("region__provider", "region__country")
     search_fields = ("movie__title", "region__provider", "region__country")
     inlines = [LanguageEntryInline]

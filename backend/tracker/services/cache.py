@@ -46,6 +46,20 @@ def _season_matches(raw_seasons, season: int) -> bool:
     return False
 
 
+def langs_from_info(info: Optional[LanguageInfo]) -> tuple[list[str], list[str]]:
+    """Extract (audio, subtitle) canonical codes from a LanguageInfo row."""
+    audio: list[str] = []
+    subs: list[str] = []
+    if info:
+        for entry in info.entries.all():
+            norm = normalize_language_code(entry.language_code) or entry.language_code.upper()
+            if entry.kind == "audio" and norm not in audio:
+                audio.append(norm)
+            elif entry.kind == "subtitle" and norm not in subs:
+                subs.append(norm)
+    return audio, subs
+
+
 @dataclass
 class CacheStatus:
     refreshed: bool
@@ -166,6 +180,23 @@ class AvailabilityCache:
             self._write_languages(movie, region, offer)
             written += 1
 
+        # Per-season language rows: each season's own offer carries its own
+        # audio/subs, so they are stored as (movie, region, season) rows rather
+        # than folded into the show-level row above. Season rows from a
+        # previous refresh are dropped first so a season that disappeared
+        # upstream can never serve stale languages.
+        LanguageInfo.objects.filter(movie=movie, season__isnull=False).delete()
+        for season in result.seasons or []:
+            number = resolve_season_number(season, movie.seasons_data)
+            if number is None:
+                continue
+            for offer in season.offers or []:
+                region, _ = Region.objects.get_or_create(
+                    provider=offer.service_id,
+                    country=offer.country,
+                )
+                self._write_languages(movie, region, offer, season=number)
+
         return written
 
     @staticmethod
@@ -194,9 +225,21 @@ class AvailabilityCache:
         return mapping
 
     @staticmethod
-    def _write_languages(movie: Movie, region: Region, offer: StreamingOffer) -> None:
-        """Replace the stored audio/subtitle language rows for one movie+region."""
-        info, _ = LanguageInfo.objects.get_or_create(movie=movie, region=region)
+    def _write_languages(
+        movie: Movie,
+        region: Region,
+        offer: StreamingOffer,
+        season: Optional[int] = None,
+    ) -> None:
+        """Replace the stored audio/subtitle language rows for one movie+region.
+
+        ``season=None`` writes the show-level row; a season number writes that
+        season's row, keyed alongside it by the (movie, region, season)
+        constraint on LanguageInfo.
+        """
+        info, _ = LanguageInfo.objects.get_or_create(
+            movie=movie, region=region, season=season
+        )
         info.entries.all().delete()
         for code in offer.audio_languages:
             norm = normalize_language_code(code)
@@ -219,23 +262,31 @@ class AvailabilityCache:
         season information, so they are only returned for the unfiltered view.
         """
         rows: list[Offer] = []
+        # Show-level rows are always loaded; season rows only when a season
+        # was requested. A season row (even an empty one) is authoritative for
+        # that season; the show-level row is the fallback for seasons the
+        # refresh never wrote a row for (legacy caches, seasons without data).
+        show_infos = {
+            i.region_id: i
+            for i in LanguageInfo.objects.filter(
+                movie=movie, season__isnull=True
+            ).prefetch_related("entries")
+        }
+        season_infos: dict[int, LanguageInfo] = {}
+        if season is not None:
+            season_infos = {
+                i.region_id: i
+                for i in LanguageInfo.objects.filter(
+                    movie=movie, season=season
+                ).prefetch_related("entries")
+            }
         for avail in movie.availabilities.select_related("region").all():
             if season is not None and not _season_matches(avail.seasons_available, season):
                 continue
-            info = (
-                LanguageInfo.objects.filter(movie=movie, region=avail.region)
-                .prefetch_related("entries")
-                .first()
-            )
-            audio = []
-            subs = []
-            if info:
-                for entry in info.entries.all():
-                    norm = normalize_language_code(entry.language_code) or entry.language_code.upper()
-                    if entry.kind == "audio" and norm not in audio:
-                        audio.append(norm)
-                    elif entry.kind == "subtitle" and norm not in subs:
-                        subs.append(norm)
+            info = season_infos.get(avail.region_id) if season is not None else None
+            if info is None:
+                info = show_infos.get(avail.region_id)
+            audio, subs = langs_from_info(info)
             rows.append(
                 Offer(
                     country=avail.region.country,
