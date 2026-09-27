@@ -394,7 +394,13 @@ function CatalogPageClient() {
                   className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-shadow flex flex-col"
                 >
                   {item.tmdb_id ? (
-                    <Link href={`/movie/${item.tmdb_id}`}>
+                    <Link
+                      href={
+                        item.content_type === "series"
+                          ? `/tv/${item.tmdb_id}`
+                          : `/movie/${item.tmdb_id}`
+                      }
+                    >
                       <div className="aspect-[2/3] bg-gray-100 dark:bg-gray-800 relative">
                         {item.poster_path ? (
                           <img

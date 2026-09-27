@@ -28,6 +28,54 @@ class TMDbClientTests(TestCase):
         self.assertIsNone(results[1].year)
 
     @patch("tracker.services.tmdb.requests.get")
+    def test_search_defaults_to_movie_endpoint_only(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"results": [{"id": 1, "title": "Foo", "release_date": "2010-05-01"}]}
+        mock_resp.raise_for_status = MagicMock()
+        mock_get.return_value = mock_resp
+
+        results = self._client().search("Foo")
+        self.assertEqual(mock_get.call_count, 1)
+        self.assertIn("/search/movie", mock_get.call_args[0][0])
+        self.assertEqual(results[0].content_type, "movie")
+
+    @patch("tracker.services.tmdb.requests.get")
+    def test_search_series_hits_tv_endpoint_and_labels_series(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "results": [{"id": 1396, "name": "Breaking Bad", "first_air_date": "2008-01-20"}]
+        }
+        mock_resp.raise_for_status = MagicMock()
+        mock_get.return_value = mock_resp
+
+        results = self._client().search("Breaking Bad", content_type="series")
+        self.assertEqual(mock_get.call_count, 1)
+        self.assertIn("/search/tv", mock_get.call_args[0][0])
+        self.assertEqual(results[0].content_type, "series")
+        self.assertEqual(results[0].year, 2008)
+
+    @patch("tracker.services.tmdb.requests.get")
+    def test_search_all_queries_both_endpoints_and_tags_results(self, mock_get):
+        def respond(url, *args, **kwargs):
+            resp = MagicMock()
+            if "/search/movie" in url:
+                resp.json.return_value = {"results": [{"id": 10, "title": "The Matrix", "release_date": "1999-03-31"}]}
+            else:
+                resp.json.return_value = {"results": [{"id": 1396, "name": "Breaking Bad", "first_air_date": "2008-01-20"}]}
+            resp.raise_for_status = MagicMock()
+            return resp
+
+        mock_get.side_effect = respond
+
+        results = self._client().search("matrix", content_type="all")
+        called_urls = [c[0][0] for c in mock_get.call_args_list]
+        self.assertEqual(len(called_urls), 2)
+        self.assertTrue(any("/search/movie" in u for u in called_urls))
+        self.assertTrue(any("/search/tv" in u for u in called_urls))
+        by_type = {r.content_type for r in results}
+        self.assertEqual(by_type, {"movie", "series"})
+
+    @patch("tracker.services.tmdb.requests.get")
     def test_details_returns_full_metadata(self, mock_get):
         mock_resp = MagicMock()
         mock_resp.json.return_value = {

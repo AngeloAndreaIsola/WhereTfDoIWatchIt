@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 from django.test import TestCase
 from django.urls import reverse
 
-from tracker.models import Movie, Preference, Provider, Subscription
+from tracker.models import Movie, Preference, Provider, Subscription, WatchlistItem
 from tracker.services.offers import Offer
 
 
@@ -155,6 +155,127 @@ class SearchEndpointTests(TestCase):
     def test_search_requires_query(self):
         resp = self.client.get("/api/search/")
         self.assertEqual(resp.status_code, 400)
+
+    @patch("tracker.views.TMDbClient")
+    def test_search_defaults_to_movie_and_labels_results(self, mock_cls):
+        instance = mock_cls.return_value
+        from tracker.services.tmdb import TMDbItem
+        instance.search.return_value = [TMDbItem(tmdb_id=1, title="Foo", year=2010)]
+        resp = self.client.get("/api/search/?q=Foo")
+        self.assertEqual(resp.status_code, 200)
+        instance.search.assert_called_once_with("Foo", year=None, content_type="movie")
+        result = resp.json()["results"][0]
+        self.assertEqual(result["content_type"], "movie")
+
+    @patch("tracker.views.TMDbClient")
+    def test_search_type_series(self, mock_cls):
+        instance = mock_cls.return_value
+        from tracker.services.tmdb import TMDbItem
+        instance.search.return_value = [
+            TMDbItem(tmdb_id=1396, title="Breaking Bad", year=2008, content_type="series")
+        ]
+        resp = self.client.get("/api/search/?q=Breaking&type=series")
+        self.assertEqual(resp.status_code, 200)
+        instance.search.assert_called_once_with("Breaking", year=None, content_type="series")
+        result = resp.json()["results"][0]
+        self.assertEqual(result["content_type"], "series")
+
+    @patch("tracker.views.TMDbClient")
+    def test_search_type_all_returns_both_types(self, mock_cls):
+        instance = mock_cls.return_value
+        from tracker.services.tmdb import TMDbItem
+        instance.search.return_value = [
+            TMDbItem(tmdb_id=10, title="The Matrix", year=1999, content_type="movie"),
+            TMDbItem(tmdb_id=1396, title="Breaking Bad", year=2008, content_type="series"),
+            TMDbItem(tmdb_id=603, title="The Matrix Reloaded", year=2003, content_type="movie"),
+        ]
+        resp = self.client.get("/api/search/?q=matrix&type=all")
+        self.assertEqual(resp.status_code, 200)
+        instance.search.assert_called_once_with("matrix", year=None, content_type="all")
+        results = resp.json()["results"]
+        self.assertEqual(
+            [r["content_type"] for r in results],
+            ["movie", "series", "movie"],
+        )
+
+    @patch("tracker.views.TMDbClient")
+    def test_search_type_all_interleaves_so_series_are_not_starved(self, mock_cls):
+        instance = mock_cls.return_value
+        from tracker.services.tmdb import TMDbItem
+        # 10 movies first, 1 series last: without interleaving the series is cut.
+        instance.search.return_value = (
+            [TMDbItem(tmdb_id=i, title=f"Movie {i}", year=2000, content_type="movie") for i in range(10)]
+            + [TMDbItem(tmdb_id=999, title="Only Series", year=2020, content_type="series")]
+        )
+        resp = self.client.get("/api/search/?q=whatever&type=all")
+        results = resp.json()["results"]
+        self.assertEqual(len(results), 10)
+        self.assertIn("series", [r["content_type"] for r in results])
+
+    @patch("tracker.views.TMDbClient")
+    def test_search_accepts_type_alias_and_tv_alias(self, mock_cls):
+        instance = mock_cls.return_value
+        from tracker.services.tmdb import TMDbItem
+        instance.search.return_value = [
+            TMDbItem(tmdb_id=1396, title="Breaking Bad", year=2008, content_type="series")
+        ]
+        resp = self.client.get("/api/search/?q=bb&content_type=tv")
+        self.assertEqual(resp.status_code, 200)
+        instance.search.assert_called_once_with("bb", year=None, content_type="series")
+
+    def test_search_rejects_invalid_type(self):
+        resp = self.client.get("/api/search/?q=Foo&type=banana")
+        self.assertEqual(resp.status_code, 400)
+
+
+class AddToWatchlistEndpointTests(TestCase):
+    @patch("tracker.services.enrichment.TMDbClient")
+    def test_add_series_uses_tv_details_and_stores_series(self, mock_cls):
+        from tracker.services.tmdb import TMDbItem
+        instance = mock_cls.return_value
+        instance.details.return_value = TMDbItem(
+            tmdb_id=1396, title="Breaking Bad", year=2008, content_type="series"
+        )
+
+        resp = self.client.post(
+            "/api/watchlist/add/",
+            data={"tmdb_id": 1396, "content_type": "series"},
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 201, resp.content)
+        instance.details.assert_called_once_with(1396, content_type="series")
+        movie = Movie.objects.get(tmdb_id=1396)
+        self.assertEqual(movie.content_type, "series")
+        self.assertTrue(
+            WatchlistItem.objects.filter(user_id=1, movie=movie, source="manual").exists()
+        )
+
+    @patch("tracker.services.enrichment.TMDbClient")
+    def test_add_movie_without_content_type_keeps_movie_behavior(self, mock_cls):
+        from tracker.services.tmdb import TMDbItem
+        instance = mock_cls.return_value
+        instance.details.return_value = TMDbItem(
+            tmdb_id=680, title="Pulp Fiction", year=1994, content_type="movie"
+        )
+
+        resp = self.client.post(
+            "/api/watchlist/add/",
+            data={"tmdb_id": 680},
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 201, resp.content)
+        instance.details.assert_called_once_with(680, content_type="movie")
+        movie = Movie.objects.get(tmdb_id=680)
+        self.assertEqual(movie.content_type, "movie")
+
+    def test_add_rejects_invalid_content_type(self):
+        resp = self.client.post(
+            "/api/watchlist/add/",
+            data={"tmdb_id": 1396, "content_type": "banana"},
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(Movie.objects.filter(tmdb_id=1396).exists())
 
 
 class MovieAvailabilityTests(TestCase):
@@ -326,6 +447,7 @@ class WatchlistReportEndpointTests(TestCase):
         ])
 
         self.assertEqual(summary["services"], [
+            {"service": "Apple", "count": 2},
             {"service": "Netflix", "count": 2},
             {"service": "Prime", "count": 1},
         ])
@@ -429,6 +551,7 @@ class WatchEndpointTests(TestCase):
         self.assertTrue(data["found"])
         self.assertEqual(data["watch_url"], "https://www.netflix.com/title/123")
         self.assertEqual(data["movie"]["tmdb_id"], 1001)
+        self.assertEqual(data["movie"]["content_type"], "movie")
 
     @patch("tracker.views.AvailabilityCache")
     def test_watch_endpoint_prioritizes_subscribed_providers(self, mock_cache_cls):
@@ -485,6 +608,72 @@ class WatchEndpointTests(TestCase):
         self.assertEqual(resp.status_code, 404)
         self.assertFalse(resp.json()["found"])
         self.assertEqual(resp.json()["message"], "Movie not found")
+
+    @patch("tracker.views.AvailabilityCache")
+    def test_watch_endpoint_serves_existing_series_row(self, mock_cache_cls):
+        Movie.objects.create(tmdb_id=1396, title="Breaking Bad", year=2008,
+                             content_type="series")
+        instance = mock_cache_cls.return_value
+        instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=1)
+        instance.read_offers.return_value = [
+            Offer(
+                country="US",
+                service="prime",
+                offer_type="subscription",
+                quality="hd",
+                url="https://www.primevideo.com/detail/1396",
+                audio_languages=["EN"],
+                subtitle_languages=["EN"],
+            )
+        ]
+        resp = self.client.get("/api/watch/1396/")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertTrue(data["found"])
+        self.assertEqual(data["watch_url"], "https://www.primevideo.com/detail/1396")
+        self.assertEqual(data["movie"]["content_type"], "series")
+
+    @patch("tracker.views.AvailabilityCache")
+    @patch("tracker.services.enrichment.TMDbClient")
+    def test_watch_endpoint_resolves_series_when_id_is_not_a_movie(self, mock_tmdb, mock_cache_cls):
+        """An unknown id that TMDb reports as "no such movie" is retried as a series."""
+        import requests
+
+        from tracker.services.tmdb import TMDbItem
+
+        not_found = requests.Response()
+        not_found.status_code = 404
+
+        mock_instance = mock_tmdb.return_value
+        mock_instance.details.side_effect = [
+            requests.HTTPError("404 Client Error", response=not_found),
+            TMDbItem(tmdb_id=1396, title="Breaking Bad", year=2008, content_type="series"),
+        ]
+
+        instance = mock_cache_cls.return_value
+        instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=0)
+        instance.read_offers.return_value = []
+
+        resp = self.client.get("/api/watch/1396/")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertFalse(data["found"])
+        self.assertEqual(data["movie"]["content_type"], "series")
+        self.assertEqual(mock_instance.details.call_count, 2)
+        mock_instance.details.assert_any_call(1396, content_type="series")
+        self.assertTrue(Movie.objects.filter(tmdb_id=1396, content_type="series").exists())
+
+    @patch("tracker.services.enrichment.TMDbClient")
+    def test_watch_endpoint_does_not_retry_series_on_unrelated_failure(self, mock_tmdb):
+        """Non-"not found" TMDb failures are reported as-is, without a second call."""
+        mock_tmdb.return_value.details.side_effect = Exception("connection reset by peer")
+
+        resp = self.client.get("/api/watch/999998/")
+        self.assertEqual(resp.status_code, 404)
+        self.assertFalse(resp.json()["found"])
+        self.assertEqual(resp.json()["message"], "Movie not found")
+        self.assertEqual(mock_tmdb.return_value.details.call_count, 1)
+        self.assertFalse(Movie.objects.filter(tmdb_id=999998).exists())
 
     def test_empty_selections_returns_400(self):
         resp = self.client.post(

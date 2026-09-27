@@ -29,7 +29,7 @@ class LanguageEntryInline(admin.TabularInline):
 
 @admin.register(LanguageInfo)
 class LanguageInfoAdmin(admin.ModelAdmin):
-    list_display = ("movie", "region", "get_audio_count", "get_subtitle_count")
+    list_display = ("movie", "region", "season", "get_audio_count", "get_subtitle_count")
     list_filter = ("region__provider", "region__country")
     search_fields = ("movie__title", "region__provider", "region__country")
     inlines = [LanguageEntryInline]
@@ -76,6 +76,7 @@ class MovieAdmin(admin.ModelAdmin):
     def link_tmdb_view(self, request, lookup):
         """Admin view: search TMDB and link a movie to an existing DB record."""
         from django.conf import settings
+        from .services.enrichment import resolve_or_create_movie
         from .services.tmdb import TMDbClient
 
         context = dict(self.admin_site.each_context(request))
@@ -95,8 +96,9 @@ class MovieAdmin(admin.ModelAdmin):
                     error = "Movie not found."
                 else:
                     try:
+                        # resolve_or_create_movie already fetches details and
+                        # syncs every field (including content_type).
                         movie = resolve_or_create_movie(int(tmdb_id))
-                        sync_movie_fields(movie, details)
                         linked = True
                     except Exception as exc:
                         error = f"TMDb fetch failed: {exc}"

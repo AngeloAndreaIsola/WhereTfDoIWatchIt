@@ -174,7 +174,7 @@ def parse_interests_page(html: str, page_url: str) -> list[GoogleInterestRow]:
 # separated by newlines / blank lines).  The visible title is also in
 # ``aria-label``.
 _COLLECTIONS_LINK_RE = re.compile(
-    r'<a[^>]+href="[^\"]*/search\?q=([^&\"]+)[^\"]*"\\s[^>]*aria-label="([^\"]*)"',
+    r'<a[^>]+href="[^"]*/search\?q=([^&"]+)[^"]*"\s[^>]*aria-label="([^"]*)"',
     re.DOTALL,
 )
 

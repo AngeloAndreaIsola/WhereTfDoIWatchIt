@@ -34,7 +34,7 @@ This document provides the complete API contract specification for the **WhereTf
 |---|---|---|
 | `GET` | `/api/health/` | Liveness and database connectivity check. |
 | `GET` | `/api/health_full/` | Legacy / compatibility alias for `/api/health/`. |
-| `GET` | `/api/search/` | Search TMDb for movies by title and optional year. |
+| `GET` | `/api/search/` | Search TMDb for movies and TV series by title (optional `type`: `movie`/`series`/`all`). |
 | `GET` | `/api/movie/<tmdb_id>/availability/` | Fetch cached, ranked streaming availability for a movie. |
 | `GET` | `/api/preferences/` | Read user streaming preferences. |
 | `PUT` | `/api/preferences/` | Update user streaming preferences. |
@@ -44,6 +44,8 @@ This document provides the complete API contract specification for the **WhereTf
 | `GET` | `/api/watchlist/report/` | Generate aggregated availability report for watchlist items. |
 | `GET` | `/api/prime/popular/` | Return trending/popular movies from TMDb for the homepage browse grid. |
 | `GET` | `/api/prime/movie/<tmdb_id>/` | Return ranked Prime Video availability offers for a single movie. |
+| `GET` | `/api/prime/series/<tmdb_id>/` | Return ranked Prime Video availability offers for a single TV series. |
+| `GET` | `/api/watch/<tmdb_id>/` | Resolve the top-ranked watch destination for a movie or series. |
 
 ---
 
@@ -317,6 +319,7 @@ This document provides the complete API contract specification for the **WhereTf
         "year": 2010,
         "poster_path": "/9gk7ARbtY8864fKE6tKjW8aZbZc.jpg",
         "overview": "A thief who steals corporate secrets...",
+        "content_type": "movie",
         "categories": ["Action", "Sci-Fi", "Thriller"]
       }
     ],
@@ -362,4 +365,64 @@ This document provides the complete API contract specification for the **WhereTf
     "offers": [],
     "message": "Not available on Prime Video in any country."
   }
+  ```
+
+---
+
+### 10. Prime Video Series Offers (Series Detail Page)
+
+#### `GET /api/prime/series/<tmdb_id>/`
+- **Purpose**: Same offer pipeline as `GET /api/prime/movie/<tmdb_id>/`, for a TV series. The row is resolved through the TMDb **TV** details endpoint (never the movie endpoint) and the payload is keyed on `series`.
+- **Path Parameters**:
+  - `tmdb_id` *(required, integer)*: The TMDb TV ID of the series.
+- **Query Parameters**:
+  - `current_country` *(optional, ISO 3166-1 alpha-2)*: Active country used for ranking and the "Local vs VPN required" badge. Falls back to the saved preference.
+  - `season` *(optional, integer)*: Restrict `offers` to that season's availability. Read from the upstream `seasons[]` payload and stored per row in `Availability.seasons_available`; season numbers are resolved against the TMDb season list, so an unknown season simply has no rows. A non-integer value is ignored (as if omitted); a well-formed but unknown season returns `200` with `offers: []` and the value echoed in `selected_season`. When `season` is set, show-level scraper (BVOD) offers are left out, because scraper rows carry no season information. Without the param the unfiltered result is returned unchanged.
+- **Response**: `200 OK`
+  ```json
+  {
+    "series": { "id": 7, "tmdb_id": 1396, "title": "Breaking Bad", "year": 2008, "content_type": "series" },
+    "offers": [],
+    "seasons": [
+      { "season": 1, "name": "Season 1", "episode_count": 7, "poster_path": "/s1.jpg" },
+      { "season": 2, "name": "Season 2", "episode_count": 13, "poster_path": "/s2.jpg" }
+    ],
+    "selected_season": null,
+    "is_in_watchlist": false,
+    "user_data": null,
+    "watch_events": []
+  }
+  ```
+  - `seasons` *(series responses only)*: TMDb season metadata for the selector, ordered by season number; empty when TMDb enrichment never stored it. It is metadata-driven, so a season with no streaming option still appears — selecting it yields `offers: []`.
+  - `selected_season` *(series responses only)*: The season the request was filtered to, or `null` when unfiltered.
+- **Error Responses**:
+  - `404 Not Found`: the id is not tracked and cannot be resolved on TMDb (or the tracked row is a movie, which is never served as a series).
+  ```json
+  {
+    "series": { "tmdb_id": 99999, "title": null, "year": null },
+    "offers": [],
+    "message": "Series not tracked and could not be resolved via TMDb."
+  }
+  ```
+
+---
+
+### 11. Watch Destination (Movie or Series)
+
+#### `GET /api/watch/<tmdb_id>/`
+- **Purpose**: Resolve the top-ranked watch URL for a movie or series under the user's subscriptions and preferences (same ranking path as the detail endpoints).
+- **Resolution**: An existing row is always used as-is and its `content_type` is echoed back. When the id is not tracked yet the movie details endpoint is tried first; if TMDb reports that the id does not exist as a movie, the TV details endpoint is retried, so a series id is not assumed to be a movie.
+- **Response**: `200 OK`
+  ```json
+  {
+    "found": true,
+    "watch_url": "https://www.primevideo.com/detail/1396",
+    "movie": { "tmdb_id": 1396, "title": "Breaking Bad", "year": 2008, "poster_path": "/bb.jpg", "content_type": "series" },
+    "offer": { "country": "US", "service": "prime", "offer_type": "subscription" }
+  }
+  ```
+- **Error Responses**:
+  - `404 Not Found`: neither a movie nor a series could be resolved for the id.
+  ```json
+  { "found": false, "movie": { "tmdb_id": 999999, "title": null, "year": null }, "message": "Movie not found" }
   ```

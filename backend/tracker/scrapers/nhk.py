@@ -49,6 +49,10 @@ class NHKScraper(BaseScraper):
                 items.append(ScrapedItem(
                     title=title,
                     provider_slug=self.provider_slug,
+                    # NHK WORLD-JAPAN exposes no per-card content type (the homepage
+                    # is a JS shell and the search route 404s), so items keep the
+                    # "movie" default rather than guessing a type from the title.
+                    content_type="movie",
                     source_url=source_url,
                     audio_languages=["ja"],
                     subtitle_languages=["en", "ja"],

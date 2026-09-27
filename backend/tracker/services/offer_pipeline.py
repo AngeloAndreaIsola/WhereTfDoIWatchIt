@@ -1,19 +1,23 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Optional
 
 from django.conf import settings
-from tracker.models import Preference, Provider, ProviderCategory
+from tracker.models import LanguageInfo, Preference, Provider, ProviderCategory
 
-from .cache import AvailabilityCache
+from .cache import AvailabilityCache, langs_from_info
 from .enrichment import enrich_movie_from_tmdb
 from .preferences import resolve_preferences
+from .prime_source import prime_offers
 from .ranking import rank_offers
 from .presentation import present_offer
 from .tmdb import TMDbClient
 from .streaming_api import service_display_name
 from .watchability import get_user_subscriptions
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -82,16 +86,86 @@ class OfficialOffersPipeline:
 
         return qualifying
 
-    def get_cached_offers(self, movie):
+    def get_cached_offers(self, movie, season: Optional[int] = None):
+        """Read (and if stale refresh) cached offers.
+
+        ``season`` only narrows the read — the refresh is identical either way,
+        because one upstream call stores every season at once.
+
+        Prime Video rows the primary source does not carry are appended from
+        TMDb's watch/providers data (read-time gap fill — nothing is written
+        back, see ``tracker.services.prime_source``). They land after the
+        season filter: TMDb publishes series-level availability, so a gap-filled
+        row applies to every season view.
+        """
         cache = AvailabilityCache()
         if not getattr(settings, "PRIME_LIVE_FETCH", True):
-            return cache.read_offers(movie)
+            return cache.read_offers(movie, season=season)
 
         try:
             cache.get_or_refresh(movie)
         except Exception:
             pass
-        return cache.read_offers(movie)
+        cached = cache.read_offers(movie, season=season)
+        try:
+            gap_filled = prime_offers(movie, existing=cached)
+            gap_filled = self._attach_cached_languages(gap_filled, movie, season=season)
+        except Exception:
+            logger.warning("Prime gap-fill skipped for movie %s", movie.pk, exc_info=True)
+            return cached
+        return cached + gap_filled
+
+    @staticmethod
+    def _attach_cached_languages(offers, movie, season: Optional[int] = None):
+        """Borrow cached LanguageInfo rows for gap-filled offers.
+
+        TMDb watch/providers carries no audio/subtitle data, so a gap-filled
+        row would otherwise always show "missing language info" — even when
+        the manual language-entry path has stored languages for exactly that
+        movie+provider+country. Season rows are preferred when a season view
+        requested them, with the show-level row as fallback, mirroring
+        ``AvailabilityCache.read_offers``.
+        """
+        pending = [
+            o
+            for o in offers
+            if not o.audio_languages
+            and not o.subtitle_languages
+            and o.service
+            and o.country
+        ]
+        if not pending:
+            return offers
+
+        def _by_pair(qs):
+            return {
+                (i.region.provider.lower(), i.region.country.upper()): i
+                for i in qs
+            }
+
+        show_infos = _by_pair(
+            LanguageInfo.objects.filter(movie=movie, season__isnull=True)
+            .select_related("region")
+            .prefetch_related("entries")
+        )
+        season_infos = {}
+        if season is not None:
+            season_infos = _by_pair(
+                LanguageInfo.objects.filter(movie=movie, season=season)
+                .select_related("region")
+                .prefetch_related("entries")
+            )
+
+        for o in pending:
+            key = (o.service.lower(), o.country.upper())
+            info = season_infos.get(key)
+            if info is None:
+                info = show_infos.get(key)
+            if info is not None:
+                audio, subs = langs_from_info(info)
+                o.audio_languages = audio
+                o.subtitle_languages = subs
+        return offers
 
     def rank_and_present(
         self,
@@ -116,13 +190,18 @@ class OfficialOffersPipeline:
             offers_out.append(offer_dict)
         return offers_out
 
-    def run(self, movie, current_country: Optional[str] = None):
+    def run(
+        self,
+        movie,
+        current_country: Optional[str] = None,
+        season: Optional[int] = None,
+    ):
         pref = self.get_pref()
         provider_map = self._build_provider_map()
         provider_slug = getattr(settings, "DEFAULT_PREFERENCE_PROVIDER", self.default_provider_slug)
 
         enrich_movie_from_tmdb(movie)
-        offers = self.get_cached_offers(movie)
+        offers = self.get_cached_offers(movie, season=season)
         qualifying = self._qualify_offers(offers, provider_map, provider_slug)
         offers_out = self.rank_and_present(qualifying, pref, provider_map, current_country=current_country)
         return OfficialOffersPipelineResult(offers_out=offers_out)

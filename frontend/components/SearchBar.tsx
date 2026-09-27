@@ -31,7 +31,7 @@ export default function SearchBar() {
 
     const timer = setTimeout(async () => {
       try {
-        const data = await search(trimmed);
+        const data = await search(trimmed, "all");
         setResults(data);
         setIsOpen(true);
         setSelectedIndex(-1);
@@ -63,9 +63,9 @@ export default function SearchBar() {
   }, []);
 
   const handleSelect = useCallback(
-    (tmdbId: number) => {
+    (tmdbId: number, contentType: SearchResult["content_type"]) => {
       setIsOpen(false);
-      router.push(`/movie/${tmdbId}`);
+      router.push(contentType === "series" ? `/tv/${tmdbId}` : `/movie/${tmdbId}`);
     },
     [router]
   );
@@ -91,7 +91,7 @@ export default function SearchBar() {
     } else if (e.key === "Enter") {
       if (selectedIndex >= 0 && selectedIndex < results.length) {
         e.preventDefault();
-        handleSelect(results[selectedIndex].tmdb_id);
+        handleSelect(results[selectedIndex].tmdb_id, results[selectedIndex].content_type);
       }
     } else if (e.key === "Escape") {
       setIsOpen(false);
@@ -112,7 +112,7 @@ export default function SearchBar() {
             }
           }}
           onKeyDown={handleKeyDown}
-          placeholder="Search for a movie by title..."
+          placeholder="Search for a movie or TV series by title..."
           className="w-full rounded-xl border border-gray-300 bg-white px-4 py-3 pl-11 pr-10 text-sm text-gray-900 shadow-sm
                      placeholder-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20
                      dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 dark:placeholder-gray-400 dark:focus:border-blue-400"
@@ -154,9 +154,9 @@ export default function SearchBar() {
           {!error &&
             results.map((item, index) => (
               <button
-                key={item.tmdb_id}
+                key={`${item.content_type}-${item.tmdb_id}`}
                 type="button"
-                onClick={() => handleSelect(item.tmdb_id)}
+                onClick={() => handleSelect(item.tmdb_id, item.content_type)}
                 onMouseEnter={() => setSelectedIndex(index)}
                 className={`flex w-full items-center justify-between px-4 py-2.5 text-left text-sm transition-colors
                            ${

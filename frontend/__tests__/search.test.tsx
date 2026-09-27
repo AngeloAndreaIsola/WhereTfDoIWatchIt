@@ -33,7 +33,7 @@ describe("SearchBar component", () => {
     const fetchMock = mockFetch([
       {
         body: {
-          results: [{ tmdb_id: 550, title: "Fight Club", year: 1999 }],
+          results: [{ tmdb_id: 550, title: "Fight Club", year: 1999, content_type: "movie" }],
         },
       },
     ]);
@@ -41,11 +41,11 @@ describe("SearchBar component", () => {
     const user = userEvent.setup();
     render(<SearchBar />);
 
-    const input = screen.getByPlaceholderText("Search for a movie by title...");
+    const input = screen.getByPlaceholderText("Search for a movie or TV series by title...");
     await user.type(input, "Fight");
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith("/api/search/?q=Fight");
+      expect(fetchMock).toHaveBeenCalledWith("/api/search/?q=Fight&type=all");
     });
 
     const resultBtn = await screen.findByRole("button", { name: /Fight Club/i });
@@ -55,6 +55,25 @@ describe("SearchBar component", () => {
     expect(routerPush).toHaveBeenCalledWith("/movie/550");
   });
 
+  it("navigates series results to the /tv route", async () => {
+    mockFetch([
+      {
+        body: {
+          results: [{ tmdb_id: 1396, title: "Breaking Bad", year: 2008, content_type: "series" }],
+        },
+      },
+    ]);
+
+    const user = userEvent.setup();
+    render(<SearchBar />);
+
+    await user.type(screen.getByPlaceholderText("Search for a movie or TV series by title..."), "Breaking");
+
+    const resultBtn = await screen.findByRole("button", { name: /Breaking Bad/i });
+    await user.click(resultBtn);
+    expect(routerPush).toHaveBeenCalledWith("/tv/1396");
+  });
+
   it("handles empty search query gracefully", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
@@ -62,7 +81,7 @@ describe("SearchBar component", () => {
     const user = userEvent.setup();
     render(<SearchBar />);
 
-    const input = screen.getByPlaceholderText("Search for a movie by title...");
+    const input = screen.getByPlaceholderText("Search for a movie or TV series by title...");
     await user.type(input, "   ");
 
     expect(fetchMock).not.toHaveBeenCalled();

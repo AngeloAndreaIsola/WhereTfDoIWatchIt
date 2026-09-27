@@ -84,7 +84,7 @@ class TMDbClient:
 
         target_type = content_type or "movie"
 
-        if target_type == "movie":
+        if target_type in ("movie", "all"):
             m_params = dict(params)
             if year is not None:
                 m_params["year"] = year
@@ -94,7 +94,7 @@ class TMDbClient:
             movie_results = resp.json().get("results", [])
             results.extend([self._parse_search_result(r, "movie") for r in movie_results])
 
-        elif target_type in ("series", "tv"):
+        if target_type in ("series", "tv", "all"):
             tv_params = dict(params)
             if year is not None:
                 tv_params["first_air_date_year"] = year
@@ -192,6 +192,23 @@ class TMDbClient:
             seasons_data=seasons_data,
             rating=data.get("vote_average"),
         )
+
+    def watch_providers(self, tmdb_id: int, content_type: str = "movie") -> dict:
+        """Per-region availability from TMDb's watch/providers endpoint.
+
+        Returns ``{CC: {"flatrate": [...], "free": [...], "buy": [...],
+        "rent": [...], "link": "..."}}`` where each provider entry is
+        ``{"provider_id": int, "provider_name": str}``. Monetization buckets
+        map to this app's offer types: ``flatrate`` = included with a
+        subscription, ``free`` = ad supported. ``buy``/``rent`` are returned
+        raw so callers can decide (this app excludes them by design).
+        """
+        params, headers = self._auth()
+        endpoint = "tv" if content_type in ("series", "tv") else "movie"
+        url = f"{TMDB_BASE}/{endpoint}/{tmdb_id}/watch/providers"
+        resp = requests.get(url, params=params, headers=headers, timeout=self.timeout)
+        resp.raise_for_status()
+        return resp.json().get("results") or {}
 
     def health(self) -> dict:
         """Return health status of TMDb client."""

@@ -152,16 +152,25 @@ class ContentMatcher:
         if existing and existing.movie:
             return existing.movie, existing.confidence_score, [], existing.is_confirmed
 
-        # Check local DB Movie table before external API
-        exact_movie = Movie.objects.filter(title__iexact=item.title, year=item.year).first()
+        # Check local DB Movie table before external API. A series-declared scrape
+        # must never link to a movie row: an exact title/year match of the other
+        # type is treated as "not found" and falls through to the TMDb search for
+        # the declared type.
+        exact_qs = Movie.objects.filter(title__iexact=item.title, year=item.year)
+        if item.content_type == "series":
+            exact_qs = exact_qs.filter(content_type="series")
+        exact_movie = exact_qs.first()
         if exact_movie:
             self._upsert_mapping(provider, item, movie=exact_movie, confidence=1.0)
             return exact_movie, 1.0, [], False
 
-        # 2. Search TMDb
+        # 2. Search TMDb — in the scraped item's content type, so a series scrape
+        # hits the TV search endpoint instead of the movie one.
         candidates_raw: list[TMDbMovie] = []
         try:
-            candidates_raw = self.tmdb_client.search(item.title, year=item.year)
+            candidates_raw = self.tmdb_client.search(
+                item.title, year=item.year, content_type=item.content_type
+            )
         except Exception as exc:
             logger.warning("TMDb search failed for scraped title '%s': %s", item.title, exc)
 
@@ -193,7 +202,13 @@ class ContentMatcher:
         if best_score >= 0.6 and best_movie:
             matched_movie_obj, _ = Movie.objects.get_or_create(
                 tmdb_id=best_movie.tmdb_id,
-                defaults={"title": best_movie.title, "year": best_movie.year},
+                defaults={
+                    "title": best_movie.title,
+                    "year": best_movie.year,
+                    # Never flip an existing row: get_or_create only applies this
+                    # content_type when the row is created.
+                    "content_type": best_movie.content_type or "movie",
+                },
             )
             # Backfill poster from the TMDb candidate so catalogs show artwork
             # without first requiring a detail-page enrichment pass.
@@ -209,7 +224,14 @@ class ContentMatcher:
 
     @staticmethod
     def _upsert_mapping(provider, item, movie=None, confidence=0.0):
-        """Safely update-or-create a ScrapedContentMapping, deduping on conflict."""
+        """Safely update-or-create a ScrapedContentMapping, deduping on conflict.
+
+        The mapping table has no ``content_type`` column, so the item's type is
+        stamped into ``raw_payload`` — it is what the unresolved-review flow reads
+        back to search TMDb in the right type.
+        """
+        payload = dict(item.raw_payload) if isinstance(item.raw_payload, dict) else {}
+        payload.setdefault("content_type", item.content_type)
         try:
             ScrapedContentMapping.objects.update_or_create(
                 provider=provider,
@@ -220,7 +242,7 @@ class ContentMatcher:
                     "movie": movie,
                     "is_confirmed": False,
                     "confidence_score": confidence,
-                    "raw_payload": item.raw_payload,
+                    "raw_payload": payload,
                 },
             )
         except ScrapedContentMapping.MultipleObjectsReturned:
@@ -242,7 +264,7 @@ class ContentMatcher:
                     "movie": movie,
                     "is_confirmed": False,
                     "confidence_score": confidence,
-                    "raw_payload": item.raw_payload,
+                    "raw_payload": payload,
                 },
             )
 

@@ -66,7 +66,7 @@ describe("frontend page smoke tests", () => {
     const user = userEvent.setup();
     render(React.createElement(SearchPage));
 
-    const input = screen.getByPlaceholderText("Search for a movie by title...");
+    const input = screen.getByPlaceholderText("Search for a movie or TV series by title...");
     await user.type(input, "matrix");
 
     const matrixCards = await screen.findAllByRole("heading", { name: "The Matrix" });

@@ -168,7 +168,10 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
 
   const handleAddToWatchlist = async () => {
     try {
-      await addToWatchlist(tmdbId);
+      await addToWatchlist(
+        tmdbId,
+        data?.movie?.content_type === "series" ? "series" : "movie"
+      );
       setData((prev) => prev ? { ...prev, is_in_watchlist: true } : prev);
       reloadMovie();
     } catch (err) {
