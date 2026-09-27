@@ -739,10 +739,15 @@ def import_rows(
                 local_movies_by_uri[row.uri] = movie
 
         if row.file_type == "watchlist":
-            item_source = getattr(row, "source", None) or source
-            item, _ = WatchlistItem.objects.get_or_create(
-                movie=movie, source=item_source, defaults={"user_id": user_id}
-            )
+            # Reuse an existing item for this movie regardless of its original
+            # source so re-importing an exported backup (whatever source the
+            # item was first created with) never duplicates the movie.
+            item = WatchlistItem.objects.filter(user_id=user_id, movie=movie).first()
+            if item is None:
+                item_source = getattr(row, "source", None) or source
+                item, _ = WatchlistItem.objects.get_or_create(
+                    movie=movie, source=item_source, defaults={"user_id": user_id}
+                )
             result.resolved.append(item)
 
         # Update UserMovieData

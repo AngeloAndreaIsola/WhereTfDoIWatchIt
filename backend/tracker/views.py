@@ -7,6 +7,7 @@ from typing import Any
 from django.conf import settings
 from django.db import connection, transaction
 from django.shortcuts import get_object_or_404
+from django.views.decorators.http import require_GET
 from rest_framework import status
 from rest_framework.decorators import api_view, parser_classes
 from rest_framework.parsers import MultiPartParser
@@ -83,6 +84,18 @@ from .services.preferences import resolve_preferences
 from .services.rate_limit import RateLimitExceeded
 from .services.enrichment import enrich_movie_from_tmdb, resolve_or_create_movie, sync_movie_fields
 from .services.tmdb import TMDbClient, TMDbItem, TMDbMovie
+from .services.watchlist_export import (
+    FILENAME_BOTH,
+    FILENAME_WATCHED,
+    FILENAME_WATCHLIST,
+    CanonicalImportError,
+    combined_export_rows,
+    csv_response,
+    is_canonical_csv,
+    parse_canonical_csv,
+    watched_export_rows,
+    watchlist_export_rows,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -939,7 +952,13 @@ def watchlist(request):
         return Response({"error": "file field required"}, status=400)
     file_bytes = upload.read()
     filename = upload.name or ""
-    rows = parse_file_or_zip(file_bytes, filename=filename)
+    if is_canonical_csv(file_bytes):
+        try:
+            rows = parse_canonical_csv(file_bytes)
+        except CanonicalImportError as exc:
+            return Response({"error": str(exc)}, status=400)
+    else:
+        rows = parse_file_or_zip(file_bytes, filename=filename)
     result = import_rows(rows)
     return Response(
         {
@@ -952,6 +971,24 @@ def watchlist(request):
             "diary_events_count": result.diary_events_count,
         }
     )
+
+
+@require_GET
+def export_watchlist(request):
+    """Download the watchlist as a canonical WhereTfDoIWatchIt CSV backup."""
+    return csv_response(FILENAME_WATCHLIST, watchlist_export_rows(user_id=1))
+
+
+@require_GET
+def export_watched(request):
+    """Download explicitly watched movies as a canonical CSV backup."""
+    return csv_response(FILENAME_WATCHED, watched_export_rows(user_id=1))
+
+
+@require_GET
+def export_combined(request):
+    """Download watchlist and watched movies in one canonical CSV backup."""
+    return csv_response(FILENAME_BOTH, combined_export_rows(user_id=1))
 
 
 @api_view(["POST"])

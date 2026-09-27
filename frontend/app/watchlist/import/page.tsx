@@ -4,6 +4,7 @@ import React, { Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import ImportSection from "@/components/watchlist/ImportSection";
+import ExportSection from "@/components/watchlist/ExportSection";
 
 function ImportContent() {
   const searchParams = useSearchParams();
@@ -20,15 +21,16 @@ function ImportContent() {
           ← Back to Watchlist
         </Link>
         <h1 className="mt-2 text-2xl font-bold text-gray-900 dark:text-gray-100">
-          Import
+          Import / Export
         </h1>
         <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
           Bring titles into your watchlist from Letterboxd, Google Interests, or
-          an export file.
+          an export file — or download a backup you can re-import later.
         </p>
       </div>
 
       <ImportSection />
+      <ExportSection />
     </>
   );
 }

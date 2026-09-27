@@ -309,22 +309,23 @@ export default function WatchlistPage() {
         </p>
       </div>
 
-      {/* ─── Import entry point ───────────────────────────────────────────── */}
+      {/* ─── Import / Export entry point ───────────────────────────────────── */}
       <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-xs dark:border-gray-700 dark:bg-gray-800">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
-              Import movies
+              Import / Export
             </h2>
             <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
-              Import your watchlist from Letterboxd, Google, or CSV.
+              Import your watchlist from Letterboxd, Google, or CSV — or export
+              a backup.
             </p>
           </div>
           <Link
             href={importHref}
             className="inline-flex shrink-0 items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-xs hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600"
           >
-            Import
+            Import / Export
           </Link>
         </div>
       </section>

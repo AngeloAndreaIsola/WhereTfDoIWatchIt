@@ -1,11 +1,17 @@
 # Letterboxd Import Guide
 
-WhereTfDoIWatchIt supports two ways to import from Letterboxd:
+WhereTfDoIWatchIt's import/export page lives at **`/watchlist/import`**
+(entry point: the compact **Import / Export** card on `/watchlist`).
 
-1. **URL import** — paste a public profile/list URL (no export, no login).
-2. **CSV import** — upload a Letterboxd export file (`.csv` / `.zip`).
+### Import — supported sources
 
-Both paths produce the same `LetterboxdRow` objects and go through the same
+1. **Letterboxd URL import** — paste a public profile/list URL (no export, no login).
+2. **Letterboxd CSV import** — upload a Letterboxd export file (`.csv` / `.zip`).
+3. **Google Interests** — paste Google Interests / Google TV list URLs (see `docs/OPERATIONS.md`).
+4. **WhereTfDoIWatchIt backup CSV** — re-upload a file previously downloaded from the
+   Export section (see [§7](#7-export--backup-wheretfdoiwatchit-format)).
+
+All CSV paths produce the same `LetterboxdRow` objects and go through the same
 `import_rows()` pipeline, so TMDb matching, ambiguity handling and idempotency
 are identical regardless of how the data arrived.
 
@@ -17,7 +23,7 @@ are identical regardless of how the data arrived.
 
 1. Open your Letterboxd profile.
 2. Copy the public profile URL.
-3. Paste it into WhereTfDoIWatchIt (**Watchlist → Import from a Letterboxd URL**).
+3. Paste it into WhereTfDoIWatchIt (**Watchlist → Import / Export → Import from a Letterboxd URL**).
 4. Choose **Import Watchlist**, **Import Watched**, or **Import Both**.
 5. The app fetches the public paginated pages.
 6. Movies are matched against TMDb.
@@ -131,7 +137,7 @@ To export your watchlist from Letterboxd:
 3. Scroll to the bottom of your watchlist page or go to your account settings (**Settings** > **Import & Export**).
 4. Click **Export Watchlist** (or **Export Your Data**). Letterboxd will generate a `.csv` file containing your saved titles.
 
-Upload the resulting file on the **Watchlist** page (**Import Watchlist Export**);
+Upload the resulting file on the **Import / Export** page (**Import from File**);
 `.csv`, `.zip`, `.xml`, `.gz` and `.xml.gz` are supported.
 
 ---
@@ -192,3 +198,59 @@ Watchlist records maintain a `source` field indicating how they entered the syst
 - **Additive & Idempotent**: Importing is idempotent. Re-importing the same CSV or the same profile URL (or adding an existing title) will not create duplicate `WatchlistItem` or `Movie` database entries.
 - **Streaming Availability API Quota**: Importing only queries TMDb for title matching and database creation. It **does not** fetch streaming availability. Streaming availability API quota (capped at 100 requests/day on the free tier) is managed strictly on-demand when inspecting individual movie availability or via background refresh jobs, keeping imports quota-neutral.
 - **Rate limits**: Letterboxd URL imports are sequential (one page at a time) and bounded by `MAX_PROFILE_PAGES`; TMDb is only queried for titles that are not already known locally.
+
+---
+
+## 7. Export & Backup (WhereTfDoIWatchIt format)
+
+The **Export** section of `/watchlist/import` can download the current user's
+collection as a CSV backup:
+
+- **Export Watchlist** — every movie currently on the watchlist.
+- **Export Watched** — every movie explicitly marked watched
+  (`UserMovieData.is_watched = True`).
+- **Export Both** — one file containing both.
+
+### API
+
+```http
+GET /api/export/watchlist/   → wheretfdoiwatchit-watchlist.csv
+GET /api/export/watched/     → wheretfdoiwatchit-watched.csv
+GET /api/export/             → wheretfdoiwatchit-export.csv
+```
+
+Responses are `text/csv` with an attachment `Content-Disposition`. An empty
+collection still returns a valid header-only CSV, so the file always remains a
+valid round-trip backup. Exports are restricted to the current user's data.
+
+### Canonical format
+
+WhereTfDoIWatchIt uses a single canonical CSV format designed for
+**Export → Download → Import → Restore** within this application:
+
+```csv
+title,year,letterboxd_uri,status
+The Matrix,1999,https://letterboxd.com/film/the-matrix/,watchlist
+Inception,2010,https://letterboxd.com/film/inception/,watched
+```
+
+- `status` is exactly `watchlist` or `watched`. Anything else is rejected with
+  a useful import error (HTTP 400) — an unknown status is never silently
+  coerced.
+- `letterboxd_uri` is the stored Letterboxd URI (empty when none is known);
+  `year` is empty when unknown. Neither is ever invented.
+- The importer detects this format by its header (`title,year,letterboxd_uri,status`)
+  regardless of filename, so `my-export.csv` is recognized correctly.
+- Mixed files are supported: each row is applied according to its status
+  (`watchlist` → `WatchlistItem`, `watched` → `UserMovieData.is_watched = True`;
+  watched rows never create a `WatchlistItem`).
+- Re-uploading the same file is idempotent — no duplicate `WatchlistItem` or
+  user/movie records are created.
+
+**This format is an application backup format.** It is not necessarily
+compatible with Letterboxd's own CSV import requirements; use the Letterboxd
+export format only for importing *from* Letterboxd.
+
+Both formats funnel into the same `import_rows()` pipeline
+(`watchlist_export.py` produces `LetterboxdRow` objects just like the
+Letterboxd parser), so matching and idempotency behave identically.

@@ -129,13 +129,16 @@ describe("watchlist import IA refactor", () => {
       expect(await screen.findByText("The Matrix")).toBeInTheDocument();
 
       expect(
-        screen.queryByRole("heading", { name: "Import Watchlist Export" })
+        screen.queryByRole("heading", { name: "Import from File" })
       ).toBeNull();
       expect(
         screen.queryByRole("heading", { name: "Import from a Letterboxd URL" })
       ).toBeNull();
       expect(
         screen.queryByRole("heading", { name: "Import from URL" })
+      ).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Export Watchlist" })
       ).toBeNull();
       expect(
         screen.queryByPlaceholderText("https://letterboxd.com/username/")
@@ -146,7 +149,7 @@ describe("watchlist import IA refactor", () => {
       expect(document.getElementById("file-upload-input")).toBeNull();
     });
 
-    it("renders a compact Import entry point linking to /watchlist/import", async () => {
+    it("renders a compact Import / Export entry point linking to /watchlist/import", async () => {
       mockRoutes([watchlistReportRoute]);
 
       render(React.createElement(WatchlistPage));
@@ -154,24 +157,26 @@ describe("watchlist import IA refactor", () => {
       await screen.findByText("The Matrix");
 
       expect(
-        screen.getByRole("heading", { name: "Import movies" })
+        screen.getByRole("heading", { name: "Import / Export" })
       ).toBeInTheDocument();
       expect(
-        screen.getByText("Import your watchlist from Letterboxd, Google, or CSV.")
+        screen.getByText(
+          "Import your watchlist from Letterboxd, Google, or CSV — or export a backup."
+        )
       ).toBeInTheDocument();
 
-      const importLink = screen.getByRole("link", { name: "Import" });
+      const importLink = screen.getByRole("link", { name: "Import / Export" });
       expect(importLink).toHaveAttribute("href", "/watchlist/import");
     });
 
-    it("navigates to /watchlist/import in the same tab when Import is clicked", async () => {
+    it("navigates to /watchlist/import in the same tab when Import / Export is clicked", async () => {
       mockRoutes([watchlistReportRoute]);
 
       const user = userEvent.setup();
       render(React.createElement(WatchlistPage));
 
       await screen.findByText("The Matrix");
-      await user.click(screen.getByRole("link", { name: "Import" }));
+      await user.click(screen.getByRole("link", { name: "Import / Export" }));
 
       expect(routerPush).toHaveBeenCalledWith("/watchlist/import");
     });
@@ -184,10 +189,9 @@ describe("watchlist import IA refactor", () => {
 
       await screen.findByText("The Matrix");
 
-      expect(screen.getByRole("link", { name: "Import" })).toHaveAttribute(
-        "href",
-        "/watchlist/import/?q=matrix"
-      );
+      expect(
+        screen.getByRole("link", { name: "Import / Export" })
+      ).toHaveAttribute("href", "/watchlist/import/?q=matrix");
     });
   });
 
@@ -231,9 +235,17 @@ describe("watchlist import IA refactor", () => {
 
       render(React.createElement(WatchlistImportPage));
 
+      // Group headings split importing from exporting
+      expect(
+        screen.getByRole("heading", { name: "Import", level: 2 })
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("heading", { name: "Export", level: 2 })
+      ).toBeInTheDocument();
+
       // CSV / export file import
       expect(
-        screen.getByRole("heading", { name: "Import Watchlist Export" })
+        screen.getByRole("heading", { name: "Import from File" })
       ).toBeInTheDocument();
       expect(document.getElementById("file-upload-input")).not.toBeNull();
       expect(screen.getByText(/Supports \.csv, \.zip/)).toBeInTheDocument();
@@ -259,6 +271,34 @@ describe("watchlist import IA refactor", () => {
       ).toBeInTheDocument();
       expect(
         screen.getByRole("button", { name: "Import from URL" })
+      ).toBeInTheDocument();
+    });
+
+    it("renders the Export section with watchlist, watched, and combined controls", () => {
+      mockRoutes([]);
+
+      render(React.createElement(WatchlistImportPage));
+
+      expect(
+        screen.getByRole("heading", { name: "Export", level: 2 })
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("heading", { name: "Watchlist", level: 3 })
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("heading", { name: "Watched", level: 3 })
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Export Watchlist" })
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Export Watched" })
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Export Both" })
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(/re-uploaded on this page/)
       ).toBeInTheDocument();
     });
 

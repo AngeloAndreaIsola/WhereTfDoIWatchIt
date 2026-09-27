@@ -198,14 +198,16 @@ This document provides the complete API contract specification for the **WhereTf
   ```
 
 #### `POST /api/watchlist/`
-- **Purpose**: Upload a Letterboxd export CSV file (`file` field in `multipart/form-data`) to parse and import movies.
+- **Purpose**: Upload a CSV file (`file` field in `multipart/form-data`) to parse and import movies.
 - **Request Content Type**: `multipart/form-data`
 - **Form Data Fields**:
-  - `file` *(required, file)*: The uploaded Letterboxd watchlist CSV file containing `Title`, `Year`, and `Letterboxd URI`.
+  - `file` *(required, file)*: A Letterboxd export CSV (`Title`, `Year`, `Letterboxd URI`), a MyAnimeList export, a ZIP of Letterboxd CSVs, **or** a WhereTfDoIWatchIt backup export (`title,year,letterboxd_uri,status`).
 - **Behavior**:
+  - The format is detected from the CSV header (not the filename): a file with the canonical `title,year,letterboxd_uri,status` header is parsed by the backup importer, anything else by the Letterboxd parser. Both funnel into the same matching/import pipeline.
   - Exact matches automatically create `Movie` and `WatchlistItem` records (returned in `resolved`).
   - Ambiguous matches (e.g. multiple TMDb search candidates) are returned in `ambiguous`.
   - Unmatched rows are returned in `skipped`.
+  - Canonical rows apply their `status`: `watchlist` rows create `WatchlistItem`s, `watched` rows set `UserMovieData.is_watched = True`.
 - **Response**: `200 OK`
   - Example: [`docs/examples/api/watchlist_import_response.json`](examples/api/watchlist_import_response.json)
   ```json
@@ -217,6 +219,33 @@ This document provides the complete API contract specification for the **WhereTf
   ```
 - **Error Responses**:
   - `400 Bad Request`: Missing `file` field in upload. Example: [`docs/examples/api/error_400_response.json`](examples/api/error_400_response.json)
+  - `400 Bad Request`: Canonical CSV with an invalid `status` value (must be `watchlist` or `watched`). Example: `{"error": "Line 2: invalid status 'banana' — must be 'watchlist' or 'watched'."}`
+
+#### `GET /api/export/watchlist/`
+- **Purpose**: Download every movie on the current user's watchlist as a canonical WhereTfDoIWatchIt CSV backup. Every row has `status=watchlist`.
+- **Response**: `200 OK`, `Content-Type: text/csv; charset=utf-8`, `Content-Disposition: attachment; filename="wheretfdoiwatchit-watchlist.csv"`.
+  ```csv
+  title,year,letterboxd_uri,status
+  The Matrix,1999,https://letterboxd.com/film/the-matrix/,watchlist
+  ```
+
+#### `GET /api/export/watched/`
+- **Purpose**: Download only movies explicitly marked watched (`UserMovieData.is_watched == True`) as a canonical CSV backup. Every row has `status=watched`.
+- **Response**: `200 OK`, `Content-Type: text/csv; charset=utf-8`, `Content-Disposition: attachment; filename="wheretfdoiwatchit-watched.csv"`.
+  ```csv
+  title,year,letterboxd_uri,status
+  Inception,2010,https://letterboxd.com/film/inception/,watched
+  ```
+
+#### `GET /api/export/`
+- **Purpose**: Download watchlist **and** watched movies in one combined canonical CSV backup (a movie in both states legitimately appears twice, once per status).
+- **Response**: `200 OK`, `Content-Type: text/csv; charset=utf-8`, `Content-Disposition: attachment; filename="wheretfdoiwatchit-export.csv"`.
+  ```csv
+  title,year,letterboxd_uri,status
+  The Matrix,1999,https://letterboxd.com/film/the-matrix/,watchlist
+  Inception,2010,https://letterboxd.com/film/inception/,watched
+  ```
+- **Notes**: All export endpoints return a valid header-only CSV for empty datasets and are restricted to the current user's data. See `docs/LETTERBOXD_IMPORT.md` §7 for the full backup format description.
 
 ---
 
