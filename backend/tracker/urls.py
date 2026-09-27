@@ -28,6 +28,10 @@ urlpatterns = [
     path("watchlist/refresh/", views.watchlist_refresh, name="watchlist-refresh"),
     path("watchlist/report/", views.watchlist_report, name="watchlist-report"),
     path("watchlist/resolve/", views.watchlist_resolve, name="watchlist-resolve"),
+    # --- Watchlist export (canonical round-trip CSV backup) ---
+    path("export/watchlist/", views.export_watchlist, name="export-watchlist"),
+    path("export/watched/", views.export_watched, name="export-watched"),
+    path("export/", views.export_combined, name="export-combined"),
     path("prime/popular/", views.prime_popular, name="prime-popular"),
     path("prime/popular-series/", views.prime_popular_series, name="prime-popular-series"),
     path("prime/movie/<int:tmdb_id>/", views.prime_movie, name="prime-movie"),
@@ -50,4 +54,6 @@ urlpatterns = [
     path("v2/unofficial/providers/", api_v2.unofficial_providers, name="v2-unofficial-providers"),
     # --- Google Interests importer ---
     path("importers/google-interests/", views.google_interests_import, name="google-interests-import"),
+    # --- Letterboxd public-profile URL importer ---
+    path("importers/letterboxd-url/", views.letterboxd_url_import, name="letterboxd-url-import"),
 ]

@@ -1,6 +1,6 @@
-"""Letterboxd CSV and ZIP import.
+"""Letterboxd CSV/ZIP import and public profile/list URL import.
 
-Supports:
+CSV/ZIP support:
 - Watchlist CSV (watchlist.csv)
 - Watched CSV (watched.csv)
 - Diary CSV (diary.csv)
@@ -8,8 +8,16 @@ Supports:
 - Reviews CSV (reviews.csv)
 - ZIP archives containing standard Letterboxd CSVs
 
-Matching goes through TMDb search; ambiguous results (multiple matches,
-or no title/year match) flagged for manual confirmation.
+URL support (public profiles only, no Letterboxd login or cookies):
+- https://letterboxd.com/USERNAME/
+- https://letterboxd.com/USERNAME/watchlist/
+- https://letterboxd.com/USERNAME/films/  (aka /films/watched/)
+
+The URL path is scraped from Letterboxd's public paginated HTML and normalized
+into the same :class:`LetterboxdRow` objects the CSV parser produces, so every
+import funnels through :func:`import_rows` (TMDb matching, ambiguity flags,
+idempotent writes). Matching goes through TMDb search; ambiguous results
+(multiple matches, or no title/year match) are flagged for manual confirmation.
 """
 from __future__ import annotations
 
@@ -18,11 +26,15 @@ import datetime
 import gzip
 import io
 import logging
+import re
 import xml.etree.ElementTree as ET
 import zipfile
 from dataclasses import dataclass, field
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
+from urllib.parse import urljoin, urlparse
 
+import requests
+from bs4 import BeautifulSoup
 from django.conf import settings
 
 from ..models import Movie, MovieWatchEvent, UserMovieData, WatchlistItem
@@ -228,6 +240,418 @@ def parse_csv(file_bytes: bytes, filename: str = "") -> list[LetterboxdRow]:
     return rows
 
 
+# ---------------------------------------------------------------------------
+# Letterboxd public profile/list URL import
+#
+# Pipeline: URL -> normalize -> fetch paginated HTML -> parse poster tiles ->
+# LetterboxdRow[] -> import_rows() (unchanged TMDb matching / ambiguity logic).
+# ---------------------------------------------------------------------------
+
+LETTERBOXD_BASE_URL = "https://letterboxd.com"
+
+#: Hard upper bound on pages fetched for a single URL import. Protects against
+#: runaway pagination if Letterboxd ever serves endless pages. 72 posters/page
+#: * 200 pages is far beyond any real profile.
+MAX_PROFILE_PAGES = 200
+
+#: Per-request timeout (seconds) for Letterboxd HTML fetches.
+PROFILE_FETCH_TIMEOUT = 20
+
+_LETTERBOXD_HOSTS = frozenset({"letterboxd.com", "www.letterboxd.com"})
+
+# First path segments Letterboxd reserves for site pages; never a username.
+_RESERVED_PATH_SEGMENTS = frozenset(
+    {
+        "film",
+        "films",
+        "list",
+        "lists",
+        "watchlist",
+        "tv",
+        "search",
+        "settings",
+        "sign-in",
+        "signin",
+        "register",
+        "forgot",
+        "help",
+        "faq",
+        "about",
+        "tags",
+        "people",
+        "person",
+        "journal",
+        "pro",
+        "features",
+        "admin",
+        "static",
+        "assets",
+    }
+)
+
+_USERNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,49}$")
+
+# "Natural Born Killers (1994)" -> ("Natural Born Killers", 1994).
+# Only a single trailing year counts; ranges like "(2002-2008)" are ignored so
+# the year is never guessed from unreliable markup.
+_YEAR_SUFFIX_RE = re.compile(r"^(?P<title>.+?)\s*\((?P<year>(?:18|19|20)\d{2})\)$")
+
+SUPPORTED_IMPORT_TYPES = ("watchlist", "watched")
+
+
+class LetterboxdImportError(Exception):
+    """Base class for user-facing Letterboxd URL import failures."""
+
+    code = "letterboxd_error"
+
+
+class LetterboxdInvalidURLError(LetterboxdImportError):
+    """The supplied URL is not a supported public Letterboxd profile/list URL."""
+
+    code = "invalid_url"
+
+
+class LetterboxdProfileNotFound(LetterboxdImportError):
+    """Letterboxd returned 404 (or a 'page not found' body) for the URL."""
+
+    code = "not_found"
+
+
+class LetterboxdFetchError(LetterboxdImportError):
+    """Network/HTTP failure while talking to Letterboxd (never leaks traces)."""
+
+    code = "fetch_failed"
+
+
+def normalize_profile_url(url: str) -> tuple[str, str]:
+    """Validate + normalize a Letterboxd profile/list URL.
+
+    Returns ``(username, list_type)`` where ``list_type`` is ``"watchlist"``,
+    ``"watched"``, or ``""`` when the URL is a bare profile (the caller must
+    then require an explicit ``type`` — never guess).
+
+    Accepted examples::
+
+        https://letterboxd.com/foo/                  -> ("foo", "")
+        https://letterboxd.com/foo/watchlist/        -> ("foo", "watchlist")
+        https://letterboxd.com/foo/films/watched/    -> ("foo", "watched")
+        https://letterboxd.com/foo/films/            -> ("foo", "watched")
+
+    Raises :class:`LetterboxdInvalidURLError` for anything else (foreign
+    hosts, site pages such as ``/film/inception/``, unknown path prefixes).
+    Pure function: no HTTP, no parsing.
+    """
+    raw = (url or "").strip()
+    if not raw:
+        raise LetterboxdInvalidURLError("Letterboxd URL is required.")
+    if "://" not in raw:
+        raw = "https://" + raw
+
+    parsed = urlparse(raw)
+    if parsed.scheme not in ("http", "https"):
+        raise LetterboxdInvalidURLError(
+            "Not a Letterboxd URL. Expected something like "
+            "https://letterboxd.com/<username>/watchlist/."
+        )
+
+    host = (parsed.hostname or "").lower()
+    if host not in _LETTERBOXD_HOSTS:
+        raise LetterboxdInvalidURLError(
+            "Not a Letterboxd URL (expected letterboxd.com). Expected "
+            "something like https://letterboxd.com/<username>/watchlist/."
+        )
+
+    segments = [seg for seg in parsed.path.split("/") if seg]
+    if not segments:
+        raise LetterboxdInvalidURLError(
+            "No username in the Letterboxd URL. Expected "
+            "https://letterboxd.com/<username>/."
+        )
+
+    username = segments[0]
+    if username.lower() in _RESERVED_PATH_SEGMENTS:
+        raise LetterboxdInvalidURLError(
+            f"'{username}' is a Letterboxd site page, not a profile. Paste your "
+            "profile, watchlist or films URL, e.g. "
+            "https://letterboxd.com/<username>/watchlist/."
+        )
+    if not _USERNAME_RE.match(username):
+        raise LetterboxdInvalidURLError(
+            f"'{username}' does not look like a Letterboxd username."
+        )
+
+    rest = [seg.lower() for seg in segments[1:]]
+    if not rest:
+        return username, ""
+    if rest[0] == "watchlist":
+        # /watchlist/, /watchlist/page/2/, /watchlist/by/name/, ... all describe
+        # the watchlist; imports always restart from page 1.
+        return username, "watchlist"
+    if rest[0] == "films":
+        # Profile "Films" page == watched films (Letterboxd template
+        # '/object/person/films-watched'); /films/watched/ is an accepted alias.
+        return username, "watched"
+
+    raise LetterboxdInvalidURLError(
+        "Unsupported Letterboxd URL path. Expected a profile URL, a "
+        "/watchlist/ URL, or a /films/ (watched) URL."
+    )
+
+
+def build_profile_page_url(username: str, file_type: str, page: int = 1) -> str:
+    """Canonical (absolute) URL for page ``page`` of a profile listing."""
+    if file_type == "watchlist":
+        base = f"{LETTERBOXD_BASE_URL}/{username}/watchlist/"
+    elif file_type == "watched":
+        base = f"{LETTERBOXD_BASE_URL}/{username}/films/"
+    else:
+        raise ValueError(f"Unsupported Letterboxd import type: {file_type!r}")
+    if page > 1:
+        return f"{base}page/{page}/"
+    return base
+
+
+def _split_title_year(display_name: str) -> tuple[str, Optional[int]]:
+    """Split a Letterboxd display name like ``"Inception (2010)"``."""
+    name = (display_name or "").strip()
+    if not name:
+        return "", None
+    match = _YEAR_SUFFIX_RE.match(name)
+    if match:
+        try:
+            return match.group("title").strip(), int(match.group("year"))
+        except ValueError:
+            return name, None
+    return name, None
+
+
+def _entry_link(element) -> Optional[str]:
+    """Absolute Letterboxd film URL for a poster element, if it has one."""
+    link = element.get("data-target-link")
+    if not link:
+        child = element.select_one("[data-target-link]")
+        if child:
+            link = child.get("data-target-link")
+    if not link:
+        anchor = element.select_one('a[href*="/film/"]')
+        if anchor:
+            link = anchor.get("href")
+    if not link:
+        return None
+    link = str(link).strip()
+    if not link or "/film/" not in link:
+        return None
+    return urljoin(LETTERBOXD_BASE_URL + "/", link)
+
+
+def _entry_title_year(element) -> tuple[str, Optional[int]]:
+    """Title + year for a poster element.
+
+    Prefers Letterboxd's own ``data-item-name`` / ``data-item-full-display-name``
+    (rendered as "Title (Year)" — reliable, no extra request). Falls back to the
+    poster image ``alt`` attribute, which carries the title only; in that case
+    the year stays ``None`` and TMDb matching resolves it.
+    """
+    name = element.get("data-item-name") or element.get("data-item-full-display-name")
+    if not name:
+        holder = element.select_one("[data-item-name]")
+        if holder:
+            name = holder.get("data-item-name") or holder.get("data-item-full-display-name")
+    title, year = _split_title_year(str(name)) if name else ("", None)
+    if title:
+        return title, year
+
+    img = element.select_one("img")
+    if img is not None:
+        alt = str(img.get("alt") or "").strip()
+        if alt:
+            return alt, None
+    return "", None
+
+
+def parse_profile_page(html: str, page_url: str, file_type: str) -> list[LetterboxdRow]:
+    """Parse one Letterboxd profile/list page into :class:`LetterboxdRow` objects.
+
+    Pure function (no HTTP). Handles both the current poster markup
+    (``react-component`` tiles carrying ``data-target-link`` /
+    ``data-item-name``) and the classic ``.poster-container`` pattern used by
+    older Letterboxd pages and third-party scrapers.
+
+    Relative film links (``/film/inception/``) are normalized against
+    ``https://letterboxd.com``. Rows carry ``source="letterboxd_url"`` so
+    downstream imports are distinguishable from CSV imports.
+    """
+    if not html or not str(html).strip():
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+    elements = soup.select("[data-target-link]")
+    if not elements:
+        elements = soup.select(".poster-container")
+
+    rows: list[LetterboxdRow] = []
+    seen: set[str] = set()
+    for element in elements:
+        uri = _entry_link(element)
+        if not uri:
+            continue
+        title, year = _entry_title_year(element)
+        if not title:
+            continue
+        key = uri or title.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(
+            LetterboxdRow(
+                title=title,
+                year=year,
+                uri=uri,
+                file_type=file_type,
+                source="letterboxd_url",
+            )
+        )
+    return rows
+
+
+def parse_watchlist_page(html: str, page_url: str) -> list[LetterboxdRow]:
+    """Parse a ``/<username>/watchlist/`` page into watchlist rows."""
+    return parse_profile_page(html, page_url, "watchlist")
+
+
+def parse_watched_page(html: str, page_url: str) -> list[LetterboxdRow]:
+    """Parse a ``/<username>/films/`` (watched) page into watched rows."""
+    return parse_profile_page(html, page_url, "watched")
+
+
+_SESSION: Optional[requests.Session] = None
+
+
+def _get_session() -> requests.Session:
+    """Browser-like navigation session.
+
+    Letterboxd sits behind Cloudflare bot protection. Requests that look like
+    a real top-level browser navigation (Client Hints + ``Sec-Fetch-*``) pass;
+    a bare ``User-Agent`` alone gets an interstitial challenge (HTTP 403) on
+    some paths, notably ``/<username>/films/page/<n>/``.
+    """
+    global _SESSION
+    if _SESSION is None:
+        _SESSION = requests.Session()
+        _SESSION.headers.update(
+            {
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0 Safari/537.36"
+                ),
+                "Accept": (
+                    "text/html,application/xhtml+xml,application/xml;q=0.9,"
+                    "image/avif,image/webp,image/apng,*/*;q=0.8"
+                ),
+                "Accept-Language": "en-US,en;q=0.9",
+                "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": '"macOS"',
+                "Upgrade-Insecure-Requests": "1",
+                "Sec-Fetch-Site": "cross-site",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-User": "?1",
+                "Sec-Fetch-Dest": "document",
+            }
+        )
+    return _SESSION
+
+
+def _looks_like_challenge(body: str) -> bool:
+    """Detect an interstitial (e.g. Cloudflare) instead of real content."""
+    head = body[:4000].lower()
+    return "just a moment..." in head or "challenges.cloudflare.com" in head
+
+
+def fetch_profile_page(url: str, timeout: int = PROFILE_FETCH_TIMEOUT) -> str:
+    """Fetch one public Letterboxd page (no auth/cookies required).
+
+    Raises application-level errors only — raw exception traces never reach
+    the API response:
+
+    - :class:`LetterboxdProfileNotFound` on 404 / "page not found" bodies
+    - :class:`LetterboxdFetchError` on timeout, connection errors, bot
+      challenges (403), rate limits (429), and any other non-2xx response
+    """
+    session = _get_session()
+    try:
+        response = session.get(url, timeout=timeout)
+    except requests.Timeout as exc:
+        raise LetterboxdFetchError(
+            "Letterboxd request timed out. Try again in a moment."
+        ) from exc
+    except requests.ConnectionError as exc:
+        raise LetterboxdFetchError(
+            "Could not connect to Letterboxd. Check your connection and try again."
+        ) from exc
+    except requests.RequestException as exc:
+        raise LetterboxdFetchError("Letterboxd request failed. Try again later.") from exc
+
+    body = response.text or ""
+    status_code = response.status_code
+
+    if status_code == 404 or "sorry, we can't find that page" in body.lower():
+        raise LetterboxdProfileNotFound(
+            "Letterboxd profile or list not found. Check the username/URL."
+        )
+    if status_code in (401, 403) or _looks_like_challenge(body):
+        raise LetterboxdFetchError(
+            "Letterboxd blocked the request (bot check or private profile). "
+            "Try again later, and make sure the profile is public."
+        )
+    if status_code == 429:
+        raise LetterboxdFetchError(
+            "Letterboxd rate limited the request. Try again in a few minutes."
+        )
+    if not 200 <= status_code < 300:
+        raise LetterboxdFetchError(f"Letterboxd request failed (HTTP {status_code}).")
+    return body
+
+
+def fetch_profile_rows(
+    username: str,
+    file_type: str,
+    *,
+    fetcher: Optional[Callable[[str], str]] = None,
+    max_pages: int = MAX_PROFILE_PAGES,
+) -> tuple[list[LetterboxdRow], int]:
+    """Fetch every page of a profile listing sequentially.
+
+    Stops at the first page with zero poster entries, and never exceeds
+    ``max_pages`` (see :data:`MAX_PROFILE_PAGES`) even if every page returns
+    rows. Returns ``(rows, pages_fetched)``; ``pages_fetched`` counts requests
+    actually made, including the terminating empty page.
+    """
+    fetch = fetcher or fetch_profile_page
+    rows: list[LetterboxdRow] = []
+    pages_fetched = 0
+
+    for page in range(1, max(1, max_pages) + 1):
+        page_url = build_profile_page_url(username, file_type, page)
+        html = fetch(page_url)
+        pages_fetched += 1
+        page_rows = parse_profile_page(html, page_url, file_type)
+        if not page_rows:
+            break
+        rows.extend(page_rows)
+    else:
+        logger.warning(
+            "Letterboxd import for %s/%s stopped at MAX_PROFILE_PAGES=%s; "
+            "listing may be truncated.",
+            username,
+            file_type,
+            max_pages,
+        )
+
+    return rows, pages_fetched
+
+
 def import_rows(
     rows: Iterable[LetterboxdRow],
     client: Optional[TMDbClient] = None,
@@ -315,10 +739,15 @@ def import_rows(
                 local_movies_by_uri[row.uri] = movie
 
         if row.file_type == "watchlist":
-            item_source = getattr(row, "source", None) or source
-            item, _ = WatchlistItem.objects.get_or_create(
-                movie=movie, source=item_source, defaults={"user_id": user_id}
-            )
+            # Reuse an existing item for this movie regardless of its original
+            # source so re-importing an exported backup (whatever source the
+            # item was first created with) never duplicates the movie.
+            item = WatchlistItem.objects.filter(user_id=user_id, movie=movie).first()
+            if item is None:
+                item_source = getattr(row, "source", None) or source
+                item, _ = WatchlistItem.objects.get_or_create(
+                    movie=movie, source=item_source, defaults={"user_id": user_id}
+                )
             result.resolved.append(item)
 
         # Update UserMovieData

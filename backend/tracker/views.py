@@ -7,6 +7,7 @@ from typing import Any
 from django.conf import settings
 from django.db import connection, transaction
 from django.shortcuts import get_object_or_404
+from django.views.decorators.http import require_GET
 from rest_framework import status
 from rest_framework.decorators import api_view, parser_classes
 from rest_framework.parsers import MultiPartParser
@@ -69,12 +70,32 @@ def paginate_list(items: list, page: int, page_size: int) -> tuple[list, dict]:
     return page_items, pagination
 from .services.bulk_refresh import process_watchlist_refresh
 from .services.cache import AvailabilityCache
-from .services.letterboxd import import_rows, parse_file_or_zip
+from .services.letterboxd import (
+    LetterboxdFetchError,
+    LetterboxdInvalidURLError,
+    LetterboxdProfileNotFound,
+    fetch_profile_rows,
+    import_rows,
+    normalize_profile_url,
+    parse_file_or_zip,
+)
 from .services.ranking import rank_offers
 from .services.preferences import resolve_preferences
 from .services.rate_limit import RateLimitExceeded
 from .services.enrichment import enrich_movie_from_tmdb, resolve_or_create_movie, sync_movie_fields
 from .services.tmdb import TMDbClient, TMDbItem, TMDbMovie
+from .services.watchlist_export import (
+    FILENAME_BOTH,
+    FILENAME_WATCHED,
+    FILENAME_WATCHLIST,
+    CanonicalImportError,
+    combined_export_rows,
+    csv_response,
+    is_canonical_csv,
+    parse_canonical_csv,
+    watched_export_rows,
+    watchlist_export_rows,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -931,7 +952,13 @@ def watchlist(request):
         return Response({"error": "file field required"}, status=400)
     file_bytes = upload.read()
     filename = upload.name or ""
-    rows = parse_file_or_zip(file_bytes, filename=filename)
+    if is_canonical_csv(file_bytes):
+        try:
+            rows = parse_canonical_csv(file_bytes)
+        except CanonicalImportError as exc:
+            return Response({"error": str(exc)}, status=400)
+    else:
+        rows = parse_file_or_zip(file_bytes, filename=filename)
     result = import_rows(rows)
     return Response(
         {
@@ -944,6 +971,24 @@ def watchlist(request):
             "diary_events_count": result.diary_events_count,
         }
     )
+
+
+@require_GET
+def export_watchlist(request):
+    """Download the watchlist as a canonical WhereTfDoIWatchIt CSV backup."""
+    return csv_response(FILENAME_WATCHLIST, watchlist_export_rows(user_id=1))
+
+
+@require_GET
+def export_watched(request):
+    """Download explicitly watched movies as a canonical CSV backup."""
+    return csv_response(FILENAME_WATCHED, watched_export_rows(user_id=1))
+
+
+@require_GET
+def export_combined(request):
+    """Download watchlist and watched movies in one canonical CSV backup."""
+    return csv_response(FILENAME_BOTH, combined_export_rows(user_id=1))
 
 
 @api_view(["POST"])
@@ -2122,7 +2167,7 @@ def google_interests_import(request):
 
     cookies: dict[str, str] = {str(k): str(v) for k, v in raw_cookies.items() if v is not None}
 
-    from tracker.services.google_interests import fetch_page, parse_and_import
+    from tracker.services import google_interests as gi
 
     client = TMDbClient(settings.TMDB_API_KEY, timeout=3)
     all_resolved: list = []
@@ -2135,13 +2180,33 @@ def google_interests_import(request):
         if not url_stripped:
             continue
         try:
-            html = fetch_page(url_stripped, cookies=cookies)
+            # Follows Google's own pagination ("1-200 of 256") so a long list
+            # imports completely instead of only its first chunk.
+            html_pages = gi.fetch_list_pages(url_stripped, cookies=cookies)
         except Exception as exc:
-            logger.exception("Google Interests fetch failed for %s", url_stripped)
+            logger.warning("Google Interests fetch failed for %s: %s", url_stripped, exc)
             all_skipped.append({"url": url_stripped, "reason": f"fetch_failed: {exc}"})
             continue
 
-        result = parse_and_import(html, page_url=url_stripped, client=client, user_id=user_id)
+        rows = []
+        for html in html_pages:
+            rows.extend(gi.parse_page(html, url_stripped))
+
+        result = gi.import_interests(rows, client=client, user_id=user_id)
+        if not rows:
+            # Never report a silent 0/0/0: an empty parse means the page was
+            # not a list we understand (consent page, empty list, untitled
+            # cards) and the caller should see why.
+            logger.warning("No titles parsed from %s", url_stripped)
+            all_skipped.append(
+                {
+                    "url": url_stripped,
+                    "reason": (
+                        "no_items_found: page contained no list entries "
+                        "(empty list, consent page, or cards without titles)"
+                    ),
+                }
+            )
         all_resolved.extend(result.resolved)
         all_ambiguous.extend(result.ambiguous)
         all_skipped.extend(result.skipped)
@@ -2153,5 +2218,92 @@ def google_interests_import(request):
             "ambiguous": all_ambiguous,
             "skipped": all_skipped,
             "watchlist_count": total_watchlist_count,
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
+# Letterboxd public-profile URL importer endpoint
+# ---------------------------------------------------------------------------
+
+@api_view(["POST"])
+def letterboxd_url_import(request):
+    """POST /api/importers/letterboxd-url/ — import a public Letterboxd URL.
+
+    Request body (JSON):
+        url (str, required): profile / watchlist / films URL, e.g.
+            https://letterboxd.com/USERNAME/ or .../USERNAME/watchlist/
+        type (str, optional): "watchlist" or "watched". Required when the URL
+            is a bare profile URL; optional otherwise (the URL path wins only
+            when ``type`` is omitted).
+        user_id (int, optional): defaults to 1.
+
+    Fetches public paginated HTML (no Letterboxd login/cookies), normalizes it
+    into LetterboxdRow objects and reuses import_rows() — the exact same TMDb
+    matching / ambiguity / idempotency behaviour as the CSV importer.
+
+    Errors are application-level only: 400 for bad input, 404 for a missing
+    profile/list, 502 for upstream Letterboxd failures (timeout, blocked,
+    non-2xx). Raw exception traces are never returned.
+    """
+    data = request.data if isinstance(request.data, dict) else {}
+    url = str(data.get("url") or "").strip()
+    requested_type = str(data.get("type") or "").strip().lower()
+    try:
+        user_id = int(data.get("user_id", 1) or 1)
+    except (TypeError, ValueError):
+        user_id = 1
+
+    if not url:
+        return Response({"error": "url is required"}, status=400)
+    if requested_type and requested_type not in ("watchlist", "watched"):
+        return Response(
+            {"error": "type must be 'watchlist' or 'watched'"}, status=400
+        )
+
+    try:
+        username, url_type = normalize_profile_url(url)
+    except LetterboxdInvalidURLError as exc:
+        return Response({"error": str(exc)}, status=400)
+
+    file_type = requested_type or url_type
+    if not file_type:
+        return Response(
+            {
+                "error": "type is required for a bare profile URL — "
+                "pass \"watchlist\" or \"watched\"."
+            },
+            status=400,
+        )
+
+    try:
+        rows, pages_fetched = fetch_profile_rows(username, file_type)
+    except LetterboxdProfileNotFound as exc:
+        return Response({"error": str(exc)}, status=404)
+    except LetterboxdFetchError as exc:
+        return Response({"error": str(exc)}, status=502)
+    except Exception:
+        logger.exception("Letterboxd URL import failed for %s (%s)", url, file_type)
+        return Response(
+            {"error": "Letterboxd request failed. Try again later."}, status=502
+        )
+
+    client = TMDbClient(settings.TMDB_API_KEY, timeout=3)
+    result = import_rows(rows, client=client, user_id=user_id)
+
+    return Response(
+        {
+            "source": "letterboxd_url",
+            "username": username,
+            "import_type": file_type,
+            "pages_fetched": pages_fetched,
+            "rows_found": len(rows),
+            "resolved": WatchlistItemSerializer(result.resolved, many=True).data,
+            "ambiguous": result.ambiguous,
+            "skipped": result.skipped,
+            "watched_count": result.watched_count,
+            "ratings_count": result.ratings_count,
+            "reviews_count": result.reviews_count,
+            "diary_events_count": result.diary_events_count,
         }
     )

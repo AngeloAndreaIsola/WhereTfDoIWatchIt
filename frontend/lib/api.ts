@@ -630,7 +630,9 @@ export async function linkTmdb(
 
 // ─── Google Interests importer ──────────────────────────────────────────────
 
-export interface GoogleInterestsResolvedRow {
+// ─── Importer result shapes (shared by the Letterboxd and Google importers) ─
+
+export interface ResolvedWatchlistRow {
   movie?: {
     id?: number;
     tmdb_id?: number;
@@ -655,7 +657,7 @@ export interface GoogleInterestsResolvedRow {
   };
 }
 
-export interface GoogleInterestsAmbiguousItem {
+export interface AmbiguousMatchItem {
   title: string;
   year: number | null;
   uri?: string | null;
@@ -663,17 +665,19 @@ export interface GoogleInterestsAmbiguousItem {
   reason?: string;
 }
 
-export interface GoogleInterestsSkippedItem {
-  title: string;
-  year: number | null;
+export interface SkippedImportItem {
+  title?: string;
+  year?: number | null;
   uri?: string | null;
+  /** Present instead of `title` when a whole URL failed to fetch. */
+  url?: string;
   reason?: string;
 }
 
 export interface GoogleInterestsImportResult {
-  resolved: GoogleInterestsResolvedRow[];
-  ambiguous: GoogleInterestsAmbiguousItem[];
-  skipped: GoogleInterestsSkippedItem[];
+  resolved: ResolvedWatchlistRow[];
+  ambiguous: AmbiguousMatchItem[];
+  skipped: SkippedImportItem[];
   watchlist_count: number;
 }
 
@@ -694,6 +698,47 @@ export async function importGoogleInterests(
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ?? `Google Interests import failed (${res.status})`);
+  }
+  return res.json();
+}
+
+// ─── Letterboxd public-profile URL importer ─────────────────────────────────
+
+export type LetterboxdImportType = "watchlist" | "watched";
+
+export interface LetterboxdUrlImportResult {
+  source: "letterboxd_url";
+  username: string;
+  import_type: LetterboxdImportType;
+  pages_fetched: number;
+  rows_found: number;
+  resolved: ResolvedWatchlistRow[];
+  ambiguous: AmbiguousMatchItem[];
+  skipped: SkippedImportItem[];
+  watched_count: number;
+  ratings_count: number;
+  reviews_count: number;
+  diary_events_count: number;
+}
+
+export interface LetterboxdUrlImportPayload {
+  url: string;
+  /** Required when `url` is a bare profile URL. */
+  type?: LetterboxdImportType;
+  user_id?: number;
+}
+
+export async function importLetterboxdUrl(
+  payload: LetterboxdUrlImportPayload
+): Promise<LetterboxdUrlImportResult> {
+  const res = await fetch("/api/importers/letterboxd-url/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `Letterboxd import failed (${res.status})`);
   }
   return res.json();
 }

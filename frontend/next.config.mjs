@@ -1,6 +1,13 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   trailingSlash: true,
+  // Next's proxy to the backend defaults to 30s (proxy-request.js:
+  // `proxyTimeout || 30000`). Bulk imports (Google Interests / Letterboxd) run
+  // TMDb lookups per title and can exceed that, which surfaces as
+  // "Error: socket hang up / ECONNRESET" in the proxy log.
+  experimental: {
+    proxyTimeout: 180 * 1000,
+  },
   images: {
     remotePatterns: [
       {
