@@ -1,21 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import React from "react";
 import Link from "next/link";
 import { useSearchParams, useRouter } from "next/navigation";
 import { FilterBar, FilterState } from "@/components/FilterBar";
-import AmbiguousReviewLink from "@/components/AmbiguousReviewLink";
 import { useCurrentLocation } from "@/components/CurrentLocationProvider";
 import { VpnWatchModal } from "@/components/VpnWatchModal";
 import { WhyCantIWatchModal, ExcludedOffer } from "@/components/WhyCantIWatchModal";
 import { Pagination } from "@/components/Pagination";
 import {
-  GoogleInterestsImportResult,
-  LetterboxdImportType,
-  LetterboxdUrlImportResult,
-  importGoogleInterests,
-  importLetterboxdUrl,
   addToWatchlist,
   markMovieWatched,
   unmarkMovieWatched,
@@ -57,6 +50,24 @@ interface WatchlistItemRow {
   };
 }
 
+const buildWatchlistQuery = (filters: FilterState, page: number): string => {
+  const params = new URLSearchParams();
+  if (filters.q) params.set("q", filters.q);
+  if (filters.content_type !== "all") params.set("type", filters.content_type);
+  if (filters.genre) params.set("genre", filters.genre);
+  if (filters.year_min) params.set("year_min", filters.year_min);
+  if (filters.year_max) params.set("year_max", filters.year_max);
+  if (filters.providers.length > 0) params.set("providers", filters.providers.join(","));
+  if (filters.country) params.set("country", filters.country);
+  if (filters.status) params.set("status", filters.status);
+  if (filters.quality) params.set("quality", filters.quality);
+  if (filters.score_min) params.set("score_min", filters.score_min);
+  if (filters.sort_by) params.set("sort_by", filters.sort_by);
+  filters.actors.forEach((a) => params.append("actor_id", `${a.id}:${a.name}`));
+  if (page > 1) params.set("page", page.toString());
+  return params.toString();
+};
+
 export default function WatchlistPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -87,60 +98,6 @@ export default function WatchlistPage() {
   const [filters, setFilters] = useState<FilterState>(() =>
     parseFiltersFromURL(new URLSearchParams(searchParams?.toString() || ""))
   );
-
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [uploadError, setUploadError] = useState("");
-  const [uploadResult, setUploadResult] = useState<UploadResult | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
-
-  // URL import state
-  const [urlImportUrls, setUrlImportUrls] = useState("");
-  const [urlImportCookies, setUrlImportCookies] = useState("");
-  const [urlImporting, setUrlImporting] = useState(false);
-  const [urlImportError, setUrlImportError] = useState("");
-  const [urlImportResult, setUrlImportResult] = useState<
-    GoogleInterestsImportResult | null
-  >(null);
-
-  // Letterboxd profile/list URL import state
-  const [letterboxdUrl, setLetterboxdUrl] = useState("");
-  const [letterboxdImporting, setLetterboxdImporting] = useState(false);
-  const [letterboxdError, setLetterboxdError] = useState("");
-  const [letterboxdResults, setLetterboxdResults] = useState<
-    LetterboxdUrlImportResult[]
-  >([]);
-
-  interface Candidate {
-    tmdb_id: number;
-    title: string;
-    year: number | null;
-  }
-
-  interface AmbiguousItem {
-    title: string;
-    year: number | null;
-    uri?: string | null;
-    candidates: Candidate[];
-    reason?: string;
-  }
-
-  interface SkippedItem {
-    title: string;
-    year: number | null;
-    uri?: string | null;
-    reason?: string;
-  }
-
-  interface UploadResult {
-    resolved: WatchlistItemRow[];
-    ambiguous: AmbiguousItem[];
-    skipped: SkippedItem[];
-    watched_count?: number;
-    ratings_count?: number;
-    reviews_count?: number;
-    diary_events_count?: number;
-  }
 
   const [items, setItems] = useState<WatchlistItemRow[]>([]);
   const [page, setPage] = useState(1);
@@ -178,22 +135,7 @@ export default function WatchlistPage() {
 
   // Keep URL in sync with filters
   useEffect(() => {
-    const params = new URLSearchParams();
-    if (filters.q) params.set("q", filters.q);
-    if (filters.content_type !== "all") params.set("type", filters.content_type);
-    if (filters.genre) params.set("genre", filters.genre);
-    if (filters.year_min) params.set("year_min", filters.year_min);
-    if (filters.year_max) params.set("year_max", filters.year_max);
-    if (filters.providers.length > 0) params.set("providers", filters.providers.join(","));
-    if (filters.country) params.set("country", filters.country);
-    if (filters.status) params.set("status", filters.status);
-    if (filters.quality) params.set("quality", filters.quality);
-    if (filters.score_min) params.set("score_min", filters.score_min);
-    if (filters.sort_by) params.set("sort_by", filters.sort_by);
-    filters.actors.forEach((a) => params.append("actor_id", `${a.id}:${a.name}`));
-    if (page > 1) params.set("page", page.toString());
-
-    const qs = params.toString();
+    const qs = buildWatchlistQuery(filters, page);
     const newUrl = qs ? `/watchlist/?${qs}` : "/watchlist/";
     router.replace(newUrl, { scroll: false });
   }, [filters, page, router]);
@@ -206,147 +148,6 @@ export default function WatchlistPage() {
   const handleSetFilters = (newFilters: FilterState) => {
     setPage(1);
     setFilters(newFilters);
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0] ?? null;
-    setSelectedFile(file);
-    setUploadError("");
-  };
-
-  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    setIsDragging(true);
-  };
-
-  const handleDragLeave = () => {
-    setIsDragging(false);
-  };
-
-  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    setIsDragging(false);
-    const file = e.dataTransfer.files?.[0] ?? null;
-    if (file) {
-      setSelectedFile(file);
-      setUploadError("");
-    }
-  };
-
-  const handleUpload = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedFile) return;
-
-    setUploading(true);
-    setUploadError("");
-    setUploadResult(null);
-
-    const formData = new FormData();
-    formData.append("file", selectedFile);
-
-    try {
-      const res = await fetch("/api/watchlist/", {
-        method: "POST",
-        body: formData,
-      });
-
-      if (res.status === 429) {
-        const body = await res.json().catch(() => ({}));
-        setUploadError(body.error ?? "Rate limited — try again later.");
-        return;
-      }
-
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error ?? `Upload failed (${res.status})`);
-      }
-
-      const data: UploadResult = await res.json();
-      setUploadResult(data);
-      refreshWatchlistData();
-    } catch (err: unknown) {
-      setUploadError(
-        err instanceof Error ? err.message : "Upload failed"
-      );
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  const clearUrlImport = () => {
-    setUrlImportUrls("");
-    setUrlImportCookies("");
-    setUrlImportError("");
-    setUrlImportResult(null);
-  };
-
-  const handleUrlImport = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!urlImportUrls.trim()) return;
-
-    setUrlImporting(true);
-    setUrlImportError("");
-    setUrlImportResult(null);
-
-    let cookies: Record<string, string> = {};
-    if (urlImportCookies.trim()) {
-      try {
-        cookies = JSON.parse(urlImportCookies) as Record<string, string>;
-      } catch {
-        setUrlImportError("Cookies field must be valid JSON (e.g. {\"CONSENT\":\"...\"}).");
-        setUrlImporting(false);
-        return;
-      }
-    }
-
-    const urls = urlImportUrls
-      .split("\n")
-      .map((l) => l.trim())
-      .filter((l) => l.startsWith("http"));
-
-    if (urls.length === 0) {
-      setUrlImportError("No valid URLs found. Paste one or more Google Interests / Google TV list URLs, one per line.");
-      setUrlImporting(false);
-      return;
-    }
-
-    try {
-      const data = await importGoogleInterests({ cookies, urls });
-      setUrlImportResult(data);
-      refreshWatchlistData();
-    } catch (err: unknown) {
-      setUrlImportError(
-        err instanceof Error ? err.message : "Import from URL failed"
-      );
-    } finally {
-      setUrlImporting(false);
-    }
-  };
-
-  const handleLetterboxdImport = async (types: LetterboxdImportType[]) => {
-    const url = letterboxdUrl.trim();
-    if (!url || types.length === 0 || letterboxdImporting) return;
-
-    setLetterboxdImporting(true);
-    setLetterboxdError("");
-    setLetterboxdResults([]);
-
-    try {
-      const results: LetterboxdUrlImportResult[] = [];
-      // Sequential on purpose: one import at a time keeps TMDb/Letterboxd
-      // usage predictable and surfaces the first failure clearly.
-      for (const importType of types) {
-        results.push(await importLetterboxdUrl({ url, type: importType }));
-      }
-      setLetterboxdResults(results);
-      refreshWatchlistData();
-    } catch (err: unknown) {
-      setLetterboxdError(
-        err instanceof Error ? err.message : "Letterboxd import failed"
-      );
-    } finally {
-      setLetterboxdImporting(false);
-    }
   };
 
   useEffect(() => {
@@ -489,6 +290,13 @@ export default function WatchlistPage() {
     }
   };
 
+  // Current filters/page as a query string, carried to the import page so
+  // coming back restores the same view.
+  const watchlistQuery = buildWatchlistQuery(filters, page);
+  const importHref = watchlistQuery
+    ? `/watchlist/import/?${watchlistQuery}`
+    : "/watchlist/import";
+
   return (
     <div className="max-w-4xl mx-auto px-4 py-8 space-y-6">
       <div>
@@ -501,413 +309,25 @@ export default function WatchlistPage() {
         </p>
       </div>
 
-      {/* ─── Import from file ──────────────────────────────────────────────── */}
-      <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-xs dark:border-gray-700 dark:bg-gray-800">
-        <h2 className="mb-2 text-lg font-semibold text-gray-900 dark:text-gray-100">
-          Import Watchlist Export
-        </h2>
-        <p className="mb-4 text-xs text-gray-500 dark:text-gray-400">
-          Upload Letterboxd exports (.csv, .zip) or MyAnimeList exports (.xml,
-          .xml.gz, .gz).
-        </p>
-
-        <form onSubmit={handleUpload} className="space-y-4">
-          <div
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-            className={`flex flex-col items-center justify-center rounded-xl border-2 border-dashed p-6 text-center transition-colors cursor-pointer ${
-              isDragging
-                ? "border-blue-500 bg-blue-50 dark:border-blue-400 dark:bg-blue-950/30"
-                : "border-gray-300 hover:border-gray-400 dark:border-gray-700 dark:hover:border-gray-600"
-            }`}
-            onClick={() =>
-              document.getElementById("file-upload-input")?.click()
-            }
-          >
-            <svg
-              className="mx-auto h-10 w-10 text-gray-400 dark:text-gray-500"
-              stroke="currentColor"
-              fill="none"
-              viewBox="0 0 48 48"
-              aria-hidden="true"
-            >
-              <path
-                d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8"
-                strokeWidth={2}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-            <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">
-              <span className="font-semibold text-blue-600 dark:text-blue-400">
-                Click to choose
-              </span>{" "}
-              or drag & drop your export file here
-            </p>
-            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              Supports .csv, .zip, .xml, .gz, .xml.gz
-            </p>
-            {selectedFile && (
-              <p className="mt-3 rounded-md bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-800 dark:bg-blue-900/50 dark:text-blue-300">
-                Selected: {selectedFile.name} (
-                {(selectedFile.size / 1024).toFixed(1)} KB)
-              </p>
-            )}
-            <input
-              id="file-upload-input"
-              type="file"
-              accept=".csv,.zip,.xml,.gz,.xml.gz,text/csv,application/zip,application/xml,text/xml,application/gzip,application/x-gzip"
-              onChange={handleFileChange}
-              className="hidden"
-            />
-          </div>
-          <div className="flex justify-end">
-            <button
-              type="submit"
-              disabled={!selectedFile || uploading}
-              className="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-medium text-white shadow-xs hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
-            >
-              {uploading ? "Importing…" : "Import File"}
-            </button>
-          </div>
-        </form>
-        {uploadError && (
-          <div className="mt-4 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-700 dark:bg-red-900/30 dark:text-red-400">
-            {uploadError}
-          </div>
-        )}
-      </section>
-
-      {uploadResult && (
-        <section className="space-y-4">
-          <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800/50">
-            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
-              Import Summary
-            </h3>
-            <div className="flex flex-wrap gap-4 text-xs font-medium">
-              <span className="text-green-600 dark:text-green-400">
-                Resolved Watchlist: {uploadResult.resolved.length}
-              </span>
-              <span className="text-amber-600 dark:text-amber-400">
-                Ambiguous: {uploadResult.ambiguous.length}
-              </span>
-              <span className="text-gray-500 dark:text-gray-400">
-                Skipped: {uploadResult.skipped.length}
-              </span>
-            </div>
-          </div>
-
-          {uploadResult.ambiguous.length > 0 && (
-            <div className="flex items-center justify-between rounded-xl border border-amber-300 bg-amber-50 p-4 dark:border-amber-700 dark:bg-amber-900/30">
-              <div>
-                <h4 className="font-semibold text-amber-800 dark:text-amber-300">
-                  {uploadResult.ambiguous.length} Ambiguous Match
-                  {uploadResult.ambiguous.length > 1 ? "es" : ""}
-                </h4>
-                <p className="text-xs text-amber-700 dark:text-amber-400">
-                  Some titles could not be automatically matched to TMDb.
-                </p>
-              </div>
-
-              <AmbiguousReviewLink
-                items={uploadResult.ambiguous}
-                className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white shadow-xs hover:bg-amber-700 dark:bg-amber-500 dark:hover:bg-amber-600"
-              >
-                Review ambiguous matches
-              </AmbiguousReviewLink>
-            </div>
-          )}
-        </section>
-      )}
-
-      {/* ─── Import from Letterboxd URL ───────────────────────────────────── */}
-      <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-xs dark:border-gray-700 dark:bg-gray-800">
-        <h2 className="mb-2 text-lg font-semibold text-gray-900 dark:text-gray-100">
-          Import from a Letterboxd URL
-        </h2>
-        <p className="mb-4 text-xs text-gray-500 dark:text-gray-400">
-          Paste a public Letterboxd profile or list URL — no Letterboxd login or
-          cookies needed. The profile must be public. This copies the list once;
-          it is not a live sync.
-        </p>
-
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            handleLetterboxdImport(["watchlist"]);
-          }}
-          className="space-y-4"
-        >
+      {/* ─── Import entry point ───────────────────────────────────────────── */}
+      <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-xs dark:border-gray-700 dark:bg-gray-800">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-300">
-              Letterboxd profile or list URL
-            </label>
-            <input
-              type="text"
-              inputMode="url"
-              value={letterboxdUrl}
-              onChange={(e) => {
-                setLetterboxdUrl(e.target.value);
-                setLetterboxdError("");
-              }}
-              placeholder="https://letterboxd.com/username/"
-              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
-            />
-            <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
-              Works with https://letterboxd.com/username/,
-              .../username/watchlist/ and .../username/films/watched/
+            <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+              Import movies
+            </h2>
+            <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+              Import your watchlist from Letterboxd, Google, or CSV.
             </p>
           </div>
-
-          <div className="flex flex-wrap justify-end gap-3">
-            <button
-              type="button"
-              onClick={() => handleLetterboxdImport(["watchlist"])}
-              disabled={!letterboxdUrl.trim() || letterboxdImporting}
-              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-xs hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
-            >
-              {letterboxdImporting ? "Importing…" : "Import Watchlist"}
-            </button>
-            <button
-              type="button"
-              onClick={() => handleLetterboxdImport(["watched"])}
-              disabled={!letterboxdUrl.trim() || letterboxdImporting}
-              className="rounded-lg bg-purple-600 px-4 py-2 text-sm font-medium text-white shadow-xs hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-purple-500 dark:hover:bg-purple-600"
-            >
-              Import Watched
-            </button>
-            <button
-              type="button"
-              onClick={() => handleLetterboxdImport(["watchlist", "watched"])}
-              disabled={!letterboxdUrl.trim() || letterboxdImporting}
-              className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white shadow-xs hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-green-500 dark:hover:bg-green-600"
-            >
-              Import Both
-            </button>
-          </div>
-        </form>
-
-        {letterboxdError && (
-          <div className="mt-4 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-700 dark:bg-red-900/30 dark:text-red-400">
-            {letterboxdError}
-          </div>
-        )}
-
-        {letterboxdResults.length > 0 &&
-          letterboxdResults.every((r) => r.rows_found === 0) && (
-            <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
-              No entries found at this URL — check that the profile is public and
-              that the list contains films.
-            </div>
-          )}
+          <Link
+            href={importHref}
+            className="inline-flex shrink-0 items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-xs hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600"
+          >
+            Import
+          </Link>
+        </div>
       </section>
-
-      {letterboxdResults.length > 0 &&
-        letterboxdResults.some((r) => r.rows_found > 0) &&
-        (() => {
-          const ambiguousItems = letterboxdResults.flatMap((r) => r.ambiguous);
-          return (
-            <section className="space-y-4">
-              <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800/50">
-                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
-                  Letterboxd Import Summary
-                </h3>
-                {letterboxdResults.map((result) => (
-                  <div
-                    key={`${result.username}-${result.import_type}`}
-                    className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs font-medium last:mb-0"
-                  >
-                    <span className="font-semibold text-gray-700 dark:text-gray-200">
-                      {result.username} · {result.import_type}
-                    </span>
-                    <span className="text-gray-500 dark:text-gray-400">
-                      Pages: {result.pages_fetched}
-                    </span>
-                    <span className="text-gray-500 dark:text-gray-400">
-                      Rows: {result.rows_found}
-                    </span>
-                    <span className="text-green-600 dark:text-green-400">
-                      Resolved: {result.resolved.length}
-                    </span>
-                    <span className="text-amber-600 dark:text-amber-400">
-                      Ambiguous: {result.ambiguous.length}
-                    </span>
-                    <span className="text-gray-500 dark:text-gray-400">
-                      Skipped: {result.skipped.length}
-                    </span>
-                    {result.import_type === "watched" && (
-                      <span className="text-purple-600 dark:text-purple-400">
-                        Marked watched: {result.watched_count}
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
-
-              {ambiguousItems.length > 0 && (
-                <div className="flex items-center justify-between rounded-xl border border-amber-300 bg-amber-50 p-4 dark:border-amber-700 dark:bg-amber-900/30">
-                  <div>
-                    <h4 className="font-semibold text-amber-800 dark:text-amber-300">
-                      {ambiguousItems.length} Ambiguous Match
-                      {ambiguousItems.length > 1 ? "es" : ""}
-                    </h4>
-                    <p className="text-xs text-amber-700 dark:text-amber-400">
-                      Some titles could not be automatically matched to TMDb.
-                    </p>
-                  </div>
-
-                  <AmbiguousReviewLink
-                    items={ambiguousItems}
-                    className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white shadow-xs hover:bg-amber-700 dark:bg-amber-500 dark:hover:bg-amber-600"
-                  >
-                    Review ambiguous matches
-                  </AmbiguousReviewLink>
-                </div>
-              )}
-            </section>
-          );
-        })()}
-
-      {/* ─── Import from URL ───────────────────────────────────────────────── */}
-      <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-xs dark:border-gray-700 dark:bg-gray-800">
-        <h2 className="mb-2 text-lg font-semibold text-gray-900 dark:text-gray-100">
-          Import from URL
-        </h2>
-        <p className="mb-4 text-xs text-gray-500 dark:text-gray-400">
-          Paste one or more Google Interests / Google TV list page URLs (one per
-          line). Interests and Google TV lists sit behind your Google account,
-          so they need cookies — public Google Collections pages work without
-          them. Multi-page lists import every page automatically.
-        </p>
-
-        <form onSubmit={handleUrlImport} className="space-y-4">
-          <div className="space-y-3">
-            <div>
-              <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-300">
-                Google Interests list URLs
-              </label>
-              <textarea
-                value={urlImportUrls}
-                onChange={(e) => setUrlImportUrls(e.target.value)}
-                rows={4}
-                placeholder="https://www.google.com/interests/saved/list/...
-https://www.google.com/interests/saved/list/...&pageNumber=2"
-                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
-              />
-            </div>
-
-            <div>
-              <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-300">
-                Google cookies{" "}
-                <span className="text-gray-400 dark:text-gray-500">(JSON, optional)</span>
-              </label>
-              <textarea
-                value={urlImportCookies}
-                onChange={(e) => setUrlImportCookies(e.target.value)}
-                rows={3}
-                placeholder='{"CONSENT": "...", "NID": "...", "SOCS": "..."} (leave empty for public pages)'
-                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-mono focus:border-blue-500 focus:outline-none dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
-              />
-              <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
-                Get these from Chrome DevTools → Application → Cookies → www.google.com
-              </p>
-            </div>
-          </div>
-
-          <div className="flex justify-end gap-3">
-            <button
-              type="button"
-              onClick={clearUrlImport}
-              className="rounded-lg px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
-            >
-              Clear
-            </button>
-            <button
-              type="submit"
-              disabled={
-                !urlImportUrls.trim() || urlImporting
-              }
-              className="rounded-lg bg-green-600 px-5 py-2.5 text-sm font-medium text-white shadow-xs hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-green-500 dark:hover:bg-green-600"
-            >
-              {urlImporting ? "Importing…" : "Import from URL"}
-            </button>
-          </div>
-        </form>
-
-        {urlImportError && (
-          <div className="mt-4 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-700 dark:bg-red-900/30 dark:text-red-400">
-            {urlImportError}
-          </div>
-        )}
-      </section>
-
-      {urlImportResult && (
-        <section className="space-y-4">
-          <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800/50">
-            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
-              Import Summary
-            </h3>
-            <div className="flex flex-wrap gap-4 text-xs font-medium">
-              <span className="text-green-600 dark:text-green-400">
-                Resolved Watchlist: {urlImportResult.resolved.length}
-              </span>
-              <span className="text-amber-600 dark:text-amber-400">
-                Ambiguous: {urlImportResult.ambiguous.length}
-              </span>
-              <span className="text-gray-500 dark:text-gray-400">
-                Skipped: {urlImportResult.skipped.length}
-              </span>
-            </div>
-          </div>
-
-          {urlImportResult.skipped.length > 0 && (
-            <div className="rounded-xl border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20">
-              <h4 className="font-semibold text-red-800 dark:text-red-300">
-                {urlImportResult.skipped.length} Skipped
-              </h4>
-              <p className="text-xs text-red-700 dark:text-red-400">
-                These entries could not be imported. Expired or missing cookies
-                are the usual cause for Google Interests / Google TV lists.
-              </p>
-              <ul className="mt-2 max-h-48 space-y-1 overflow-y-auto text-xs text-red-700 dark:text-red-400">
-                {urlImportResult.skipped.slice(0, 25).map((item, index) => (
-                  <li key={index} className="break-words">
-                    <span className="font-medium">
-                      {item.title || item.url || "Entry"}
-                    </span>
-                    {item.reason ? ` — ${item.reason}` : ""}
-                  </li>
-                ))}
-                {urlImportResult.skipped.length > 25 && (
-                  <li>…and {urlImportResult.skipped.length - 25} more</li>
-                )}
-              </ul>
-            </div>
-          )}
-
-          {urlImportResult.ambiguous.length > 0 && (
-            <div className="flex items-center justify-between rounded-xl border border-amber-300 bg-amber-50 p-4 dark:border-amber-700 dark:bg-amber-900/30">
-              <div>
-                <h4 className="font-semibold text-amber-800 dark:text-amber-300">
-                  {urlImportResult.ambiguous.length} Ambiguous Match
-                  {urlImportResult.ambiguous.length > 1 ? "es" : ""}
-                </h4>
-                <p className="text-xs text-amber-700 dark:text-amber-400">
-                  Some titles could not be automatically matched to TMDb.
-                </p>
-              </div>
-
-              <AmbiguousReviewLink
-                items={urlImportResult.ambiguous}
-                className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white shadow-xs hover:bg-amber-700 dark:bg-amber-500 dark:hover:bg-amber-600"
-              >
-                Review ambiguous matches
-              </AmbiguousReviewLink>
-            </div>
-          )}
-        </section>
-      )}
 
       <FilterBar
         filters={filters}
