@@ -447,6 +447,7 @@ class WatchlistReportEndpointTests(TestCase):
         ])
 
         self.assertEqual(summary["services"], [
+            {"service": "Apple", "count": 2},
             {"service": "Netflix", "count": 2},
             {"service": "Prime", "count": 1},
         ])
