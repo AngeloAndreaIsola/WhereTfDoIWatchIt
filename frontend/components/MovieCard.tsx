@@ -9,6 +9,7 @@ export interface MovieCardData {
   title: string;
   year?: number | null;
   poster_path?: string | null;
+  content_type?: string;
   categories?: string[];
   best_service?: string | null;
   best_country?: string | null;
@@ -47,7 +48,7 @@ export default function MovieCard({ movie }: MovieCardProps) {
 
   return (
     <Link
-      href={`/movie/${movie.tmdb_id}`}
+      href={movie.content_type === "series" ? `/tv/${movie.tmdb_id}` : `/movie/${movie.tmdb_id}`}
       className="group flex flex-col overflow-hidden rounded-xl border border-gray-200 bg-white text-decoration-none shadow-sm transition-all hover:-translate-y-1 hover:shadow-lg dark:border-gray-700 dark:bg-gray-800"
     >
       {/* Poster Image */}

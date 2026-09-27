@@ -9,40 +9,94 @@ from tracker.scrapers.base import BaseScraper, ScrapedItem
 logger = logging.getLogger(__name__)
 
 
+def _content_type_from_url(url: Any, default: str = "movie") -> str:
+    """Classify an item from its URL path.
+
+    HydraHD keeps films and shows in separate path namespaces (`/movie/...`
+    vs `/watchseries/...`), so the URL carries a usable signal even for search
+    results, where no browse category is available. Anything unrecognised keeps
+    ``default`` — an unknown signal must never become a series.
+    """
+    path = str(url or "").split("?", 1)[0]
+    if "watchseries/" in path:
+        return "series"
+    if "/movie/" in path or path.startswith("movie/"):
+        return "movie"
+    return default
+
+
 class KissKHScraper(BaseScraper):
     provider_slug = "kisskh"
 
+    # KissKH's API `type` parameter is the site's own structured content flag and
+    # the only reliable signal it exposes (payload rows carry no per-item type):
+    # 2 = films, 1 = drama series, 3 = anime series. `type=0` (mixed) is avoided
+    # because it yields no usable classification, so each type is fetched on its own
+    # and the response type stamps every item parsed from it.
+    BROWSE_TYPES: tuple[tuple[str, str], ...] = (
+        ("2", "movie"),
+        ("1", "series"),
+        ("3", "series"),
+    )
+
     def _execute_run(self, query: Optional[str] = None) -> list[ScrapedItem]:
+        items: list[ScrapedItem] = []
+
         if not query:
             logger.info("KissKH scraper: no query provided, scraping recently added...")
-            items = []
-            for page in range(1, 3):
-                url = f"https://kisskh.do/api/DramaList/List?page={page}&type=0&sub=0&country=0&status=0&order=1"
-                logger.info("KissKH scraper: fetching %s", url)
-                resp_data = self.fetch_url(url)
-                if not resp_data or not isinstance(resp_data, dict):
-                    break
-                data = resp_data.get("data")
-                if not data:
-                    break
-                page_items = self.parse_items(data)
-                if not page_items:
-                    break
-                items.extend(page_items)
-            return items
+            for type_code, content_type in self.BROWSE_TYPES:
+                for page in range(1, 3):
+                    url = (
+                        f"https://kisskh.do/api/DramaList/List?page={page}"
+                        f"&type={type_code}&sub=0&country=0&status=0&order=1"
+                    )
+                    logger.info("KissKH scraper: fetching %s", url)
+                    resp_data = self.fetch_url(url)
+                    if not resp_data or not isinstance(resp_data, dict):
+                        break
+                    data = resp_data.get("data")
+                    if not data:
+                        break
+                    page_items = self.parse_items(data, content_type=content_type)
+                    if not page_items:
+                        break
+                    items.extend(page_items)
+            return self._dedupe(items)
 
-        url = f"https://kisskh.do/api/DramaList/Search?q={query}"
-        resp_data = self.fetch_url(url)
-        if not resp_data:
-            logger.warning("KissKH scraper: no response data")
-            return []
-        if not isinstance(resp_data, list):
-            logger.warning("KissKH scraper: expected list, got %s", type(resp_data))
-            return []
-        logger.info("KissKH scraper: got %d entries", len(resp_data))
-        return self.parse_items(resp_data)
+        for type_code, content_type in self.BROWSE_TYPES:
+            url = f"https://kisskh.do/api/DramaList/Search?q={query}&type={type_code}"
+            resp_data = self.fetch_url(url)
+            if not resp_data:
+                logger.warning("KissKH scraper: no response data for type=%s", type_code)
+                continue
+            if not isinstance(resp_data, list):
+                logger.warning(
+                    "KissKH scraper: expected list for type=%s, got %s",
+                    type_code,
+                    type(resp_data),
+                )
+                continue
+            logger.info("KissKH scraper: got %d entries", len(resp_data))
+            items.extend(self.parse_items(resp_data, content_type=content_type))
+        return self._dedupe(items)
 
-    def parse_items(self, raw_data: Any) -> list[ScrapedItem]:
+    @staticmethod
+    def _dedupe(items: list[ScrapedItem]) -> list[ScrapedItem]:
+        """Drop rows seen under another type request (the same title can be
+        returned by both the series and the film query)."""
+        seen: set[Any] = set()
+        deduped: list[ScrapedItem] = []
+        for item in items:
+            payload = item.raw_payload
+            entry_id = payload.get("id") if isinstance(payload, dict) else None
+            key = entry_id if entry_id is not None else (item.title, item.year)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(item)
+        return deduped
+
+    def parse_items(self, raw_data: Any, content_type: str = "movie") -> list[ScrapedItem]:
         items: list[ScrapedItem] = []
         for entry in raw_data or []:
             if not isinstance(entry, dict):
@@ -66,7 +120,7 @@ class KissKHScraper(BaseScraper):
                     title=str(title),
                     provider_slug=self.provider_slug,
                     year=year_int,
-                    content_type="movie",
+                    content_type=content_type,
                     source_url=str(url_path),
                     audio_languages=audio if isinstance(audio, list) else [str(audio)],
                     subtitle_languages=subs if isinstance(subs, list) else [str(subs)],
@@ -147,13 +201,18 @@ class HydraHDScraper(BaseScraper):
             logger.info("HydraHD scraper: no query provided, scraping recently added...")
             items = []
             for category in ["movies", "tv-shows"]:
+                # The browse category only acts as the fallback signal; the item URL
+                # itself is authoritative for classification.
+                default_content_type = "series" if category == "tv-shows" else "movie"
                 for page in range(1, 2):  # Scrape first page per category
                     for domain in ["hydrahd.ws", "hydrahd.ru"]:
                         url = f"https://{domain}/{category}/date/{page}"
                         logger.info("HydraHD scraper: fetching %s", url)
                         resp_data = self.fetch_url(url, headers=self.HEADERS)
                         if resp_data and isinstance(resp_data, str):
-                            page_items = getattr(self, "parse_html", lambda x: [])(resp_data)
+                            page_items = self.parse_html(
+                                resp_data, default_content_type=default_content_type
+                            )
                             if page_items:
                                 items.extend(page_items)
                                 break  # Break domain loop
@@ -206,6 +265,7 @@ class HydraHDScraper(BaseScraper):
                     title=str(title),
                     provider_slug=self.provider_slug,
                     year=year_int,
+                    content_type=_content_type_from_url(source_url),
                     source_url=str(source_url),
                     audio_languages=audio if isinstance(audio, list) else [str(audio)],
                     subtitle_languages=subs if isinstance(subs, list) else [str(subs)],
@@ -217,7 +277,9 @@ class HydraHDScraper(BaseScraper):
         return items
 
 
-    def parse_html(self, html_content: str) -> list[ScrapedItem]:
+    def parse_html(
+        self, html_content: str, default_content_type: str = "movie"
+    ) -> list[ScrapedItem]:
         import re
         items: list[ScrapedItem] = []
         pattern = re.compile(
@@ -237,6 +299,7 @@ class HydraHDScraper(BaseScraper):
                     title=title.strip(),
                     provider_slug=self.provider_slug,
                     year=year_int,
+                    content_type=_content_type_from_url(source_url, default=default_content_type),
                     source_url=source_url,
                     audio_languages=["EN"],
                     subtitle_languages=[], 
@@ -260,7 +323,7 @@ class AnimeWorldScraper(BaseScraper):
                     logger.info("AnimeWorld scraper: fetching %s", url)
                     resp = self.session.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=self.timeout)
                     if resp.status_code == 200:
-                        page_items = self.parse_html(resp.text)
+                        page_items = self.parse_html(resp.text, category=category)
                         if not page_items:
                             break
                         items.extend(page_items)
@@ -285,10 +348,18 @@ class AnimeWorldScraper(BaseScraper):
         logger.warning("AnimeWorld scraper: unexpected response type: %s", type(resp_data))
         return []
 
-    def parse_html(self, html_content: str) -> list[ScrapedItem]:
-        """Parse HTML response containing anime items."""
+    def parse_html(self, html_content: str, category: Optional[str] = None) -> list[ScrapedItem]:
+        """Parse HTML response containing anime items.
+
+        ``category`` is the browse section the HTML came from. AnimeWorld has two
+        static sections (`/animes` and `/movies`) and every item carries the same
+        `/play/...` href, so the section is the only per-item type signal; search
+        results arrive without one and keep the default movie type. An unknown
+        category never becomes a series.
+        """
         import re
         items: list[ScrapedItem] = []
+        content_type = "series" if category == "animes" else "movie"
 
         # Extract anime entries using regex
         # Pattern: <a class="name" href="play/...">Title</a>
@@ -318,6 +389,7 @@ class AnimeWorldScraper(BaseScraper):
                     title=title.strip(),
                     provider_slug=self.provider_slug,
                     year=year_int,
+                    content_type=content_type,
                     source_url=source_url,
                     audio_languages=["JA"],  # Default for anime
                     subtitle_languages=["EN", "IT"],  # AnimeWorld is Italian site with subs

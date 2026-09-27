@@ -69,6 +69,53 @@ class ParseOffersTests(SimpleTestCase):
         self.assertEqual(gb.service_name, "Netflix")
 
 
+class PrimeOfferTypeTests(SimpleTestCase):
+    """Only ``subscription``/``free`` Prime entries survive parsing.
+
+    A series payload can list Prime Video by other routes — a Prime Video
+    Channel (``addon``, billed through the channel provider) or a ``buy``/
+    ``rent`` offer. None of those mean "included with the Prime subscription",
+    so none of them may reach the Availability cache, where they would later be
+    presented as an ordinary Prime Video subscription.
+    """
+
+    @staticmethod
+    def _prime_payload():
+        entry = lambda offer_type: {
+            "type": offer_type,
+            "quality": "hd",
+            "audios": ["eng"],
+            "subtitles": ["eng"],
+            "service": {"id": "prime", "name": "Prime Video"},
+            "link": f"https://www.primevideo.com/detail/{offer_type}",
+        }
+        return {
+            "streamingOptions": {
+                "CA": [entry("addon")],
+                "AT": [entry("buy"), entry("rent")],
+                "US": [entry("subscription")],
+                "NL": [entry("free")],
+            }
+        }
+
+    def test_only_subscription_and_free_prime_offers_survive(self):
+        offers = StreamingAvailabilityClient._parse_offers(self._prime_payload())
+
+        self.assertEqual(
+            sorted((o.country, o.offer_type) for o in offers),
+            [("NL", "free"), ("US", "subscription")],
+        )
+        self.assertTrue(all(o.service_id == "prime" for o in offers))
+
+    def test_prime_addon_and_buy_never_become_availability_rows(self):
+        """The parser is the stage that must reject them — nothing later can."""
+        offers = StreamingAvailabilityClient._parse_offers(self._prime_payload())
+        surviving_countries = {o.country for o in offers}
+
+        self.assertNotIn("CA", surviving_countries)  # Prime Video Channel
+        self.assertNotIn("AT", surviving_countries)  # purchase offer
+
+
 class ServiceDisplayNameTests(SimpleTestCase):
     def test_known_ids_map_to_pretty_names(self):
         self.assertEqual(service_display_name("prime"), "Prime Video")

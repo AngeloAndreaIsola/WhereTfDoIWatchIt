@@ -399,9 +399,9 @@ export default function WatchlistPage() {
   };
 
   // Manual watchlist management functions
-  const handleAddToWatchlist = async (tmdbId: number) => {
+  const handleAddToWatchlist = async (tmdbId: number, contentType: "movie" | "series" = "movie") => {
     try {
-      const result = await addToWatchlist(tmdbId);
+      const result = await addToWatchlist(tmdbId, contentType);
       console.log("Added to watchlist:", result);
       // Refresh watchlist data
       refreshWatchlistData();
@@ -745,7 +745,13 @@ https://www.google.com/interests/saved/list/...&pageNumber=2"
                       : "border-gray-200 dark:border-gray-800/60 opacity-60 grayscale hover:opacity-100 hover:grayscale-0"
                   }`}
                 >
-                  <Link href={`/movie/${movie.tmdb_id}`}>
+                  <Link
+                    href={
+                      movie.content_type === "series"
+                        ? `/tv/${movie.tmdb_id}`
+                        : `/movie/${movie.tmdb_id}`
+                    }
+                  >
                     <div className="aspect-[2/3] bg-gray-100 dark:bg-gray-800 relative">
                       {movie.poster_path ? (
                         <img
@@ -858,7 +864,10 @@ https://www.google.com/interests/saved/list/...&pageNumber=2"
                         <button
                           onClick={() => {
                             if (movie?.tmdb_id) {
-                              handleAddToWatchlist(movie.tmdb_id);
+                              handleAddToWatchlist(
+                                movie.tmdb_id,
+                                movie.content_type === "series" ? "series" : "movie"
+                              );
                             }
                           }}
                           className={`w-full py-2 text-xs font-medium rounded-lg border transition-colors ${

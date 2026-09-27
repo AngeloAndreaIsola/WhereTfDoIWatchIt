@@ -7,7 +7,7 @@ and have strict rate limits).
 from __future__ import annotations
 
 from datetime import timedelta
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from django.test import TestCase
 from django.urls import reverse
@@ -31,6 +31,10 @@ class PrimeUrlRoutingTests(TestCase):
     def test_prime_movie_route_resolves(self):
         url = reverse("prime-movie", kwargs={"tmdb_id": 550})
         self.assertEqual(url, "/api/prime/movie/550/")
+
+    def test_prime_series_route_resolves(self):
+        url = reverse("prime-series", kwargs={"tmdb_id": 1396})
+        self.assertEqual(url, "/api/prime/series/1396/")
 
     def test_health_route_resolves(self):
         url = reverse("health")
@@ -86,6 +90,9 @@ class PrimePopularEndpointTests(TestCase):
         self.assertEqual(data["results"][0]["poster_path"], "/test.jpg")
         self.assertEqual(data["results"][0]["categories"], ["Action", "Drama"])
         self.assertEqual(data["results"][1]["categories"], ["Comedy"])
+        # Homepage cards need the content type to route to /movie/ vs /tv/.
+        self.assertEqual(data["results"][0]["content_type"], "movie")
+        self.assertEqual(data["results"][1]["content_type"], "movie")
 
     @patch("tracker.views.TMDbClient")
     def test_respects_limit_param(self, mock_tmdb_cls):
@@ -187,6 +194,9 @@ class PrimePopularSeriesEndpointTests(TestCase):
         self.assertEqual(data["results"][0]["title"], "DB Series")
         self.assertEqual(data["results"][1]["tmdb_id"], 101)
         self.assertEqual(data["results"][1]["title"], "Test Series")
+        # Homepage cards need the content type to route to /movie/ vs /tv/.
+        self.assertEqual(data["results"][0]["content_type"], "series")
+        self.assertEqual(data["results"][1]["content_type"], "series")
 
     @patch("tracker.views.TMDbClient")
     def test_returns_db_series_when_tmdb_fails(self, mock_tmdb_cls):
@@ -202,6 +212,7 @@ class PrimePopularSeriesEndpointTests(TestCase):
         data = response.json()
         self.assertEqual(data["count"], 1)
         self.assertEqual(data["results"][0]["title"], "Fallback Series")
+        self.assertEqual(data["results"][0]["content_type"], "series")
 
 
 class StreamingApiSeriesTests(TestCase):
@@ -220,7 +231,22 @@ class StreamingApiSeriesTests(TestCase):
 
         mock_get.assert_called_once()
         url = mock_get.call_args[0][0]
-        self.assertIn("/shows/series/12345", url)
+        self.assertIn("/shows/tv/12345", url)
+
+    @patch("tracker.services.streaming_api.requests.get")
+    def test_get_availability_movie_endpoint(self, mock_get):
+        from tracker.services.streaming_api import StreamingAvailabilityClient
+
+        mock_resp = mock_get.return_value
+        mock_resp.json.return_value = {"streamingOptions": {}}
+        mock_resp.raise_for_status.return_value = None
+
+        client = StreamingAvailabilityClient(api_key="test_key")
+        client.get_availability(12345, content_type="movie")
+
+        mock_get.assert_called_once()
+        url = mock_get.call_args[0][0]
+        self.assertIn("/shows/movie/12345", url)
 
 
 class SeedFixtureSeriesTests(TestCase):
@@ -237,6 +263,15 @@ class SeedFixtureSeriesTests(TestCase):
 
 class PrimeMovieEndpointTests(TestCase):
     """Tests for GET /api/prime/movie/<tmdb_id>/."""
+
+    def setUp(self):
+        # TMDb watch/providers gap-fill is a separate source with its own tests;
+        # these assert on the mocked cache payload only.
+        prime_patcher = patch(
+            "tracker.services.offer_pipeline.prime_offers", return_value=[]
+        )
+        self.addCleanup(prime_patcher.stop)
+        prime_patcher.start()
 
     @patch("tracker.services.offer_pipeline.AvailabilityCache")
     @patch("tracker.services.enrichment.TMDbClient")
@@ -413,3 +448,153 @@ class PrimeMovieEndpointTests(TestCase):
         self.assertEqual(data["offers"][1]["country"], "US")
         self.assertGreater(data["offers"][1]["ranking"]["audio_rank"],
                           data["offers"][0]["ranking"]["audio_rank"])
+
+
+class PrimeSeriesEndpointTests(TestCase):
+    """Tests for GET /api/prime/series/<tmdb_id>/."""
+
+    @patch("tracker.services.offer_pipeline.OfficialOffersPipeline")
+    @patch("tracker.services.enrichment.TMDbClient")
+    @patch("tracker.views.AvailabilityCache")
+    def test_returns_200_keyed_on_series_for_tracked_row(
+        self, mock_cache_cls, mock_enrich_tmdb, mock_pipeline_cls
+    ):
+        """A tracked series is served under the ``series`` key without a TMDb call."""
+        Movie.objects.create(tmdb_id=1396, title="Breaking Bad", year=2008,
+                             content_type="series")
+        mock_pipeline_cls.return_value.run.return_value = MagicMock(offers_out=[])
+
+        from django.test import Client
+        response = Client().get("/api/prime/series/1396/")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("series", data)
+        self.assertNotIn("movie", data)
+        self.assertEqual(data["series"]["tmdb_id"], 1396)
+        self.assertEqual(data["series"]["content_type"], "series")
+        self.assertEqual(data["offers"], [])
+        self.assertIn("is_in_watchlist", data)
+        mock_enrich_tmdb.return_value.details.assert_not_called()
+
+        # The offer pipeline runs against the series row itself.
+        passed = mock_pipeline_cls.return_value.run.call_args[0][0]
+        self.assertEqual(passed.content_type, "series")
+
+    @patch("tracker.services.offer_pipeline.OfficialOffersPipeline")
+    @patch("tracker.services.enrichment.TMDbClient")
+    @patch("tracker.views.AvailabilityCache")
+    def test_resolves_unknown_id_through_tmdb_tv_endpoint(
+        self, mock_cache_cls, mock_enrich_tmdb, mock_pipeline_cls
+    ):
+        """An untracked id is created from the TMDb TV details endpoint."""
+        from tracker.services.tmdb import TMDbItem
+
+        mock_enrich_tmdb.return_value.details.return_value = TMDbItem(
+            tmdb_id=1399, title="New Series", year=2024, content_type="series",
+            overview="A series.", poster_path="/s.jpg", genre_ids=[18],
+        )
+        mock_pipeline_cls.return_value.run.return_value = MagicMock(offers_out=[])
+
+        from django.test import Client
+        response = Client().get("/api/prime/series/1399/")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["series"]["tmdb_id"], 1399)
+        self.assertEqual(data["series"]["content_type"], "series")
+        self.assertTrue(Movie.objects.filter(tmdb_id=1399, content_type="series").exists())
+        mock_enrich_tmdb.return_value.details.assert_called_once_with(
+            1399, content_type="series"
+        )
+
+    @patch("tracker.services.offer_pipeline.OfficialOffersPipeline")
+    @patch("tracker.services.enrichment.TMDbClient")
+    @patch("tracker.views.AvailabilityCache")
+    def test_movie_row_is_not_resolved_as_series(
+        self, mock_cache_cls, mock_enrich_tmdb, mock_pipeline_cls
+    ):
+        """A row typed as a movie is never served (or flipped) as a series."""
+        movie = Movie.objects.create(tmdb_id=4242, title="Some Movie",
+                                     year=2021, content_type="movie")
+        mock_enrich_tmdb.return_value.details.side_effect = Exception("404 Not Found")
+
+        from django.test import Client
+        response = Client().get("/api/prime/series/4242/")
+
+        self.assertEqual(response.status_code, 404)
+        data = response.json()
+        self.assertEqual(data["offers"], [])
+        self.assertIn("Series not tracked", data["message"])
+        movie.refresh_from_db()
+        self.assertEqual(movie.content_type, "movie")
+        mock_pipeline_cls.return_value.run.assert_not_called()
+
+    @patch("tracker.services.offer_pipeline.OfficialOffersPipeline")
+    @patch("tracker.services.enrichment.TMDbClient")
+    @patch("tracker.views.AvailabilityCache")
+    def test_unresolvable_id_returns_404_with_clean_json(
+        self, mock_cache_cls, mock_enrich_tmdb, mock_pipeline_cls
+    ):
+        mock_enrich_tmdb.return_value.details.side_effect = Exception("404 Not Found")
+
+        from django.test import Client
+        response = Client().get("/api/prime/series/99999/")
+
+        self.assertEqual(response.status_code, 404)
+        data = response.json()
+        self.assertEqual(data["series"]["tmdb_id"], 99999)
+        self.assertIsNone(data["series"]["title"])
+        self.assertEqual(data["offers"], [])
+
+    @patch("tracker.services.offer_pipeline.OfficialOffersPipeline")
+    @patch("tracker.views.AvailabilityCache")
+    def test_current_country_query_param_reaches_pipeline(
+        self, mock_cache_cls, mock_pipeline_cls
+    ):
+        Movie.objects.create(tmdb_id=1396, title="Breaking Bad", year=2008,
+                             content_type="series")
+        mock_pipeline_cls.return_value.run.return_value = MagicMock(offers_out=[])
+
+        from django.test import Client
+        response = Client().get("/api/prime/series/1396/?current_country=JP")
+
+        self.assertEqual(response.status_code, 200)
+        kwargs = mock_pipeline_cls.return_value.run.call_args.kwargs
+        self.assertEqual(kwargs.get("current_country"), "JP")
+
+    @patch("tracker.views.resolve_preferences")
+    @patch("tracker.services.offer_pipeline.OfficialOffersPipeline")
+    @patch("tracker.views.AvailabilityCache")
+    def test_current_country_falls_back_to_saved_preference(
+        self, mock_cache_cls, mock_pipeline_cls, mock_prefs
+    ):
+        Movie.objects.create(tmdb_id=1396, title="Breaking Bad", year=2008,
+                             content_type="series")
+        mock_prefs.return_value = {"current_country": "BR"}
+        mock_pipeline_cls.return_value.run.return_value = MagicMock(offers_out=[])
+
+        from django.test import Client
+        response = Client().get("/api/prime/series/1396/")
+
+        self.assertEqual(response.status_code, 200)
+        kwargs = mock_pipeline_cls.return_value.run.call_args.kwargs
+        self.assertEqual(kwargs.get("current_country"), "BR")
+
+
+class SeriesAvailabilityCacheTests(TestCase):
+    """Series rows must refresh through the TMDb-TV twin /shows/tv/ endpoint."""
+
+    def test_stale_series_row_refreshes_with_series_content_type(self):
+        from tracker.services.cache import AvailabilityCache
+        from tracker.services.rate_limit import RateLimiter
+
+        series = Movie.objects.create(tmdb_id=1396, title="Breaking Bad", year=2008,
+                                      content_type="series")
+        client = MagicMock()
+        client.get_availability.return_value = MagicMock(offers=[])
+
+        cache = AvailabilityCache(client=client, limiter=RateLimiter("test_series_cache"))
+        cache.get_or_refresh(series)
+
+        client.get_availability.assert_called_once_with(1396, content_type="series")

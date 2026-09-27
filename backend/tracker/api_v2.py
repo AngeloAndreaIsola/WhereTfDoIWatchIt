@@ -197,6 +197,9 @@ def unofficial_scrape(request):
       - provider_slug: required (e.g. 'rai-play')
       - query: optional search term
       - country: optional ISO country code
+
+    Each result carries the ``content_type`` the scraper classified it with
+    (``movie``/``series``) next to the matched TMDb row.
     """
     data = request.data if isinstance(request.data, dict) else {}
     provider_slug = (data.get("provider_slug") or "").strip()
@@ -238,6 +241,7 @@ def unofficial_scrape(request):
         result = {
             "scraped_title": item.title,
             "scraped_year": item.year,
+            "content_type": item.content_type,
             "provider_slug": item.provider_slug,
             "source_url": item.source_url,
             "audio_languages": item.audio_languages,
@@ -273,11 +277,43 @@ def unofficial_movie_offers(request, tmdb_id: int):
 
     Return scraper source offers for a movie, filtered by user preferences
     and ranked by: audio match → subtitle match → quality.
+
+    ``?season=N`` (series rows only) suppresses those show-level scraper
+    offers: scraper rows carry no season signal, so a season-filtered request
+    answers ``offers: []`` with the season echoed in ``selected_season``.
+    Non-integer values are ignored, and movie rows ignore the parameter.
     """
     try:
         movie = Movie.objects.get(tmdb_id=tmdb_id)
     except Movie.DoesNotExist:
         return Response({"error": "movie not tracked yet"}, status=404)
+
+    # Scraper rows carry no season signal (same Phase 3 rule as the prime
+    # pipeline): for a series narrowed to one season the show-level scraper
+    # offers are never returned — the answer degrades to an empty list that
+    # echoes the selection, exactly like an unknown season upstream.
+    season: Optional[int] = None
+    if movie.content_type == "series":
+        raw_season = request.GET.get("season")
+        if raw_season is not None and raw_season.strip() != "":
+            try:
+                season = int(raw_season)
+            except (TypeError, ValueError):
+                season = None
+
+    movie_payload = {
+        "tmdb_id": movie.tmdb_id,
+        "title": movie.title,
+        "year": movie.year,
+        "poster_path": movie.poster_path,
+        "content_type": movie.content_type,
+    }
+    if season is not None:
+        return Response({
+            "movie": movie_payload,
+            "offers": [],
+            "selected_season": season,
+        })
 
     pref_dict = resolve_preferences(user_id=1)
     preference = Preference(
@@ -332,13 +368,9 @@ def unofficial_movie_offers(request, tmdb_id: int):
         offers_out.append(d)
 
     return Response({
-        "movie": {
-            "tmdb_id": movie.tmdb_id,
-            "title": movie.title,
-            "year": movie.year,
-            "poster_path": movie.poster_path,
-        },
+        "movie": movie_payload,
         "offers": offers_out,
+        "selected_season": None,
     })
 
 

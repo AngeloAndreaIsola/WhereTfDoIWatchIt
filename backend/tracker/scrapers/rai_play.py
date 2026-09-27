@@ -13,6 +13,12 @@ RAIPLAY_FILM_URL = "https://www.raiplay.it/film/"
 RAIPLAY_SERIE_URL = "https://www.raiplay.it/serieitaliane"
 WASHI_CONTEXT_VAR = "window.WashiContext"
 
+# RaiPlay's `typology` field is the structured content flag. Verified against the
+# live /film/ and /serieitaliane listings: both pages mix films and series rows,
+# so the page alone is not a reliable signal and the typology wins whenever present.
+SERIES_TYPELOGIES = frozenset({"Fiction", "Serie", "Serie TV"})
+MOVIE_TYPELOGIES = frozenset({"Film", "Documentari"})
+
 # Common patterns that indicate the page is geo-blocked or unreachable
 GEO_BLOCK_PATTERNS = [
     r"non disponibile",
@@ -99,7 +105,14 @@ class RaiPlayScraper(BaseScraper):
             full_url = weblink if weblink.startswith("http") else f"https://www.raiplay.it{weblink}"
 
             typology = card.get("typology", "")
-            content_type = "series" if typology in ("Fiction", "Serie") else "movie"
+            if typology in SERIES_TYPELOGIES:
+                content_type = "series"
+            elif typology in MOVIE_TYPELOGIES:
+                content_type = "movie"
+            else:
+                # No usable typology: fall back to the (weaker) listing page signal.
+                # An unknown signal stays a movie rather than guessing a series.
+                content_type = "series" if source_url == RAIPLAY_SERIE_URL else "movie"
 
             year_raw = card.get("year")
             year_int: Optional[int] = None

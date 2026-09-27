@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Optional
 
@@ -9,11 +10,14 @@ from tracker.models import Preference, Provider, ProviderCategory
 from .cache import AvailabilityCache
 from .enrichment import enrich_movie_from_tmdb
 from .preferences import resolve_preferences
+from .prime_source import prime_offers
 from .ranking import rank_offers
 from .presentation import present_offer
 from .tmdb import TMDbClient
 from .streaming_api import service_display_name
 from .watchability import get_user_subscriptions
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -82,16 +86,32 @@ class OfficialOffersPipeline:
 
         return qualifying
 
-    def get_cached_offers(self, movie):
+    def get_cached_offers(self, movie, season: Optional[int] = None):
+        """Read (and if stale refresh) cached offers.
+
+        ``season`` only narrows the read — the refresh is identical either way,
+        because one upstream call stores every season at once.
+
+        Prime Video rows the primary source does not carry are appended from
+        TMDb's watch/providers data (read-time gap fill — nothing is written
+        back, see ``tracker.services.prime_source``). They land after the
+        season filter: TMDb publishes series-level availability, so a gap-filled
+        row applies to every season view.
+        """
         cache = AvailabilityCache()
         if not getattr(settings, "PRIME_LIVE_FETCH", True):
-            return cache.read_offers(movie)
+            return cache.read_offers(movie, season=season)
 
         try:
             cache.get_or_refresh(movie)
         except Exception:
             pass
-        return cache.read_offers(movie)
+        cached = cache.read_offers(movie, season=season)
+        try:
+            return cached + prime_offers(movie, existing=cached)
+        except Exception:
+            logger.warning("Prime gap-fill skipped for movie %s", movie.pk, exc_info=True)
+            return cached
 
     def rank_and_present(
         self,
@@ -116,13 +136,18 @@ class OfficialOffersPipeline:
             offers_out.append(offer_dict)
         return offers_out
 
-    def run(self, movie, current_country: Optional[str] = None):
+    def run(
+        self,
+        movie,
+        current_country: Optional[str] = None,
+        season: Optional[int] = None,
+    ):
         pref = self.get_pref()
         provider_map = self._build_provider_map()
         provider_slug = getattr(settings, "DEFAULT_PREFERENCE_PROVIDER", self.default_provider_slug)
 
         enrich_movie_from_tmdb(movie)
-        offers = self.get_cached_offers(movie)
+        offers = self.get_cached_offers(movie, season=season)
         qualifying = self._qualify_offers(offers, provider_map, provider_slug)
         offers_out = self.rank_and_present(qualifying, pref, provider_map, current_country=current_country)
         return OfficialOffersPipelineResult(offers_out=offers_out)

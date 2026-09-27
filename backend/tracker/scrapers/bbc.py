@@ -13,6 +13,10 @@ FEATURED_URL = "https://www.bbc.co.uk/iplayer/categories/films/featured"
 STATE_VAR = "__IPLAYER_REDUX_STATE__"
 BBC_EPISODE_URL = "https://www.bbc.co.uk/iplayer/episode/"
 
+# Only the films category has a verified listing route (series/boxset category
+# URLs 404), so every item this scraper produces is a film — stated explicitly
+# instead of relying on the default.
+
 # Common patterns that indicate the page is geo-blocked or unreachable
 GEO_BLOCK_PATTERNS = [
     r"only available in the uk",
@@ -128,6 +132,7 @@ class BBCScraper(BaseScraper):
                     ScrapedItem(
                         title=str(title),
                         provider_slug=self.provider_slug,
+                        content_type="movie",
                         source_url=source_url,
                         audio_languages=["en"],
                         subtitle_languages=["en"],

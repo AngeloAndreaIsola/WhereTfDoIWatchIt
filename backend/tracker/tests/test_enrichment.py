@@ -147,7 +147,34 @@ class EnrichMovieFromTmdbTests(TestCase):
         self.assertEqual(movie.tmdb_id, 20)
         self.assertEqual(movie.title, "New Movie")
         self.assertEqual(movie.year, 2022)
-        instance.details.assert_called_once_with(20)
+        instance.details.assert_called_once_with(20, content_type="movie")
+
+    @patch("tracker.services.enrichment.TMDbClient")
+    def test_resolve_or_create_movie_series_uses_tv_endpoint(self, MockClient):
+        details = _details(tmdb_id=1396, title="Breaking Bad", year=2008, content_type="series")
+        instance = MockClient.return_value
+        instance.details.return_value = details
+
+        movie = resolve_or_create_movie(1396, content_type="series")
+        instance.details.assert_called_once_with(1396, content_type="series")
+        self.assertEqual(movie.content_type, "series")
+        self.assertEqual(movie.title, "Breaking Bad")
+        self.assertEqual(Movie.objects.get(tmdb_id=1396).content_type, "series")
+
+    @patch("tracker.services.enrichment.TMDbClient")
+    def test_resolve_or_create_movie_series_flips_existing_row(self, MockClient):
+        details = _details(tmdb_id=31, title="Now A Series", year=2020, content_type="series")
+        instance = MockClient.return_value
+        instance.details.return_value = details
+        Movie.objects.create(
+            tmdb_id=31, title="Old Title", year=2019, poster_path="", content_type="movie",
+            overview="", genres=[], genre_ids=[], cast=[], director=[], tmdb_rating=None, seasons_data=[],
+        )
+
+        result = resolve_or_create_movie(31, content_type="series")
+        result.refresh_from_db()
+        self.assertEqual(result.content_type, "series")
+        self.assertEqual(result.title, "Now A Series")
 
     @patch("tracker.services.enrichment.TMDbClient")
     def test_resolve_or_create_movie_updates_existing(self, MockClient):
@@ -163,7 +190,7 @@ class EnrichMovieFromTmdbTests(TestCase):
         self.assertEqual(result.title, "Updated Title")
         self.assertEqual(result.year, 2023)
         self.assertEqual(result.poster_path, "/new-poster.jpg")
-        instance.details.assert_called_once_with(30)
+        instance.details.assert_called_once_with(30, content_type="movie")
 
     @override_settings(TMDB_API_KEY="")
     def test_noop_when_unconfigured(self):

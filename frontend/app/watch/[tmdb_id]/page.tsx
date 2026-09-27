@@ -14,6 +14,7 @@ export default function WatchPage({ params }: WatchPageProps) {
   const { currentCountry } = useCurrentLocation();
   const [result, setResult] = useState<WatchResult | null>(null);
   const [loading, setLoading] = useState(true);
+  const isSeries = result?.movie?.content_type === "series";
 
   useEffect(() => {
     let cancelled = false;
@@ -85,10 +86,10 @@ export default function WatchPage({ params }: WatchPageProps) {
           </p>
           <div className="pt-2">
             <Link
-              href={`/movie/${tmdbId}`}
+              href={isSeries ? `/tv/${tmdbId}` : `/movie/${tmdbId}`}
               className="inline-block rounded-lg bg-blue-600 px-6 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600"
             >
-              ← Return to Movie Details
+              {isSeries ? "← Return to Series Details" : "← Return to Movie Details"}
             </Link>
           </div>
         </div>

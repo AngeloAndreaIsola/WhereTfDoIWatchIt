@@ -8,6 +8,7 @@ export interface PopularMovie {
   year: number | null;
   poster_path: string | null;
   overview: string | null;
+  content_type?: "movie" | "series";
   categories: string[];
 }
 
@@ -64,6 +65,7 @@ export interface PrimeMovieResponse {
     year: number | null;
     poster_path?: string | null;
     rating?: number | null;
+    tmdb_rating?: number | null;
     overview?: string | null;
     genres?: TMDbGenre[];
     cast?: TMDbCastMember[];
@@ -76,6 +78,40 @@ export interface PrimeMovieResponse {
   offers: PrimeOffer[];
 }
 
+export interface SeriesDetail {
+  id: number;
+  tmdb_id: number;
+  title: string;
+  year: number | null;
+  poster_path?: string | null;
+  tmdb_rating?: number | null;
+  overview?: string | null;
+  genres?: TMDbGenre[];
+  cast?: TMDbCastMember[];
+  director?: string[];
+  content_type?: string;
+  seasons_data?: unknown[];
+}
+
+export interface SeasonSummary {
+  season: number;
+  name: string;
+  episode_count: number;
+  poster_path: string;
+}
+
+export interface PrimeSeriesResponse {
+  series: SeriesDetail;
+  user_data?: UserMovieData | null;
+  is_in_watchlist?: boolean;
+  watch_events?: MovieWatchEvent[];
+  offers: PrimeOffer[];
+  /** TMDb season list for the selector (series responses only). */
+  seasons?: SeasonSummary[];
+  /** Season echoed back for `?season=N`; null/absent when unfiltered. */
+  selected_season?: number | null;
+}
+
 export interface WatchResult {
   found: boolean;
   watch_url?: string;
@@ -83,6 +119,7 @@ export interface WatchResult {
     tmdb_id: number;
     title: string | null;
     year: number | null;
+    content_type?: string;
   };
   offer?: PrimeOffer;
   message?: string;
@@ -113,6 +150,7 @@ export interface SearchResult {
   tmdb_id: number;
   title: string;
   year: number | null;
+  content_type: "movie" | "series";
 }
 
 // ─── Unified Catalog ─────────────────────────────────────────────────────────
@@ -243,10 +281,38 @@ export async function fetchPrimeMovieOffers(
 }
 
 /**
- * Search for movies.
+ * Fetch Prime Video offers for a series. Same pipeline as the movie endpoint,
+ * but keyed on `series` and resolved through the TMDb TV endpoint.
+ */
+export async function fetchPrimeSeriesOffers(
+  tmdbId: number,
+  currentCountry?: string,
+  season?: number | null
+): Promise<PrimeSeriesResponse> {
+  const params = new URLSearchParams();
+  if (currentCountry) params.set("current_country", currentCountry);
+  if (season !== undefined && season !== null) params.set("season", String(season));
+  const query = params.toString();
+  const res = await fetch(`/api/prime/series/${tmdbId}/${query ? `?${query}` : ""}`);
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+
+    throw new Error(
+      body.error ?? body.message ?? `Failed to load offers (${res.status})`
+    );
+  }
+
+  return res.json();
+}
+
+/**
+ * Search TMDb. `type` defaults to "movie" (existing behavior); pass "series"
+ * or "all" to widen the search.
  */
 export async function search(
-  query: string
+  query: string,
+  type: "movie" | "series" | "all" = "movie"
 ): Promise<SearchResult[]> {
   const trimmed = query.trim();
 
@@ -255,7 +321,7 @@ export async function search(
   }
 
   const res = await fetch(
-    `/api/search/?q=${encodeURIComponent(trimmed)}`
+    `/api/search/?q=${encodeURIComponent(trimmed)}&type=${encodeURIComponent(type)}`
   );
 
   if (!res.ok) {
@@ -636,6 +702,7 @@ export async function importGoogleInterests(
 
 export interface AddToWatchlistRequest {
   tmdb_id: number;
+  content_type?: "movie" | "series";
 }
 
 export interface AddToWatchlistResponse {
@@ -693,12 +760,13 @@ export interface RemoveFromWatchlistResponse {
 }
 
 export async function addToWatchlist(
-  tmdbId: number
+  tmdbId: number,
+  contentType: "movie" | "series" = "movie"
 ): Promise<AddToWatchlistResponse> {
   const res = await fetch("/api/watchlist/add/", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tmdb_id: tmdbId }),
+    body: JSON.stringify({ tmdb_id: tmdbId, content_type: contentType }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));

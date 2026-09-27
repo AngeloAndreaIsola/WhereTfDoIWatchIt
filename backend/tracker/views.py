@@ -344,7 +344,7 @@ def unified_catalog(request):
                 "title": m.title if m else mapping.scraped_title,
                 "year": m.year if m else mapping.scraped_year,
                 "poster_path": m.poster_path if m else "",
-                "content_type": m.content_type if m else "movie",
+                "content_type": m.content_type if m else (payload.get("content_type") or "movie"),
                 "provider": {
                     "slug": mapping.provider.slug,
                     "name": mapping.provider.name,
@@ -397,22 +397,55 @@ def unified_catalog(request):
 
 @api_view(["GET"])
 def search(request):
-    """Search TMDb by title (and optional year)."""
+    """Search TMDb by title (and optional year).
+
+    Optional ``type`` (alias ``content_type``) selects the target:
+    ``movie`` (default), ``series``/``tv``, or ``all``. Every result carries
+    an explicit ``content_type`` of ``movie`` or ``series``.
+    """
     query = request.GET.get("q") or request.GET.get("query") or ""
     year = request.GET.get("year")
     year_int = int(year) if year and year.isdigit() else None
     if not query:
         return Response({"error": "query parameter required"}, status=400)
+
+    raw_type = (request.GET.get("type") or request.GET.get("content_type") or "movie").strip().lower()
+    if raw_type not in ("movie", "series", "tv", "all"):
+        return Response(
+            {"error": "invalid type: expected movie, series, tv or all"},
+            status=400,
+        )
+    search_type = "series" if raw_type == "tv" else raw_type
+
     try:
         client = TMDbClient(settings.TMDB_API_KEY)
-        results = client.search(query, year=year_int)
+        results = client.search(query, year=year_int, content_type=search_type)
     except Exception as exc:  # network or config error
         logger.exception("TMDb search failed")
         return Response({"error": str(exc)}, status=502)
+
+    # "all" runs two TMDb searches; interleave so neither type is starved
+    # by the result cap below.
+    if search_type == "all":
+        movies = [m for m in results if (m.content_type or "movie") == "movie"]
+        series = [m for m in results if (m.content_type or "movie") != "movie"]
+        merged = []
+        for i in range(max(len(movies), len(series))):
+            if i < len(movies):
+                merged.append(movies[i])
+            if i < len(series):
+                merged.append(series[i])
+        results = merged
+
     return Response(
         {
             "results": [
-                {"tmdb_id": m.tmdb_id, "title": m.title, "year": m.year}
+                {
+                    "tmdb_id": m.tmdb_id,
+                    "title": m.title,
+                    "year": m.year,
+                    "content_type": m.content_type or "movie",
+                }
                 for m in results[:10]
             ]
         }
@@ -606,6 +639,7 @@ def scraper_import_url(request):
             "scraped_item": {
                 "title": item.title,
                 "year": item.year,
+                "content_type": item.content_type,
                 "provider_slug": item.provider_slug,
                 "source_url": item.source_url,
                 "audio_languages": item.audio_languages,
@@ -658,13 +692,15 @@ def scraper_run(request):
 
     # Ensure all scraped items are saved to database mappings for provider stats
     for item in items:
+        payload = dict(item.raw_payload) if isinstance(item.raw_payload, dict) else {}
+        payload.setdefault("content_type", item.content_type)
         ScrapedContentMapping.objects.get_or_create(
             provider=provider,
             scraped_title=item.title,
             scraped_year=item.year,
             defaults={
                 "scraped_url": item.source_url,
-                "raw_payload": item.raw_payload,
+                "raw_payload": payload,
                 "is_available": item.availability,
             },
         )
@@ -678,6 +714,7 @@ def scraper_run(request):
             "scraped_item": {
                 "title": item.title,
                 "year": item.year,
+                "content_type": item.content_type,
                 "provider_slug": item.provider_slug,
                 "source_url": item.source_url,
                 "audio_languages": item.audio_languages,
@@ -748,16 +785,22 @@ def scraper_unresolved(request):
     matcher = ContentMatcher()
     out = []
     for mapping in unresolved:
+        payload = mapping.raw_payload if isinstance(mapping.raw_payload, dict) else {}
+        # The type the scrape was classified with, stored by _upsert_mapping.
+        content_type = payload.get("content_type") or "movie"
         item = ScrapedItem(
             title=mapping.scraped_title,
             provider_slug=mapping.provider.slug,
             year=mapping.scraped_year,
+            content_type=content_type,
             source_url=mapping.scraped_url,
         )
 
         candidates = []
         try:
-            raw_cands = matcher.tmdb_client.search(item.title, year=item.year)
+            raw_cands = matcher.tmdb_client.search(
+                item.title, year=item.year, content_type=content_type
+            )
             candidates = [
                 {
                     "tmdb_id": c.tmdb_id,
@@ -779,7 +822,13 @@ def scraper_unresolved(request):
 
 @api_view(["POST"])
 def scraper_confirm_match(request):
-    """Confirm a mapping between scraped content and a TMDb movie."""
+    """Confirm a mapping between scraped content and a TMDb movie.
+
+    ``content_type`` (``movie`` default, or ``series``) picks the TMDb details
+    endpoint and is stored on a newly created row. An already-tracked row is only
+    retyped when the caller states the type explicitly — a scraper result never
+    silently flips an existing row.
+    """
     data = request.data if isinstance(request.data, dict) else {}
     mapping_id = data.get("mapping_id")
     tmdb_id = data.get("tmdb_id")
@@ -787,15 +836,27 @@ def scraper_confirm_match(request):
     if not mapping_id or not tmdb_id:
         return Response({"error": "mapping_id and tmdb_id are required"}, status=400)
 
+    raw_type = str(data.get("content_type") or "").strip().lower()
+    if raw_type and raw_type not in ("movie", "series"):
+        return Response({"error": "content_type must be 'movie' or 'series'"}, status=400)
+    content_type = raw_type or "movie"
+
     mapping = get_object_or_404(ScrapedContentMapping, id=mapping_id)
 
     client = TMDbClient(settings.TMDB_API_KEY)
     try:
-        details = client.details(tmdb_id)
-        movie, _ = Movie.objects.get_or_create(
+        details = client.details(tmdb_id, content_type=content_type)
+        movie, created = Movie.objects.get_or_create(
             tmdb_id=details.tmdb_id,
-            defaults={"title": details.title, "year": details.year},
+            defaults={
+                "title": details.title,
+                "year": details.year,
+                "content_type": details.content_type or content_type,
+            },
         )
+        if not created and raw_type and movie.content_type != details.content_type:
+            movie.content_type = details.content_type
+            movie.save(update_fields=["content_type"])
     except Exception as exc:
         return Response({"error": f"Failed to fetch TMDb details: {exc}"}, status=400)
 
@@ -1333,50 +1394,117 @@ def _popular_movie_dict(movie: TMDbMovie) -> dict:
         "year": movie.year,
         "poster_path": movie.poster_path,
         "overview": movie.overview,
+        "content_type": movie.content_type,
         "categories": categories,
     }
 
 
+def _current_country(request) -> str:
+    """Resolve the active country: explicit query param, then saved preference."""
+    return (
+        request.query_params.get("current_country")
+        or resolve_preferences(user_id=1).get("current_country")
+        or ""
+    )
 
-@api_view(["GET"])
-def prime_movie(request, tmdb_id: int):
-    """GET /api/prime/movie/<tmdb_id>/ — ranked Prime Video offers for one movie.
-    Filters to subscription/free offers only.
+
+def _load_content_item(tmdb_id: int, content_type: str) -> Movie | None:
+    """Load the tracked row for tmdb_id, resolving it through TMDb when missing.
+
+    Movies keep the historical behavior: any existing row is served as-is and
+    an unknown id is resolved with the movie details endpoint. A series only
+    reuses a row already typed as a series; a missing or mistyped row is
+    (re)resolved through the TMDb TV details endpoint. Returns None when
+    nothing could be resolved (the failure is logged).
     """
-    from django.conf import settings
-    from tracker.models import ProviderCategory
+    try:
+        item = Movie.objects.get(tmdb_id=tmdb_id)
+    except Movie.DoesNotExist:
+        item = None
 
-    from .services.offer_pipeline import OfficialOffersPipeline
+    if item is not None and (content_type == "movie" or item.content_type == content_type):
+        return item
 
     try:
-        movie = Movie.objects.get(tmdb_id=tmdb_id)
-    except Movie.DoesNotExist:
-        try:
-            movie = resolve_or_create_movie(tmdb_id)
-        except Exception:
-            return Response(
-                {
-                    "movie": {"tmdb_id": tmdb_id, "title": None, "year": None},
-                    "offers": [],
-                    "message": "Movie not tracked and could not be resolved via TMDb.",
-                },
-                status=404,
-            )
+        return resolve_or_create_movie(tmdb_id, content_type=content_type)
+    except Exception:
+        logger.exception("TMDb resolve failed for %s %s", content_type, tmdb_id)
+        return None
+
+
+def _requested_season(request, item: Movie) -> int | None:
+    """Season filter from ``?season=N`` for series only.
+
+    A non-integer value is treated as absent (ignored), matching how other
+    optional params behave here. A well-formed but unknown season number is
+    kept: the detail payload echoes it back as ``selected_season`` and the
+    offers list comes out empty, so a stale URL degrades instead of erroring.
+    """
+    if item.content_type != "series":
+        return None
+    raw = request.query_params.get("season")
+    if raw is None or raw.strip() == "":
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _season_summaries(item: Movie) -> list[dict]:
+    """Series season list for the UI, straight from TMDb's ``seasons_data``.
+
+    The selector is metadata-driven (not cache-driven) so a season the streaming
+    catalog has no option for still shows up; selecting it simply yields no
+    offers.
+    """
+    out: list[dict] = []
+    for entry in item.seasons_data or []:
+        if not isinstance(entry, dict):
+            continue
+        number = entry.get("season_number")
+        if not isinstance(number, int) or isinstance(number, bool):
+            continue
+        out.append(
+            {
+                "season": number,
+                "name": entry.get("name") or "",
+                "episode_count": entry.get("episode_count") or 0,
+                "poster_path": entry.get("poster_path") or "",
+            }
+        )
+    out.sort(key=lambda row: row["season"])
+    return out
+
+
+def _build_prime_offers(request, movie: Movie, season: int | None = None) -> list[dict]:
+    """Ranked official + BVOD offers for one tracked movie or series.
+
+    ``season`` (series only) restricts the official result set to rows that
+    recorded that season; the scraped BVOD block is skipped because scraper
+    rows are show-level and carry no season signal.
+    """
+    from tracker.models import ProviderCategory
+    from tracker.services.offers import Offer
+    from tracker.services.presentation import present_offer
+    from tracker.services.ranking import rank_offers
+
+    from .services.offer_pipeline import OfficialOffersPipeline
 
     pipeline = OfficialOffersPipeline(
         user_id=1,
         default_provider_slug=getattr(settings, "DEFAULT_PREFERENCE_PROVIDER", "prime"),
         provider_category_set={ProviderCategory.OFFICIAL, ProviderCategory.BVOD, ProviderCategory.AVOD, ProviderCategory.TVOD, ProviderCategory.FAST},
     )
-    current_country = request.query_params.get("current_country") or resolve_preferences(user_id=1).get("current_country")
-    offers_out = pipeline.run(movie, current_country=current_country).offers_out
+    current_country = _current_country(request)
+    offers_out = pipeline.run(
+        movie, current_country=current_country, season=season
+    ).offers_out
+
+    if season is not None:
+        return offers_out
 
     # Include BVOD scraped offers in the main offers list
-    from tracker.models import ScrapedContentMapping
-    from tracker.services.offers import Offer
-    from tracker.services.presentation import present_offer
-    from tracker.services.ranking import rank_offers
-
     bvod_categories = ["bvod", "avod", "tvod", "fast"]
     scraped = ScrapedContentMapping.objects.filter(
         movie=movie,
@@ -1413,38 +1541,121 @@ def prime_movie(request, tmdb_id: int):
             offer_dict["country"] = presented.country
             offers_out.append(offer_dict)
 
-    user_data = UserMovieData.objects.filter(user_id=1, movie=movie).first()
-    is_in_watchlist = WatchlistItem.objects.filter(user_id=1, movie=movie).exists()
-    watch_events = MovieWatchEvent.objects.filter(user_id=1, movie=movie).order_by("-watched_date", "-created_at")
-    return Response(
-        {
-            "movie": MovieDetailSerializer(movie).data,
-            "user_data": UserMovieDataSerializer(user_data).data if user_data else None,
-            "is_in_watchlist": is_in_watchlist,
-            "watch_events": MovieWatchEventSerializer(watch_events, many=True).data,
-            "offers": offers_out,
-        }
-    )
+    return offers_out
 
+
+def _prime_detail_response(request, item: Movie, key: str) -> Response:
+    """Shared detail payload for prime_movie / prime_series, keyed by ``key``."""
+    user_data = UserMovieData.objects.filter(user_id=1, movie=item).first()
+    is_in_watchlist = WatchlistItem.objects.filter(user_id=1, movie=item).exists()
+    watch_events = MovieWatchEvent.objects.filter(user_id=1, movie=item).order_by("-watched_date", "-created_at")
+    season = _requested_season(request, item)
+    payload = {
+        key: MovieDetailSerializer(item).data,
+        "user_data": UserMovieDataSerializer(user_data).data if user_data else None,
+        "is_in_watchlist": is_in_watchlist,
+        "watch_events": MovieWatchEventSerializer(watch_events, many=True).data,
+        "offers": _build_prime_offers(request, item, season=season),
+    }
+    if key == "series":
+        payload["seasons"] = _season_summaries(item)
+        payload["selected_season"] = season
+    return Response(payload)
+
+
+@api_view(["GET"])
+def prime_movie(request, tmdb_id: int):
+    """GET /api/prime/movie/<tmdb_id>/ — ranked Prime Video offers for one movie.
+    Filters to subscription/free offers only.
+    """
+    movie = _load_content_item(tmdb_id, "movie")
+    if movie is None:
+        return Response(
+            {
+                "movie": {"tmdb_id": tmdb_id, "title": None, "year": None},
+                "offers": [],
+                "message": "Movie not tracked and could not be resolved via TMDb.",
+            },
+            status=404,
+        )
+    return _prime_detail_response(request, movie, "movie")
+
+
+@api_view(["GET"])
+def prime_series(request, tmdb_id: int):
+    """GET /api/prime/series/<tmdb_id>/ — ranked Prime Video offers for one series.
+
+    Mirrors prime_movie but resolves the row through the TMDb TV endpoint and
+    is keyed on ``series`` so callers can tell movies and series apart.
+
+    Series responses also carry ``seasons`` (TMDb season metadata for the
+    selector) and ``selected_season``. The optional ``?season=N`` query param
+    narrows ``offers`` to the rows recorded for that season; with no param the
+    unfiltered, show-level result is returned unchanged.
+    """
+    series = _load_content_item(tmdb_id, "series")
+    if series is None:
+        return Response(
+            {
+                "series": {"tmdb_id": tmdb_id, "title": None, "year": None},
+                "offers": [],
+                "message": "Series not tracked and could not be resolved via TMDb.",
+            },
+            status=404,
+        )
+    return _prime_detail_response(request, series, "series")
+
+
+def _tmdb_missing_id(exc: BaseException) -> bool:
+    """True when a TMDb details fetch failed because the id has no entry there."""
+    response = getattr(exc, "response", None)
+    if getattr(response, "status_code", None) == 404:
+        return True
+    text = str(exc).lower()
+    return "404" in text or "not found" in text
+
+
+def _resolve_watch_item(tmdb_id: int) -> Movie | None:
+    """Load the tracked row behind /watch/<tmdb_id>/, resolving via TMDb if missing.
+
+    An existing row is always used as-is — it carries the only signal of
+    whether the id is a movie or a series. When no row exists yet the movie
+    details endpoint is tried first (historical behavior), then, if TMDb
+    reports that the id does not exist as a movie, the TV endpoint. Returns
+    None when nothing could be resolved (each failure is logged).
+    """
+    try:
+        return Movie.objects.get(tmdb_id=tmdb_id)
+    except Movie.DoesNotExist:
+        pass
+
+    try:
+        return resolve_or_create_movie(tmdb_id)
+    except Exception as movie_exc:
+        logger.exception("TMDb movie resolve failed for watch redirect %s", tmdb_id)
+        if not _tmdb_missing_id(movie_exc):
+            return None
+
+    try:
+        return resolve_or_create_movie(tmdb_id, content_type="series")
+    except Exception:
+        logger.exception("TMDb series resolve failed for watch redirect %s", tmdb_id)
+        return None
 
 
 @api_view(["GET"])
 def watch_redirect(request, tmdb_id: int):
-    """Resolve top ranked watch destination for a movie."""
-    try:
-        movie = Movie.objects.get(tmdb_id=tmdb_id)
-    except Movie.DoesNotExist:
-        try:
-            movie = resolve_or_create_movie(tmdb_id)
-        except Exception:
-            return Response(
-                {
-                    "found": False,
-                    "movie": {"tmdb_id": tmdb_id, "title": None, "year": None},
-                    "message": "Movie not found",
-                },
-                status=404,
-            )
+    """Resolve top ranked watch destination for a movie or series."""
+    movie = _resolve_watch_item(tmdb_id)
+    if movie is None:
+        return Response(
+            {
+                "found": False,
+                "movie": {"tmdb_id": tmdb_id, "title": None, "year": None},
+                "message": "Movie not found",
+            },
+            status=404,
+        )
 
     preference = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
 
@@ -1480,7 +1691,7 @@ def watch_redirect(request, tmdb_id: int):
         if matched:
             qualifying = matched
 
-    current_country = request.query_params.get("current_country") or resolve_preferences(user_id=1).get("current_country")
+    current_country = _current_country(request)
     ranked = rank_offers(qualifying, preference, current_country=current_country)
 
     top_offer = None
@@ -1489,12 +1700,20 @@ def watch_redirect(request, tmdb_id: int):
             top_offer = offer
             break
 
+    movie_payload = {
+        "tmdb_id": movie.tmdb_id,
+        "title": movie.title,
+        "year": movie.year,
+        "poster_path": movie.poster_path,
+        "content_type": movie.content_type,
+    }
+
     if top_offer:
         return Response(
             {
                 "found": True,
                 "watch_url": top_offer.url,
-                "movie": {"tmdb_id": movie.tmdb_id, "title": movie.title, "year": movie.year, "poster_path": movie.poster_path},
+                "movie": movie_payload,
                 "offer": top_offer.to_dict(),
             }
         )
@@ -1502,7 +1721,7 @@ def watch_redirect(request, tmdb_id: int):
     return Response(
         {
             "found": False,
-            "movie": {"tmdb_id": movie.tmdb_id, "title": movie.title, "year": movie.year, "poster_path": movie.poster_path},
+            "movie": movie_payload,
             "message": "Not currently available to watch on your subscribed services.",
         }
     )
@@ -1619,10 +1838,11 @@ def update_movie(request, tmdb_id: int):
 
 @api_view(["POST"])
 def add_to_watchlist(request):
-    """POST /api/watchlist/add/ — manually add a movie to the watchlist.
+    """POST /api/watchlist/add/ — manually add a movie or series to the watchlist.
 
     Request body:
-        tmdb_id (int, required): the TMDb ID of the movie to add
+        tmdb_id (int, required): the TMDb ID of the movie/series to add
+        content_type (str, optional): "movie" (default) or "series"
     """
     from .services.enrichment import resolve_or_create_movie
 
@@ -1631,8 +1851,12 @@ def add_to_watchlist(request):
     if not isinstance(tmdb_id, int) or tmdb_id <= 0:
         return Response({"error": "tmdb_id is required and must be a positive integer"}, status=400)
 
+    content_type = data.get("content_type", "movie")
+    if not isinstance(content_type, str) or content_type not in ("movie", "series"):
+        return Response({"error": "content_type must be 'movie' or 'series'"}, status=400)
+
     try:
-        movie = resolve_or_create_movie(tmdb_id)
+        movie = resolve_or_create_movie(tmdb_id, content_type=content_type)
     except Exception as exc:
         logger.exception("Failed to resolve/create movie for tmdb_id=%s", tmdb_id)
         return Response({"error": f"Movie lookup failed: {exc}"}, status=502)
