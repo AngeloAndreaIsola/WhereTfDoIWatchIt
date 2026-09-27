@@ -69,7 +69,15 @@ def paginate_list(items: list, page: int, page_size: int) -> tuple[list, dict]:
     return page_items, pagination
 from .services.bulk_refresh import process_watchlist_refresh
 from .services.cache import AvailabilityCache
-from .services.letterboxd import import_rows, parse_file_or_zip
+from .services.letterboxd import (
+    LetterboxdFetchError,
+    LetterboxdInvalidURLError,
+    LetterboxdProfileNotFound,
+    fetch_profile_rows,
+    import_rows,
+    normalize_profile_url,
+    parse_file_or_zip,
+)
 from .services.ranking import rank_offers
 from .services.preferences import resolve_preferences
 from .services.rate_limit import RateLimitExceeded
@@ -2153,5 +2161,92 @@ def google_interests_import(request):
             "ambiguous": all_ambiguous,
             "skipped": all_skipped,
             "watchlist_count": total_watchlist_count,
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
+# Letterboxd public-profile URL importer endpoint
+# ---------------------------------------------------------------------------
+
+@api_view(["POST"])
+def letterboxd_url_import(request):
+    """POST /api/importers/letterboxd-url/ — import a public Letterboxd URL.
+
+    Request body (JSON):
+        url (str, required): profile / watchlist / films URL, e.g.
+            https://letterboxd.com/USERNAME/ or .../USERNAME/watchlist/
+        type (str, optional): "watchlist" or "watched". Required when the URL
+            is a bare profile URL; optional otherwise (the URL path wins only
+            when ``type`` is omitted).
+        user_id (int, optional): defaults to 1.
+
+    Fetches public paginated HTML (no Letterboxd login/cookies), normalizes it
+    into LetterboxdRow objects and reuses import_rows() — the exact same TMDb
+    matching / ambiguity / idempotency behaviour as the CSV importer.
+
+    Errors are application-level only: 400 for bad input, 404 for a missing
+    profile/list, 502 for upstream Letterboxd failures (timeout, blocked,
+    non-2xx). Raw exception traces are never returned.
+    """
+    data = request.data if isinstance(request.data, dict) else {}
+    url = str(data.get("url") or "").strip()
+    requested_type = str(data.get("type") or "").strip().lower()
+    try:
+        user_id = int(data.get("user_id", 1) or 1)
+    except (TypeError, ValueError):
+        user_id = 1
+
+    if not url:
+        return Response({"error": "url is required"}, status=400)
+    if requested_type and requested_type not in ("watchlist", "watched"):
+        return Response(
+            {"error": "type must be 'watchlist' or 'watched'"}, status=400
+        )
+
+    try:
+        username, url_type = normalize_profile_url(url)
+    except LetterboxdInvalidURLError as exc:
+        return Response({"error": str(exc)}, status=400)
+
+    file_type = requested_type or url_type
+    if not file_type:
+        return Response(
+            {
+                "error": "type is required for a bare profile URL — "
+                "pass \"watchlist\" or \"watched\"."
+            },
+            status=400,
+        )
+
+    try:
+        rows, pages_fetched = fetch_profile_rows(username, file_type)
+    except LetterboxdProfileNotFound as exc:
+        return Response({"error": str(exc)}, status=404)
+    except LetterboxdFetchError as exc:
+        return Response({"error": str(exc)}, status=502)
+    except Exception:
+        logger.exception("Letterboxd URL import failed for %s (%s)", url, file_type)
+        return Response(
+            {"error": "Letterboxd request failed. Try again later."}, status=502
+        )
+
+    client = TMDbClient(settings.TMDB_API_KEY, timeout=3)
+    result = import_rows(rows, client=client, user_id=user_id)
+
+    return Response(
+        {
+            "source": "letterboxd_url",
+            "username": username,
+            "import_type": file_type,
+            "pages_fetched": pages_fetched,
+            "rows_found": len(rows),
+            "resolved": WatchlistItemSerializer(result.resolved, many=True).data,
+            "ambiguous": result.ambiguous,
+            "skipped": result.skipped,
+            "watched_count": result.watched_count,
+            "ratings_count": result.ratings_count,
+            "reviews_count": result.reviews_count,
+            "diary_events_count": result.diary_events_count,
         }
     )

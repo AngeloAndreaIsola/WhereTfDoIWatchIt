@@ -50,4 +50,6 @@ urlpatterns = [
     path("v2/unofficial/providers/", api_v2.unofficial_providers, name="v2-unofficial-providers"),
     # --- Google Interests importer ---
     path("importers/google-interests/", views.google_interests_import, name="google-interests-import"),
+    # --- Letterboxd public-profile URL importer ---
+    path("importers/letterboxd-url/", views.letterboxd_url_import, name="letterboxd-url-import"),
 ]

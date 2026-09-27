@@ -1,9 +1,10 @@
 "use client";
 
-import React, { useState, Suspense } from "react";
+import React, { useState, useEffect, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import AmbiguousMatchCard, { Candidate } from "@/components/AmbiguousMatchCard";
+import { readStashedAmbiguousItems } from "@/lib/ambiguousReview";
 
 interface AmbiguousItem {
   title: string;
@@ -19,16 +20,31 @@ function AmbiguousClient() {
 
   const itemsParam = searchParams.get("items");
 
-  let initialItems: AmbiguousItem[] = [];
+  let queryItems: AmbiguousItem[] = [];
   let parseError = "";
 
   if (itemsParam) {
     try {
-      initialItems = JSON.parse(itemsParam);
+      const parsed = JSON.parse(itemsParam);
+      queryItems = Array.isArray(parsed) ? parsed : [];
     } catch {
       parseError = "Failed to parse ambiguous items parameter.";
     }
   }
+
+  // Items are handed over through sessionStorage (see lib/ambiguousReview.ts)
+  // so large ambiguity queues don't produce a 431 from the query string.
+  const [stashedItems, setStashedItems] = useState<AmbiguousItem[] | null>(
+    null
+  );
+
+  useEffect(() => {
+    if (itemsParam || stashedItems !== null) return;
+    setStashedItems(readStashedAmbiguousItems<AmbiguousItem>() ?? []);
+  }, [itemsParam, stashedItems]);
+
+  const items = itemsParam ? queryItems : stashedItems ?? [];
+  const ready = Boolean(itemsParam) || stashedItems !== null;
 
   // selections map: itemIndex -> selected tmdb_id (or null if skip)
   const [selections, setSelections] = useState<Record<number, number | null>>({});
@@ -45,7 +61,7 @@ function AmbiguousClient() {
     setSubmitError("");
 
     // Build payload of selected items
-    const selectedPayload = initialItems
+    const selectedPayload = items
       .map((item, index) => {
         const selectedId = selections[index];
         if (selectedId === null || selectedId === undefined) return null;
@@ -101,7 +117,15 @@ function AmbiguousClient() {
     );
   }
 
-  if (initialItems.length === 0) {
+  if (!ready) {
+    return (
+      <p className="py-6 text-center text-sm text-gray-500 dark:text-gray-400">
+        Loading ambiguous items…
+      </p>
+    );
+  }
+
+  if (items.length === 0) {
     return (
       <div className="text-center py-8">
         <p className="text-sm text-gray-500 dark:text-gray-400">
@@ -125,7 +149,7 @@ function AmbiguousClient() {
         </div>
       )}
 
-      {initialItems.map((item, itemIdx) => {
+      {items.map((item, itemIdx) => {
         const selectedValue = selections[itemIdx] ?? null;
 
         return (
