@@ -10,10 +10,17 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from ..models import ApiCallCounter, Availability, Movie, Region, WatchlistItem
-from ..services.bulk_refresh import process_watchlist_refresh
-from ..services.cache import AvailabilityCache, CacheStatus
+from ..models import ApiCallCounter, Movie, WatchlistItem
+from ..services.bulk_refresh import is_stale, process_watchlist_refresh
 from ..services.rate_limit import RateLimitExceeded, RateLimiter
+from .availability_factories import local_offer
+
+
+def _stale_offers(movie, when):
+    """Backdate the canonical offers of *movie* so it reads as stale."""
+    from availability.models import Offer
+
+    Offer.objects.filter(tmdb_id=movie.tmdb_id).update(last_seen=when)
 
 
 class BulkRefreshServiceTests(TestCase):
@@ -26,76 +33,107 @@ class BulkRefreshServiceTests(TestCase):
         WatchlistItem.objects.create(user_id=1, movie=self.movie2)
         WatchlistItem.objects.create(user_id=1, movie=self.movie3)
 
-        self.region = Region.objects.create(provider="netflix", country="US")
+        self.refresh_service = MagicMock()
+        self.limiter = MagicMock(spec=RateLimiter)
+        self.limiter.remaining.return_value = 100
 
-    def test_fresh_cached_movies_are_skipped(self):
-        now = timezone.now()
-        # All movies are fresh
-        Availability.objects.create(movie=self.movie1, region=self.region, last_checked_at=now, is_available=True)
-        Availability.objects.create(movie=self.movie2, region=self.region, last_checked_at=now, is_available=True)
-        Availability.objects.create(movie=self.movie3, region=self.region, last_checked_at=now, is_available=True)
+    def _run(self, budget=10, **kwargs):
+        kwargs.setdefault("refresh_service", self.refresh_service)
+        kwargs.setdefault("limiter", self.limiter)
+        return process_watchlist_refresh(budget=budget, user_id=1, **kwargs)
 
-        summary = process_watchlist_refresh(budget=10, user_id=1)
+    def test_fresh_canonical_offers_are_skipped(self):
+        # Fresh canonical availability for every movie; nothing to refresh.
+        local_offer(self.movie1)
+        local_offer(self.movie2)
+        local_offer(self.movie3)
+
+        summary = self._run()
 
         self.assertEqual(summary["attempted"], 3)
         self.assertEqual(summary["refreshed"], 0)
         self.assertEqual(summary["skipped_cached"], 3)
         self.assertEqual(summary["remaining_budget"], 10)
         self.assertFalse(summary["rate_limited"])
+        self.refresh_service.refresh_content.assert_not_called()
 
     def test_stale_movies_refreshed_up_to_budget(self):
         stale_time = timezone.now() - dt.timedelta(days=2)
-        Availability.objects.create(movie=self.movie1, region=self.region, last_checked_at=stale_time)
-        Availability.objects.create(movie=self.movie2, region=self.region, last_checked_at=stale_time)
-        # movie3 has no availability (stalest)
+        local_offer(self.movie1)
+        local_offer(self.movie2)
+        _stale_offers(self.movie1, stale_time)
+        _stale_offers(self.movie2, stale_time)
+        # movie3 has no canonical offers (stalest — never checked)
 
-        mock_cache = MagicMock(spec=AvailabilityCache)
-        mock_cache.limiter = MagicMock()
-        mock_cache.limiter.remaining.return_value = 100
-        mock_cache.is_stale.return_value = True
-        mock_cache.get_or_refresh.return_value = CacheStatus(refreshed=True, reason="stale", offers_written=2)
-
-        summary = process_watchlist_refresh(budget=2, user_id=1, cache=mock_cache)
+        summary = self._run(budget=2)
 
         self.assertEqual(summary["attempted"], 3)
         self.assertEqual(summary["refreshed"], 2)
         self.assertEqual(summary["skipped_budget_exhausted"], 1)
         self.assertEqual(summary["remaining_budget"], 0)
         self.assertFalse(summary["rate_limited"])
+        # Never-checked movie sorts first, so the two refreshed are 103 + one stale.
+        refreshed_ids = {
+            call.args[0].tmdb_id
+            for call in self.refresh_service.refresh_content.call_args_list
+        }
+        self.assertIn(103, refreshed_ids)
+
+    def test_never_checked_candidates_are_refreshed_before_stale_ones(self):
+        stale_time = timezone.now() - dt.timedelta(days=2)
+        local_offer(self.movie1)
+        _stale_offers(self.movie1, stale_time)
+
+        summary = self._run(budget=1)
+
+        refreshed = [
+            call.args[0].tmdb_id
+            for call in self.refresh_service.refresh_content.call_args_list
+        ]
+        self.assertEqual(refreshed, [102])
+        self.assertEqual(summary["refreshed"], 1)
 
     def test_rate_limit_stopping(self):
-        mock_cache = MagicMock(spec=AvailabilityCache)
-        mock_cache.limiter = MagicMock()
-        mock_cache.limiter.remaining.return_value = 100
-        mock_cache.is_stale.return_value = True
-        mock_cache.get_or_refresh.side_effect = RateLimitExceeded("rate limit")
+        self.limiter.acquire.side_effect = RateLimitExceeded("rate limit")
 
-        summary = process_watchlist_refresh(budget=10, user_id=1, cache=mock_cache)
+        summary = self._run(budget=10)
 
         self.assertEqual(summary["attempted"], 3)
         self.assertTrue(summary["rate_limited"])
         self.assertEqual(summary["skipped_rate_limited"], 3)
+        self.refresh_service.refresh_content.assert_not_called()
+
+    def test_upfront_exhausted_quota_skips_everything(self):
+        self.limiter.remaining.return_value = 0
+
+        summary = self._run(budget=10)
+
+        self.assertTrue(summary["rate_limited"])
+        self.assertEqual(summary["skipped_rate_limited"], 3)
+        self.assertEqual(summary["refreshed"], 0)
 
     def test_per_movie_error_resilience(self):
-        mock_cache = MagicMock(spec=AvailabilityCache)
-        mock_cache.limiter = MagicMock()
-        mock_cache.limiter.remaining.return_value = 100
-        mock_cache.is_stale.return_value = True
-
         # movie 1 raises unexpected Exception, movie 2 & 3 succeed
-        mock_cache.get_or_refresh.side_effect = [
+        self.refresh_service.refresh_content.side_effect = [
             ValueError("unexpected DB error"),
-            CacheStatus(refreshed=True, reason="stale", offers_written=1),
-            CacheStatus(refreshed=True, reason="stale", offers_written=1),
+            MagicMock(),
+            MagicMock(),
         ]
 
-        summary = process_watchlist_refresh(budget=10, user_id=1, cache=mock_cache)
+        summary = self._run(budget=10)
 
         self.assertEqual(summary["attempted"], 3)
         self.assertEqual(summary["errors"], 1)
         self.assertEqual(summary["refreshed"], 2)
         self.assertEqual(summary["remaining_budget"], 8)
         self.assertFalse(summary["rate_limited"])
+
+    def test_freshness_comes_from_canonical_last_seen(self):
+        self.assertTrue(is_stale(self.movie1))  # never refreshed canonically
+        local_offer(self.movie1)
+        self.assertFalse(is_stale(self.movie1))
+        _stale_offers(self.movie1, timezone.now() - dt.timedelta(hours=48))
+        self.assertTrue(is_stale(self.movie1))
 
 
 class ManagementCommandTests(TestCase):
@@ -182,3 +220,14 @@ class WatchlistRefreshApiTests(TestCase):
 
         self.assertEqual(resp.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
         self.assertTrue(resp.data["rate_limited"])
+
+
+class RateLimiterIntegrationTests(TestCase):
+    """The migrated path still reserves a call per live refresh."""
+
+    def test_acquire_increments_the_shared_counter(self):
+        limiter = RateLimiter("test_bulk_refresh_migration")
+        ApiCallCounter.objects.filter(service="test_bulk_refresh_migration").delete()
+        limiter.acquire()
+        self.assertEqual(ApiCallCounter.objects.get(service="test_bulk_refresh_migration").count, 1)
+        self.assertEqual(limiter.remaining(), 99)

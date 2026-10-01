@@ -366,7 +366,7 @@ This document provides the complete API contract specification for the **WhereTf
 - **Purpose**: Return ranked Prime Video (provider=`amazon`) availability offers for a single movie, filtered to `subscription`/`free` offer types only, ranked by strict priority: audio language match (JA > EN) → subtitle language match (EN > JA) → quality (4K > HDR > HD > SD) → country code (alphabetical tiebreak).
 - **Path Parameters**:
   - `tmdb_id` *(required, integer)*: The TMDb ID of the movie.
-- **Environment**: `PRIME_LIVE_FETCH` (default `true`). When `true`, a cache miss triggers a live Streaming Availability API call. When `false`, only cached `Availability` rows are returned.
+- **Data source**: served entirely from cached availability rows — a detail request never triggers a live upstream fetch (availability refreshes run separately via cron).
 - **Response**: `200 OK`
   - Example: [`docs/examples/api/prime_movie_response.json`](examples/api/prime_movie_response.json)
   ```json

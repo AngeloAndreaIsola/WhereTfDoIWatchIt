@@ -15,6 +15,7 @@ from django.utils import timezone
 
 from tracker.models import Movie, Availability, Region, LanguageInfo, LanguageEntry, Provider, Subscription
 from tracker.services.offers import Offer
+from tracker.tests.availability_factories import local_offer
 
 
 class PrimeUrlRoutingTests(TestCase):
@@ -264,21 +265,9 @@ class SeedFixtureSeriesTests(TestCase):
 class PrimeMovieEndpointTests(TestCase):
     """Tests for GET /api/prime/movie/<tmdb_id>/."""
 
-    def setUp(self):
-        # TMDb watch/providers gap-fill is a separate source with its own tests;
-        # these assert on the mocked cache payload only.
-        prime_patcher = patch(
-            "tracker.services.offer_pipeline.prime_offers", return_value=[]
-        )
-        self.addCleanup(prime_patcher.stop)
-        prime_patcher.start()
-
-    @patch("tracker.services.offer_pipeline.AvailabilityCache")
     @patch("tracker.services.enrichment.TMDbClient")
     @patch("tracker.views.TMDbClient")
-    @patch("tracker.views.AvailabilityCache")
-    def test_returns_ranked_official_and_free_offers(self, mock_cache_cls, mock_tmdb_cls, mock_enrich_tmdb_cls, mock_pipeline_cache_cls):
-        mock_pipeline_cache_cls.return_value = mock_cache_cls.return_value
+    def test_returns_ranked_official_and_free_offers(self, mock_tmdb_cls, mock_enrich_tmdb_cls):
         """Detail endpoint returns ranked SVOD + BVOD offers, not scrapers."""
         from tracker.services.tmdb import TMDbMovie
 
@@ -296,25 +285,25 @@ class PrimeMovieEndpointTests(TestCase):
         # Mock TMDb details (not called since movie exists)
         mock_tmdb = mock_tmdb_cls.return_value
 
-        # Mock availability cache
-        mock_cache = mock_cache_cls.return_value
-        mock_cache.read_offers.return_value = [
-            Offer(country="JP", service="prime", offer_type="subscription",
-             quality="4k", audio_languages=["JA", "EN"], subtitle_languages=["EN", "JA"]),
-            Offer(country="US", service="prime", offer_type="subscription",
-             quality="hd", audio_languages=["EN"], subtitle_languages=["EN"]),
-            # A Free Streaming Provider (e.g. BBC iPlayer) — must be included.
-            Offer(country="GB", service="bbc_iplayer", offer_type="free",
-             quality="hd", audio_languages=["EN"], subtitle_languages=["EN"]),
-            # A Major (Netflix) — included now that the section is Official + Free.
-            Offer(country="GB", service="netflix", offer_type="subscription",
-             quality="hd", audio_languages=["EN"], subtitle_languages=["EN"]),
-            # A scraper (Imported Small Source) — must be filtered out of the
-            # official section (it lives in the separate Unofficial Sources block).
-            Offer(country="", service="hydrahd", offer_type="free",
-             quality="hd", audio_languages=["EN"], subtitle_languages=["EN"], is_scraped_source=True),
-        ]
-        mock_cache.get_or_refresh.return_value = None
+        # Canonical offers for the movie.
+        local_offer(movie, country="JP", service="prime", quality="4k",
+                    audio_languages=["JA", "EN"], subtitle_languages=["EN", "JA"])
+        local_offer(movie, country="US", service="prime", quality="hd",
+                    audio_languages=["EN"], subtitle_languages=["EN"])
+        # A Free Streaming Provider (e.g. BBC iPlayer) — must be included.
+        local_offer(movie, country="GB", service="bbc_iplayer", offer_type="free",
+                    quality="hd", audio_languages=["EN"], subtitle_languages=["EN"])
+        # A Major (Netflix) — included now that the section is Official + Free.
+        local_offer(movie, country="GB", service="netflix", quality="hd",
+                    audio_languages=["EN"], subtitle_languages=["EN"])
+        # A scraper (Imported Small Source) — must be filtered out of the
+        # official section (it lives in the separate Unofficial Sources block).
+        Provider.objects.get_or_create(
+            slug="hydrahd",
+            defaults={"name": "HydraHD", "category": "scraper", "is_enabled": True},
+        )
+        local_offer(movie, country="US", service="hydrahd", offer_type="free",
+                    quality="hd", audio_languages=["EN"], subtitle_languages=["EN"])
 
         from django.test import Client
         response = Client().get("/api/prime/movie/550/")
@@ -343,8 +332,7 @@ class PrimeMovieEndpointTests(TestCase):
 
     @patch("tracker.services.enrichment.TMDbClient")
     @patch("tracker.views.TMDbClient")
-    @patch("tracker.views.AvailabilityCache")
-    def test_auto_creates_movie_from_tmdb(self, mock_cache_cls, mock_tmdb_cls, mock_enrich_tmdb_cls):
+    def test_auto_creates_movie_from_tmdb(self, mock_tmdb_cls, mock_enrich_tmdb_cls):
         """If movie not in DB, prime_movie auto-creates from TMDb."""
         from tracker.services.tmdb import TMDbMovie
 
@@ -355,10 +343,6 @@ class PrimeMovieEndpointTests(TestCase):
         mock_enrich_tmdb_cls.return_value.details.return_value = TMDbMovie(
             tmdb_id=999, title="New Movie", year=2025
         )
-
-        mock_cache = mock_cache_cls.return_value
-        mock_cache.read_offers.return_value = []
-        mock_cache.get_or_refresh.return_value = None
 
         from django.test import Client
         response = Client().get("/api/prime/movie/999/")
@@ -387,26 +371,19 @@ class PrimeMovieEndpointTests(TestCase):
         data = response.json()
         self.assertEqual(data["offers"], [])
 
-    @patch("tracker.services.offer_pipeline.AvailabilityCache")
-    @patch("tracker.views.AvailabilityCache")
-    def test_filters_to_subscription_free_only(self, mock_cache_cls, mock_pipeline_cache_cls):
-        mock_pipeline_cache_cls.return_value = mock_cache_cls.return_value
+    def test_filters_to_subscription_free_only(self):
         """Only subscription/free offers are returned, rent/buy excluded."""
         movie = Movie.objects.create(tmdb_id=777, title="Test Movie", year=2024)
 
         prime_provider = Provider.objects.get(slug="prime")
         Subscription.objects.create(user_id=1, provider=prime_provider, name="Prime Video")
 
-        mock_cache = mock_cache_cls.return_value
-        mock_cache.read_offers.return_value = [
-            Offer(country="US", service="prime", offer_type="subscription",
-             quality="hd", audio_languages=["EN"], subtitle_languages=["EN"]),
-            Offer(country="US", service="prime", offer_type="rent",
-             quality="4k", audio_languages=["EN"], subtitle_languages=["EN"]),
-            Offer(country="US", service="prime", offer_type="buy",
-             quality="4k", audio_languages=["EN"], subtitle_languages=["EN"]),
-        ]
-        mock_cache.get_or_refresh.return_value = None
+        local_offer(movie, country="US", service="prime", offer_type="subscription",
+                    quality="hd", audio_languages=["EN"], subtitle_languages=["EN"])
+        local_offer(movie, country="US", service="prime", offer_type="rent",
+                    quality="4k", audio_languages=["EN"], subtitle_languages=["EN"])
+        local_offer(movie, country="US", service="prime", offer_type="buy",
+                    quality="4k", audio_languages=["EN"], subtitle_languages=["EN"])
 
         from django.test import Client
         response = Client().get("/api/prime/movie/777/")
@@ -416,26 +393,19 @@ class PrimeMovieEndpointTests(TestCase):
         self.assertEqual(len(data["offers"]), 1)
         self.assertEqual(data["offers"][0]["offer_type"], "subscription")
 
-    @patch("tracker.services.offer_pipeline.AvailabilityCache")
-    @patch("tracker.views.AvailabilityCache")
-    def test_offers_sorted_by_priority(self, mock_cache_cls, mock_pipeline_cache_cls):
-        mock_pipeline_cache_cls.return_value = mock_cache_cls.return_value
+    def test_offers_sorted_by_priority(self):
         """Offers are sorted: JA audio > EN audio > quality."""
         movie = Movie.objects.create(tmdb_id=888, title="Sort Test", year=2024)
 
         prime_provider = Provider.objects.get(slug="prime")
         Subscription.objects.create(user_id=1, provider=prime_provider, name="Prime Video")
 
-        mock_cache = mock_cache_cls.return_value
-        mock_cache.read_offers.return_value = [
-            # US: EN audio, EN subs — lower priority
-            Offer(country="US", service="prime", offer_type="subscription",
-             quality="hd", audio_languages=["EN"], subtitle_languages=["EN"]),
-            # JP: JA audio, EN subs — highest priority (JA audio rank 0)
-            Offer(country="JP", service="prime", offer_type="subscription",
-             quality="hd", audio_languages=["JA", "EN"], subtitle_languages=["EN", "JA"]),
-        ]
-        mock_cache.get_or_refresh.return_value = None
+        # US: EN audio, EN subs — lower priority
+        local_offer(movie, country="US", service="prime", quality="hd",
+                    audio_languages=["EN"], subtitle_languages=["EN"])
+        # JP: JA audio, EN subs — highest priority (JA audio rank 0)
+        local_offer(movie, country="JP", service="prime", quality="hd",
+                    audio_languages=["JA", "EN"], subtitle_languages=["EN", "JA"])
 
         from django.test import Client
         response = Client().get("/api/prime/movie/888/")
@@ -455,9 +425,8 @@ class PrimeSeriesEndpointTests(TestCase):
 
     @patch("tracker.services.offer_pipeline.OfficialOffersPipeline")
     @patch("tracker.services.enrichment.TMDbClient")
-    @patch("tracker.views.AvailabilityCache")
     def test_returns_200_keyed_on_series_for_tracked_row(
-        self, mock_cache_cls, mock_enrich_tmdb, mock_pipeline_cls
+        self, mock_enrich_tmdb, mock_pipeline_cls
     ):
         """A tracked series is served under the ``series`` key without a TMDb call."""
         Movie.objects.create(tmdb_id=1396, title="Breaking Bad", year=2008,
@@ -483,9 +452,8 @@ class PrimeSeriesEndpointTests(TestCase):
 
     @patch("tracker.services.offer_pipeline.OfficialOffersPipeline")
     @patch("tracker.services.enrichment.TMDbClient")
-    @patch("tracker.views.AvailabilityCache")
     def test_resolves_unknown_id_through_tmdb_tv_endpoint(
-        self, mock_cache_cls, mock_enrich_tmdb, mock_pipeline_cls
+        self, mock_enrich_tmdb, mock_pipeline_cls
     ):
         """An untracked id is created from the TMDb TV details endpoint."""
         from tracker.services.tmdb import TMDbItem
@@ -510,9 +478,8 @@ class PrimeSeriesEndpointTests(TestCase):
 
     @patch("tracker.services.offer_pipeline.OfficialOffersPipeline")
     @patch("tracker.services.enrichment.TMDbClient")
-    @patch("tracker.views.AvailabilityCache")
     def test_movie_row_is_not_resolved_as_series(
-        self, mock_cache_cls, mock_enrich_tmdb, mock_pipeline_cls
+        self, mock_enrich_tmdb, mock_pipeline_cls
     ):
         """A row typed as a movie is never served (or flipped) as a series."""
         movie = Movie.objects.create(tmdb_id=4242, title="Some Movie",
@@ -532,9 +499,8 @@ class PrimeSeriesEndpointTests(TestCase):
 
     @patch("tracker.services.offer_pipeline.OfficialOffersPipeline")
     @patch("tracker.services.enrichment.TMDbClient")
-    @patch("tracker.views.AvailabilityCache")
     def test_unresolvable_id_returns_404_with_clean_json(
-        self, mock_cache_cls, mock_enrich_tmdb, mock_pipeline_cls
+        self, mock_enrich_tmdb, mock_pipeline_cls
     ):
         mock_enrich_tmdb.return_value.details.side_effect = Exception("404 Not Found")
 
@@ -548,9 +514,8 @@ class PrimeSeriesEndpointTests(TestCase):
         self.assertEqual(data["offers"], [])
 
     @patch("tracker.services.offer_pipeline.OfficialOffersPipeline")
-    @patch("tracker.views.AvailabilityCache")
     def test_current_country_query_param_reaches_pipeline(
-        self, mock_cache_cls, mock_pipeline_cls
+        self, mock_pipeline_cls
     ):
         Movie.objects.create(tmdb_id=1396, title="Breaking Bad", year=2008,
                              content_type="series")
@@ -565,9 +530,8 @@ class PrimeSeriesEndpointTests(TestCase):
 
     @patch("tracker.views.resolve_preferences")
     @patch("tracker.services.offer_pipeline.OfficialOffersPipeline")
-    @patch("tracker.views.AvailabilityCache")
     def test_current_country_falls_back_to_saved_preference(
-        self, mock_cache_cls, mock_pipeline_cls, mock_prefs
+        self, mock_pipeline_cls, mock_prefs
     ):
         Movie.objects.create(tmdb_id=1396, title="Breaking Bad", year=2008,
                              content_type="series")

@@ -299,6 +299,10 @@ class RefreshRun(models.Model):
     rows_refreshed = models.IntegerField(default=0)
     rows_skipped = models.IntegerField(default=0)
     rate_limited = models.BooleanField(default=False)
+    # Non-empty only when the run failed. A finished run with an empty error
+    # is a genuine success (including a genuine empty result), so a failed
+    # catalogue fetch can never masquerade as a successful refresh.
+    error = models.TextField(blank=True, default="")
 
     def __str__(self):
         return f"RefreshRun {self.service} @ {self.started_at}"

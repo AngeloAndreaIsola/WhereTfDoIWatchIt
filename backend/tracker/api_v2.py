@@ -30,7 +30,6 @@ from tracker.scrapers.base import ScrapedItem, ContentMatcher
 from tracker.scrapers import SCRAPER_REGISTRY, resolve_scraper_class
 from tracker.services.preferences import resolve_preferences
 from tracker.services.ranking import rank_offers
-from tracker.services.cache import AvailabilityCache
 from tracker.services.streaming_api import service_display_name
 from tracker.services.offers import Offer
 from tracker.serializers import (

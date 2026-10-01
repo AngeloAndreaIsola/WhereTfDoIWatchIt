@@ -1,0 +1,2166 @@
+{
+ "content": [
+  {
+   "lineups": [
+    {
+     "items": [
+      {
+       "callToActionTitle": "S1 | 1. Power",
+       "closedCaptionAvailable": true,
+       "completionTime": 2593267,
+       "description": "While the electrocution of a young woman leads Murdoch to a war between rival electricity suppliers, and no less than Nikola Tesla (Dmitry Chepovetsky), Crabtree (Jonny Harris) finds himself attracted to a suspect.",
+       "episodeNumber": 1,
+       "formattedIdMedia": "934743",
+       "idMedia": 934743,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.radio-canada.ca/v1/synps-cbc/episode/perso/cbc_murdoch_mysteries_season_01e01_thumbnail_v01.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "infoTitle": "January 24, 2008",
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "airDate": "2008-01-24",
+        "availabilityDate": "2016-01-26",
+        "copyright": "",
+        "country": "Canada",
+        "duration": 2651,
+        "media": {
+         "airDate": "2008-01-24",
+         "availabilityDate": "2016-01-26",
+         "copyright": "",
+         "country": "Canada",
+         "duration": 2651,
+         "productionYear": 2008,
+         "rating": "PG"
+        },
+        "productionYear": 2008,
+        "rating": "PG"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "1. Power",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425211408",
+       "url": "murdoch-mysteries/s01e01",
+       "videoDescriptionAvailable": true
+      },
+      {
+       "callToActionTitle": "S1 | 2. The Glass Ceiling",
+       "closedCaptionAvailable": false,
+       "completionTime": 2593000,
+       "description": "When two respected officers of the court are murdered, Brackenreid (Thomas Craig) fears he\u2019s next on the hit list; meanwhile, Murdoch interviews for the Inspector\u2019s position at a new station.",
+       "episodeNumber": 2,
+       "formattedIdMedia": "934744",
+       "idMedia": 934744,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.radio-canada.ca/v1/synps-cbc/episode/perso/cbc_murdoch_mysteries_season_01e02_thumbnail_v01.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "infoTitle": "January 31, 2008",
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "airDate": "2008-01-31",
+        "availabilityDate": "2018-03-29",
+        "country": "Canada",
+        "duration": 2651,
+        "media": {
+         "airDate": "2008-01-31",
+         "availabilityDate": "2018-03-29",
+         "country": "Canada",
+         "duration": 2651,
+         "rating": "PG"
+        },
+        "rating": "PG"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "2. The Glass Ceiling",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425211413",
+       "url": "murdoch-mysteries/s01e02",
+       "videoDescriptionAvailable": false
+      }
+     ],
+     "permission": {
+      "catalog": "Gem",
+      "requiredScope": "gem:member",
+      "tier": "Member"
+     },
+     "seasonNumber": 1,
+     "tier": "Member",
+     "title": "Season 1",
+     "url": "murdoch-mysteries/s01"
+    },
+    {
+     "items": [
+      {
+       "callToActionTitle": "Trailer",
+       "closedCaptionAvailable": true,
+       "completionTime": 70000,
+       "description": "We're off to the (silent) races with Murdoch Mysteries, to celebrate the Season 12 premiere!",
+       "episodeNumber": 1,
+       "formattedIdMedia": "164994",
+       "idMedia": 164994,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.radio-canada.ca/v1/synps-cbc/episode/perso/cbc_murdoch_mysteries_season_12e00_thumbnail_v01.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "infoTitle": "September 10, 2018",
+       "isPlaybackStatusSupported": false,
+       "links": {
+        "action": "Exit",
+        "next": "murdoch-mysteries/s12e01"
+       },
+       "mediaType": "Trailer",
+       "metadata": {
+        "airDate": "2018-09-10",
+        "availabilityDate": "2019-09-16",
+        "copyright": "",
+        "country": "Canada",
+        "duration": 80,
+        "media": {
+         "airDate": "2018-09-10",
+         "availabilityDate": "2019-09-16",
+         "copyright": "",
+         "country": "Canada",
+         "duration": 80,
+         "productionYear": 2018,
+         "rating": "PG"
+        },
+        "productionYear": 2018,
+        "rating": "PG"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:standard",
+        "tier": "Standard"
+       },
+       "tier": "Standard",
+       "title": "Trailer",
+       "type": "Trailer",
+       "uniqueIdentifier": "EPISODE2425215520",
+       "url": "murdoch-mysteries/s12b01",
+       "videoDescriptionAvailable": false
+      },
+      {
+       "callToActionTitle": "S12 | 1. Murdoch Mystery Mansion",
+       "closedCaptionAvailable": true,
+       "completionTime": 2621000,
+       "description": "After being designed by architect Frank Lloyd Wright, Murdoch and Ogden\u2019s house is rocked by an explosion that claims a man\u2019s life. Guest starring Downton Abbey\u2019s Sophie McShera.",
+       "episodeNumber": 1,
+       "formattedIdMedia": "164955",
+       "idMedia": 164955,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.radio-canada.ca/v1/synps-cbc/episode/perso/cbc_murdoch_mysteries_season_12e01_thumbnail_v01.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "infoTitle": "September 24, 2018",
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "airDate": "2018-09-24",
+        "availabilityDate": "2019-09-16",
+        "copyright": "",
+        "country": "Canada",
+        "credits": [
+         {
+          "peoples": "Sophie McShera",
+          "title": "Guest(s)"
+         }
+        ],
+        "duration": 2658,
+        "media": {
+         "airDate": "2018-09-24",
+         "availabilityDate": "2019-09-16",
+         "copyright": "",
+         "country": "Canada",
+         "credits": [
+          {
+           "peoples": "Sophie McShera",
+           "title": "Guest(s)"
+          }
+         ],
+         "duration": 2658,
+         "productionYear": 2018,
+         "rating": "PG"
+        },
+        "productionYear": 2018,
+        "rating": "PG"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "1. Murdoch Mystery Mansion",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425212771",
+       "url": "murdoch-mysteries/s12e01",
+       "videoDescriptionAvailable": true
+      },
+      {
+       "callToActionTitle": "S12 | 2. Operation: Murder",
+       "closedCaptionAvailable": true,
+       "completionTime": 2601933,
+       "description": "Ogden enlists Murdoch to investigate possible sabotage in the operating room after a patient dies during a routine medical procedure.",
+       "episodeNumber": 2,
+       "formattedIdMedia": "164956",
+       "idMedia": 164956,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.radio-canada.ca/v1/synps-cbc/episode/perso/cbc_murdoch_mysteries_season_12e02_thumbnail_v01.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "infoTitle": "October 1, 2018",
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "airDate": "2018-10-01",
+        "availabilityDate": "2019-09-16",
+        "copyright": "",
+        "country": "Canada",
+        "duration": 2658,
+        "media": {
+         "airDate": "2018-10-01",
+         "availabilityDate": "2019-09-16",
+         "copyright": "",
+         "country": "Canada",
+         "duration": 2658,
+         "productionYear": 2018,
+         "rating": "PG"
+        },
+        "productionYear": 2018,
+        "rating": "PG"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "2. Operation: Murder",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425212775",
+       "url": "murdoch-mysteries/s12e02",
+       "videoDescriptionAvailable": true
+      },
+      {
+       "callToActionTitle": "S12 | 3. My Big Fat Mimico Wedding",
+       "closedCaptionAvailable": true,
+       "completionTime": 2622000,
+       "description": "When Murdoch, Ogden, Crabtree and Brackenreid attend Higgins\u2019 and Ruth Newsome\u2019s wedding, a guest repeatedly tries to kill the groom.",
+       "episodeNumber": 3,
+       "formattedIdMedia": "934753",
+       "idMedia": 934753,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.radio-canada.ca/v1/synps-cbc/episode/perso/cbc_murdoch_mysteries_season_12e03_thumbnail_v01.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "infoTitle": "October 8, 2018",
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "airDate": "2018-10-08",
+        "availabilityDate": "2019-09-16",
+        "copyright": "",
+        "country": "Canada",
+        "duration": 2658,
+        "media": {
+         "airDate": "2018-10-08",
+         "availabilityDate": "2019-09-16",
+         "copyright": "",
+         "country": "Canada",
+         "duration": 2658,
+         "productionYear": 2018,
+         "rating": "PG"
+        },
+        "productionYear": 2018,
+        "rating": "PG"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "3. My Big Fat Mimico Wedding",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425212778",
+       "url": "murdoch-mysteries/s12e03",
+       "videoDescriptionAvailable": true
+      },
+      {
+       "callToActionTitle": "S12 | 4. Murdoch Without Borders",
+       "closedCaptionAvailable": true,
+       "completionTime": 2622467,
+       "description": "After anti-immigrant laws lead to the arrests of Greek men, Brackenreid regrets releasing his carpenter when he\u2019s suspected of murder.",
+       "episodeNumber": 4,
+       "formattedIdMedia": "164957",
+       "idMedia": 164957,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.radio-canada.ca/v1/synps-cbc/episode/perso/cbc_murdoch_mysteries_season_12e04_thumbnail_v01.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "infoTitle": "October 15, 2018",
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "airDate": "2018-10-15",
+        "availabilityDate": "2019-09-16",
+        "copyright": "",
+        "country": "Canada",
+        "duration": 2658,
+        "media": {
+         "airDate": "2018-10-15",
+         "availabilityDate": "2019-09-16",
+         "copyright": "",
+         "country": "Canada",
+         "duration": 2658,
+         "productionYear": 2018,
+         "rating": "PG"
+        },
+        "productionYear": 2018,
+        "rating": "PG"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "4. Murdoch Without Borders",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425212781",
+       "url": "murdoch-mysteries/s12e04",
+       "videoDescriptionAvailable": true
+      },
+      {
+       "callToActionTitle": "S12 | 5. The Spy Who Loved Murdoch",
+       "closedCaptionAvailable": true,
+       "completionTime": 2621567,
+       "description": "When Murdoch impersonates a dead diplomat to save a treaty, political, and sexual intrigue complicate matters.",
+       "episodeNumber": 5,
+       "formattedIdMedia": "164958",
+       "idMedia": 164958,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.radio-canada.ca/v1/synps-cbc/episode/perso/cbc_murdoch_mysteries_season_12e05_thumbnail_v01.jpeg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "infoTitle": "October 22, 2018",
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "airDate": "2018-10-22",
+        "availabilityDate": "2019-09-16",
+        "copyright": "",
+        "country": "Canada",
+        "duration": 2658,
+        "media": {
+         "airDate": "2018-10-22",
+         "availabilityDate": "2019-09-16",
+         "copyright": "",
+         "country": "Canada",
+         "duration": 2658,
+         "productionYear": 2018,
+         "rating": "PG"
+        },
+        "productionYear": 2018,
+        "rating": "PG"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "5. The Spy Who Loved Murdoch",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425212784",
+       "url": "murdoch-mysteries/s12e05",
+       "videoDescriptionAvailable": true
+      },
+      {
+       "callToActionTitle": "S12 | 6. Sir. Sir? Sir!!!",
+       "closedCaptionAvailable": true,
+       "completionTime": 2621633,
+       "description": "Murdoch investigates an astronomical phenomenon with a strange impact on his colleagues' behaviour and dire implications for Toronto.",
+       "episodeNumber": 6,
+       "formattedIdMedia": "164959",
+       "idMedia": 164959,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.radio-canada.ca/v1/synps-cbc/episode/perso/cbc_murdoch_mysteries_season_12e06_thumbnail_v01.jpeg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "infoTitle": "October 29, 2018",
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "airDate": "2018-10-29",
+        "availabilityDate": "2019-09-16",
+        "copyright": "",
+        "country": "Canada",
+        "duration": 2658,
+        "media": {
+         "airDate": "2018-10-29",
+         "availabilityDate": "2019-09-16",
+         "copyright": "",
+         "country": "Canada",
+         "duration": 2658,
+         "productionYear": 2018,
+         "rating": "PG"
+        },
+        "productionYear": 2018,
+        "rating": "PG"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "6. Sir. Sir? Sir!!!",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425212787",
+       "url": "murdoch-mysteries/s12e06",
+       "videoDescriptionAvailable": true
+      },
+      {
+       "callToActionTitle": "S12 | 7. Brother's Keeper",
+       "closedCaptionAvailable": false,
+       "completionTime": 2621000,
+       "description": "When Watts kills a man in self-defense, and Murdoch uncovers the victim's criminal past, questions surround Watts' story.",
+       "episodeNumber": 7,
+       "formattedIdMedia": "164960",
+       "idMedia": 164960,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.radio-canada.ca/v1/synps-cbc/episode/perso/cbc_murdoch_mysteries_season_12e07_thumbnail_v01.jpeg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "infoTitle": "November 5, 2018",
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "airDate": "2018-11-05",
+        "availabilityDate": "2019-09-16",
+        "country": "Canada",
+        "duration": 2653,
+        "media": {
+         "airDate": "2018-11-05",
+         "availabilityDate": "2019-09-16",
+         "country": "Canada",
+         "duration": 2653,
+         "rating": "PG"
+        },
+        "rating": "PG"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "7. Brother's Keeper",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425212791",
+       "url": "murdoch-mysteries/s12e07",
+       "videoDescriptionAvailable": false
+      },
+      {
+       "callToActionTitle": "S12 | 8. Drowning in Money",
+       "closedCaptionAvailable": true,
+       "completionTime": 2621900,
+       "description": "When a wealthy, high society couple is found drowned in their pool in an apparent double suicide, Murdoch suspects murder.",
+       "episodeNumber": 8,
+       "formattedIdMedia": "936884",
+       "idMedia": 936884,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.radio-canada.ca/v1/synps-cbc/episode/perso/cbc_murdoch_mysteries_season_12e08_thumbnail_v01.jpeg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "infoTitle": "November 12, 2018",
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "airDate": "2018-11-12",
+        "availabilityDate": "2019-09-16",
+        "copyright": "",
+        "country": "Canada",
+        "duration": 2658,
+        "media": {
+         "airDate": "2018-11-12",
+         "availabilityDate": "2019-09-16",
+         "copyright": "",
+         "country": "Canada",
+         "duration": 2658,
+         "productionYear": 2018,
+         "rating": "PG"
+        },
+        "productionYear": 2018,
+        "rating": "PG"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "8. Drowning in Money",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425212794",
+       "url": "murdoch-mysteries/s12e08",
+       "videoDescriptionAvailable": true
+      },
+      {
+       "callToActionTitle": "S12 | 9. Secrets and Lies",
+       "closedCaptionAvailable": true,
+       "completionTime": 2621500,
+       "description": "When Brackenreid leaves Toronto to help an old friend find a missing woman, he learns he's a lot closer to the case than he thought.",
+       "episodeNumber": 9,
+       "formattedIdMedia": "164961",
+       "idMedia": 164961,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.radio-canada.ca/v1/synps-cbc/episode/perso/cbc_murdoch_mysteries_season_12e09_thumbnail_v01.jpeg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "infoTitle": "November 26, 2018",
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "airDate": "2018-11-26",
+        "availabilityDate": "2019-09-16",
+        "copyright": "",
+        "country": "Canada",
+        "duration": 2658,
+        "media": {
+         "airDate": "2018-11-26",
+         "availabilityDate": "2019-09-16",
+         "copyright": "",
+         "country": "Canada",
+         "duration": 2658,
+         "productionYear": 2018,
+         "rating": "PG"
+        },
+        "productionYear": 2018,
+        "rating": "PG"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "9. Secrets and Lies",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425212797",
+       "url": "murdoch-mysteries/s12e09",
+       "videoDescriptionAvailable": true
+      },
+      {
+       "callToActionTitle": "S12 | 10. Pirates of the Great Lakes",
+       "closedCaptionAvailable": true,
+       "completionTime": 2621900,
+       "description": "As Murdoch helps an Italian detective recover a shipload of stolen antiquities, Brackenreid considers shipping out.",
+       "episodeNumber": 10,
+       "formattedIdMedia": "164962",
+       "idMedia": 164962,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.radio-canada.ca/v1/synps-cbc/episode/perso/cbc_murdoch_mysteries_season_12e10_thumbnail_v01.png?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "infoTitle": "January 7, 2019",
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "airDate": "2019-01-07",
+        "availabilityDate": "2019-09-16",
+        "copyright": "",
+        "country": "Canada",
+        "duration": 2658,
+        "media": {
+         "airDate": "2019-01-07",
+         "availabilityDate": "2019-09-16",
+         "copyright": "",
+         "country": "Canada",
+         "duration": 2658,
+         "productionYear": 2018,
+         "rating": "PG"
+        },
+        "productionYear": 2018,
+        "rating": "PG"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "10. Pirates of the Great Lakes",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425212801",
+       "url": "murdoch-mysteries/s12e10",
+       "videoDescriptionAvailable": true
+      },
+      {
+       "callToActionTitle": "S12 | 11. Annabella Cinderella",
+       "closedCaptionAvailable": true,
+       "completionTime": 2621933,
+       "description": "Crabtree and John are transporting a convicted axe murderer to prison when she escapes to exact revenge on those who testified against her.",
+       "episodeNumber": 11,
+       "formattedIdMedia": "164963",
+       "idMedia": 164963,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.radio-canada.ca/v1/synps-cbc/episode/perso/cbc_murdoch_mysteries_season_12e11_thumbnail_v01.jpeg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "infoTitle": "January 14, 2019",
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "airDate": "2019-01-14",
+        "availabilityDate": "2019-09-16",
+        "copyright": "",
+        "country": "Canada",
+        "duration": 2658,
+        "media": {
+         "airDate": "2019-01-14",
+         "availabilityDate": "2019-09-16",
+         "copyright": "",
+         "country": "Canada",
+         "duration": 2658,
+         "productionYear": 2018,
+         "rating": "PG"
+        },
+        "productionYear": 2018,
+        "rating": "PG"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "11. Annabella Cinderella",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425212804",
+       "url": "murdoch-mysteries/s12e11",
+       "videoDescriptionAvailable": true
+      },
+      {
+       "callToActionTitle": "S12 | 12. Six of the Best",
+       "closedCaptionAvailable": true,
+       "completionTime": 2621967,
+       "description": "Murdoch\u2019s distressing childhood memories are evoked while investigating the death of an orphan under the care of the same Jesuit priest who taught him.",
+       "episodeNumber": 12,
+       "formattedIdMedia": "164964",
+       "idMedia": 164964,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.radio-canada.ca/v1/synps-cbc/episode/perso/cbc_murdoch_mysteries_season_12e12_thumbnail_v01.jpeg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "infoTitle": "January 21, 2019",
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "airDate": "2019-01-21",
+        "availabilityDate": "2019-09-16",
+        "copyright": "",
+        "country": "Canada",
+        "duration": 2658,
+        "media": {
+         "airDate": "2019-01-21",
+         "availabilityDate": "2019-09-16",
+         "copyright": "",
+         "country": "Canada",
+         "duration": 2658,
+         "productionYear": 2018,
+         "rating": "PG"
+        },
+        "productionYear": 2018,
+        "rating": "PG"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "12. Six of the Best",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425212807",
+       "url": "murdoch-mysteries/s12e12",
+       "videoDescriptionAvailable": true
+      },
+      {
+       "callToActionTitle": "S12 | 13. Murdoch and the Undetectable Man",
+       "closedCaptionAvailable": true,
+       "completionTime": 2619400,
+       "description": "Murdoch enlists inventor Nikola Tesla to help with the murder investigation of a man experimenting with invisibility.",
+       "episodeNumber": 13,
+       "formattedIdMedia": "164965",
+       "idMedia": 164965,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.radio-canada.ca/v1/synps-cbc/episode/perso/cbc_murdoch_mysteries_season_12e13_thumbnail_v01.jpeg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "infoTitle": "January 28, 2019",
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "airDate": "2019-01-28",
+        "availabilityDate": "2019-09-16",
+        "copyright": "",
+        "country": "Canada",
+        "duration": 2658,
+        "media": {
+         "airDate": "2019-01-28",
+         "availabilityDate": "2019-09-16",
+         "copyright": "",
+         "country": "Canada",
+         "duration": 2658,
+         "productionYear": 2018,
+         "rating": "PG"
+        },
+        "productionYear": 2018,
+        "rating": "PG"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "13. Murdoch and the Undetectable Man",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425212811",
+       "url": "murdoch-mysteries/s12e13",
+       "videoDescriptionAvailable": true
+      },
+      {
+       "callToActionTitle": "S12 | 14. Sins of the Father",
+       "closedCaptionAvailable": true,
+       "completionTime": 2621933,
+       "description": "When a man dies in a deliberately set fire, Murdoch\u2019s investigation reveals some shocking personal history.",
+       "episodeNumber": 14,
+       "formattedIdMedia": "164966",
+       "idMedia": 164966,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.radio-canada.ca/v1/synps-cbc/episode/perso/cbc_murdoch_mysteries_season_12e14_thumbnail_v01.jpeg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "infoTitle": "February 4, 2019",
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "airDate": "2019-02-04",
+        "availabilityDate": "2019-09-16",
+        "copyright": "",
+        "country": "Canada",
+        "duration": 2658,
+        "media": {
+         "airDate": "2019-02-04",
+         "availabilityDate": "2019-09-16",
+         "copyright": "",
+         "country": "Canada",
+         "duration": 2658,
+         "productionYear": 2018,
+         "rating": "PG"
+        },
+        "productionYear": 2018,
+        "rating": "PG"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "14. Sins of the Father",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425212814",
+       "url": "murdoch-mysteries/s12e14",
+       "videoDescriptionAvailable": true
+      },
+      {
+       "callToActionTitle": "S12 | 15. One Minute to Murder",
+       "closedCaptionAvailable": true,
+       "completionTime": 2621500,
+       "description": "When a man is electrocuted during a typing contest with Crabtree and Louise Cherry, Murdoch suspects the reporter was the intended target.",
+       "episodeNumber": 15,
+       "formattedIdMedia": "164967",
+       "idMedia": 164967,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.radio-canada.ca/v1/synps-cbc/episode/perso/cbc_murdoch_mysteries_season_12e15_thumbnail_v01.jpeg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "infoTitle": "February 11, 2019",
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "airDate": "2019-02-11",
+        "availabilityDate": "2019-09-16",
+        "copyright": "",
+        "country": "Canada",
+        "duration": 2658,
+        "media": {
+         "airDate": "2019-02-11",
+         "availabilityDate": "2019-09-16",
+         "copyright": "",
+         "country": "Canada",
+         "duration": 2658,
+         "productionYear": 2018,
+         "rating": "PG"
+        },
+        "productionYear": 2018,
+        "rating": "PG"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "15. One Minute to Murder",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425212817",
+       "url": "murdoch-mysteries/s12e15",
+       "videoDescriptionAvailable": true
+      },
+      {
+       "callToActionTitle": "S12 | 16. The Manual for Murder",
+       "closedCaptionAvailable": true,
+       "completionTime": 2621933,
+       "description": "After the release of Murdoch and Ogden\u2019s book, a series of copycat murders begin to take place.",
+       "episodeNumber": 16,
+       "formattedIdMedia": "164968",
+       "idMedia": 164968,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.radio-canada.ca/v1/synps-cbc/episode/perso/cbc_murdoch_mysteries_season_12e16_thumbnail_v01.jpeg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "infoTitle": "February 18, 2019",
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "airDate": "2019-02-18",
+        "availabilityDate": "2019-09-16",
+        "copyright": "",
+        "country": "Canada",
+        "duration": 2658,
+        "media": {
+         "airDate": "2019-02-18",
+         "availabilityDate": "2019-09-16",
+         "copyright": "",
+         "country": "Canada",
+         "duration": 2658,
+         "productionYear": 2018,
+         "rating": "PG"
+        },
+        "productionYear": 2018,
+        "rating": "PG"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "16. The Manual for Murder",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425212820",
+       "url": "murdoch-mysteries/s12e16",
+       "videoDescriptionAvailable": true
+      },
+      {
+       "callToActionTitle": "S12 | 17. Darkness Before Dawn (Pt. 1)",
+       "closedCaptionAvailable": true,
+       "completionTime": 2622000,
+       "description": "As Murdoch seeks a promotion, a constable is shot in a botched raid on an opium den led by Watts.",
+       "episodeNumber": 17,
+       "formattedIdMedia": "164969",
+       "idMedia": 164969,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.radio-canada.ca/v1/synps-cbc/episode/perso/cbc_murdoch_mysteries_season_12e17_thumbnail_v01.jpeg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "infoTitle": "February 25, 2019",
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "airDate": "2019-02-25",
+        "availabilityDate": "2019-09-16",
+        "copyright": "",
+        "country": "Canada",
+        "duration": 2658,
+        "media": {
+         "airDate": "2019-02-25",
+         "availabilityDate": "2019-09-16",
+         "copyright": "",
+         "country": "Canada",
+         "duration": 2658,
+         "productionYear": 2018,
+         "rating": "PG"
+        },
+        "productionYear": 2018,
+        "rating": "PG"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "17. Darkness Before Dawn (Pt. 1)",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425212824",
+       "url": "murdoch-mysteries/s12e17",
+       "videoDescriptionAvailable": true
+      },
+      {
+       "callToActionTitle": "S12 | 18. Darkness Before Dawn (Pt. 2)",
+       "closedCaptionAvailable": true,
+       "completionTime": 2589000,
+       "description": "Murdoch suspects John is being framed for murder by Inspector McWorthy, and Brackenreid goes after the corrupt copper.",
+       "episodeNumber": 18,
+       "formattedIdMedia": "942331",
+       "idMedia": 942331,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.radio-canada.ca/v1/synps-cbc/episode/perso/cbc_murdoch_mysteries_season_12e18_thumbnail_v01.jpeg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "infoTitle": "March 4, 2019",
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "airDate": "2019-03-04",
+        "availabilityDate": "2019-09-16",
+        "copyright": "",
+        "country": "Canada",
+        "duration": 2626,
+        "media": {
+         "airDate": "2019-03-04",
+         "availabilityDate": "2019-09-16",
+         "copyright": "",
+         "country": "Canada",
+         "duration": 2626,
+         "productionYear": 2018,
+         "rating": "PG"
+        },
+        "productionYear": 2018,
+        "rating": "PG"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "18. Darkness Before Dawn (Pt. 2)",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425212827",
+       "url": "murdoch-mysteries/s12e18",
+       "videoDescriptionAvailable": true
+      }
+     ],
+     "permission": {
+      "catalog": "Gem",
+      "requiredScope": "gem:member",
+      "tier": "Member"
+     },
+     "seasonNumber": 12,
+     "selectedTrailerUrl": "murdoch-mysteries/s12b01",
+     "tier": "Member",
+     "title": "Season 12",
+     "url": "murdoch-mysteries/s12"
+    },
+    {
+     "items": [
+      {
+       "callToActionTitle": "Trailer",
+       "closedCaptionAvailable": true,
+       "completionTime": 56000,
+       "description": "Set in the late 1890s and early 1900s, critically-acclaimed series MURDOCH MYSTERIES explores the world of William Murdoch, a dashing detective who uses inventive forensic techniques to solve crimes.",
+       "episodeNumber": 1,
+       "formattedIdMedia": "996684",
+       "idMedia": 996684,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_murdoch_mysteries_s20t01_thumbnail_v01.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "isPlaybackStatusSupported": false,
+       "links": {
+        "action": "Exit"
+       },
+       "mediaType": "Trailer",
+       "metadata": {
+        "availabilityDate": "2026-09-21",
+        "copyright": "",
+        "country": "Canada",
+        "duration": 66,
+        "media": {
+         "availabilityDate": "2026-09-21",
+         "copyright": "",
+         "country": "Canada",
+         "duration": 66,
+         "productionYear": 2026,
+         "rating": "PG"
+        },
+        "productionYear": 2026,
+        "rating": "PG"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:standard",
+        "tier": "Standard"
+       },
+       "tier": "Standard",
+       "title": "Trailer",
+       "type": "Trailer",
+       "uniqueIdentifier": "EPISODE2425278685",
+       "url": "murdoch-mysteries/s20b01",
+       "videoDescriptionAvailable": false
+      }
+     ],
+     "permission": {
+      "catalog": "Gem",
+      "requiredScope": "gem:standard",
+      "tier": "Standard"
+     },
+     "seasonNumber": 20,
+     "selectedTrailerUrl": "murdoch-mysteries/s20b01",
+     "tier": "Standard",
+     "title": "Season 20",
+     "url": "murdoch-mysteries/s20"
+    }
+   ]
+  }
+ ],
+ "contentType": "Season",
+ "description": "Set in the late 1890s and early 1900s, critically-acclaimed series MURDOCH MYSTERIES explores the world of William Murdoch, a dashing detective who uses inventive forensic techniques to solve crimes.",
+ "hasOnlyATrailer": false,
+ "images": {
+  "background": {
+   "size": "Normal",
+   "url": "https://images.gem.cbc.ca/v1/synps-cbc/show/perso/cbc_murdoch_mysteries_ott_background_v07.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+  },
+  "logo": {
+   "size": "Normal",
+   "url": "https://images.gem.cbc.ca/v1/synps-cbc/show/perso/cbc_murdoch_mysteries_ott_logo_v04.png?impolicy=ott&im=Resize=(_Size_)&quality=75"
+  }
+ },
+ "requestedType": "Show",
+ "selectedUrl": "murdoch-mysteries/s01e01",
+ "structuredMetadata": {
+  "@context": "http://schema.org",
+  "@type": "TVSeries",
+  "abstract": "Set in the late 1890s and early 1900s, critically-acclaimed series MURDOCH MYSTERIES explores the world of William Murdoch, a dashing detective who uses inventive forensic techniques to solve crimes.",
+  "actor": [
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Lisa Faulkner"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Peter Stebbings"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Kate Greenhouse"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Jonathan Goad"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Jordan Pettle"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Stephanie Langton"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Roy Lewis"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Yannick Bisson"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Helene Joy"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Thomas Craig"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Jonny Harris"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Georgina Reilly"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "David Onley"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Tattiawna Jones"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Zaib Shaikh"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Paula Brancati"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Michael Seater"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Charlotte Sullivan"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Andrew Gower"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Tara Spencer-Nairn"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Allan Hawco"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Wendy Crewson"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Daiva Johnston"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Peter Keleghan"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Matthew Bennett"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Kari Matchett"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Peter Outerbridge"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Kristian Bruun"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Mouna Traore"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Megan Follows"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Trevor Carroll"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Simon R. Baker"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Wayne Baker"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Bisson Yannick"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Claire Goose"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "John Fleming"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Craig Thomas"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Lachlan Murdoch"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Joy Helene"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Murdoch Lachlan"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Daniel Maslany"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Shanice Banton"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Clare McConnell"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Paul Sun-Hyung Lee"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Arwen Humphreys"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Kataem O\u2019Connor"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Bea Santos"
+   }
+  ],
+  "alternateName": "",
+  "author": [],
+  "containsSeason": [
+   {
+    "@context": "http://schema.org",
+    "@type": "CreativeWorkSeason",
+    "abstract": "Set in the late 1890s and early 1900s, critically-acclaimed series MURDOCH MYSTERIES explores the world of William Murdoch, a dashing detective who uses inventive forensic techniques to solve crimes.",
+    "actor": [],
+    "author": [],
+    "contentRating": "PG",
+    "datePublished": "2016-01-26T05:00:00Z",
+    "director": [],
+    "image": "https://pp-images.gem.cbc.ca/v1/synps-cbc/season/perso/cbc_murdoch_mysteries_s01_ott_background_v02.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75",
+    "inLanguage": "en-CA",
+    "name": "Season 1",
+    "numberOfEpisodes": 13,
+    "seasonNumber": 1,
+    "startDate": "2016-01-26T05:00:00Z",
+    "url": "https://gem.cbc.ca/murdoch-mysteries/s01"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "CreativeWorkSeason",
+    "abstract": "Set in the late 1890s and early 1900s, critically-acclaimed series MURDOCH MYSTERIES explores the world of William Murdoch, a dashing detective who uses inventive forensic techniques to solve crimes.",
+    "actor": [],
+    "author": [],
+    "contentRating": "PG",
+    "datePublished": "2018-03-29T04:00:00Z",
+    "director": [],
+    "image": "https://pp-images.gem.cbc.ca/v1/synps-cbc/season/perso/cbc_murdoch_mysteries_s02_ott_background_v02.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75",
+    "inLanguage": "en-CA",
+    "name": "Season 2",
+    "numberOfEpisodes": 13,
+    "seasonNumber": 2,
+    "startDate": "2018-03-29T04:00:00Z",
+    "url": "https://gem.cbc.ca/murdoch-mysteries/s02"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "CreativeWorkSeason",
+    "abstract": "Set in the late 1890s and early 1900s, critically-acclaimed series MURDOCH MYSTERIES explores the world of William Murdoch, a dashing detective who uses inventive forensic techniques to solve crimes.",
+    "actor": [
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Lisa Faulkner"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Peter Stebbings"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Kate Greenhouse"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Jonathan Goad"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Jordan Pettle"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Stephanie Langton"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Roy Lewis"
+     }
+    ],
+    "author": [],
+    "contentRating": "PG",
+    "datePublished": "2018-03-29T04:00:00Z",
+    "director": [],
+    "image": "https://pp-images.gem.cbc.ca/v1/synps-cbc/season/perso/cbc_murdoch_mysteries_s03_ott_background_v02.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75",
+    "inLanguage": "en-CA",
+    "name": "Season 3",
+    "numberOfEpisodes": 13,
+    "seasonNumber": 3,
+    "startDate": "2018-03-29T04:00:00Z",
+    "url": "https://gem.cbc.ca/murdoch-mysteries/s03"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "CreativeWorkSeason",
+    "abstract": "Set in late 1890s Toronto, Murdoch Mysteries explores the intriguing world of William Murdoch (Yannick Bisson, Sue Thomas F.B. Eye), a handsome young detective using radical forensic techniques for the time, including fingerprinting and trace evidence, to solve some of the city's most gruesome murders.",
+    "actor": [
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Yannick Bisson"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Helene Joy"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Thomas Craig"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Jonny Harris"
+     }
+    ],
+    "author": [],
+    "contentRating": "PG",
+    "datePublished": "2018-05-01T13:00:00Z",
+    "director": [],
+    "image": "https://pp-images.gem.cbc.ca/v1/synps-cbc/season/perso/cbc_murdoch_mysteries_s04_ott_background_v02.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75",
+    "inLanguage": "en-CA",
+    "name": "Season 4",
+    "numberOfEpisodes": 13,
+    "seasonNumber": 4,
+    "startDate": "2018-05-01T13:00:00Z",
+    "url": "https://gem.cbc.ca/murdoch-mysteries/s04"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "CreativeWorkSeason",
+    "abstract": "Set in the late 1890s and early 1900s, critically-acclaimed series MURDOCH MYSTERIES explores the world of William Murdoch, a dashing detective who uses inventive forensic techniques to solve crimes.",
+    "actor": [
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Yannick Bisson"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Thomas Craig"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Helene Joy"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Georgina Reilly"
+     }
+    ],
+    "author": [],
+    "contentRating": "PG",
+    "datePublished": "2018-03-29T04:00:00Z",
+    "director": [],
+    "image": "https://pp-images.gem.cbc.ca/v1/synps-cbc/season/perso/cbc_murdoch_mysteries_s05_ott_background_v02.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75",
+    "inLanguage": "en-CA",
+    "name": "Season 5",
+    "numberOfEpisodes": 13,
+    "seasonNumber": 5,
+    "startDate": "2018-03-29T04:00:00Z",
+    "url": "https://gem.cbc.ca/murdoch-mysteries/s05"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "CreativeWorkSeason",
+    "abstract": "Set in the late 1890s and early 1900s, critically-acclaimed series MURDOCH MYSTERIES explores the world of William Murdoch, a dashing detective who uses inventive forensic techniques to solve crimes.",
+    "actor": [
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Yannick Bisson"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Jonny Harris"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Georgina Reilly"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Helene Joy"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "David Onley"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Tattiawna Jones"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Zaib Shaikh"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Paula Brancati"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Michael Seater"
+     }
+    ],
+    "author": [],
+    "contentRating": "PG",
+    "datePublished": "2018-05-01T13:00:00Z",
+    "director": [],
+    "image": "https://pp-images.gem.cbc.ca/v1/synps-cbc/season/perso/cbc_murdoch_mysteries_s06_ott_background_v02.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75",
+    "inLanguage": "en-CA",
+    "name": "Season 6",
+    "numberOfEpisodes": 13,
+    "seasonNumber": 6,
+    "startDate": "2018-05-01T13:00:00Z",
+    "url": "https://gem.cbc.ca/murdoch-mysteries/s06"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "CreativeWorkSeason",
+    "abstract": "Set in the late 1890s and early 1900s, critically-acclaimed series MURDOCH MYSTERIES explores the world of William Murdoch, a dashing detective who uses inventive forensic techniques to solve crimes.",
+    "actor": [
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Yannick Bisson"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Thomas Craig"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Helene Joy"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Jonny Harris"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Georgina Reilly"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Peter Stebbings"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Charlotte Sullivan"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Andrew Gower"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Tara Spencer-Nairn"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Allan Hawco"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Michael Seater"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Wendy Crewson"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Daiva Johnston"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Peter Keleghan"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Matthew Bennett"
+     }
+    ],
+    "author": [],
+    "contentRating": "PG",
+    "datePublished": "2018-05-01T13:00:00Z",
+    "director": [],
+    "image": "https://pp-images.gem.cbc.ca/v1/synps-cbc/season/perso/cbc_murdoch_mysteries_s07_ott_background_v03.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75",
+    "inLanguage": "en-CA",
+    "name": "Season 7",
+    "numberOfEpisodes": 18,
+    "seasonNumber": 7,
+    "startDate": "2018-05-01T13:00:00Z",
+    "url": "https://gem.cbc.ca/murdoch-mysteries/s07"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "CreativeWorkSeason",
+    "abstract": "Set in the late 1890s and early 1900s, critically-acclaimed series MURDOCH MYSTERIES explores the world of William Murdoch, a dashing detective who uses inventive forensic techniques to solve crimes.",
+    "actor": [
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Georgina Reilly"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Jonny Harris"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Helene Joy"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Thomas Craig"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Yannick Bisson"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Kari Matchett"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Peter Outerbridge"
+     }
+    ],
+    "author": [],
+    "contentRating": "PG",
+    "datePublished": "2018-05-01T13:00:00Z",
+    "director": [],
+    "image": "https://pp-images.gem.cbc.ca/v1/synps-cbc/season/perso/cbc_murdoch_mysteries_s08_ott_background_v02.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75",
+    "inLanguage": "en-CA",
+    "name": "Season 8",
+    "numberOfEpisodes": 18,
+    "seasonNumber": 8,
+    "startDate": "2018-05-01T13:00:00Z",
+    "url": "https://gem.cbc.ca/murdoch-mysteries/s08"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "CreativeWorkSeason",
+    "abstract": "Set in the late 1890s and early 1900s, critically-acclaimed series MURDOCH MYSTERIES explores the world of William Murdoch, a dashing detective who uses inventive forensic techniques to solve crimes.",
+    "actor": [
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Yannick Bisson"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Helene Joy"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Jonny Harris"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Georgina Reilly"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Thomas Craig"
+     }
+    ],
+    "author": [],
+    "contentRating": "PG",
+    "datePublished": "2018-05-01T04:00:00Z",
+    "director": [],
+    "image": "https://pp-images.gem.cbc.ca/v1/synps-cbc/season/perso/cbc_murdoch_mysteries_s09_ott_background_v02.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75",
+    "inLanguage": "en-CA",
+    "name": "Season 9",
+    "numberOfEpisodes": 19,
+    "seasonNumber": 9,
+    "startDate": "2018-05-01T04:00:00Z",
+    "url": "https://gem.cbc.ca/murdoch-mysteries/s09"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "CreativeWorkSeason",
+    "abstract": "Set in the late 1890s and early 1900s, critically-acclaimed series MURDOCH MYSTERIES explores the world of William Murdoch, a dashing detective who uses inventive forensic techniques to solve crimes.",
+    "actor": [
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Yannick Bisson"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Helene Joy"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Jonny Harris"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Georgina Reilly"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Thomas Craig"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Kristian Bruun"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Mouna Traore"
+     }
+    ],
+    "author": [],
+    "contentRating": "PG",
+    "datePublished": "2018-05-01T04:00:00Z",
+    "director": [],
+    "image": "https://pp-images.gem.cbc.ca/v1/synps-cbc/season/perso/cbc_murdoch_mysteries_s10_ott_background_v02.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75",
+    "inLanguage": "en-CA",
+    "name": "Season 10",
+    "numberOfEpisodes": 19,
+    "seasonNumber": 10,
+    "startDate": "2018-05-01T04:00:00Z",
+    "url": "https://gem.cbc.ca/murdoch-mysteries/s10"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "CreativeWorkSeason",
+    "abstract": "Set in the late 1890s and early 1900s, critically-acclaimed series MURDOCH MYSTERIES explores the world of William Murdoch, a dashing detective who uses inventive forensic techniques to solve crimes.",
+    "actor": [
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Megan Follows"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Trevor Carroll"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Simon R. Baker"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Wayne Baker"
+     }
+    ],
+    "author": [],
+    "contentRating": "PG",
+    "datePublished": "2017-12-18T05:00:00Z",
+    "director": [],
+    "image": "https://pp-images.gem.cbc.ca/v1/synps-cbc/season/perso/cbc_murdoch_mysteries_s11_ott_background_v02.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75",
+    "inLanguage": "en-CA",
+    "name": "Season 11",
+    "numberOfEpisodes": 19,
+    "seasonNumber": 11,
+    "startDate": "2017-12-18T05:00:00Z",
+    "url": "https://gem.cbc.ca/murdoch-mysteries/s11"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "CreativeWorkSeason",
+    "abstract": "At the dawn of the new century, Detective William Murdoch (Yannick Bisson) uses innovative investigative techniques, like fingerprinting, ultraviolet lighting and trace evidence, to solve murders.",
+    "actor": [],
+    "author": [],
+    "contentRating": "PG",
+    "datePublished": "2019-09-16T23:00:00Z",
+    "director": [],
+    "image": "https://pp-images.gem.cbc.ca/v1/synps-cbc/season/perso/cbc_murdoch_mysteries_s12_ott_background_v05.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75",
+    "inLanguage": "en-CA",
+    "name": "Season 12",
+    "numberOfEpisodes": 18,
+    "seasonNumber": 12,
+    "startDate": "2019-09-16T23:00:00Z",
+    "url": "https://gem.cbc.ca/murdoch-mysteries/s12"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "CreativeWorkSeason",
+    "abstract": "At the dawn of the 20th century, Detective William Murdoch (Yannick Bisson) uses innovative investigative techniques, like fingerprinting, ultraviolet lighting, and trace evidence to solve gruesome murders in Toronto.",
+    "actor": [
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Bisson Yannick"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Yannick Bisson"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Claire Goose"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "John Fleming"
+     }
+    ],
+    "author": [],
+    "contentRating": "PG",
+    "datePublished": "2019-09-16T23:00:00Z",
+    "director": [],
+    "image": "https://images.gem.cbc.ca/v1/synps-cbc/season/perso/cbc_murdoch_mysteries_s13_ott_background_v03.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75",
+    "inLanguage": "en-CA",
+    "name": "Season 13",
+    "numberOfEpisodes": 18,
+    "seasonNumber": 13,
+    "startDate": "2019-09-16T23:00:00Z",
+    "url": "https://gem.cbc.ca/murdoch-mysteries/s13"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "CreativeWorkSeason",
+    "abstract": "Set in the late 1890s and early 1900s, critically-acclaimed series MURDOCH MYSTERIES explores the world of William Murdoch, a dashing detective who uses inventive forensic techniques to solve crimes.",
+    "actor": [],
+    "author": [],
+    "contentRating": "PG",
+    "datePublished": "2021-01-05T00:00:00Z",
+    "director": [],
+    "image": "https://pp-images.gem.cbc.ca/v1/synps-cbc/season/perso/cbc_murdoch_mysteries_s14_ott_background_v02.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75",
+    "inLanguage": "en-CA",
+    "name": "Season 14",
+    "numberOfEpisodes": 11,
+    "seasonNumber": 14,
+    "startDate": "2021-01-05T00:00:00Z",
+    "url": "https://gem.cbc.ca/murdoch-mysteries/s14"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "CreativeWorkSeason",
+    "abstract": "Set in the late 1890s and early 1900s, critically-acclaimed series MURDOCH MYSTERIES explores the world of William Murdoch, a dashing detective who uses inventive forensic techniques to solve crimes.",
+    "actor": [],
+    "author": [],
+    "contentRating": "PG",
+    "datePublished": "2021-09-14T00:00:00Z",
+    "director": [],
+    "image": "https://pp-images.gem.cbc.ca/v1/synps-cbc/season/perso/cbc_murdoch_mysteries_s15_ott_background_v04.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75",
+    "inLanguage": "en-CA",
+    "name": "Season 15",
+    "numberOfEpisodes": 24,
+    "seasonNumber": 15,
+    "startDate": "2021-09-14T00:00:00Z",
+    "url": "https://gem.cbc.ca/murdoch-mysteries/s15"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "CreativeWorkSeason",
+    "abstract": "Set in the late 1890s and early 1900s, this critically-acclaimed series explores the world of William Murdoch, a dashing detective who uses inventive forensic techniques to solve crimes.",
+    "actor": [
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Yannick Bisson"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Bisson Yannick"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Helene Joy"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Craig Thomas"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Lachlan Murdoch"
+     }
+    ],
+    "author": [],
+    "contentRating": "PG",
+    "datePublished": "2022-09-12T23:00:00Z",
+    "director": [],
+    "image": "https://images.gem.cbc.ca/v1/synps-cbc/season/perso/cbc_murdoch_mysteries_s16_ott_background_v05.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75",
+    "inLanguage": "en-CA",
+    "name": "Season 16",
+    "numberOfEpisodes": 24,
+    "seasonNumber": 16,
+    "startDate": "2022-09-12T23:00:00Z",
+    "url": "https://gem.cbc.ca/murdoch-mysteries/s16"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "CreativeWorkSeason",
+    "abstract": "At the dawn of the new century, Detective William Murdoch uses innovative investigative techniques, like fingerprinting, ultraviolet lighting and trace evidence to solve gruesome murders in Toronto.",
+    "actor": [
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Yannick Bisson"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Joy Helene"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Thomas Craig"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Murdoch Lachlan"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Jonny Harris"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Craig Thomas"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Lachlan Murdoch"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Helene Joy"
+     }
+    ],
+    "author": [],
+    "contentRating": "PG",
+    "datePublished": "2023-10-02T13:00:00Z",
+    "director": [],
+    "inLanguage": "en-CA",
+    "name": "Season 17",
+    "numberOfEpisodes": 24,
+    "seasonNumber": 17,
+    "startDate": "2023-10-02T13:00:00Z",
+    "url": "https://gem.cbc.ca/murdoch-mysteries/s17"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "CreativeWorkSeason",
+    "abstract": "Set in the late 1890s and early 1900s, critically-acclaimed series MURDOCH MYSTERIES explores the world of William Murdoch, a dashing detective who uses inventive forensic techniques to solve crimes.",
+    "actor": [],
+    "author": [],
+    "contentRating": "PG",
+    "datePublished": "2024-09-30T13:00:00Z",
+    "director": [],
+    "image": "https://images.gem.cbc.ca/v1/synps-cbc/season/perso/cbc_murdoch_mysteries_s18_ott_background_v01.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75",
+    "inLanguage": "en-CA",
+    "name": "Season 18",
+    "numberOfEpisodes": 22,
+    "seasonNumber": 18,
+    "startDate": "2024-09-30T13:00:00Z",
+    "url": "https://gem.cbc.ca/murdoch-mysteries/s18"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "CreativeWorkSeason",
+    "abstract": "Set in the late 1890s and early 1900s, critically-acclaimed series MURDOCH MYSTERIES explores the world of William Murdoch, a dashing detective who uses inventive forensic techniques to solve crimes.",
+    "actor": [
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Yannick Bisson"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Craig Thomas"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Daniel Maslany"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Shanice Banton"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Clare McConnell"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Lachlan Murdoch"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Paul Sun-Hyung Lee"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Arwen Humphreys"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Kataem O\u2019Connor"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Bea Santos"
+     }
+    ],
+    "author": [],
+    "contentRating": "PG",
+    "datePublished": "2025-10-06T13:00:00Z",
+    "director": [],
+    "image": "https://pp-images.gem.cbc.ca/v1/synps-cbc/season/perso/cbc_murdoch_mysteries_s19_ott_background_v01.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75",
+    "inLanguage": "en-CA",
+    "name": "Season 19",
+    "numberOfEpisodes": 21,
+    "seasonNumber": 19,
+    "startDate": "2025-10-06T13:00:00Z",
+    "url": "https://gem.cbc.ca/murdoch-mysteries/s19"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "CreativeWorkSeason",
+    "abstract": "Set in the late 1890s and early 1900s, critically-acclaimed series MURDOCH MYSTERIES explores the world of William Murdoch, a dashing detective who uses inventive forensic techniques to solve crimes.",
+    "actor": [],
+    "author": [],
+    "contentRating": "PG",
+    "director": [],
+    "image": "https://images.gem.cbc.ca/v1/synps-cbc/season/perso/cbc_murdoch_mysteries_s20_ott_background_v01.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75",
+    "inLanguage": "en-CA",
+    "name": "Season 20",
+    "numberOfEpisodes": 0,
+    "seasonNumber": 20,
+    "url": "https://gem.cbc.ca/murdoch-mysteries/s20"
+   }
+  ],
+  "contentRating": "PG",
+  "countryOfOrigin": {
+   "@context": "http://schema.org",
+   "@type": "Country",
+   "name": "Canada"
+  },
+  "datePublished": "2016-01-26T05:00:00Z",
+  "director": [],
+  "genre": [
+   "Crime et police"
+  ],
+  "image": "https://images.gem.cbc.ca/v1/synps-cbc/show/perso/cbc_murdoch_mysteries_ott_background_v07.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75",
+  "inLanguage": "en-CA",
+  "name": "Murdoch Mysteries",
+  "numberOfEpisodes": 333,
+  "numberOfSeasons": 20,
+  "startDate": "2016-01-26T05:00:00Z",
+  "url": "https://gem.cbc.ca/murdoch-mysteries"
+ },
+ "title": "Murdoch Mysteries"
+}

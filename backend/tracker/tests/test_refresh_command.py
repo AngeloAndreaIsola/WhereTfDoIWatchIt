@@ -1,12 +1,18 @@
 """Tests for refresh_availability management command and RefreshRun audit model."""
+import datetime as dt
 import io
 from unittest.mock import MagicMock, patch
 
 from django.core.management import call_command
 from django.test import TestCase
+from django.utils import timezone
 
 from tracker.models import Movie, RefreshRun, WatchlistItem
-from tracker.services.cache import CacheStatus
+from tracker.services.rate_limit import RateLimitExceeded, RateLimiter
+from tracker.tests.availability_factories import local_offer
+
+REFRESH_CLS = "tracker.services.bulk_refresh.AvailabilityRefreshService"
+LIMITER_CLS = "tracker.services.bulk_refresh.RateLimiter"
 
 
 class RefreshCommandTests(TestCase):
@@ -16,17 +22,19 @@ class RefreshCommandTests(TestCase):
         WatchlistItem.objects.create(user_id=1, movie=self.movie1)
         WatchlistItem.objects.create(user_id=1, movie=self.movie2)
 
-    @patch("tracker.services.bulk_refresh.AvailabilityCache")
-    def test_refresh_command_creates_refresh_run(self, mock_cache_cls):
-        mock_cache = MagicMock()
-        mock_cache_cls.return_value = mock_cache
-        mock_cache.limiter.remaining.return_value = 100
+        self.refresh_service = MagicMock()
+        self.limiter = MagicMock(spec=RateLimiter)
+        self.limiter.remaining.return_value = 100
 
-        # movie1 is stale and gets refreshed, movie2 is fresh and gets skipped
-        mock_cache.is_stale.side_effect = lambda movie: movie.id == self.movie1.id
-        mock_cache.get_or_refresh.return_value = CacheStatus(
-            refreshed=True, reason="stale", offers_written=2
-        )
+    @patch(LIMITER_CLS)
+    @patch(REFRESH_CLS)
+    def test_refresh_command_creates_refresh_run(self, mock_service_cls, mock_limiter_cls):
+        mock_service_cls.return_value = self.refresh_service
+        mock_limiter_cls.return_value = self.limiter
+
+        # movie2 is fresh (canonical offers observed now) and gets skipped;
+        # movie1 has no canonical offers yet and gets refreshed.
+        local_offer(self.movie2)
 
         out = io.StringIO()
         call_command("refresh_availability", "--budget", "10", stdout=out)
@@ -42,16 +50,12 @@ class RefreshCommandTests(TestCase):
         self.assertGreaterEqual(run.finished_at, run.started_at)
         self.assertIn("RefreshRun streaming_availability", str(run))
 
-    @patch("tracker.services.bulk_refresh.AvailabilityCache")
-    def test_refresh_command_handles_rate_limit_status(self, mock_cache_cls):
-        mock_cache = MagicMock()
-        mock_cache_cls.return_value = mock_cache
-        mock_cache.limiter.remaining.return_value = 100
-
-        mock_cache.is_stale.return_value = True
-        mock_cache.get_or_refresh.return_value = CacheStatus(
-            refreshed=False, reason="rate_limited", offers_written=0
-        )
+    @patch(LIMITER_CLS)
+    @patch(REFRESH_CLS)
+    def test_refresh_command_handles_rate_limit_status(self, mock_service_cls, mock_limiter_cls):
+        mock_service_cls.return_value = self.refresh_service
+        mock_limiter_cls.return_value = self.limiter
+        self.limiter.acquire.side_effect = RateLimitExceeded("Rate limit reached")
 
         out = io.StringIO()
         call_command("refresh_availability", "--budget", "10", stdout=out)
@@ -62,3 +66,26 @@ class RefreshCommandTests(TestCase):
         self.assertEqual(run.rows_refreshed, 0)
         self.assertTrue(run.rate_limited)
         self.assertIsNotNone(run.finished_at)
+        self.refresh_service.refresh_content.assert_not_called()
+
+    @patch(LIMITER_CLS)
+    @patch(REFRESH_CLS)
+    def test_stale_canonical_offers_are_refreshed_again(self, mock_service_cls, mock_limiter_cls):
+        mock_service_cls.return_value = self.refresh_service
+        mock_limiter_cls.return_value = self.limiter
+        local_offer(self.movie1)
+        local_offer(self.movie2)  # movie2 stays fresh
+        from availability.models import Offer
+
+        Offer.objects.filter(tmdb_id=101).update(
+            last_seen=timezone.now() - dt.timedelta(hours=48)
+        )
+
+        out = io.StringIO()
+        call_command("refresh_availability", "--budget", "10", stdout=out)
+
+        refreshed = [
+            call.args[0].tmdb_id
+            for call in self.refresh_service.refresh_content.call_args_list
+        ]
+        self.assertEqual(refreshed, [101])

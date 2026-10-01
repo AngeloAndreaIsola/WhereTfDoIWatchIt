@@ -1,0 +1,1269 @@
+{
+ "content": [
+  {
+   "lineups": [
+    {
+     "items": [
+      {
+       "callToActionTitle": "Trailer",
+       "closedCaptionAvailable": true,
+       "completionTime": 114057,
+       "description": "A young Inuk woman wants to build a new future for herself after a spontaneous and extremely public exit from her marriage. It won't be easy in a small Arctic town where everybody knows your business.",
+       "episodeNumber": 1,
+       "formattedIdMedia": "977498",
+       "idMedia": 977498,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_northofnorth_s01t01_thumbnail_v01.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "isPlaybackStatusSupported": false,
+       "links": {
+        "action": "Exit",
+        "next": "north-of-north/s01e01"
+       },
+       "mediaType": "Trailer",
+       "metadata": {
+        "availabilityDate": "2024-12-09",
+        "copyright": "",
+        "country": "Canada",
+        "credits": [
+         {
+          "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching",
+          "title": "Actor(s)"
+         }
+        ],
+        "duration": 124,
+        "media": {
+         "availabilityDate": "2024-12-09",
+         "copyright": "",
+         "country": "Canada",
+         "credits": [
+          {
+           "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching",
+           "title": "Actor(s)"
+          }
+         ],
+         "duration": 124,
+         "productionYear": 2024,
+         "rating": "14+"
+        },
+        "productionYear": 2024,
+        "rating": "14+"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:standard",
+        "tier": "Standard"
+       },
+       "tier": "Standard",
+       "title": "Trailer",
+       "type": "Trailer",
+       "uniqueIdentifier": "EPISODE2425258879",
+       "url": "north-of-north/s01b01",
+       "videoDescriptionAvailable": true
+      },
+      {
+       "callToActionTitle": "S1 | 1. Top of the World",
+       "closedCaptionAvailable": true,
+       "completionTime": 1558367,
+       "description": "Feeling stuck in her life in her tiny Arctic community, Siaja decides it\u2019s time to shake things up during the annual Spring Festival, but her plans are derailed by personal upheavals.",
+       "episodeNumber": 1,
+       "formattedIdMedia": "978055",
+       "idMedia": 978055,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_northofnorth_s01e01_thumbnail_v01.jpeg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "infoTitle": "January 7, 2025",
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "airDate": "2025-01-07",
+        "availabilityDate": "2025-01-07",
+        "copyright": "",
+        "country": "Canada",
+        "credits": [
+         {
+          "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching",
+          "title": "Actor(s)"
+         }
+        ],
+        "duration": 1609,
+        "media": {
+         "airDate": "2025-01-07",
+         "availabilityDate": "2025-01-07",
+         "copyright": "",
+         "country": "Canada",
+         "credits": [
+          {
+           "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching",
+           "title": "Actor(s)"
+          }
+         ],
+         "duration": 1609,
+         "productionYear": 2024,
+         "rating": "14+"
+        },
+        "productionYear": 2024,
+        "rating": "14+"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "1. Top of the World",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425259270",
+       "url": "north-of-north/s01e01",
+       "videoDescriptionAvailable": true
+      },
+      {
+       "callToActionTitle": "S1 | 2. No Freeloading",
+       "closedCaptionAvailable": true,
+       "completionTime": 1325133,
+       "description": "Siaja struggles to pick up the pieces and prove herself capable of handling more than just her messy personal life.",
+       "episodeNumber": 2,
+       "formattedIdMedia": "977868",
+       "idMedia": 977868,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_northofnorth_s01e02_thumbnail_v01.png?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "infoTitle": "January 7, 2025",
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "airDate": "2025-01-07",
+        "availabilityDate": "2025-01-07",
+        "copyright": "",
+        "country": "Canada",
+        "credits": [
+         {
+          "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching",
+          "title": "Actor(s)"
+         }
+        ],
+        "duration": 1392,
+        "media": {
+         "airDate": "2025-01-07",
+         "availabilityDate": "2025-01-07",
+         "copyright": "",
+         "country": "Canada",
+         "credits": [
+          {
+           "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching",
+           "title": "Actor(s)"
+          }
+         ],
+         "duration": 1392,
+         "productionYear": 2024,
+         "rating": "14+"
+        },
+        "productionYear": 2024,
+        "rating": "14+"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "2. No Freeloading",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425259271",
+       "url": "north-of-north/s01e02",
+       "videoDescriptionAvailable": true
+      },
+      {
+       "callToActionTitle": "S1 | 3. Dumpcano",
+       "closedCaptionAvailable": true,
+       "completionTime": 1353467,
+       "description": "Siaja\u2019s first day of work goes awry when she accidentally starts a fire at the dump and Alistair and Kuuk visit the community center to discuss Ice Cove's candidacy to host a polar research station.",
+       "episodeNumber": 3,
+       "formattedIdMedia": "977869",
+       "idMedia": 977869,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_northofnorth_s01e03_thumbnail_v01.png?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "infoTitle": "January 14, 2025",
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "airDate": "2025-01-14",
+        "availabilityDate": "2025-01-14",
+        "copyright": "",
+        "country": "Canada",
+        "credits": [
+         {
+          "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching",
+          "title": "Actor(s)"
+         }
+        ],
+        "duration": 1420,
+        "media": {
+         "airDate": "2025-01-14",
+         "availabilityDate": "2025-01-14",
+         "copyright": "",
+         "country": "Canada",
+         "credits": [
+          {
+           "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching",
+           "title": "Actor(s)"
+          }
+         ],
+         "duration": 1420,
+         "productionYear": 2024,
+         "rating": "14+"
+        },
+        "productionYear": 2024,
+        "rating": "14+"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "3. Dumpcano",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425259272",
+       "url": "north-of-north/s01e03",
+       "videoDescriptionAvailable": true
+      },
+      {
+       "callToActionTitle": "S1 | 4. Joy to the Effing World",
+       "closedCaptionAvailable": true,
+       "completionTime": 1284467,
+       "description": "Siaja jumps at the chance to bring new energy to the community centre\u2019s weekly Elders\u2019 Night, but her rousing success has unexpected consequences.",
+       "episodeNumber": 4,
+       "formattedIdMedia": "977895",
+       "idMedia": 977895,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_northofnorth_s01e04_thumbnail_v01.jpeg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "infoTitle": "January 21, 2025",
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "airDate": "2025-01-21",
+        "availabilityDate": "2025-01-21",
+        "copyright": "",
+        "country": "Canada",
+        "credits": [
+         {
+          "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching",
+          "title": "Actor(s)"
+         }
+        ],
+        "duration": 1350,
+        "media": {
+         "airDate": "2025-01-21",
+         "availabilityDate": "2025-01-21",
+         "copyright": "",
+         "country": "Canada",
+         "credits": [
+          {
+           "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching",
+           "title": "Actor(s)"
+          }
+         ],
+         "duration": 1350,
+         "productionYear": 2024,
+         "rating": "14+"
+        },
+        "productionYear": 2024,
+        "rating": "14+"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "4. Joy to the Effing World",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425259273",
+       "url": "north-of-north/s01e04",
+       "videoDescriptionAvailable": true
+      },
+      {
+       "callToActionTitle": "S1 | 5. Walrus D*ck Baseball",
+       "closedCaptionAvailable": true,
+       "completionTime": 1384400,
+       "description": "Six weeks later as Spring continues to thaw the Arctic, the community comes together to challenge Ice Cove\u2019s rivals to a not-so-friendly game of northern baseball.",
+       "episodeNumber": 5,
+       "formattedIdMedia": "978561",
+       "idMedia": 978561,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_northofnorth_s01e05_thumbnail_v02.png?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "infoTitle": "January 28, 2025",
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "airDate": "2025-01-28",
+        "availabilityDate": "2025-01-28",
+        "copyright": "",
+        "country": "Canada",
+        "credits": [
+         {
+          "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching",
+          "title": "Actor(s)"
+         }
+        ],
+        "duration": 1452,
+        "media": {
+         "airDate": "2025-01-28",
+         "availabilityDate": "2025-01-28",
+         "copyright": "",
+         "country": "Canada",
+         "credits": [
+          {
+           "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching",
+           "title": "Actor(s)"
+          }
+         ],
+         "duration": 1452,
+         "productionYear": 2024,
+         "rating": "14+"
+        },
+        "productionYear": 2024,
+        "rating": "14+"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "5. Walrus D*ck Baseball",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425259274",
+       "url": "north-of-north/s01e05",
+       "videoDescriptionAvailable": true
+      },
+      {
+       "callToActionTitle": "S1 | 6. Carnivores",
+       "closedCaptionAvailable": true,
+       "completionTime": 1318767,
+       "description": "Love is not in the air in Ice Cove as Siaja re-enters the dating world in epic style, Neevee and Alistair reach a turning point, and Kuuk has a surprise visitor",
+       "episodeNumber": 6,
+       "formattedIdMedia": "978912",
+       "idMedia": 978912,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_northofnorth_s01e06_thumbnail_v01.jpeg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "infoTitle": "February 4, 2025",
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "airDate": "2025-02-04",
+        "availabilityDate": "2025-02-04",
+        "copyright": "",
+        "country": "Canada",
+        "credits": [
+         {
+          "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching",
+          "title": "Actor(s)"
+         }
+        ],
+        "duration": 1385,
+        "media": {
+         "airDate": "2025-02-04",
+         "availabilityDate": "2025-02-04",
+         "copyright": "",
+         "country": "Canada",
+         "credits": [
+          {
+           "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching",
+           "title": "Actor(s)"
+          }
+         ],
+         "duration": 1385,
+         "productionYear": 2024,
+         "rating": "14+"
+        },
+        "productionYear": 2024,
+        "rating": "14+"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "6. Carnivores",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425259275",
+       "url": "north-of-north/s01e06",
+       "videoDescriptionAvailable": true
+      },
+      {
+       "callToActionTitle": "S1 | 7. Lost and Found",
+       "closedCaptionAvailable": true,
+       "completionTime": 1355600,
+       "description": "With Ting missing somewhere in the vast Arctic tundra, the community of Ice Cove springs into action and Siaja slips into old habits.",
+       "episodeNumber": 7,
+       "formattedIdMedia": "979004",
+       "idMedia": 979004,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_northofnorth_s01e07_thumbnail_v01.png?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "infoTitle": "February 11, 2025",
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "airDate": "2025-02-11",
+        "availabilityDate": "2025-02-11",
+        "copyright": "",
+        "country": "Canada",
+        "credits": [
+         {
+          "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching",
+          "title": "Actor(s)"
+         }
+        ],
+        "duration": 1422,
+        "media": {
+         "airDate": "2025-02-11",
+         "availabilityDate": "2025-02-11",
+         "copyright": "",
+         "country": "Canada",
+         "credits": [
+          {
+           "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching",
+           "title": "Actor(s)"
+          }
+         ],
+         "duration": 1422,
+         "productionYear": 2024,
+         "rating": "14+"
+        },
+        "productionYear": 2024,
+        "rating": "14+"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "7. Lost and Found",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425259276",
+       "url": "north-of-north/s01e07",
+       "videoDescriptionAvailable": true
+      },
+      {
+       "callToActionTitle": "S1 | 8. Bad Influences",
+       "closedCaptionAvailable": true,
+       "completionTime": 1355600,
+       "description": "Siaja looks for a new place to live while balancing the long anticipated Polar Research pitch and a difficult conversation with Neevee.",
+       "episodeNumber": 8,
+       "formattedIdMedia": "979239",
+       "idMedia": 979239,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_northofnorth_s01e08_thumbnail_v01.png?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "infoTitle": "February 18, 2025",
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "airDate": "2025-02-18",
+        "availabilityDate": "2025-02-18",
+        "copyright": "",
+        "country": "Canada",
+        "credits": [
+         {
+          "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching",
+          "title": "Actor(s)"
+         }
+        ],
+        "duration": 1422,
+        "media": {
+         "airDate": "2025-02-18",
+         "availabilityDate": "2025-02-18",
+         "copyright": "",
+         "country": "Canada",
+         "credits": [
+          {
+           "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching",
+           "title": "Actor(s)"
+          }
+         ],
+         "duration": 1422,
+         "productionYear": 2024,
+         "rating": "14+"
+        },
+        "productionYear": 2024,
+        "rating": "14+"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "8. Bad Influences",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425259277",
+       "url": "north-of-north/s01e08",
+       "videoDescriptionAvailable": true
+      }
+     ],
+     "permission": {
+      "catalog": "Gem",
+      "requiredScope": "gem:member",
+      "tier": "Member"
+     },
+     "seasonNumber": 1,
+     "selectedTrailerUrl": "north-of-north/s01b01",
+     "tier": "Member",
+     "title": "Season 1",
+     "url": "north-of-north/s01"
+    },
+    {
+     "items": [
+      {
+       "callToActionTitle": "Trailer",
+       "closedCaptionAvailable": true,
+       "completionTime": 80000,
+       "description": "As winter closes in on Ice Cove, young Inuk mother Siaja is still making bold decisions and even bolder mistakes in her effort to level up her life and prove she's ready to take charge.",
+       "episodeNumber": 1,
+       "formattedIdMedia": "995518",
+       "idMedia": 995518,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_northofnorth_s02t01_thumbnail_v01.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "isPlaybackStatusSupported": false,
+       "links": {
+        "action": "Exit",
+        "next": "north-of-north/s02e01"
+       },
+       "mediaType": "Trailer",
+       "metadata": {
+        "availabilityDate": "2026-08-14",
+        "copyright": "",
+        "country": "Canada",
+        "credits": [
+         {
+          "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching, Zorga Qaunaq, Maika Harper",
+          "title": "Actor(s)"
+         }
+        ],
+        "duration": 90,
+        "media": {
+         "availabilityDate": "2026-08-14",
+         "copyright": "",
+         "country": "Canada",
+         "credits": [
+          {
+           "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching, Zorga Qaunaq, Maika Harper",
+           "title": "Actor(s)"
+          }
+         ],
+         "duration": 90,
+         "productionYear": 2026,
+         "rating": "14+"
+        },
+        "productionYear": 2026,
+        "rating": "14+"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:standard",
+        "tier": "Standard"
+       },
+       "tier": "Standard",
+       "title": "Trailer",
+       "type": "Trailer",
+       "uniqueIdentifier": "EPISODE2425277417",
+       "url": "north-of-north/s02b01",
+       "videoDescriptionAvailable": false
+      },
+      {
+       "callToActionTitle": "S2 | 1. I Wanna Mask Dance With Somebody",
+       "closedCaptionAvailable": true,
+       "completionTime": 1405000,
+       "description": "As Winter approaches, Siaja tries to break out of a rut \u2013 but a mask dance intended to boost tourism spirals out of control. Meanwhile, a surprise discovery in Neevee's house sets Siaja on a mission.",
+       "episodeNumber": 1,
+       "formattedIdMedia": "996001",
+       "idMedia": 996001,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_northofnorth_s02e01_thumbnail_v01.png?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "availabilityDate": "2026-09-08",
+        "copyright": "",
+        "country": "Canada",
+        "credits": [
+         {
+          "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching, Zorga Qaunaq, Maika Harper",
+          "title": "Actor(s)"
+         }
+        ],
+        "duration": 1441,
+        "media": {
+         "availabilityDate": "2026-09-08",
+         "copyright": "",
+         "country": "Canada",
+         "credits": [
+          {
+           "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching, Zorga Qaunaq, Maika Harper",
+           "title": "Actor(s)"
+          }
+         ],
+         "duration": 1441,
+         "productionYear": 2026,
+         "rating": "14+"
+        },
+        "productionYear": 2026,
+        "rating": "14+"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "1. I Wanna Mask Dance With Somebody",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425277737",
+       "url": "north-of-north/s02e01",
+       "videoDescriptionAvailable": true
+      },
+      {
+       "callToActionTitle": "S2 | 2. Ice, Ice, Baby",
+       "closedCaptionAvailable": true,
+       "completionTime": 1274000,
+       "description": "When a water crisis hits Ice Cove, Siaja and Alistair work together to resolve it.",
+       "episodeNumber": 2,
+       "formattedIdMedia": "996002",
+       "idMedia": 996002,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_northofnorth_s02e02_thumbnail_v01.png?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "availabilityDate": "2026-09-08",
+        "copyright": "",
+        "country": "Canada",
+        "credits": [
+         {
+          "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching, Zorga Qaunaq, Maika Harper",
+          "title": "Actor(s)"
+         }
+        ],
+        "duration": 1310,
+        "media": {
+         "availabilityDate": "2026-09-08",
+         "copyright": "",
+         "country": "Canada",
+         "credits": [
+          {
+           "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching, Zorga Qaunaq, Maika Harper",
+           "title": "Actor(s)"
+          }
+         ],
+         "duration": 1310,
+         "productionYear": 2026,
+         "rating": "14+"
+        },
+        "productionYear": 2026,
+        "rating": "14+"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "2. Ice, Ice, Baby",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425277736",
+       "url": "north-of-north/s02e02",
+       "videoDescriptionAvailable": true
+      },
+      {
+       "callToActionTitle": "S2 | 3. Code Blue",
+       "closedCaptionAvailable": true,
+       "completionTime": 1274000,
+       "description": "When a first-aid training session out on the ice goes wrong, Siaja and Millie team up to solve the crisis. Elsewhere, Kuuk and Alistair help each other process their respective romantic struggles.",
+       "episodeNumber": 3,
+       "formattedIdMedia": "996004",
+       "idMedia": 996004,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_northofnorth_s02e03_thumbnail_v01.png?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "availabilityDate": "2026-09-15",
+        "copyright": "",
+        "country": "Canada",
+        "credits": [
+         {
+          "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching, Zorga Qaunaq, Maika Harper",
+          "title": "Actor(s)"
+         }
+        ],
+        "duration": 1310,
+        "media": {
+         "availabilityDate": "2026-09-15",
+         "copyright": "",
+         "country": "Canada",
+         "credits": [
+          {
+           "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching, Zorga Qaunaq, Maika Harper",
+           "title": "Actor(s)"
+          }
+         ],
+         "duration": 1310,
+         "productionYear": 2026,
+         "rating": "14+"
+        },
+        "productionYear": 2026,
+        "rating": "14+"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "3. Code Blue",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425277734",
+       "url": "north-of-north/s02e03",
+       "videoDescriptionAvailable": true
+      },
+      {
+       "callToActionTitle": "S2 | 4. Fast and Flirtatious",
+       "closedCaptionAvailable": true,
+       "completionTime": 1274000,
+       "description": "When Siaja discovers her ex has moved on, she and her friends organize a community speed dating event, leading to unexpected outcomes. Meanwhile, Alistair has his own adventure with Bun.",
+       "episodeNumber": 4,
+       "formattedIdMedia": "996006",
+       "idMedia": 996006,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_northofnorth_s02e04_thumbnail_v01.png?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "availabilityDate": "2026-09-15",
+        "copyright": "",
+        "country": "Canada",
+        "credits": [
+         {
+          "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching, Zorga Qaunaq, Maika Harper",
+          "title": "Actor(s)"
+         }
+        ],
+        "duration": 1310,
+        "media": {
+         "availabilityDate": "2026-09-15",
+         "copyright": "",
+         "country": "Canada",
+         "credits": [
+          {
+           "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching, Zorga Qaunaq, Maika Harper",
+           "title": "Actor(s)"
+          }
+         ],
+         "duration": 1310,
+         "productionYear": 2026,
+         "rating": "14+"
+        },
+        "productionYear": 2026,
+        "rating": "14+"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "4. Fast and Flirtatious",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425277735",
+       "url": "north-of-north/s02e04",
+       "videoDescriptionAvailable": true
+      },
+      {
+       "callToActionTitle": "S2 | 5. Beer Quest",
+       "closedCaptionAvailable": true,
+       "completionTime": 1264000,
+       "description": "A birthday celebration for Millie takes a chaotic turn when a delivery goes wrong, leading to an unexpected run-in with the law. Amidst the trouble, Siaja receives life-changing news.",
+       "episodeNumber": 5,
+       "formattedIdMedia": "996014",
+       "idMedia": 996014,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_northofnorth_s02e05_thumbnail_v01.png?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "availabilityDate": "2026-09-22",
+        "copyright": "",
+        "country": "Canada",
+        "credits": [
+         {
+          "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching, Zorga Qaunaq, Maika Harper",
+          "title": "Actor(s)"
+         }
+        ],
+        "duration": 1300,
+        "media": {
+         "availabilityDate": "2026-09-22",
+         "copyright": "",
+         "country": "Canada",
+         "credits": [
+          {
+           "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching, Zorga Qaunaq, Maika Harper",
+           "title": "Actor(s)"
+          }
+         ],
+         "duration": 1300,
+         "productionYear": 2026,
+         "rating": "14+"
+        },
+        "productionYear": 2026,
+        "rating": "14+"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "5. Beer Quest",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425277733",
+       "url": "north-of-north/s02e05",
+       "videoDescriptionAvailable": true
+      },
+      {
+       "callToActionTitle": "S2 | 6. Missing Pieces",
+       "closedCaptionAvailable": true,
+       "completionTime": 1264000,
+       "description": "Siaja travels south on a mission to investigate the whereabouts of her long lost sister. Siaja arrives in the city with a clear plan, but absolutely does not stick to it.",
+       "episodeNumber": 6,
+       "formattedIdMedia": "996015",
+       "idMedia": 996015,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_northofnorth_s02e06_thumbnail_v01.png?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "availabilityDate": "2026-09-22",
+        "copyright": "",
+        "country": "Canada",
+        "credits": [
+         {
+          "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching, Zorga Qaunaq, Maika Harper",
+          "title": "Actor(s)"
+         }
+        ],
+        "duration": 1300,
+        "media": {
+         "availabilityDate": "2026-09-22",
+         "copyright": "",
+         "country": "Canada",
+         "credits": [
+          {
+           "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching, Zorga Qaunaq, Maika Harper",
+           "title": "Actor(s)"
+          }
+         ],
+         "duration": 1300,
+         "productionYear": 2026,
+         "rating": "14+"
+        },
+        "productionYear": 2026,
+        "rating": "14+"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "6. Missing Pieces",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425277732",
+       "url": "north-of-north/s02e06",
+       "videoDescriptionAvailable": true
+      },
+      {
+       "callToActionTitle": "S2 | 7. Ghosted",
+       "closedCaptionAvailable": true,
+       "completionTime": 1272000,
+       "description": "Following a personal setback, Siaja struggles with her commitment to the Winter Ball and her relationships. A trip out onto the land with Neevee leads to a long-overdue, honest conversation.",
+       "episodeNumber": 7,
+       "formattedIdMedia": "996022",
+       "idMedia": 996022,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_northofnorth_s02e07_thumbnail_v01.png?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "availabilityDate": "2026-09-29",
+        "copyright": "",
+        "country": "Canada",
+        "credits": [
+         {
+          "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching, Zorga Qaunaq, Maika Harper",
+          "title": "Actor(s)"
+         }
+        ],
+        "duration": 1310,
+        "media": {
+         "availabilityDate": "2026-09-29",
+         "copyright": "",
+         "country": "Canada",
+         "credits": [
+          {
+           "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching, Zorga Qaunaq, Maika Harper",
+           "title": "Actor(s)"
+          }
+         ],
+         "duration": 1310,
+         "productionYear": 2026,
+         "rating": "14+"
+        },
+        "productionYear": 2026,
+        "rating": "14+"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "7. Ghosted",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425277730",
+       "url": "north-of-north/s02e07",
+       "videoDescriptionAvailable": true
+      },
+      {
+       "callToActionTitle": "S2 | 8. Experrrrt",
+       "closedCaptionAvailable": true,
+       "completionTime": 1264000,
+       "description": "As the night of the Winter Ball arrives, so does a massive storm which threatens to derail the event. Siaja and her friends have to dig deep to keep the ball alive.",
+       "episodeNumber": 8,
+       "formattedIdMedia": "996378",
+       "idMedia": 996378,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_northofnorth_s02e08_thumbnail_v01.jpeg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "availabilityDate": "2026-09-29",
+        "copyright": "",
+        "country": "Canada",
+        "credits": [
+         {
+          "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching, Zorga Qaunaq, Maika Harper",
+          "title": "Actor(s)"
+         }
+        ],
+        "duration": 1300,
+        "media": {
+         "availabilityDate": "2026-09-29",
+         "copyright": "",
+         "country": "Canada",
+         "credits": [
+          {
+           "peoples": "Anna Lambe, Keira Cooper, Jay Ryan, Mary Lynn Rajskub, Braeden Clarke, Bailey Poching, Zorga Qaunaq, Maika Harper",
+           "title": "Actor(s)"
+          }
+         ],
+         "duration": 1300,
+         "productionYear": 2026,
+         "rating": "14+"
+        },
+        "productionYear": 2026,
+        "rating": "14+"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "8. Experrrrt",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425277731",
+       "url": "north-of-north/s02e08",
+       "videoDescriptionAvailable": true
+      }
+     ],
+     "permission": {
+      "catalog": "Gem",
+      "requiredScope": "gem:member",
+      "tier": "Member"
+     },
+     "seasonNumber": 2,
+     "selectedTrailerUrl": "north-of-north/s02b01",
+     "tier": "Member",
+     "title": "Season 2",
+     "url": "north-of-north/s02"
+    }
+   ],
+   "seasonTitle": "Season",
+   "title": "Episodes"
+  }
+ ],
+ "contentType": "Season",
+ "description": "A young Inuk woman wants to build a new future for herself after a spontaneous and extremely public exit from her marriage. It won't be easy in a small Arctic town where everybody knows your business.",
+ "hasOnlyATrailer": false,
+ "images": {
+  "background": {
+   "size": "Normal",
+   "url": "https://images.gem.cbc.ca/v1/synps-cbc/show/perso/cbc_northofnorth_ott_background_v03.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+  },
+  "logo": {
+   "size": "Bigger",
+   "url": "https://images.gem.cbc.ca/v1/synps-cbc/show/perso/cbc_northofnorth_ott_logo_v02.png?impolicy=ott&im=Resize=(_Size_)&quality=75"
+  }
+ },
+ "requestedType": "Show",
+ "selectedUrl": "north-of-north/s01e01",
+ "structuredMetadata": {
+  "@context": "http://schema.org",
+  "@type": "TVSeries",
+  "abstract": "A young Inuk woman wants to build a new future for herself after a spontaneous and extremely public exit from her marriage. It won't be easy in a small Arctic town where everybody knows your business.",
+  "actor": [
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Anna Lambe"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Keira Cooper"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Jay Ryan"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Mary Lynn Rajskub"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Braeden Clarke"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Bailey Poching"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Zorga Qaunaq"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Maika Harper"
+   }
+  ],
+  "alternateName": "",
+  "author": [],
+  "containsSeason": [
+   {
+    "@context": "http://schema.org",
+    "@type": "CreativeWorkSeason",
+    "abstract": "A young Inuk woman wants to build a new future for herself after a spontaneous and extremely public exit from her marriage. It won't be easy in a small Arctic town where everybody knows your business.",
+    "actor": [
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Anna Lambe"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Keira Cooper"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Jay Ryan"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Mary Lynn Rajskub"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Braeden Clarke"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Bailey Poching"
+     }
+    ],
+    "author": [],
+    "contentRating": "14+",
+    "datePublished": "2025-01-07T14:00:00Z",
+    "director": [],
+    "image": "https://images.gem.cbc.ca/v1/synps-cbc/season/perso/cbc_northofnorth_s01_ott_background_v01.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75",
+    "inLanguage": "en-CA",
+    "name": "Season 1",
+    "numberOfEpisodes": 8,
+    "seasonNumber": 1,
+    "startDate": "2025-01-07T14:00:00Z",
+    "url": "https://gem.cbc.ca/north-of-north/s01"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "CreativeWorkSeason",
+    "abstract": "As winter closes in on Ice Cove, young Inuk mother Siaja is still making bold decisions and even bolder mistakes in her effort to level up her life and prove she's ready to take charge.",
+    "actor": [
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Anna Lambe"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Keira Cooper"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Jay Ryan"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Mary Lynn Rajskub"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Braeden Clarke"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Bailey Poching"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Zorga Qaunaq"
+     },
+     {
+      "@context": "http://schema.org",
+      "@type": "Person",
+      "name": "Maika Harper"
+     }
+    ],
+    "author": [],
+    "contentRating": "14+",
+    "datePublished": "2026-09-08T13:00:00Z",
+    "director": [],
+    "image": "https://images.gem.cbc.ca/v1/synps-cbc/season/perso/cbc_northofnorth_s02_ott_background_v01.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75",
+    "inLanguage": "en-CA",
+    "name": "Season 2",
+    "numberOfEpisodes": 8,
+    "seasonNumber": 2,
+    "startDate": "2026-09-08T13:00:00Z",
+    "url": "https://gem.cbc.ca/north-of-north/s02"
+   }
+  ],
+  "contentRating": "14+",
+  "countryOfOrigin": {
+   "@context": "http://schema.org",
+   "@type": "Country",
+   "name": "Canada"
+  },
+  "datePublished": "2025-01-07T14:00:00Z",
+  "director": [],
+  "genre": [
+   "Com\u00e9die et humour"
+  ],
+  "image": "https://images.gem.cbc.ca/v1/synps-cbc/show/perso/cbc_northofnorth_ott_background_v03.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75",
+  "inLanguage": "en-CA",
+  "name": "North of North",
+  "numberOfEpisodes": 16,
+  "numberOfSeasons": 2,
+  "startDate": "2025-01-07T14:00:00Z",
+  "url": "https://gem.cbc.ca/north-of-north"
+ },
+ "title": "North of North"
+}

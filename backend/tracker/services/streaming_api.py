@@ -80,11 +80,17 @@ def _norm_lang(code: Optional[str]) -> Optional[str]:
     return normalize_language_code(str(code))
 
 
-def _extract_langs(items, code_getter) -> list[str]:
-    """Normalize + de-dupe a list of language entries, preserving order."""
+def _extract_langs(items, code_getter) -> Optional[list[str]]:
+    """Normalize + de-dupe a list of language entries, preserving order.
+
+    Returns None when the payload carries no language metadata at all, so
+    "unknown languages" stays distinguishable from a known-empty list ([]).
+    """
+    if items is None:
+        return None
     out: list[str] = []
     seen: set[str] = set()
-    for item in items or []:
+    for item in items:
         norm = _norm_lang(code_getter(item))
         if norm and norm not in seen:
             seen.add(norm)
@@ -117,8 +123,9 @@ class StreamingOffer:
     offer_type: str  # "subscription" | "free"
     quality: Optional[str] = None
     link: Optional[str] = None
-    audio_languages: list[str] = field(default_factory=list)
-    subtitle_languages: list[str] = field(default_factory=list)
+    # None = the source exposed no language metadata; [] = known to have none.
+    audio_languages: Optional[list[str]] = None
+    subtitle_languages: Optional[list[str]] = None
 
 
 @dataclass

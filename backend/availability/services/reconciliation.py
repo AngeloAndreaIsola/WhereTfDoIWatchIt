@@ -1,0 +1,568 @@
+"""Reconciliation of raw availability observations into effective local offers.
+
+Phase 13. Raw rows are never rewritten and never deleted: this module reads
+``Offer`` (plus the ``ContentMapping`` and ``SyncRun`` rows that give it
+meaning) and returns derived ``ReconciliationResult`` values. Nothing here
+persists, fetches, refreshes, ranks, or scores — it only reports what the raw
+observations say once they are compared with each other.
+
+What "reconciled" means here:
+
+* **One decision per key.** Observations are grouped by
+  ``(content_type, tmdb_id, season_number, episode_number, provider,
+  country)`` and, inside a group, by ``offer_type``. Two sources describing the
+  same provider's offer for the same content are two observations of one offer.
+* **No source ranking.** When sources disagree on a value, reconciliation
+  cannot pick a winner (there is no trusted source), so it widens the value to
+  "unknown", records a ``ReconciliationConflict``, and keeps every observation.
+* **Availability is conservative.** An observation only counts as available
+  when its raw lifecycle flag is set, its availability window is open at
+  ``now``, and its provider content does not resolve to some other TMDB id.
+  The effective offer is available when at least one observation is.
+* **Freshness is advisory.** A source may declare
+  ``configuration["expected_refresh_interval_seconds"]``; without it there is
+  no deadline to measure against, so observations are ``unknown`` rather than
+  silently fresh.
+
+Query shape is deliberately fixed: one row query plus one bulk lookup each for
+mappings, cross-content claims and sync runs — no per-offer query.
+"""
+from __future__ import annotations
+
+from collections import Counter
+from datetime import datetime, timedelta
+from typing import Iterable, Optional
+
+from django.db.models import Exists, OuterRef
+from django.utils import timezone
+
+from ..domain.enums import ConflictKind, ContentType, FreshnessState, SyncStatus
+from ..domain.reconciliation import (
+    OfferObservation,
+    ReconciledOffer,
+    ReconciliationAudit,
+    ReconciliationConflict,
+    ReconciliationDiagnostics,
+    ReconciliationGroup,
+    ReconciliationResult,
+    SourceFact,
+)
+from ..models import ContentMapping, ProviderContent
+from ..persistence.repositories import (
+    MappingRepository,
+    OfferRepository,
+    SyncRunRepository,
+)
+
+FRESHNESS_INTERVAL_KEY = "expected_refresh_interval_seconds"
+
+
+class AvailabilityReconciliationService:
+    """Read-only reconciliation of canonical availability rows."""
+
+    def __init__(self, offer_repository=None, mapping_repository=None,
+                 sync_run_repository=None):
+        self.offers = offer_repository or OfferRepository()
+        self.mappings = mapping_repository or MappingRepository()
+        self.sync_runs = sync_run_repository or SyncRunRepository()
+
+    # ------------------------------------------------------------------ API
+
+    def reconcile(self, *, content_types, tmdb_id, country=None,
+                  season_number=None, episode_number=None, now=None):
+        """Reconcile every observation of one TMDB content.
+
+        Args:
+            content_types: iterable of canonical ContentType values to include
+                (a bare string is treated as a single content type).
+            tmdb_id: TMDB id the observations claim.
+            country: optional two-letter country code to reconcile within.
+            season_number / episode_number: optional season/episode scoping,
+                matching the raw read boundaries.
+            now: evaluation instant; defaults to the current time. Naive
+                values are made aware so window and freshness comparisons are
+                well defined.
+
+        Returns:
+            ReconciliationResult with the effective offers, every conflict
+            found, and counts describing the pass. Empty result when no raw
+            observations exist — never an error, never a fetch.
+        """
+        content_types = self._validate_content_types(content_types)
+        now = self._now(now)
+        country = country.upper() if country else None
+        rows = list(self.offers.observations_for(
+            tmdb_id=tmdb_id,
+            content_types=content_types,
+            season_number=season_number,
+            episode_number=episode_number,
+            country_code=country,
+        ))
+        if not rows:
+            return ReconciliationResult.empty(
+                content_types=content_types,
+                tmdb_id=tmdb_id,
+                country=country,
+                season_number=season_number,
+                episode_number=episode_number,
+                now=now,
+            )
+
+        offers, conflicts, statuses = self._reconcile_rows(rows, now=now)
+        return ReconciliationResult(
+            content_types=content_types,
+            tmdb_id=tmdb_id,
+            country=country,
+            season_number=season_number,
+            episode_number=episode_number,
+            offers=tuple(offers),
+            conflicts=tuple(conflicts),
+            diagnostics=self._diagnostics(rows=rows, offers=offers,
+                                          conflicts=conflicts, statuses=statuses),
+            now=now,
+        )
+
+    def reconcile_content(self, *, content_type, tmdb_id, country=None, now=None):
+        """Single-content convenience wrapper around :meth:`reconcile`."""
+        return self.reconcile(
+            content_types=(content_type,),
+            tmdb_id=tmdb_id,
+            country=country,
+            now=now,
+        )
+
+    def audit(self, *, now=None):
+        """Database-wide reconciliation summary for observability.
+
+        Costs one pass over every observation plus one count of provider
+        contents with no stored mapping. It is not part of any read path.
+        """
+        now = self._now(now)
+        rows = list(self.offers.all_observations())
+        if rows:
+            offers, conflicts, statuses = self._reconcile_rows(rows, now=now)
+        else:
+            offers, conflicts, statuses = [], [], {}
+        diagnostics = self._diagnostics(rows=rows, offers=offers,
+                                        conflicts=conflicts, statuses=statuses)
+        groups = {
+            (offer.content_type, offer.tmdb_id, offer.season_number,
+             offer.episode_number, offer.provider, offer.country)
+            for offer in offers
+        }
+        return ReconciliationAudit(
+            observations=diagnostics.observations,
+            groups=len(groups),
+            effective_offers=diagnostics.effective_offers,
+            conflicts=diagnostics.conflicts,
+            conflicts_by_kind=diagnostics.conflicts_by_kind,
+            stale_observations=diagnostics.stale_observations,
+            failed_syncs=diagnostics.failed_syncs,
+            unresolved_contents=self._unresolved_contents(),
+            sources=diagnostics.sources,
+            now=now,
+        )
+
+    # ------------------------------------------------------------ internals
+
+    @staticmethod
+    def _validate_content_types(content_types) -> tuple[str, ...]:
+        if isinstance(content_types, str):
+            content_types = (content_types,)
+        values = tuple(content_types)
+        if not values:
+            raise ValueError("content_types must not be empty")
+        for value in values:
+            if value not in ContentType.values:
+                raise ValueError(
+                    f"Invalid content_type: {value}. "
+                    f"Must be one of: {ContentType.MOVIE}, {ContentType.SERIES}"
+                )
+        return values
+
+    @staticmethod
+    def _now(now: Optional[datetime]) -> datetime:
+        return _aware(now if now is not None else timezone.now())
+
+    @staticmethod
+    def _freshness_interval(source) -> Optional[timedelta]:
+        """Source-declared refresh cadence, or None when it declares none."""
+        configuration = source.configuration or {}
+        raw = configuration.get(FRESHNESS_INTERVAL_KEY)
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)) or raw <= 0:
+            return None
+        return timedelta(seconds=raw)
+
+    def _reconcile_rows(self, rows, *, now):
+        """Group raw rows, then reconcile each group. Returns offers,
+        deduped conflicts, and the latest sync status per observed scope."""
+        mappings = self.mappings.tmdb_ids_for_provider_content(rows)
+        claims = self.offers.alternate_content_claims(rows)
+        statuses = self.sync_runs.latest_by_scope(
+            (row.provider_id, row.source_id, row.country_id) for row in rows
+        )
+
+        grouped: dict[ReconciliationGroup, dict[str, list[OfferObservation]]] = {}
+        for row in rows:
+            observation = self._observe(
+                row,
+                now=now, mappings=mappings, claims=claims, statuses=statuses,
+            )
+            group = ReconciliationGroup(
+                content_type=row.content_type,
+                tmdb_id=row.tmdb_id,
+                season_number=row.season_number,
+                episode_number=row.episode_number,
+                provider=row.provider.slug,
+                country=row.country.code,
+            )
+            grouped.setdefault(group, {}).setdefault(row.offer_type, []).append(observation)
+
+        offers: list[ReconciledOffer] = []
+        conflicts: list[ReconciliationConflict] = []
+        for group, subgroups in grouped.items():
+            group_offers, group_conflicts = self._reconcile_group(group, subgroups)
+            offers.extend(group_offers)
+            conflicts.extend(group_conflicts)
+
+        # Raw reads are ordered by id; keeping the group's lowest observation
+        # first preserves that order for the common one-row-per-group case.
+        offers.sort(key=lambda offer: offer.offer_ids[0])
+        conflicts = _dedupe(conflicts)
+        conflicts.sort(key=lambda c: (c.provider, c.country, str(c.kind), c.offer_ids))
+        return offers, conflicts, statuses
+
+    def _observe(self, row, *, now, mappings, claims, statuses) -> OfferObservation:
+        detail = ""
+        provider_content_id = row.provider_content_id
+        if provider_content_id:
+            key = (row.provider_id, provider_content_id)
+            mapped_tmdb = mappings.get(key)
+            if mapped_tmdb is not None and mapped_tmdb != row.tmdb_id:
+                detail = f"mapping points to tmdb {mapped_tmdb}"
+            others = sorted(claims.get(key, set()) - {row.tmdb_id})
+            if others:
+                suffix = "also active for " + ", ".join(f"tmdb {other}" for other in others)
+                detail = f"{detail}; {suffix}" if detail else suffix
+
+        window_open = (
+            (row.available_from is None or _aware(row.available_from) <= now)
+            and (row.available_until is None or _aware(row.available_until) > now)
+        )
+        interval = self._freshness_interval(row.source)
+        if interval is None:
+            freshness = FreshnessState.UNKNOWN
+        else:
+            freshness = (
+                FreshnessState.FRESH
+                if now - _aware(row.last_seen) <= interval
+                else FreshnessState.STALE
+            )
+
+        return OfferObservation(
+            offer_id=row.pk,
+            source=row.source.slug,
+            sync_run_id=row.sync_run_id,
+            provider_content_id=provider_content_id,
+            provider_url=row.provider_url or "",
+            quality=row.quality or "",
+            audio_languages=_languages(row.audio_languages),
+            subtitle_languages=_languages(row.subtitle_languages),
+            available_from=_aware_opt(row.available_from),
+            available_until=_aware_opt(row.available_until),
+            first_seen=_aware(row.first_seen),
+            last_seen=_aware(row.last_seen),
+            currently_available=bool(row.currently_available),
+            available_now=bool(row.currently_available) and window_open and not detail,
+            freshness=freshness,
+            sync_status=statuses.get((row.provider_id, row.source_id, row.country_id)),
+            mapping_doubt=detail,
+        )
+
+    def _reconcile_group(self, group, subgroups):
+        """Reconcile one (content, provider, country) group.
+
+        Returns the effective offers (one per offer_type) and every conflict
+        found in the group, group-level ones included.
+        """
+        all_observations = sorted(
+            (obs for observations in subgroups.values() for obs in observations),
+            key=lambda obs: (obs.source, obs.offer_id),
+        )
+        group_conflicts: list[ReconciliationConflict] = []
+
+        # A group-level disagreement: sources describing this content at this
+        # provider as different kinds of offer.
+        types_by_source: dict[str, set[str]] = {}
+        for offer_type, observations in subgroups.items():
+            for obs in observations:
+                types_by_source.setdefault(obs.source, set()).add(offer_type)
+        if len(types_by_source) > 1 and len({
+            frozenset(types) for types in types_by_source.values()
+        }) > 1:
+            group_conflicts.append(self._conflict(
+                ConflictKind.OFFER_TYPE,
+                group=group,
+                offer_ids=[obs.offer_id for obs in all_observations],
+                sources=list(types_by_source),
+                facts=[
+                    SourceFact(source, ",".join(sorted(types)))
+                    for source, types in types_by_source.items()
+                ],
+            ))
+
+        offers: list[ReconciledOffer] = []
+        for offer_type in sorted(subgroups):
+            observations = sorted(
+                subgroups[offer_type], key=lambda obs: (obs.source, obs.offer_id),
+            )
+            offers.append(self._reconcile_offer(
+                group, offer_type, observations, extra_conflicts=group_conflicts,
+            ))
+
+        conflicts = list(group_conflicts)
+        for offer in offers:
+            conflicts.extend(offer.conflicts)
+        return offers, conflicts
+
+    def _reconcile_offer(self, group, offer_type, observations, *,
+                         extra_conflicts=()) -> ReconciledOffer:
+        """Merge every observation of one offer_type into a single value."""
+        conflicts: list[ReconciliationConflict] = []
+
+        if len({obs.available_now for obs in observations}) > 1:
+            conflicts.append(self._conflict(
+                ConflictKind.AVAILABILITY,
+                group=group,
+                offer_ids=[obs.offer_id for obs in observations],
+                sources=[obs.source for obs in observations],
+                facts=[
+                    SourceFact(obs.source, "available" if obs.available_now else "unavailable")
+                    for obs in observations
+                ],
+            ))
+
+        doubted = [obs for obs in observations if obs.mapping_doubt]
+        if doubted:
+            conflicts.append(self._conflict(
+                ConflictKind.MAPPING,
+                group=group,
+                offer_ids=[obs.offer_id for obs in doubted],
+                sources=[obs.source for obs in doubted],
+                facts=[SourceFact(obs.source, obs.mapping_doubt) for obs in doubted],
+            ))
+
+        quality, quality_conflict = self._quality_value(group, observations)
+        if quality_conflict is not None:
+            conflicts.append(quality_conflict)
+
+        audio, audio_conflict = self._language_value(
+            group, observations, "audio_languages", "audio",
+        )
+        if audio_conflict is not None:
+            conflicts.append(audio_conflict)
+
+        subtitle, subtitle_conflict = self._language_value(
+            group, observations, "subtitle_languages", "subtitles",
+        )
+        if subtitle_conflict is not None:
+            conflicts.append(subtitle_conflict)
+
+        available_from, available_until, window_conflict = self._window_values(
+            group, observations,
+        )
+        if window_conflict is not None:
+            conflicts.append(window_conflict)
+
+        if len({obs.freshness for obs in observations}) > 1:
+            conflicts.append(self._conflict(
+                ConflictKind.FRESHNESS,
+                group=group,
+                offer_ids=[obs.offer_id for obs in observations],
+                sources=[obs.source for obs in observations],
+                facts=[SourceFact(obs.source, obs.freshness.value) for obs in observations],
+            ))
+
+        with_url = [obs for obs in observations if obs.provider_url]
+        provider_url = ""
+        if with_url:
+            # Freshest source wins the link; ties break on the stable slug so
+            # the result never depends on row order.
+            provider_url = max(
+                with_url, key=lambda obs: (obs.last_seen, obs.source),
+            ).provider_url
+
+        return ReconciledOffer(
+            provider=group.provider,
+            country=group.country,
+            content_type=group.content_type,
+            tmdb_id=group.tmdb_id,
+            season_number=group.season_number,
+            episode_number=group.episode_number,
+            offer_type=offer_type,
+            currently_available=any(obs.available_now for obs in observations),
+            quality=quality,
+            audio_languages=audio,
+            subtitle_languages=subtitle,
+            provider_url=provider_url,
+            available_from=available_from,
+            available_until=available_until,
+            first_seen=min(obs.first_seen for obs in observations),
+            last_seen=max(obs.last_seen for obs in observations),
+            sources=tuple(sorted({obs.source for obs in observations})),
+            offer_ids=tuple(sorted(obs.offer_id for obs in observations)),
+            observations=tuple(observations),
+            conflicts=tuple(_dedupe(list(conflicts) + list(extra_conflicts))),
+        )
+
+    def _quality_value(self, group, observations):
+        """Known quality wins over unknown; two known values cannot be ranked."""
+        known = [obs for obs in observations if obs.quality]
+        distinct = {obs.quality for obs in known}
+        if len(distinct) > 1:
+            return "", self._conflict(
+                ConflictKind.QUALITY,
+                group=group,
+                offer_ids=[obs.offer_id for obs in known],
+                sources=[obs.source for obs in known],
+                facts=[SourceFact(obs.source, obs.quality) for obs in known],
+            )
+        if not known:
+            return "", None
+        return known[0].quality, None
+
+    def _language_value(self, group, observations, attribute, label):
+        """Known language lists win over unknown; ordering never conflicts."""
+        known = [obs for obs in observations if getattr(obs, attribute) is not None]
+        distinct = {frozenset(getattr(obs, attribute)) for obs in known}
+        if len(distinct) > 1:
+            return None, self._conflict(
+                ConflictKind.LANGUAGE,
+                group=group,
+                offer_ids=[obs.offer_id for obs in known],
+                sources=[obs.source for obs in known],
+                facts=[
+                    SourceFact(
+                        obs.source,
+                        f"{label}={','.join(sorted(getattr(obs, attribute)))}",
+                    )
+                    for obs in known
+                ],
+            )
+        if not known:
+            return None, None
+        # Order-insensitive comparison above; the stored order of the single
+        # agreeing observation is what readers see.
+        return getattr(known[0], attribute), None
+
+    def _window_values(self, group, observations):
+        """Availability window: agree -> that value, unknown -> nothing known,
+        disagree -> unknown plus a conflict naming both ends."""
+        values: dict[str, Optional[datetime]] = {}
+        facts: list[SourceFact] = []
+        involved_ids: list[int] = []
+        involved_sources: list[str] = []
+        for name in ("available_from", "available_until"):
+            known = [obs for obs in observations if getattr(obs, name) is not None]
+            distinct = {getattr(obs, name) for obs in known}
+            if len(distinct) > 1:
+                values[name] = None
+                for obs in known:
+                    facts.append(
+                        SourceFact(obs.source, f"{name}={getattr(obs, name).isoformat()}")
+                    )
+                    involved_ids.append(obs.offer_id)
+                    involved_sources.append(obs.source)
+            elif known:
+                values[name] = known[0].__getattribute__(name)
+            else:
+                values[name] = None
+        conflict = None
+        if facts:
+            conflict = self._conflict(
+                ConflictKind.WINDOW,
+                group=group,
+                offer_ids=involved_ids,
+                sources=involved_sources,
+                facts=facts,
+            )
+        return values["available_from"], values["available_until"], conflict
+
+    @staticmethod
+    def _conflict(kind, *, group, offer_ids, sources, facts) -> ReconciliationConflict:
+        normalized = sorted(
+            set(facts), key=lambda fact: (fact.source, fact.value),
+        )
+        return ReconciliationConflict(
+            kind=kind,
+            provider=group.provider,
+            country=group.country,
+            offer_ids=tuple(sorted(set(offer_ids))),
+            sources=tuple(sorted(set(sources))),
+            facts=tuple(normalized),
+        )
+
+    @staticmethod
+    def _diagnostics(*, rows, offers, conflicts, statuses) -> ReconciliationDiagnostics:
+        stale = sum(
+            1
+            for offer in offers
+            for obs in offer.observations
+            if obs.freshness == FreshnessState.STALE
+        )
+        failed = sum(
+            1 for status in statuses.values() if status == SyncStatus.FAILED
+        )
+        kinds = Counter(conflict.kind for conflict in conflicts)
+        return ReconciliationDiagnostics(
+            observations=len(rows),
+            effective_offers=len(offers),
+            providers=len({offer.provider for offer in offers}),
+            conflicts=len(conflicts),
+            conflicts_by_kind=tuple(
+                sorted(kinds.items(), key=lambda item: str(item[0]))
+            ),
+            stale_observations=stale,
+            failed_syncs=failed,
+            sources=tuple(sorted({row.source.slug for row in rows})),
+        )
+
+    @staticmethod
+    def _unresolved_contents() -> int:
+        """Provider catalogue rows with no stored TMDB mapping yet."""
+        return ProviderContent.objects.filter(
+            ~Exists(
+                ContentMapping.objects.filter(
+                    provider=OuterRef("provider"),
+                    provider_content_id=OuterRef("provider_content_id"),
+                )
+            )
+        ).count()
+
+
+def _aware(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return timezone.make_aware(value, timezone.get_current_timezone())
+    return value
+
+
+def _aware_opt(value: Optional[datetime]) -> Optional[datetime]:
+    return None if value is None else _aware(value)
+
+
+def _languages(value) -> Optional[tuple[str, ...]]:
+    """None stays unknown; a known empty list stays known but empty."""
+    if value is None:
+        return None
+    return tuple(str(code) for code in value)
+
+
+def _dedupe(conflicts: Iterable[ReconciliationConflict]) -> list[ReconciliationConflict]:
+    seen = set()
+    unique = []
+    for conflict in conflicts:
+        if conflict.dedupe_key in seen:
+            continue
+        seen.add(conflict.dedupe_key)
+        unique.append(conflict)
+    return unique

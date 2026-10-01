@@ -1,0 +1,480 @@
+{
+  "/iplayer/episodes/b01qm16p": {
+    "header": {
+      "title": "Abadas",
+      "subtitle": "Pop-up book adventures with the curious Abadas",
+      "imageTemplate": "https://ichef.bbci.co.uk/images/ic/{recipe}/p017mqg6.jpg",
+      "brandId": "b01qm16p",
+      "episodeCount": 3,
+      "comingSoon": false,
+      "genre": null,
+      "availableSlices": [
+        {"id": "b01qm16p-structural-1-b016kbpl", "title": "Series 1"},
+        {"id": "b01qm16p-structural-2-b01qlgnf", "title": "Series 2"},
+        {"id": "more-like-this", "title": "More Like This"}
+      ]
+    },
+    "page": {
+      "seriesPagination": {
+        "perPage": 36,
+        "page": 1,
+        "count": 2,
+        "sliceId": "b01qm16p-structural-1-b016kbpl"
+      }
+    },
+    "pagination": {
+      "currentPage": 1,
+      "totalEpisodes": 2,
+      "totalPages": 1,
+      "perPage": 36,
+      "pageUrl": "?seriesId=b01qm16p-structural-1-b016kbpl&page=%s"
+    },
+    "entities": {
+      "results": [
+        {
+          "episode": {
+            "id": "b016kd5d",
+            "title": {"default": "Acair/Anchor", "live": null},
+            "subtitle": {"default": "Series 1: 1. Acair/Anchor", "live": null, "slice": "1. Acair/Anchor"},
+            "synopsis": {"small": "The Abadas are pirates, and one goes in search of an anchor.", "live": null},
+            "image": {"default": "https://ichef.bbci.co.uk/images/ic/{recipe}/p01hwl4d.jpg", "live": null},
+            "labels": null,
+            "versions": [
+              {
+                "availability": {"remaining": "Available for over a year", "end": "2030-12-30T05:59:00Z"},
+                "duration": {"text": "11 mins"},
+                "kind": "original"
+              }
+            ]
+          }
+        },
+        {
+          "episode": {
+            "id": "b016kd7h",
+            "title": {"default": "Piano", "live": null},
+            "subtitle": {"default": "Series 1: 2. Piano", "live": null, "slice": "2. Piano"},
+            "synopsis": {"small": "Elgin finds a piano and learns to play.", "live": null},
+            "image": {"default": "https://ichef.bbci.co.uk/images/ic/{recipe}/p01hwl5f.jpg", "live": null},
+            "labels": null,
+            "versions": [
+              {
+                "availability": {"remaining": "Available for over a year", "end": "2030-12-30T05:59:00Z"},
+                "duration": {"text": "11 mins"},
+                "kind": "original"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "/iplayer/episodes/b01qm16p?seriesId=b01qm16p-structural-2-b01qlgnf&page=1": {
+    "header": {
+      "title": "Abadas",
+      "subtitle": "Pop-up book adventures with the curious Abadas",
+      "imageTemplate": "https://ichef.bbci.co.uk/images/ic/{recipe}/p017mqg6.jpg",
+      "brandId": "b01qm16p",
+      "episodeCount": 3,
+      "comingSoon": false,
+      "genre": null,
+      "availableSlices": [
+        {"id": "b01qm16p-structural-1-b016kbpl", "title": "Series 1"},
+        {"id": "b01qm16p-structural-2-b01qlgnf", "title": "Series 2"},
+        {"id": "more-like-this", "title": "More Like This"}
+      ]
+    },
+    "page": {
+      "seriesPagination": {
+        "perPage": 36,
+        "page": 1,
+        "count": 1,
+        "sliceId": "b01qm16p-structural-2-b01qlgnf"
+      }
+    },
+    "pagination": {
+      "currentPage": 1,
+      "totalEpisodes": 1,
+      "totalPages": 1,
+      "perPage": 36,
+      "pageUrl": "?seriesId=b01qm16p-structural-2-b01qlgnf&page=%s"
+    },
+    "entities": {
+      "results": [
+        {
+          "episode": {
+            "id": "b016kd9q",
+            "title": {"default": "Luachair/Rush", "live": null},
+            "subtitle": {"default": "Series 2: 1. Luachair/Rush", "live": null, "slice": "1. Luachair/Rush"},
+            "synopsis": {"small": "A new pop-up book brings a new adventure.", "live": null},
+            "image": {"default": "https://ichef.bbci.co.uk/images/ic/{recipe}/p01hwl6k.jpg", "live": null},
+            "labels": null,
+            "versions": [
+              {
+                "availability": {"remaining": "Available for over a year", "end": "2031-01-30T05:59:00Z"},
+                "duration": {"text": "11 mins"},
+                "kind": "original"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "/iplayer/episodes/b006m86d": {
+    "header": {
+      "title": "EastEnders",
+      "subtitle": "Welcome to Walford, E20.",
+      "imageTemplate": "https://ichef.bbci.co.uk/images/ic/{recipe}/p0b9zqk3.jpg",
+      "brandId": "b006m86d",
+      "episodeCount": 4,
+      "comingSoon": false,
+      "genre": "Drama",
+      "availableSlices": [
+        {"id": "unsliced", "title": "Episodes"},
+        {"id": "more-like-this", "title": "More Like This"}
+      ]
+    },
+    "page": {
+      "seriesPagination": {"perPage": 2, "page": 1, "count": 4, "sliceId": "unsliced"}
+    },
+    "pagination": {
+      "currentPage": 1,
+      "totalEpisodes": 4,
+      "totalPages": 2,
+      "perPage": 2,
+      "pageUrl": "?seriesId=unsliced&page=%s"
+    },
+    "entities": {
+      "results": [
+        {
+          "episode": {
+            "id": "m002zlx7",
+            "title": {"default": "EastEnders", "live": null},
+            "subtitle": {"default": "30/09/2026", "live": null, "slice": null},
+            "synopsis": {"small": "Denise makes a decision about her future.", "live": null},
+            "image": {"default": "https://ichef.bbci.co.uk/images/ic/{recipe}/p0ee7a01.jpg", "live": null},
+            "labels": {"editorial": null, "time": null, "category": "Drama"},
+            "versions": [
+              {
+                "availability": {"remaining": "Available for 9 months", "end": "2027-07-29T05:00:00Z"},
+                "duration": {"text": "29 mins"},
+                "kind": "original"
+              },
+              {
+                "availability": {"remaining": "Available for 9 months", "end": "2027-07-29T05:00:00Z"},
+                "duration": {"text": "29 mins"},
+                "kind": "audio-described"
+              }
+            ]
+          }
+        },
+        {
+          "episode": {
+            "id": "m002zlx8",
+            "title": {"default": "EastEnders", "live": null},
+            "subtitle": {"default": "29/07/2026", "live": null, "slice": null},
+            "synopsis": {"small": "Kathy receives an unexpected visitor.", "live": null},
+            "image": {"default": "https://ichef.bbci.co.uk/images/ic/{recipe}/p0ee7a02.jpg", "live": null},
+            "labels": {"editorial": null, "time": null, "category": "Drama"},
+            "versions": [
+              {
+                "availability": {"remaining": "Available for 9 months", "end": "2027-07-28T05:00:00Z"},
+                "duration": {"text": "29 mins"},
+                "kind": "original"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "/iplayer/episodes/b006m86d?seriesId=unsliced&page=2": {
+    "header": {
+      "title": "EastEnders",
+      "subtitle": "Welcome to Walford, E20.",
+      "imageTemplate": "https://ichef.bbci.co.uk/images/ic/{recipe}/p0b9zqk3.jpg",
+      "brandId": "b006m86d",
+      "episodeCount": 4,
+      "comingSoon": false,
+      "genre": "Drama",
+      "availableSlices": [
+        {"id": "unsliced", "title": "Episodes"},
+        {"id": "more-like-this", "title": "More Like This"}
+      ]
+    },
+    "page": {
+      "seriesPagination": {"perPage": 2, "page": 2, "count": 4, "sliceId": "unsliced"}
+    },
+    "pagination": {
+      "currentPage": 2,
+      "totalEpisodes": 4,
+      "totalPages": 2,
+      "perPage": 2,
+      "pageUrl": "?seriesId=unsliced&page=%s"
+    },
+    "entities": {
+      "results": [
+        {
+          "episode": {
+            "id": "m002zlx9",
+            "title": {"default": "EastEnders", "live": null},
+            "subtitle": {"default": "28/05/2026", "live": null, "slice": null},
+            "synopsis": {"small": "The Carters face a difficult week.", "live": null},
+            "image": {"default": "https://ichef.bbci.co.uk/images/ic/{recipe}/p0ee7a03.jpg", "live": null},
+            "labels": {"editorial": null, "time": null, "category": "Drama"},
+            "versions": [
+              {
+                "availability": {"remaining": "Available for 9 months", "end": "2027-05-27T05:00:00Z"},
+                "duration": {"text": "29 mins"},
+                "kind": "original"
+              }
+            ]
+          }
+        },
+        {
+          "episode": {
+            "id": "m002zlxa",
+            "title": {"default": "EastEnders", "live": null},
+            "subtitle": {"default": "26/03/2026", "live": null, "slice": null},
+            "synopsis": {"small": "A revelation rocks the Square.", "live": null},
+            "image": {"default": "https://ichef.bbci.co.uk/images/ic/{recipe}/p0ee7a04.jpg", "live": null},
+            "labels": {"editorial": null, "time": null, "category": "Drama"},
+            "versions": [
+              {
+                "availability": {"remaining": "Available for 9 months", "end": "2027-03-25T05:00:00Z"},
+                "duration": {"text": "29 mins"},
+                "kind": "original"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "/iplayer/episodes/m000bbbb1": {
+    "header": {
+      "title": "Bob's World",
+      "subtitle": "Bob and friends explore the garden.",
+      "imageTemplate": "https://ichef.bbci.co.uk/images/ic/{recipe}/p0bobs01.jpg",
+      "brandId": "m000bbbb1",
+      "episodeCount": 1,
+      "comingSoon": false,
+      "genre": null,
+      "availableSlices": [
+        {"id": "m000bbbb1-special-1", "title": "Specials"},
+        {"id": "more-like-this", "title": "More Like This"}
+      ]
+    },
+    "page": {
+      "seriesPagination": {
+        "perPage": 36,
+        "page": 1,
+        "count": 1,
+        "sliceId": "m000bbbb1-special-1"
+      }
+    },
+    "pagination": {
+      "currentPage": 1,
+      "totalEpisodes": 1,
+      "totalPages": 1,
+      "perPage": 36,
+      "pageUrl": "?seriesId=m000bbbb1-special-1&page=%s"
+    },
+    "entities": {
+      "results": [
+        {
+          "episode": {
+            "id": "m000bbbb2",
+            "title": {"default": "Bob's World", "live": null},
+            "subtitle": {"default": "Christmas Special", "live": null, "slice": null},
+            "synopsis": {"small": "Bob decorates the garden for Christmas.", "live": null},
+            "image": {"default": "https://ichef.bbci.co.uk/images/ic/{recipe}/p0bobs02.jpg", "live": null},
+            "labels": null,
+            "versions": [
+              {
+                "availability": {"remaining": "Available for 6 months", "end": "2027-01-05T05:59:00Z"},
+                "duration": {"text": "30 mins"},
+                "kind": "original"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "/iplayer/episodes/m000ffff1": {
+    "header": {
+      "title": "Folk the World",
+      "subtitle": "Musicians travel the country collecting songs.",
+      "imageTemplate": "https://ichef.bbci.co.uk/images/ic/{recipe}/p0folk01.jpg",
+      "brandId": "m000ffff1",
+      "episodeCount": 2,
+      "comingSoon": false,
+      "genre": "Factual",
+      "availableSlices": [
+        {"id": "m000ffff1-structural-1", "title": "Series 1"},
+        {"id": "more-like-this", "title": "More Like This"}
+      ]
+    },
+    "page": {
+      "seriesPagination": {
+        "perPage": 1,
+        "page": 1,
+        "count": 2,
+        "sliceId": "m000ffff1-structural-1"
+      }
+    },
+    "pagination": {
+      "currentPage": 1,
+      "totalEpisodes": 2,
+      "totalPages": 2,
+      "perPage": 1,
+      "pageUrl": "?seriesId=m000ffff1-structural-1&page=%s"
+    },
+    "entities": {
+      "results": [
+        {
+          "episode": {
+            "id": "m000ffff2",
+            "title": {"default": "Folk the World", "live": null},
+            "subtitle": {"default": "The First Tale", "live": null, "slice": "1. The First Tale"},
+            "synopsis": {"small": "The first song is collected in a Cornish harbour.", "live": null},
+            "image": {"default": "https://ichef.bbci.co.uk/images/ic/{recipe}/p0folk02.jpg", "live": null},
+            "labels": {"category": "Factual"},
+            "versions": [
+              {
+                "availability": {"remaining": "Available for 30 days", "end": "2026-10-30T05:59:00Z"},
+                "duration": {"text": "45 mins"},
+                "kind": "original"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "/iplayer/episodes/m000ffff1?seriesId=m000ffff1-structural-1&page=2": {
+    "header": {
+      "title": "Folk the World",
+      "subtitle": "Musicians travel the country collecting songs.",
+      "imageTemplate": "https://ichef.bbci.co.uk/images/ic/{recipe}/p0folk01.jpg",
+      "brandId": "m000ffff1",
+      "episodeCount": 2,
+      "comingSoon": false,
+      "genre": "Factual",
+      "availableSlices": [
+        {"id": "m000ffff1-structural-1", "title": "Series 1"},
+        {"id": "more-like-this", "title": "More Like This"}
+      ]
+    },
+    "page": {
+      "seriesPagination": {
+        "perPage": 1,
+        "page": 2,
+        "count": 2,
+        "sliceId": "m000ffff1-structural-1"
+      }
+    },
+    "pagination": {
+      "currentPage": 2,
+      "totalEpisodes": 2,
+      "totalPages": 2,
+      "perPage": 1,
+      "pageUrl": "?seriesId=m000ffff1-structural-1&page=%s"
+    },
+    "entities": {
+      "results": [
+        {
+          "episode": {
+            "id": "m000ffff3",
+            "title": {"default": "Folk the World", "live": null},
+            "subtitle": {"default": "The Second Tale", "live": null, "slice": "2. The Second Tale"},
+            "synopsis": {"small": "A shanty is traced back to a Pembrokeshire quarry.", "live": null},
+            "image": {"default": "https://ichef.bbci.co.uk/images/ic/{recipe}/p0folk03.jpg", "live": null},
+            "labels": {"category": "Factual"},
+            "versions": [
+              {
+                "availability": {"remaining": "Available for 30 days", "end": "2026-10-30T05:59:00Z"},
+                "duration": {"text": "45 mins"},
+                "kind": "original"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "/iplayer/episode/m00327ht": {
+    "episode": {
+      "id": "m00327ht",
+      "tleoId": "m00327ht",
+      "tleoType": "episode",
+      "title": "Nickel Boys",
+      "synopses": {
+        "small": "Young Elwood Curtis finds himself in the brutal regime of a Florida reform school.",
+        "medium": "1962, Tallahassee. African-American Elwood Curtis has high hopes for the future, which are cruelly dashed when he is caught in a stolen car and sent to the Nickel Academy reform school.",
+        "editorial": null
+      },
+      "images": {
+        "type": "image",
+        "portrait": "https://ichef.bbci.co.uk/images/ic/{recipe}/p0pb2b5g.jpg",
+        "standard": "https://ichef.bbci.co.uk/images/ic/{recipe}/p0pb2b09.jpg",
+        "promotional": "https://ichef.bbci.co.uk/images/ic/{recipe}/p0pb2b09.jpg"
+      },
+      "masterBrand": {"id": "bbc_one", "logoUrl": "https://ichef.bbci.co.uk/images/ic/{recipe}/p0bbonelogo.png"},
+      "labels": {"category": "Film - Drama"},
+      "programmeType": "one-off",
+      "releaseDate": "2024",
+      "releaseDateTime": "2024-01-01T00:00:00.000Z",
+      "firstVersionDuration": "PT2H9M59.200S",
+      "requiresSignIn": true,
+      "requiresTvLicence": true,
+      "live": false,
+      "childrens": false
+    },
+    "versions": [
+      {
+        "id": "m00327hs",
+        "kind": "original",
+        "hd": true,
+        "firstBroadcast": "2024",
+        "duration": {"text": "2h 10m", "seconds": 7799},
+        "availability": {"remaining": {"text": "Available for 1 month"}},
+        "isoStartTime": "2026-09-29T00:16:21Z",
+        "isoEndTime": "2026-11-28T01:16:21Z"
+      },
+      {
+        "id": "m00327hr",
+        "kind": "audio-described",
+        "hd": true,
+        "duration": {"text": "2h 10m", "seconds": 7799},
+        "availability": {"remaining": {"text": "Available for 1 month"}},
+        "isoStartTime": "2026-09-29T00:16:21Z",
+        "isoEndTime": "2026-11-28T01:16:21Z"
+      }
+    ]
+  },
+  "/iplayer/episode/m000cccc1": {
+    "episode": {
+      "id": "m000cccc1",
+      "tleoId": "m000cccc1",
+      "tleoType": "episode",
+      "title": "Comic Relief 2025",
+      "synopses": {
+        "small": "A night of comedy for Comic Relief.",
+        "medium": "A night of comedy and music raising money for Comic Relief."
+      },
+      "images": {
+        "type": "image",
+        "standard": "https://ichef.bbci.co.uk/images/ic/{recipe}/p0comic1.jpg"
+      },
+      "labels": {"category": "Entertainment"},
+      "programmeType": "one-off",
+      "releaseDate": "2025",
+      "releaseDateTime": "2025-03-21T00:00:00.000Z",
+      "requiresSignIn": true,
+      "requiresTvLicence": true,
+      "live": false
+    }
+  }
+}

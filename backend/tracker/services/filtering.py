@@ -6,7 +6,7 @@ from typing import Optional
 
 from django.db.models import Q, QuerySet
 from tracker.models import Movie, Preference
-from tracker.services.cache import AvailabilityCache
+from tracker.services.availability_reads import get_local_offers
 from tracker.services.watchability import (
     WatchabilityStatus,
     evaluate_watchability,
@@ -124,7 +124,6 @@ def apply_composable_filters(
     movie_list = list(queryset)
 
     # 6. Evaluate Watchability & Availability filters per item
-    cache = AvailabilityCache()
     if user_subscriptions is None:
         user_subscriptions = get_user_subscriptions(preference.user_id if preference else 1)
 
@@ -151,7 +150,7 @@ def apply_composable_filters(
 
     evaluated_items = []
     for m in movie_list:
-        offers = cache.read_offers(m)
+        offers = get_local_offers(m)
         watch_res = evaluate_watchability(
             m,
             offers,

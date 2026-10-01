@@ -35,6 +35,7 @@ from tracker.services.streaming_api import (
     StreamingResult,
     StreamingSeason,
 )
+from tracker.tests.availability_factories import local_offer
 
 SEASONS_DATA = [
     {"season_number": 1, "name": "Season 1", "episode_count": 10, "poster_path": "/s1.jpg"},
@@ -327,14 +328,9 @@ class SeasonLanguageScoringTests(TestCase):
 
 
 class SeasonLanguageEndpointTests(TestCase):
-    """``?season=N`` end-to-end: payload → cache → read → rank → JSON."""
+    """``?season=N`` end-to-end: canonical rows → read → rank → JSON."""
 
     def setUp(self):
-        prime_patcher = patch(
-            "tracker.services.offer_pipeline.prime_offers", return_value=[]
-        )
-        self.addCleanup(prime_patcher.stop)
-        prime_patcher.start()
         Subscription.objects.create(
             user_id=1, provider=Provider.objects.get(slug="prime"), name="Prime Video"
         )
@@ -344,21 +340,6 @@ class SeasonLanguageEndpointTests(TestCase):
     def test_series_endpoint_serves_and_scores_season_languages(
         self, mock_enrich, mock_get
     ):
-        show = [_offer(country="US", audio=("EN",), subs=("EN",))]
-        mock_get.return_value = StreamingResult(
-            tmdb_id=2316,
-            offers=show,
-            seasons=[
-                StreamingSeason(
-                    title="Season 1",
-                    offers=[_offer(country="US", audio=("EN",), subs=("EN",))],
-                ),
-                StreamingSeason(
-                    title="Season 2",
-                    offers=[_offer(country="US", audio=("DE",), subs=("DE",))],
-                ),
-            ],
-        )
         series = Movie.objects.create(
             tmdb_id=2316,
             title="The Office",
@@ -366,6 +347,10 @@ class SeasonLanguageEndpointTests(TestCase):
             content_type="series",
             seasons_data=SEASONS_DATA,
         )
+        local_offer(series, country="US", service="prime", season_number=1,
+                    audio_languages=["EN"], subtitle_languages=["EN"])
+        local_offer(series, country="US", service="prime", season_number=2,
+                    audio_languages=["DE"], subtitle_languages=["DE"])
 
         season_one = self.client.get("/api/prime/series/2316/?season=1").json()
         season_two = self.client.get("/api/prime/series/2316/?season=2").json()
@@ -384,8 +369,8 @@ class SeasonLanguageEndpointTests(TestCase):
         self.assertEqual(
             {o["service"] for o in season_two["offers"]}, {"Prime Video"}
         )
-        # One upstream call serves every season view.
-        self.assertEqual(mock_get.call_count, 1)
+        # Reads serve every season view from canonical rows, no upstream call.
+        mock_get.assert_not_called()
         self.assertEqual(series.tmdb_id, 2316)
 
 
@@ -460,15 +445,12 @@ class LanguageInfoSeasonModelTests(TestCase):
                 )
 
 
-class GapFillLanguageTests(TestCase):
-    """Gap-filled offers pick up the manual language entry for the same region.
+class ManualLanguageEntryEndpointTests(TestCase):
+    """The manual language-info endpoint lands entries on the slug-keyed region.
 
-    The TMDb watch/providers gap-fill carries no audio/subtitle data (TMDb
-    doesn't publish it), so titles like The Office show Prime Video rows with
-    "missing language info" until the manual entry path stores languages.
-    Those languages must reach the gap-filled offer — and the entry must land
-    on the slug-keyed Region the pipeline reads, even though the UI sends the
-    display name shown on the offer card.
+    The UI sends the display name shown on the offer card ("Prime Video"),
+    but the entry must land on the slug-keyed Region ("prime") that reads
+    use — and round-trip back through the display-name query string.
     """
 
     def setUp(self):
@@ -508,55 +490,3 @@ class GapFillLanguageTests(TestCase):
         ).json()
         self.assertEqual(got["audio_languages"], ["EN"])
         self.assertEqual(got["subtitle_languages"], ["EN", "NL"])
-
-    def test_gap_filled_offer_inherits_the_cached_manual_languages(self):
-        LanguageInfo.objects.create(
-            movie=self.movie,
-            region=Region.objects.get_or_create(provider="prime", country="NL")[0],
-        )
-        info = LanguageInfo.objects.get(movie=self.movie, season=None)
-        LanguageEntry.objects.create(
-            language_info=info, kind="audio", language_code="EN"
-        )
-        LanguageEntry.objects.create(
-            language_info=info, kind="subtitle", language_code="NL"
-        )
-
-        gap_filled = Offer(
-            country="NL", service="prime", offer_type="subscription", quality="hd"
-        )
-        with patch(
-            "tracker.services.offer_pipeline.AvailabilityCache"
-        ) as mock_cache_cls, patch(
-            "tracker.services.offer_pipeline.enrich_movie_from_tmdb"
-        ), patch(
-            "tracker.services.offer_pipeline.prime_offers",
-            return_value=[gap_filled],
-        ):
-            mock_cache_cls.return_value.read_offers.return_value = []
-            offers = OfficialOffersPipeline().get_cached_offers(self.movie)
-
-        attached = [o for o in offers if o.service == "prime"]
-        self.assertEqual(len(attached), 1)
-        self.assertEqual(attached[0].audio_languages, ["EN"])
-        self.assertEqual(attached[0].subtitle_languages, ["NL"])
-
-    def test_gap_filled_offer_without_cached_rows_stays_empty(self):
-        gap_filled = Offer(
-            country="NL", service="prime", offer_type="subscription", quality="hd"
-        )
-        with patch(
-            "tracker.services.offer_pipeline.AvailabilityCache"
-        ) as mock_cache_cls, patch(
-            "tracker.services.offer_pipeline.enrich_movie_from_tmdb"
-        ), patch(
-            "tracker.services.offer_pipeline.prime_offers",
-            return_value=[gap_filled],
-        ):
-            mock_cache_cls.return_value.read_offers.return_value = []
-            offers = OfficialOffersPipeline().get_cached_offers(self.movie)
-
-        attached = [o for o in offers if o.service == "prime"]
-        self.assertEqual(len(attached), 1)
-        self.assertEqual(attached[0].audio_languages, [])
-        self.assertEqual(attached[0].subtitle_languages, [])

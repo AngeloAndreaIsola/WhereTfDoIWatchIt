@@ -27,6 +27,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "django.contrib.postgres",
     "tracker",
+    "availability",
 ]
 
 MIDDLEWARE = [
@@ -141,10 +142,6 @@ DEFAULT_PREFERENCE = {
     "accept_any_audio": False,
     "accept_any_subtitle": False,
 }
-
-# When True, cache misses for /api/prime/movie/<id>/ trigger a live Streaming
-# Availability API call. When False, only cached rows are returned.
-PRIME_LIVE_FETCH = os.environ.get("PRIME_LIVE_FETCH", "true").lower() == "true"
 
 # The provider the Prime Video endpoints filter on. This is the stable
 # Streaming Availability *service id* ("prime"), not the display name.

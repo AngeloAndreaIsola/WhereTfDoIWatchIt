@@ -1,6 +1,18 @@
-"""Cache layer: ingest Streaming Availability API results into local models.
+"""LEGACY / TRANSITIONAL cache layer — no longer the canonical write path.
 
-Strategy:
+Since Phase 3, availability persistence flows through
+``availability.services.refresh.AvailabilityRefreshService`` ->
+``OfferRepository`` -> ``availability.Offer`` (see
+``tracker.services.bulk_refresh``). This module remains only for:
+
+- ``seed_prime_fixture`` (offline fixture seeding via ``_write_result``);
+- legacy tests covering the old Region/LanguageInfo write semantics.
+
+``get_or_refresh()`` has no production callers left; do not add new ones.
+New code must read through ``tracker.services.availability_reads`` and write
+through the availability refresh service.
+
+Strategy (legacy):
 - Check Availability.last_checked_at freshness; if stale or missing, refetch.
 - Honor 100 req/day rate limit; defer refetch when budget exhausted.
 - Write Availability, LanguageInfo, LanguageEntry in one transaction per movie.
@@ -241,13 +253,13 @@ class AvailabilityCache:
             movie=movie, region=region, season=season
         )
         info.entries.all().delete()
-        for code in offer.audio_languages:
+        for code in offer.audio_languages or []:
             norm = normalize_language_code(code)
             if norm:
                 LanguageEntry.objects.create(
                     language_info=info, kind="audio", language_code=norm
                 )
-        for code in offer.subtitle_languages:
+        for code in offer.subtitle_languages or []:
             norm = normalize_language_code(code)
             if norm:
                 LanguageEntry.objects.create(

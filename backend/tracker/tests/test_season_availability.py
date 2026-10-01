@@ -28,6 +28,7 @@ from tracker.services.streaming_api import (
     StreamingSeason,
     resolve_season_number,
 )
+from tracker.tests.availability_factories import local_offer
 
 SEASONS_DATA = [
     {"season_number": 1, "name": "Season 1", "episode_count": 10, "poster_path": "/s1.jpg"},
@@ -294,18 +295,13 @@ class SeasonDetailEndpointTests(TestCase):
     """``/api/prime/series/<id>/?season=N`` payload shape and season plumbing."""
 
     def setUp(self):
-        cache_patcher = patch("tracker.services.offer_pipeline.AvailabilityCache")
+        reads_patcher = patch("tracker.services.offer_pipeline.get_local_offers")
         enrich_patcher = patch("tracker.services.offer_pipeline.enrich_movie_from_tmdb")
-        prime_patcher = patch(
-            "tracker.services.offer_pipeline.prime_offers", return_value=[]
-        )
-        self.addCleanup(cache_patcher.stop)
+        self.addCleanup(reads_patcher.stop)
         self.addCleanup(enrich_patcher.stop)
-        self.addCleanup(prime_patcher.stop)
-        mock_cache_cls = cache_patcher.start()
+        mock_reads = reads_patcher.start()
         enrich_patcher.start()
-        prime_patcher.start()
-        self.read_offers = mock_cache_cls.return_value.read_offers
+        self.read_offers = mock_reads
 
         self.series = Movie.objects.create(
             tmdb_id=1396,
@@ -377,20 +373,11 @@ class SeasonDetailEndpointTests(TestCase):
 
 
 class SeasonEndToEndEndpointTests(TestCase):
-    """Request → pipeline → cache → ranking, with season metadata and filtering."""
-
-    def setUp(self):
-        # TMDb watch/providers gap-fill is a separate source with its own tests;
-        # keep this end-to-end run on the mocked upstream only.
-        prime_patcher = patch(
-            "tracker.services.offer_pipeline.prime_offers", return_value=[]
-        )
-        self.addCleanup(prime_patcher.stop)
-        prime_patcher.start()
+    """Request → pipeline → canonical offer reads → ranking and season filtering."""
 
     @patch("tracker.services.streaming_api.StreamingAvailabilityClient.get_availability")
     @patch("tracker.services.offer_pipeline.enrich_movie_from_tmdb")
-    def test_season_requests_share_one_upstream_call_and_filter_offers(
+    def test_season_requests_filter_canonical_offers_without_upstream_calls(
         self, mock_enrich, mock_get
     ):
         series = Movie.objects.create(
@@ -409,7 +396,17 @@ class SeasonEndToEndEndpointTests(TestCase):
         Subscription.objects.create(
             user_id=1, provider=Provider.objects.get(slug="hulu"), name="Hulu"
         )
-        mock_get.return_value = SeasonCacheTests._result()
+        # Canonical rows: Prime streams season 1, Netflix streams seasons 1-2,
+        # Hulu streams season 3 only (mirrors the upstream payload shape).
+        for service, season in (("prime", 1), ("netflix", 1), ("netflix", 2), ("hulu", 3)):
+            local_offer(
+                series,
+                country="US",
+                service=service,
+                season_number=season,
+                audio_languages=["EN"],
+                subtitle_languages=["EN"],
+            )
 
         def services_for(url):
             response = self.client.get(url)
@@ -421,16 +418,15 @@ class SeasonEndToEndEndpointTests(TestCase):
         season_two = services_for("/api/prime/series/1396/?season=2")
         season_nine = services_for("/api/prime/series/1396/?season=9")
 
-        # Show-level rows plus season-only rows are all visible unfiltered.
+        # Show-level (unfiltered) reads see every canonical series row.
         self.assertEqual(unfiltered, {"Prime Video", "Netflix", "Hulu"})
         self.assertEqual(season_one, {"Prime Video", "Netflix"})
-        # Season 2 is Netflix-only upstream: Prime and Hulu drop out.
+        # Season 2 is Netflix-only: Prime and Hulu drop out.
         self.assertEqual(season_two, {"Netflix"})
         self.assertEqual(season_nine, set())
 
-        # Every season view is served from one cached upstream response.
-        self.assertEqual(mock_get.call_count, 1)
-        mock_get.assert_called_with(1396, content_type="series")
+        # Reads never fall through to the upstream API.
+        mock_get.assert_not_called()
 
         payload = self.client.get("/api/prime/series/1396/?season=2").json()
         self.assertEqual(payload["selected_season"], 2)
@@ -439,28 +435,23 @@ class SeasonEndToEndEndpointTests(TestCase):
 
 
 class SeriesSubscriptionFilterTests(TestCase):
-    """Cached rows for a series whose services the user does not subscribe to.
+    """Canonical rows for a series whose services the user does not subscribe to.
 
     Regression guard for the reported "not available" outcome: an empty
     ``offers`` list must come from the subscription/provider filters, never
     from a series-only drop. The series payload has to stay complete so the
-    page can render its empty state, and one subscribed row in the same cache
+    page can render its empty state, and one subscribed row in the same set
     must still be surfaced.
     """
 
     def setUp(self):
-        cache_patcher = patch("tracker.services.offer_pipeline.AvailabilityCache")
+        reads_patcher = patch("tracker.services.offer_pipeline.get_local_offers")
         enrich_patcher = patch("tracker.services.offer_pipeline.enrich_movie_from_tmdb")
-        prime_patcher = patch(
-            "tracker.services.offer_pipeline.prime_offers", return_value=[]
-        )
-        self.addCleanup(cache_patcher.stop)
+        self.addCleanup(reads_patcher.stop)
         self.addCleanup(enrich_patcher.stop)
-        self.addCleanup(prime_patcher.stop)
-        mock_cache_cls = cache_patcher.start()
+        mock_reads = reads_patcher.start()
         enrich_patcher.start()
-        prime_patcher.start()
-        self.read_offers = mock_cache_cls.return_value.read_offers
+        self.read_offers = mock_reads
 
         self.series = Movie.objects.create(
             tmdb_id=90001,

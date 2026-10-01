@@ -69,7 +69,7 @@ def paginate_list(items: list, page: int, page_size: int) -> tuple[list, dict]:
     }
     return page_items, pagination
 from .services.bulk_refresh import process_watchlist_refresh
-from .services.cache import AvailabilityCache
+from .services.availability_reads import get_local_offers
 from .services.letterboxd import (
     LetterboxdFetchError,
     LetterboxdInvalidURLError,
@@ -81,7 +81,6 @@ from .services.letterboxd import (
 )
 from .services.ranking import rank_offers
 from .services.preferences import resolve_preferences
-from .services.rate_limit import RateLimitExceeded
 from .services.enrichment import enrich_movie_from_tmdb, resolve_or_create_movie, sync_movie_fields
 from .services.tmdb import TMDbClient, TMDbItem, TMDbMovie
 from .services.watchlist_export import (
@@ -483,13 +482,7 @@ def movie_availability(request, tmdb_id: int):
 
     preference = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
 
-    try:
-        cache = AvailabilityCache()
-        status_obj = cache.get_or_refresh(movie)
-    except RateLimitExceeded as exc:
-        return Response({"error": str(exc), "rate_limited": True}, status=429)
-
-    offers = cache.read_offers(movie)
+    offers = get_local_offers(movie)
     ranked = rank_offers(offers, preference)
 
     user_data = UserMovieData.objects.filter(user_id=1, movie=movie).first()
@@ -501,9 +494,9 @@ def movie_availability(request, tmdb_id: int):
             "user_data": UserMovieDataSerializer(user_data).data if user_data else None,
             "watch_events": MovieWatchEventSerializer(watch_events, many=True).data,
             "cache": {
-                "refreshed": status_obj.refreshed,
-                "reason": status_obj.reason,
-                "offers": status_obj.offers_written,
+                "refreshed": False,
+                "reason": "local",
+                "offers": len(offers),
             },
             "offers": RankedOfferSerializer([offer.to_dict() for offer in ranked], many=True).data,
         }
@@ -1076,8 +1069,6 @@ def watchlist_report(request):
         current_country=curr_country,
     )
 
-    cache = AvailabilityCache()
-
     report = []
     country_movie_sets: dict[str, set[int]] = {}
     service_movie_sets: dict[str, set[int]] = {}
@@ -1091,8 +1082,12 @@ def watchlist_report(request):
         user_data = UserMovieData.objects.filter(user_id=1, movie=movie).first()
         is_watched = bool(user_data and user_data.is_watched)
 
-        # Skip filtering offers - just use ranked offers for country/service breakdown
-        raw_offers = cache.read_offers(movie)
+        # A single corrupt/failing read must not take down the whole report.
+        try:
+            raw_offers = get_local_offers(movie)
+        except Exception:
+            logger.exception("Offer read failed for movie %s", movie.tmdb_id)
+            raw_offers = []
         ranked = rank_offers(raw_offers, preference, current_country=curr_country)
 
         countries = sorted(list({r.country.upper() for r in ranked if r.country}))
@@ -1732,15 +1727,7 @@ def watch_redirect(request, tmdb_id: int):
         if name:
             subscribed_slugs.add(name.lower())
 
-    cache = AvailabilityCache()
-    try:
-        cache.get_or_refresh(movie)
-    except RateLimitExceeded:
-        pass
-    except Exception:
-        logger.exception("Live availability refresh failed for watch redirect tmdb %s", tmdb_id)
-
-    offers = cache.read_offers(movie)
+    offers = get_local_offers(movie)
     qualifying = [
         o for o in offers
         if (o.offer_type or "").lower() in ("subscription", "free")
