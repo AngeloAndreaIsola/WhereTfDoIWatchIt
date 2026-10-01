@@ -81,6 +81,9 @@ docker compose exec -T backend python manage.py ingest_legacy_scraper_catalogue
 
 The command is idempotent (re-running upserts the same `legacy-<pk>` identities) and local-only — no network, no TMDb, no offers written. New scraper rows are bridged automatically on save, so this never needs re-running.
 
+### Event-driven availability refresh (Phase B)
+No additional service, worker or cron entry is required: watchlist adds, imports and detail views only queue `tracker.RefreshRequest` rows (migration `tracker.0029_refreshrequest`, applied automatically by the entrypoint above), and the existing `refresh_availability` cron plus `POST /api/watchlist/refresh/` drain that queue first, within the same daily budget. The pending backlog and any `failed` requests are inspectable read-only in the Django admin under **Tracker → Refresh requests**.
+
 ---
 
 ## 4. Health Checks and Logs

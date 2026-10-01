@@ -308,6 +308,91 @@ class RefreshRun(models.Model):
         return f"RefreshRun {self.service} @ {self.started_at}"
 
 
+class RefreshPriority(models.IntegerChoices):
+    """Deterministic priority for event-driven availability refresh requests.
+
+    Lower numbers run first, so explicit user intent always outranks
+    background maintenance: a watchlist addition is drained before the
+    nightly stale sweep, which is drained before historical backlog.
+    ``request_availability_refresh`` bumps a never-fetched title to ``NEW``
+    automatically, so callers only describe *why* they are asking.
+    """
+
+    NEW = 10, "New / never fetched"
+    WATCHLIST = 20, "Watchlist addition"
+    INTENT = 30, "Recently viewed / explicitly requested"
+    STALE = 40, "Regular stale refresh"
+    BACKGROUND = 50, "Low-priority historical content"
+
+
+class RefreshRequestStatus(models.TextChoices):
+    PENDING = "pending", "Pending"
+    DONE = "done", "Done"
+    FAILED = "failed", "Failed"
+
+
+class RefreshRequest(models.Model):
+    """One idempotent request to refresh canonical availability for a title.
+
+    Local-only by construction: creating a request is a database insert that
+    never calls an external API, so it is safe inside the originating user
+    transaction — it commits or rolls back with the user action and the HTTP
+    response never waits for a provider. Requests are drained later by the
+    existing budgeted refresh run (``process_watchlist_refresh``), which owns
+    rate limiting, budget, and freshness policy.
+
+    Deduplication invariant: at most one *pending* request exists per
+    (movie, source scope), enforced by the partial unique constraint below —
+    repeated events for the same title collapse into one row (a higher
+    priority may upgrade it, never duplicate it).
+
+    ``source`` is an ``availability.Source.slug`` scope (where the
+    information comes from), never a provider: Provider and Source stay
+    distinct, and the empty string means the default title-targeted refresh.
+    """
+
+    movie = models.ForeignKey(
+        Movie, on_delete=models.CASCADE, related_name="refresh_requests"
+    )
+    source = models.CharField(max_length=50, blank=True, default="", db_index=True)
+    priority = models.IntegerField(
+        choices=RefreshPriority.choices, default=RefreshPriority.STALE
+    )
+    status = models.CharField(
+        max_length=12,
+        choices=RefreshRequestStatus.choices,
+        default=RefreshRequestStatus.PENDING,
+        db_index=True,
+    )
+    attempts = models.IntegerField(default=0)
+    last_error = models.TextField(blank=True, default="")
+    requested_at = models.DateTimeField(default=timezone.now)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["priority", "requested_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["movie", "source"],
+                condition=models.Q(status="pending"),
+                name="uniq_refreshrequest_pending_movie_source",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["status", "priority", "requested_at"],
+                name="refreshrequest_drain_order",
+            ),
+        ]
+
+    def __str__(self):
+        scope = self.source or "default"
+        return (
+            f"RefreshRequest {self.movie_id} scope={scope} "
+            f"{self.get_status_display()} priority={self.priority}"
+        )
+
+
 class UserMovieData(models.Model):
     user_id = models.IntegerField(default=1)
     movie = models.ForeignKey(Movie, on_delete=models.CASCADE, related_name="user_data")

@@ -36,7 +36,7 @@ Just you (and optionally a couple of friends later, sharing the same instance wi
 ### 3. Letterboxd Watchlist Free-to-Watch Check
 - You upload your Letterboxd watchlist CSV export (title + year + Letterboxd URI — no external IDs).
 - Each entry is matched to a TMDb ID via TMDb's search API (title + year), with a manual confirm step for ambiguous matches.
-- Availability is checked (and cached) for every title, **filtered the same way as single-movie search**: subscription/free offers only, matched against your services.
+- Availability is checked (and cached) for every title, **filtered the same way as single-movie search**: subscription/free offers only, matched against your services. Titles entering the watchlist (or the catalogue) queue a background availability check automatically; the import itself never waits on one.
 - Report: **per movie**, which region(s) (if any) have it free via a subscription you already have — not an aggregate "switch here to unlock N more" score. A movie with no subscription-included offer anywhere is flagged as unavailable rather than silently omitted.
 
 ## Data Model (conceptual)
@@ -67,7 +67,7 @@ Countries/services are sorted by this priority; ties broken by the next criterio
 
 ## Constraints & Notes
 
-- Streaming Availability API free tier caps at 100 req/day — cached in Postgres with a background refresh job (~90 stale entries/day) rather than fetched live each time.
+- Streaming Availability API free tier caps at 100 req/day — cached in Postgres with a background refresh job (~90 stale entries/day) rather than fetched live each time. Refreshes are *requested* by events (watchlist add, import, opening a title's detail page) as local queued jobs and executed only by the budgeted refresh runs, so no user action ever pays the API quota directly and no read ever blocks on an external call.
 - Letterboxd exports contain no TMDb/IMDb ID, only title/year/URI — matching is done via TMDb search, not by scraping Letterboxd.
 - No ToS-sensitive scraping or automated regional account access anywhere in v1 — all availability data comes from licensed/public APIs.
 - If data from the Streaming Availability API is ever surfaced publicly (not applicable for a personal tool), their terms require attribution.

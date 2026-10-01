@@ -13,6 +13,7 @@ from .models import (
     Movie,
     Preference,
     Provider,
+    RefreshRequest,
     RefreshRun,
     Region,
     ScrapedContentMapping,
@@ -199,6 +200,26 @@ class RefreshRunAdmin(admin.ModelAdmin):
         "rows_skipped",
         "rate_limited",
     )
+
+
+@admin.register(RefreshRequest)
+class RefreshRequestAdmin(admin.ModelAdmin):
+    list_display = (
+        "movie",
+        "source",
+        "priority",
+        "status",
+        "attempts",
+        "requested_at",
+        "completed_at",
+    )
+    list_filter = ("status", "priority", "source")
+    readonly_fields = ("requested_at", "completed_at", "attempts", "last_error")
+
+    def has_add_permission(self, request):
+        # Refresh requests are created by application events only; the admin
+        # exists for observability (pending backlog, failure inspection).
+        return False
 
 
 @admin.register(ScrapedContentMapping)

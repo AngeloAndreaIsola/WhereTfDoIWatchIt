@@ -7,5 +7,7 @@
   "errors": 0,
   "budget": 10,
   "remaining_budget": 10,
-  "rate_limited": true
+  "rate_limited": true,
+  "requests_drained": 0,
+  "requests_pending": 0
 }

@@ -23,6 +23,7 @@ Or if running directly on the host / server environment:
 - **Budget Cap (`--budget 90`)**: Caps the scheduled refresh to 90 stale availability requests per run, leaving roughly 10 calls/day available for manual or on-demand lookups under the 100 request/day free-tier cap.
 - **Log Path (`./logs/refresh.log`)**: Output is appended to `./logs/refresh.log` within the project tree (matching `.gitignore` log rules).
 - **Audit Logging**: Each invocation automatically creates a `RefreshRun` audit record in PostgreSQL, accessible via the Django Admin interface under `RefreshRun`.
+- **Event-driven request drain**: before the background stale sweep, each run settles pending `RefreshRequest` rows first (watchlist adds, imports, refresh-on-view), in priority order, through this same budget, the same rate limiter and the same `RefreshRun`. A request left pending because the budget or quota ran out simply waits for the next run — no separate queue process exists. The JSON summary in the log carries `requests_drained` (requests settled this run) and `requests_pending` (backlog remaining).
 
 ## Provider Catalogue Refresh
 

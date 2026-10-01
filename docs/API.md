@@ -16,10 +16,11 @@ This document provides the complete API contract specification for the **WhereTf
 
 1. **Streaming Availability API Quota**:
    - The Streaming Availability API provider has a strict free-tier daily rate limit of **100 requests per day**.
-   - The quota is consumed only by budgeted refreshes (the `refresh_availability` cron job and `POST /api/watchlist/refresh/`), never by a read.
+   - The quota is consumed only by budgeted refreshes (the `refresh_availability` cron job and `POST /api/watchlist/refresh/`), never by a read and never by merely *requesting* a refresh: event-driven `RefreshRequest` rows (watchlist adds, imports, refresh-on-view) are drained inside those same budgeted runs and share their budget, rate limiter and `RefreshRun` audit row.
 
 2. **Reads are local**:
    - Read endpoints (`GET /api/movie/<tmdb_id>/availability/`, `GET /api/watchlist/report/`, `GET /api/watch/<tmdb_id>/`, `GET /api/catalog/unified/`, …) answer from canonical Postgres rows — reconciled offers for availability, `ProviderContent`/`ContentMapping` for the catalogue. They never call an external API, never trigger a refresh, and cannot return HTTP 429 for rate-limit reasons.
+   - Title-detail reads (`GET /api/movie/<pk>/`, `GET /api/prime/movie|series/<id>/`) may *queue* an asynchronous refresh for a stale or never-fetched title: that enqueue is a local database insert inside the request, so the response is still served entirely from local rows and never waits on a provider.
    - The availability response still carries a `cache` status block (`refreshed`, `reason`, `offers`); `reason` is `"local"` because the read is served from local canonical offers.
 
 3. **Where 429 can still happen**:
@@ -212,6 +213,7 @@ This document provides the complete API contract specification for the **WhereTf
   - Ambiguous matches (e.g. multiple TMDb search candidates) are returned in `ambiguous`.
   - Unmatched rows are returned in `skipped`.
   - Canonical rows apply their `status`: `watchlist` rows create `WatchlistItem`s, `watched` rows set `UserMovieData.is_watched = True`.
+  - Titles *entering* the catalogue (new `Movie` or new `WatchlistItem`) — or titles with no canonical availability at all — queue an asynchronous availability refresh (`RefreshRequest`); fresh titles and already-seen stale titles are left to the scheduled sweep, so a large import never floods the refresh budget. The response itself never waits on a provider.
 - **Response**: `200 OK`
   - Example: [`docs/examples/api/watchlist_import_response.json`](examples/api/watchlist_import_response.json)
   ```json
@@ -257,6 +259,7 @@ This document provides the complete API contract specification for the **WhereTf
 
 #### `POST /api/watchlist/resolve/`
 - **Purpose**: Resolve user-selected movie candidates (from ambiguous Letterboxd matches or manual searches) into database `Movie` and `WatchlistItem` records (`source="letterboxd_resolved"`).
+- **Behavior**: each resolved title also queues an asynchronous availability refresh (`RefreshRequest`, watchlist priority). The enqueue is a local insert — repeated resolves collapse into one pending request, fresh titles are skipped, and no provider is contacted while answering the request.
 - **Request Body**: JSON object with `selections` list.
   - Example Request Body: [`docs/examples/api/watchlist_resolve_request.json`](examples/api/watchlist_resolve_request.json)
   ```json
@@ -372,7 +375,7 @@ This document provides the complete API contract specification for the **WhereTf
 - **Purpose**: Return ranked Prime Video (provider=`amazon`) availability offers for a single movie, filtered to `subscription`/`free` offer types only, ranked by strict priority: audio language match (JA > EN) → subtitle language match (EN > JA) → quality (4K > HDR > HD > SD) → country code (alphabetical tiebreak).
 - **Path Parameters**:
   - `tmdb_id` *(required, integer)*: The TMDb ID of the movie.
-- **Data source**: served entirely from cached availability rows — a detail request never triggers a live upstream fetch (availability refreshes run separately via cron).
+- **Data source**: served entirely from cached availability rows — a detail request never triggers a live upstream fetch. If the title is stale or was never fetched, the read *queues* an asynchronous refresh (`RefreshRequest`, detail-view priority) that the budgeted refresh run drains later; the response still returns the local rows immediately. This applies to `GET /api/prime/movie/<tmdb_id>/`, `GET /api/prime/series/<tmdb_id>/` and `GET /api/movie/<pk>/` alike.
 - **Response**: `200 OK`
   - Example: [`docs/examples/api/prime_movie_response.json`](examples/api/prime_movie_response.json)
   ```json
@@ -467,7 +470,7 @@ This document provides the complete API contract specification for the **WhereTf
 ### 12. Watchlist Availability Refresh
 
 #### `POST /api/watchlist/refresh/`
-- **Purpose**: Run a budgeted live refresh of stale availability for watchlist movies (`user_id=1`). This is the only endpoint that can consume Streaming Availability API quota at request time — all GET reads stay local.
+- **Purpose**: Run a budgeted live refresh of stale availability for watchlist movies (`user_id=1`). This is the only endpoint that can consume Streaming Availability API quota at request time — all GET reads stay local. The run first drains pending event-driven `RefreshRequest` rows (watchlist adds, imports, refresh-on-view) in priority order, then refreshes the background stale sweep candidates with whatever budget remains.
 - **Request Body**: JSON (`budget` optional).
   - `budget` *(optional, integer, default 10, max 90)*: number of live refreshes to perform. Values outside `1..90`, booleans and non-integers are rejected with `400`.
 - **Response**: `200 OK`
@@ -481,9 +484,12 @@ This document provides the complete API contract specification for the **WhereTf
     "errors": 0,
     "budget": 10,
     "remaining_budget": 1,
-    "rate_limited": false
+    "rate_limited": false,
+    "requests_drained": 2,
+    "requests_pending": 1
   }
   ```
+  `requests_drained` counts `RefreshRequest` rows settled by this run (`done` or `failed`); `requests_pending` is the backlog left queued for a later run. Both fields are additive — `refreshed`/`skipped_*` also include drained work, and `attempted` still counts only sweep candidates.
 - **Error Responses**:
   - `400 Bad Request`: invalid `budget` (non-positive, > 90, non-integer, or boolean).
   - `429 Too Many Requests`: daily API quota exhausted before/at the start of the run; body is the same summary shape with `"rate_limited": true`. Example: [`docs/examples/api/error_429_response.json`](examples/api/error_429_response.json)

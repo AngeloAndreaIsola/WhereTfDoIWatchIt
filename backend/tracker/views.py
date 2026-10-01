@@ -23,6 +23,7 @@ from .models import (
     MovieWatchEvent,
     Preference,
     Provider,
+    RefreshPriority,
     Region,
     ScrapedContentMapping,
     Subscription,
@@ -72,6 +73,7 @@ def paginate_list(items: list, page: int, page_size: int) -> tuple[list, dict]:
     return page_items, pagination
 from .services.bulk_refresh import process_watchlist_refresh
 from .services.availability_reads import get_local_offers
+from .services.refresh_requests import request_availability_refresh
 from .services.letterboxd import (
     LetterboxdFetchError,
     LetterboxdInvalidURLError,
@@ -794,6 +796,9 @@ def scraper_confirm_match(request):
     # Re-project the confirmed mapping so the canonical row carries the
     # manual match (MatchMethod.MANUAL) the catalogue reads back.
     ingest_scraped_mapping(mapping)
+    # Manual match = explicit user intent: if the canonical path has no
+    # availability for this TMDb id yet, request an asynchronous refresh.
+    request_availability_refresh(movie, priority=RefreshPriority.INTENT)
 
     return Response(ScrapedContentMappingSerializer(mapping).data)
 
@@ -951,6 +956,9 @@ def watchlist_resolve(request):
             movie=movie,
             source="letterboxd_resolved",
         )
+        # Event-driven refresh: resolved selections become eligible for
+        # canonical availability refresh (idempotent, local-only).
+        request_availability_refresh(movie, priority=RefreshPriority.WATCHLIST)
         watchlist_items.append(item)
 
     return Response(
@@ -1520,6 +1528,11 @@ def _build_prime_offers(request, movie: Movie, season: int | None = None) -> lis
 
 def _prime_detail_response(request, item: Movie, key: str) -> Response:
     """Shared detail payload for prime_movie / prime_series, keyed by ``key``."""
+    # Refresh-on-view (Phase B): this is the title detail page the frontend
+    # opens. Local offers are returned immediately; a stale/missing title
+    # gets an asynchronous refresh request, never a synchronous fetch.
+    request_availability_refresh(item, priority=RefreshPriority.INTENT)
+
     user_data = UserMovieData.objects.filter(user_id=1, movie=item).first()
     is_in_watchlist = WatchlistItem.objects.filter(user_id=1, movie=item).exists()
     watch_events = MovieWatchEvent.objects.filter(user_id=1, movie=item).order_by("-watched_date", "-created_at")
@@ -1707,6 +1720,11 @@ def movie_detail(request, pk: int):
     except Exception:
         logger.exception("TMDb details fetch failed for movie %s", pk)
 
+    # Refresh-on-view (Phase B): opening a title is meaningful user intent.
+    # The local availability is served above; a stale/missing title only
+    # *requests* an asynchronous refresh here — the response never waits.
+    request_availability_refresh(movie, priority=RefreshPriority.INTENT)
+
     user_data = UserMovieData.objects.filter(user_id=1, movie=movie).first()
     watch_events = MovieWatchEvent.objects.filter(user_id=1, movie=movie).order_by("-watched_date", "-created_at")
 
@@ -1762,6 +1780,9 @@ def link_tmdb(request, pk: int):
         # Invalidate cached availability for the old tmdb_id if it differs
         if old_tmdb_id != details.tmdb_id:
             Availability.objects.filter(movie=movie).delete()
+            # The canonical offers now key on a TMDb id that has likely never
+            # been fetched — request a refresh (local insert, async drain).
+            request_availability_refresh(movie, priority=RefreshPriority.INTENT)
 
     return Response({
         "message": f"Linked to TMDB {details.tmdb_id}",
@@ -1840,6 +1861,12 @@ def add_to_watchlist(request):
                 user_id=1,
                 movie=movie,
                 source="manual",
+            )
+            # Event-driven refresh (Phase B): local insert in the same
+            # transaction — the response never waits for a provider; the
+            # budgeted refresh run drains it later.
+            request_availability_refresh(
+                watchlist_item.movie, priority=RefreshPriority.WATCHLIST
             )
 
         # Create UserMovieData entry if not exists

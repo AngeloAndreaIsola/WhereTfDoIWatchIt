@@ -2,7 +2,11 @@
 
 ``process_watchlist_refresh`` (Phase 3): selects watchlist movies needing
 availability refresh, respecting daily API quota and caller-provided budget
-limit.
+limit. Phase B extended it with an event-driven request drain
+(``tracker.services.refresh_requests``): pending ``RefreshRequest`` rows —
+created by watchlist adds, imports, and detail views — are processed first,
+in priority order, through the exact same budget, rate limiter, freshness
+policy and audit row as the background sweep.
 
 ``process_catalogue_refresh`` (Phases 5/6): refreshes the full catalogue of
 catalogue-capable sources (CBC Gem first) with no budget selection at all —
@@ -44,7 +48,7 @@ from availability.models import Country, Offer, Source
 from availability.services.refresh import AvailabilityRefreshService
 from availability.sources import source_registry
 
-from ..models import Movie, RefreshRun, WatchlistItem
+from ..models import Movie, RefreshRequest, RefreshRequestStatus, RefreshRun, WatchlistItem
 from .rate_limit import RateLimitExceeded, RateLimiter
 
 logger = logging.getLogger(__name__)
@@ -130,6 +134,11 @@ class BulkRefreshSummary:
     budget: int = 0
     remaining_budget: int = 0
     rate_limited: bool = False
+    # Event-driven refresh requests (Phase B): how many pending
+    # RefreshRequest rows were settled (done or failed) by this run, and how
+    # many are still queued for a later run.
+    requests_drained: int = 0
+    requests_pending: int = 0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -146,22 +155,30 @@ def process_watchlist_refresh(
     """Batch refresh watchlist movie availability up to budget limit.
 
     Candidates selection & priority:
-    1. Watchlist movies for user_id with no canonical availability yet.
-    2. Watchlist movies with oldest/stalest canonical Offer.last_seen.
+    1. Pending event-driven refresh requests (``tracker.RefreshRequest``),
+       drained first in their deterministic priority order — explicit user
+       intent (watchlist additions, imports, detail views) outranks
+       background maintenance. Draining shares this run's budget, rate
+       limiter and ``RefreshRun`` audit row, so event triggers can never
+       bypass the daily API quota.
+    2. Watchlist movies for user_id with no canonical availability yet.
+    3. Watchlist movies with oldest/stalest canonical Offer.last_seen.
 
     One unit of work = one ``AvailabilityRefreshService.refresh_content``
     call (one external API request + one transactional canonical write).
 
     Summary fields:
-    - attempted: number of candidates considered
-    - refreshed: number of movies successfully refreshed
+    - attempted: number of sweep candidates considered
+    - refreshed: number of titles successfully refreshed (requests + sweep)
     - skipped_cached: number skipped because existing cache was fresh
     - skipped_budget_exhausted: number skipped because no refresh budget remained
     - skipped_rate_limited: number skipped because rate limit/quota prevented further refreshes
-    - errors: number of unexpected per-movie errors
+    - errors: number of unexpected per-title errors
     - budget: input budget for the run
     - remaining_budget: unused live-refresh budget after the run
     - rate_limited: boolean indicating whether quota/rate limiting stopped the run
+    - requests_drained: pending RefreshRequest rows settled (done/failed) this run
+    - requests_pending: RefreshRequest rows still queued after the run
     """
     service = refresh_service or AvailabilityRefreshService()
     limiter = limiter or RateLimiter("streaming_availability")
@@ -177,6 +194,21 @@ def process_watchlist_refresh(
         started_at=timezone.now(),
     )
 
+    # Phase B: drain event-driven refresh requests first (local intent
+    # outranks the background sweep). Local import: refresh_requests imports
+    # this module's freshness helpers, so the dependency stays one-way at
+    # module load time. The returned set owns those titles for this run —
+    # settled or still queued — so the sweep below neither re-attempts nor
+    # double-counts them.
+    from .refresh_requests import drain_refresh_requests
+
+    queue_owned = drain_refresh_requests(
+        summary=summary,
+        service=service,
+        limiter=limiter,
+        stale_after=stale_after,
+    )
+
     pairs = _order_candidates(_candidate_pairs(user_id, content_types))
     summary.attempted = len(pairs)
     movies_by_id = {
@@ -184,7 +216,12 @@ def process_watchlist_refresh(
     }
 
     rate_limit_hit = summary.rate_limited
-    for movie_id, _tmdb_id in pairs:
+    for movie_id, tmdb_id in pairs:
+        if tmdb_id in queue_owned:
+            # The request drain owns this title this run (settled, or still
+            # queued for a later run) — one title, one attempt per run.
+            continue
+
         movie = movies_by_id.get(movie_id)
         if not movie:
             continue
@@ -222,6 +259,10 @@ def process_watchlist_refresh(
     run.rate_limited = summary.rate_limited
     run.finished_at = timezone.now()
     run.save()
+
+    summary.requests_pending = RefreshRequest.objects.filter(
+        status=RefreshRequestStatus.PENDING
+    ).count()
 
     return summary.to_dict()
 
