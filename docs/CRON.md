@@ -195,14 +195,18 @@ one effective offer, and disagreements are reported as conflicts rather than
 resolved. It is read-only and needs no cron entry of its own, but two things
 on this page feed it:
 
-- **Freshness deadline (optional, per `Source`)**: set
-  `Source.configuration = {"expected_refresh_interval_seconds": <seconds>}`
-  (admin → Availability → Sources) and every observation from that source is
-  classified `fresh`/`stale` against the read time; a group that mixes states
-  reports a `freshness` conflict. Keep the value **at or above that source's
-  crontab cadence** — `21600` for a `17 */6 * * *` slot, `86400` for a daily
-  slot — or every observation will read stale between runs. Sources without
-  the key report `unknown`; there is deliberately no global default timeout.
+- **Freshness deadline (per source, from `availability.freshness`)**: every
+  observation is classified `fresh`/`stale` against the read time using that
+  source's own window, and a group that mixes states reports a `freshness`
+  conflict. The window resolves in order: `Source.configuration =
+  {"expected_refresh_interval_seconds": <seconds>}` (admin → Availability →
+  Sources) overrides the built-in `SOURCE_FRESHNESS` policy — `21600` (6h)
+  for `cbc_gem`, `43200` (12h) for `legacy_scraper`, `86400` (24h) for
+  `streaming_availability`, `bbc_iplayer`, `tubi`, `prime_video` and
+  `rai_play`. Keep an override **at or above that source's crontab cadence**
+  or every observation will read stale between runs. Slugs in neither place
+  (undeclared sources) report `unknown` — the read side has deliberately no
+  global default timeout; only the refresh side falls back to 24h.
 - **Failed runs stay visible, offers stay readable**: the latest
   `availability.SyncRun` per (provider, source, country) becomes an
   observation's `sync_status`, and a failed run is counted in the

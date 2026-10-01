@@ -1,6 +1,7 @@
 """Canonical availability fixtures for HTTP read tests."""
 from availability.domain.enums import OfferType, SourceType
 from availability.models import Country, Offer, Source
+from availability.sources import DEFAULT_SOURCE_SLUG
 from tracker.models import Provider, ProviderCategory
 
 
@@ -14,8 +15,11 @@ def local_offer(movie, *, country="US", service="netflix", offer_type="subscript
     availability_country, _ = Country.objects.get_or_create(
         code=country.upper(), defaults={"name": country.upper()}
     )
+    # Canonical offers belong to the default title-targeted scope, so the
+    # per-source freshness policy sees them where a real refresh writes them.
     source, _ = Source.objects.get_or_create(
-        slug="test-local", defaults={"name": "Test local availability", "type": SourceType.API}
+        slug=DEFAULT_SOURCE_SLUG,
+        defaults={"name": "Streaming Availability API", "type": SourceType.API},
     )
     kwargs = {}
     if movie.content_type == "series":

@@ -19,9 +19,10 @@ What "reconciled" means here:
   when its raw lifecycle flag is set, its availability window is open at
   ``now``, and its provider content does not resolve to some other TMDB id.
   The effective offer is available when at least one observation is.
-* **Freshness is advisory.** A source may declare
-  ``configuration["expected_refresh_interval_seconds"]``; without it there is
-  no deadline to measure against, so observations are ``unknown`` rather than
+ * **Freshness is advisory.** The freshness of an observation is classified
+  against its source's declared refresh window — a per-source policy
+  (``availability.freshness``) that ``Source.configuration`` can override per
+  source. A source that declares neither reports ``unknown`` rather than
   silently fresh.
 
 Query shape is deliberately fixed: one row query plus one bulk lookup each for
@@ -30,7 +31,7 @@ mappings, cross-content claims and sync runs — no per-offer query.
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Iterable, Optional
 
 from django.db.models import Exists, OuterRef
@@ -47,14 +48,15 @@ from ..domain.reconciliation import (
     ReconciliationResult,
     SourceFact,
 )
+# Shared with the refresh path: one declared freshness policy per source.
+# Re-exported here so existing importers keep working.
+from ..freshness import FRESHNESS_INTERVAL_KEY, freshness_state
 from ..models import ContentMapping, ProviderContent
 from ..persistence.repositories import (
     MappingRepository,
     OfferRepository,
     SyncRunRepository,
 )
-
-FRESHNESS_INTERVAL_KEY = "expected_refresh_interval_seconds"
 
 
 class AvailabilityReconciliationService:
@@ -184,15 +186,6 @@ class AvailabilityReconciliationService:
     def _now(now: Optional[datetime]) -> datetime:
         return _aware(now if now is not None else timezone.now())
 
-    @staticmethod
-    def _freshness_interval(source) -> Optional[timedelta]:
-        """Source-declared refresh cadence, or None when it declares none."""
-        configuration = source.configuration or {}
-        raw = configuration.get(FRESHNESS_INTERVAL_KEY)
-        if isinstance(raw, bool) or not isinstance(raw, (int, float)) or raw <= 0:
-            return None
-        return timedelta(seconds=raw)
-
     def _reconcile_rows(self, rows, *, now):
         """Group raw rows, then reconcile each group. Returns offers,
         deduped conflicts, and the latest sync status per observed scope."""
@@ -249,15 +242,12 @@ class AvailabilityReconciliationService:
             (row.available_from is None or _aware(row.available_from) <= now)
             and (row.available_until is None or _aware(row.available_until) > now)
         )
-        interval = self._freshness_interval(row.source)
-        if interval is None:
-            freshness = FreshnessState.UNKNOWN
-        else:
-            freshness = (
-                FreshnessState.FRESH
-                if now - _aware(row.last_seen) <= interval
-                else FreshnessState.STALE
-            )
+        freshness = freshness_state(
+            row.source.slug,
+            row.last_seen,
+            configuration=row.source.configuration,
+            now=now,
+        )
 
         return OfferObservation(
             offer_id=row.pk,

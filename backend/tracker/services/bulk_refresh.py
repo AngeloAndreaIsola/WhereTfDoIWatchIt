@@ -26,14 +26,16 @@ Write path:
         -> OfferRepository (canonical availability.Offer rows)
 
 Staleness and candidate ordering are evaluated against canonical
-``availability.Offer.last_seen``; the legacy ``AvailabilityCache`` no longer
-owns availability persistence here. The legacy tracker ``RefreshRun`` audit
-row is kept for run bookkeeping, while per-group lifecycle details live on
-``availability.SyncRun`` rows created by the refresh service.
+``availability.Offer.last_seen`` **per source**: every scope is measured
+against its own declared window (``availability.freshness``), never a single
+global timeout, so two sources for the same title go stale independently. The
+legacy ``AvailabilityCache`` no longer owns availability persistence here. The
+legacy tracker ``RefreshRun`` audit row is kept for run bookkeeping, while
+per-group lifecycle details live on ``availability.SyncRun`` rows created by
+the refresh service.
 """
 from __future__ import annotations
 
-import datetime as dt
 import hashlib
 import logging
 import time
@@ -44,40 +46,82 @@ from django.db import connection
 from django.db.models import Max
 from django.utils import timezone
 
+from availability.freshness import source_is_stale, stale_sources
 from availability.models import Country, Offer, Source
 from availability.services.refresh import AvailabilityRefreshService
-from availability.sources import source_registry
+from availability.sources import DEFAULT_SOURCE_SLUG, source_registry
 
 from ..models import Movie, RefreshRequest, RefreshRequestStatus, RefreshRun, WatchlistItem
 from .rate_limit import RateLimitExceeded, RateLimiter
 
 logger = logging.getLogger(__name__)
 
-STALE_AFTER = dt.timedelta(hours=24)
 
+def is_stale(
+    movie: Movie,
+    *,
+    source: str = "",
+    now=None,
+) -> bool:
+    """True when *source*'s observation of the movie is missing or too old.
 
-def is_stale(movie: Movie, stale_after: dt.timedelta = STALE_AFTER) -> bool:
-    """True when the movie has no canonical offer observed within stale_after.
+    Freshness is evaluated **per source** against that source's declared
+    window (``availability.freshness``) — there is no shared global timeout:
+    the default scope and a catalogue source for the same title go stale
+    independently, so a fresh Prime Video observation never hides a stale
+    Streaming Availability one (and vice versa).
 
-    Freshness is ``max(Offer.last_seen)`` across all offers of the movie's
-    TMDb id (season/episode rows count too), so a series refreshed through
-    season-level offers is not re-fetched. A movie the canonical path has
-    never seen is always stale — same behavior the legacy cache had for
-    movies with no availability rows.
+    ``source=""`` is the default title-targeted scope
+    (``DEFAULT_SOURCE_SLUG``) — what this module's sweep and a default
+    ``RefreshRequest`` refresh. The newest ``Offer.last_seen`` of that scope
+    counts (season/episode rows included, so a series refreshed through
+    season-level offers is not re-fetched). A scope the canonical path has
+    never observed is always stale.
     """
-    latest = (
-        Offer.objects.filter(tmdb_id=movie.tmdb_id)
-        .aggregate(latest=Max("last_seen"))["latest"]
-    )
-    if latest is None:
-        return True
-    return (timezone.now() - latest) > stale_after
+    return source_is_stale(movie.tmdb_id, source or DEFAULT_SOURCE_SLUG, now=now)
+
+
+def refreshable_source_slugs() -> list[str]:
+    """Sources the per-title sweep may refresh.
+
+    Capability-driven, never slug-driven: a source that syncs its own
+    catalogue is refreshed by ``process_catalogue_refresh`` (a whole-catalogue
+    fetch, no budget), while everything else needs a per-title fetch here —
+    today that is the default title-targeted scope. Unknown slugs are not
+    refreshable by construction (they are not registered).
+    """
+    return [
+        slug
+        for slug in source_registry.slugs()
+        if not source_registry.get(slug).capabilities.supports_catalogue_sync
+    ]
+
+
+def stale_refresh_scopes(tmdb_id, *, now=None) -> list[str]:
+    """Refreshable sources whose observation of the title is stale.
+
+    Each candidate is evaluated on its own freshness window, so one stale
+    source is selected while a fresh one for the same title is left alone —
+    and a fresh source never triggers a refresh of another scope. Catalogue
+    sources are classified by :func:`stale_sources` but dropped here: their
+    staleness belongs to the catalogue run, not the budgeted per-title sweep.
+    """
+    refreshable = set(refreshable_source_slugs())
+    return [
+        slug for slug in stale_sources(tmdb_id, now=now) if slug in refreshable
+    ]
 
 
 def _latest_checks(tmdb_ids) -> dict:
-    """Map tmdb_id -> newest canonical ``Offer.last_seen`` for those ids."""
+    """Map tmdb_id -> newest default-scope ``Offer.last_seen`` for those ids.
+
+    Ordering follows the scope the sweep refreshes: a title another source
+    refreshed an hour ago is still worth ordering by *its own* age here.
+    """
     rows = (
-        Offer.objects.filter(tmdb_id__in=list(tmdb_ids))
+        Offer.objects.filter(
+            tmdb_id__in=list(tmdb_ids), source__slug=DEFAULT_SOURCE_SLUG
+        )
         .values("tmdb_id")
         .annotate(latest=Max("last_seen"))
     )
@@ -150,7 +194,6 @@ def process_watchlist_refresh(
     refresh_service: Optional[AvailabilityRefreshService] = None,
     limiter: Optional[RateLimiter] = None,
     content_types: tuple[str, ...] | list[str] = ("movie", "series"),
-    stale_after: dt.timedelta = STALE_AFTER,
 ) -> dict:
     """Batch refresh watchlist movie availability up to budget limit.
 
@@ -164,10 +207,15 @@ def process_watchlist_refresh(
        shares this run's budget, rate limiter and ``RefreshRun`` audit row,
        so event triggers can never bypass the daily API quota.
     2. Watchlist movies for user_id with no canonical availability yet.
-    3. Watchlist movies with oldest/stalest canonical Offer.last_seen.
+    3. Watchlist movies with the oldest default-scope ``Offer.last_seen``.
 
     One unit of work = one ``AvailabilityRefreshService.refresh_content``
     call (one external API request + one transactional canonical write).
+
+    Staleness is per source (``stale_refresh_scopes``): each source's
+    observation of a title is evaluated against that source's own freshness
+    window, only refreshable scopes are refreshed, and a fresh source for the
+    same title never triggers — never suppresses — another scope's refresh.
 
     Summary fields:
     - attempted: number of sweep candidates considered
@@ -183,7 +231,7 @@ def process_watchlist_refresh(
     - requests_pending: RefreshRequest rows still queued after the run
     """
     service = refresh_service or AvailabilityRefreshService()
-    limiter = limiter or RateLimiter("streaming_availability")
+    limiter = limiter or RateLimiter(DEFAULT_SOURCE_SLUG)
 
     summary = BulkRefreshSummary(budget=budget, remaining_budget=budget)
 
@@ -192,7 +240,7 @@ def process_watchlist_refresh(
         summary.rate_limited = True
 
     run = RefreshRun.objects.create(
-        service="streaming_availability",
+        service=DEFAULT_SOURCE_SLUG,
         started_at=timezone.now(),
     )
 
@@ -208,7 +256,6 @@ def process_watchlist_refresh(
         summary=summary,
         service=service,
         limiter=limiter,
-        stale_after=stale_after,
     )
 
     pairs = _order_candidates(_candidate_pairs(user_id, content_types))
@@ -236,25 +283,41 @@ def process_watchlist_refresh(
             summary.skipped_budget_exhausted += 1
             continue
 
-        if not is_stale(movie, stale_after):
+        # Per-source staleness: each source's own window decides, so a fresh
+        # source neither triggers nor suppresses another scope's refresh.
+        scopes = stale_refresh_scopes(tmdb_id)
+        if not scopes:
             summary.skipped_cached += 1
             continue
 
-        # Movie is stale/missing, we have budget and rate limit capacity.
-        try:
-            limiter.acquire()
-            service.refresh_content(movie)
-            summary.refreshed += 1
-            summary.remaining_budget -= 1
-        except RateLimitExceeded:
-            rate_limit_hit = True
-            summary.rate_limited = True
-            summary.skipped_rate_limited += 1
-        except Exception as exc:
-            logger.exception(
-                "Unexpected error refreshing movie tmdb_id=%s: %s", movie.tmdb_id, exc
+        # The stale scopes we may refresh, with budget and rate capacity.
+        for slug in scopes:
+            if rate_limit_hit:
+                summary.skipped_rate_limited += 1
+                break
+            if summary.remaining_budget <= 0:
+                summary.skipped_budget_exhausted += 1
+                break
+            scope_service = (
+                service
+                if slug == DEFAULT_SOURCE_SLUG
+                else AvailabilityRefreshService(source=source_registry.get(slug))
             )
-            summary.errors += 1
+            try:
+                limiter.acquire()
+                scope_service.refresh_content(movie)
+                summary.refreshed += 1
+                summary.remaining_budget -= 1
+            except RateLimitExceeded:
+                rate_limit_hit = True
+                summary.rate_limited = True
+                summary.skipped_rate_limited += 1
+            except Exception as exc:
+                logger.exception(
+                    "Unexpected error refreshing movie tmdb_id=%s source=%s: %s",
+                    movie.tmdb_id, slug, exc,
+                )
+                summary.errors += 1
 
     run.rows_refreshed = summary.refreshed
     run.rows_skipped = summary.skipped_cached + summary.skipped_budget_exhausted + summary.skipped_rate_limited

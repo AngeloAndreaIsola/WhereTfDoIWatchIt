@@ -21,10 +21,12 @@ Contracts:
   (movie, source scope), enforced by a partial unique constraint; repeated
   events collapse into the same row and may only raise its priority.
 - **Draining reuses the existing refresh infrastructure**: the same
-  ``RateLimiter``/daily budget, the same ``is_stale`` freshness policy, the
-  same ``RefreshRun`` audit row, and the same ``AvailabilityRefreshService``
-  as the scheduled stale sweep — so event triggers can never bypass rate
-  limits or duplicate freshness/reconciliation logic.
+  ``RateLimiter``/daily budget, the same per-source freshness policy
+  (``availability.freshness``, evaluated for the request's own source scope —
+  a fresh pending request settles without spending budget), the same
+  ``RefreshRun`` audit row, and the same ``AvailabilityRefreshService`` as the
+  scheduled stale sweep — so event triggers can never bypass rate limits or
+  duplicate freshness/reconciliation logic.
 - **Failures never propagate to the originating user action.** A failed
   drain records ``attempts``/``last_error`` on the request row and retries at
   most ``MAX_ATTEMPTS`` times before being marked ``failed`` permanently.
@@ -36,7 +38,6 @@ Contracts:
 """
 from __future__ import annotations
 
-import datetime as dt
 import logging
 
 from django.db import IntegrityError
@@ -76,13 +77,16 @@ def request_availability_refresh(
     later event cares more. Titles the canonical path has never seen are
     always bumped to ``RefreshPriority.NEW``.
 
-    ``if_stale`` (default) skips titles whose canonical offers are fresh, so
-    repeated events (detail views, re-adds) do not churn the queue. Never
-    raises: an enqueue failure is logged and swallowed so it cannot break the
-    user action that triggered it.
+    ``if_stale`` (default) skips titles whose canonical offers *for the
+    requested source scope* are fresh (that scope's own freshness window, see
+    ``availability.freshness``), so repeated events (detail views, re-adds)
+    do not churn the queue — and one source's fresh observation never makes
+    another source's stale scope look fresh. Never raises: an enqueue failure
+    is logged and swallowed so it cannot break the user action that triggered
+    it.
     """
     try:
-        if if_stale and not is_stale(movie):
+        if if_stale and not is_stale(movie, source=source):
             return None
 
         effective_priority = priority
@@ -160,16 +164,17 @@ def _drain_one(
     summary,
     service: AvailabilityRefreshService,
     limiter,
-    stale_after: dt.timedelta,
     rate_limit_hit: bool,
 ) -> bool:
     """Process one pending request under the run's guards.
 
     The very same guards as the background stale sweep, in order:
-    freshness first (a title that became fresh meanwhile is settled as
-    ``done`` without spending budget — no external call), then rate-limit
-    capacity (``limiter.acquire()``), which priority never bypasses, then
-    the remaining run budget.
+    freshness first — evaluated for *this request's source scope* on that
+    source's own window, so a title that became fresh meanwhile is settled as
+    ``done`` without spending budget (no external call) while a scope that is
+    still stale for its own source still refreshes — then rate-limit capacity
+    (``limiter.acquire()``), which priority never bypasses, then the remaining
+    run budget.
 
     Outcomes:
 
@@ -183,8 +188,8 @@ def _drain_one(
     """
     movie = request.movie
 
-    # Freshness is free: settle fresh titles without touching the budget.
-    if not is_stale(movie, stale_after):
+    # Freshness is free: settle fresh scopes without touching the budget.
+    if not is_stale(movie, source=request.source):
         _finish(request, RefreshRequestStatus.DONE)
         summary.skipped_cached += 1
         summary.requests_drained += 1
@@ -234,14 +239,15 @@ def drain_refresh_requests(
     summary,
     service: AvailabilityRefreshService,
     limiter,
-    stale_after: dt.timedelta,
 ) -> set[int]:
     """Process pending refresh requests in priority order, budget permitting.
 
     Called by ``process_watchlist_refresh`` before its background stale
     sweep. Every request goes through the very same guards as the sweep
     (see ``_drain_one``), and priority never bypasses the rate limiter or
-    the daily budget.
+    the daily budget. Freshness is evaluated per request: each scope is
+    checked against its own source's window, so the drain settles what is
+    fresh for *that* scope and refreshes what is not.
 
     **Fairness (bounded, one slot):** when the run has budget to spare
     (``remaining_budget >= 2``), one unit is held back while the strict
@@ -290,7 +296,6 @@ def drain_refresh_requests(
             summary=summary,
             service=service,
             limiter=limiter,
-            stale_after=stale_after,
             rate_limit_hit=rate_limit_hit,
         )
 
@@ -305,7 +310,6 @@ def drain_refresh_requests(
             summary=summary,
             service=service,
             limiter=limiter,
-            stale_after=stale_after,
             rate_limit_hit=rate_limit_hit,
         )
 
