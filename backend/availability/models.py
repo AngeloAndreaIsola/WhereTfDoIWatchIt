@@ -44,6 +44,12 @@ from .domain.enums import (
     SyncStatus,
 )
 
+# Slug of the Source that carries rows migrated out of the legacy scraper
+# store (``tracker.ScrapedContentMapping``). It is provenance, never identity:
+# the canonical catalogue reads these rows exactly like any other source's
+# observation, and the legacy table itself is no longer a read path.
+LEGACY_SCRAPER_SOURCE_SLUG = "legacy_scraper"
+
 
 def build_offer_identity(
     provider_slug,

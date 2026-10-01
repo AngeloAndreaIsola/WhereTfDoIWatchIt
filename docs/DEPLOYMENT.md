@@ -72,6 +72,15 @@ The `backend` entrypoint script (`entrypoint.sh`) will automatically execute:
 1. `python manage.py migrate` — Applies all PostgreSQL database migrations.
 2. `python manage.py collectstatic --noinput` — Collects Django Admin static files for WhiteNoise static file serving.
 
+### One-off legacy scraper backfill (first deploy after the read-path migration)
+Databases that predate the canonical read path store scraper rows only in `tracker.ScrapedContentMapping`. Project them once so the unified catalogue serves them:
+
+```bash
+docker compose exec -T backend python manage.py ingest_legacy_scraper_catalogue
+```
+
+The command is idempotent (re-running upserts the same `legacy-<pk>` identities) and local-only — no network, no TMDb, no offers written. New scraper rows are bridged automatically on save, so this never needs re-running.
+
 ---
 
 ## 4. Health Checks and Logs

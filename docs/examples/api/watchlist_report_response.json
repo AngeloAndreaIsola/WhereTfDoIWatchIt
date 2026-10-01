@@ -1,50 +1,87 @@
 {
-  "report": [
-    {
-      "movie": {
-        "id": 101,
-        "tmdb_id": 27205,
-        "title": "Inception",
-        "year": 2010
-      },
-      "available_countries": [
-        "GB",
-        "US"
-      ],
-      "best_country": "US",
-      "best_service": "Netflix"
+ "report": [
+  {
+   "movie": {
+    "id": 101,
+    "tmdb_id": 27205,
+    "title": "Inception",
+    "year": 2010
+   },
+   "available_countries": [
+    "GB",
+    "US"
+   ],
+   "best_country": "US",
+   "best_service": "Netflix",
+   "watchability": {
+    "status": "watchable_here",
+    "status_label": "Available on your subscriptions",
+    "status_symbol": "🟢",
+    "best_offer": {
+     "country": "US",
+     "service": "netflix",
+     "offer_type": "subscription",
+     "quality": "4k",
+     "url": "https://www.netflix.com/title/70131314",
+     "is_current_country": true
     },
-    {
-      "movie": {
-        "id": 102,
-        "tmdb_id": 999999,
-        "title": "Rare Indie Movie",
-        "year": 2022
-      },
-      "available_countries": [],
-      "best_country": null,
-      "best_service": null
-    }
-  ],
-  "summary": {
-    "total_movies": 2,
-    "available_movies": 1,
-    "unavailable_movies": 1,
-    "countries": [
-      {
-        "country": "US",
-        "count": 1
-      },
-      {
-        "country": "GB",
-        "count": 1
-      }
-    ],
-    "services": [
-      {
-        "service": "Netflix",
-        "count": 1
-      }
-    ]
+    "watchable_offers": [],
+    "excluded_offers": [],
+    "explanation": []
+   },
+   "is_watched": false,
+   "user_data": null
+  },
+  {
+   "movie": {
+    "id": 102,
+    "tmdb_id": 999999,
+    "title": "Rare Indie Movie",
+    "year": 2022
+   },
+   "available_countries": [],
+   "best_country": null,
+   "best_service": null,
+   "watchability": {
+    "status": "not_watchable",
+    "status_label": "Not available on your subscriptions",
+    "status_symbol": "🔴",
+    "best_offer": null,
+    "watchable_offers": [],
+    "excluded_offers": [],
+    "explanation": []
+   },
+   "is_watched": false,
+   "user_data": null
   }
+ ],
+ "pagination": {
+  "count": 2,
+  "page": 1,
+  "page_size": 24,
+  "total_pages": 1,
+  "has_next": false,
+  "has_previous": false
+ },
+ "summary": {
+  "total_movies": 2,
+  "available_movies": 1,
+  "unavailable_movies": 1,
+  "countries": [
+   {
+    "country": "US",
+    "count": 1
+   },
+   {
+    "country": "GB",
+    "count": 1
+   }
+  ],
+  "services": [
+   {
+    "service": "Netflix",
+    "count": 1
+   }
+  ]
+ }
 }

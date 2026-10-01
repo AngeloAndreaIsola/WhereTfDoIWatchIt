@@ -18,21 +18,29 @@ from __future__ import annotations
 
 import ast
 from contextlib import ExitStack
+from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
 from django.test import TestCase
+from django.utils import timezone
 
 from availability.domain.enums import ContentType, MatchMethod, OfferType, SourceType
-from availability.domain.models import ProviderContentView
-from availability.models import Country, Offer, ProviderContent, Source
+from availability.domain.models import ProviderContentView, UnofficialCatalogueEntry
+from availability.models import (
+    LEGACY_SCRAPER_SOURCE_SLUG,
+    Country,
+    Offer,
+    ProviderContent,
+    Source,
+)
 from availability.persistence.repositories import (
     MappingRepository,
     OfferRepository,
     ProviderContentRepository,
 )
 from availability.services.catalogue_query import ProviderCatalogueQueryService
-from tracker.models import Provider
+from tracker.models import Provider, ProviderCategory
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 
@@ -395,3 +403,223 @@ class ProviderCatalogueReadBoundaryTests(CatalogueQueryTestCase):
             ]
             with self.subTest(path=path.name):
                 self.assertEqual(offenders, [], f"{path.name} imports {offenders}")
+
+
+class ListUnofficialTests(CatalogueQueryTestCase):
+    """``list_unofficial``: the canonical read behind the unified catalogue.
+
+    This is the query that replaced ``ScrapedContentMapping`` reads in the
+    tracker: it selects only unofficial observations (scraper-category
+    providers, or anything attributed to the legacy ingestion bridge),
+    applies the endpoint's filters, and enriches each row with its mapping
+    provenance — all from local tables, in a fixed number of queries.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.hydra, _ = Provider.objects.get_or_create(
+            slug="hydra",
+            defaults={
+                "name": "Hydra",
+                "category": ProviderCategory.SCRAPER,
+            },
+        )
+        self.legacy, _ = Source.objects.get_or_create(
+            slug=LEGACY_SCRAPER_SOURCE_SLUG,
+            defaults={"name": "Legacy scraper (ingested)", "type": SourceType.WEB},
+        )
+
+    def _row(self, provider_content_id, *, provider=None, source=None, **overrides):
+        return self._content(
+            provider_content_id,
+            provider=provider or self.hydra,
+            source=source or self.legacy,
+            **overrides,
+        )
+
+    def _resolve(self, provider_content_id, tmdb_id, *, confidence=1.0,
+                 match_method=MatchMethod.TITLE_YEAR):
+        return self.mappings.record(
+            provider=self.hydra,
+            source=self.legacy,
+            provider_content_id=provider_content_id,
+            content_type=ContentType.MOVIE,
+            tmdb_id=tmdb_id,
+            confidence=confidence,
+            match_method=match_method,
+        )
+
+    def test_predicate_selects_unofficial_observations_only(self):
+        self._row("hydra-row")
+        # The bridge also attributes legacy rows to non-scraper providers.
+        self._row("cbc-legacy", provider=self.cbc, source=self.legacy)
+        # A native source's row on an official provider is not unofficial.
+        self._row("cbc-native", provider=self.cbc, source=self.source)
+        # ...while a scraper-category provider counts whatever wrote the row.
+        self._row("hydra-native", source=self.source)
+
+        disabled = Provider.objects.create(
+            slug="hydra-off", name="Disabled", category=ProviderCategory.SCRAPER,
+            is_enabled=False,
+        )
+        self._row("disabled-row", provider=disabled)
+
+        gone = self._row("gone-row")
+        ProviderContent.objects.filter(pk=gone.pk).update(
+            currently_available=False
+        )
+
+        entries = self.service.list_unofficial()
+
+        self.assertEqual(
+            {entry.provider_content_id for entry in entries},
+            {"hydra-row", "cbc-legacy", "hydra-native"},
+        )
+
+    def test_filters_by_provider_search_country_and_year(self):
+        Provider.objects.filter(pk=self.hydra.pk).update(country_code="CA")
+        self._row(
+            "row-a", title="Alpha Quest", release_date=date(2001, 1, 1),
+            metadata={"country_code": "GB"},
+        )
+        self._row("row-b", title="Beta Chronicle", release_date=date(2020, 6, 1))
+
+        self.assertEqual(
+            {e.provider_content_id for e in self.service.list_unofficial(search="ALPHA")},
+            {"row-a"},
+        )
+        # Row-level country and provider-level country both match.
+        self.assertEqual(
+            {e.provider_content_id for e in self.service.list_unofficial(country="GB")},
+            {"row-a"},
+        )
+        self.assertEqual(
+            {e.provider_content_id for e in self.service.list_unofficial(country="CA")},
+            {"row-a", "row-b"},
+        )
+        self.assertEqual(self.service.list_unofficial(country="US"), [])
+
+        self.assertEqual(
+            {e.provider_content_id for e in self.service.list_unofficial(year_min=2010)},
+            {"row-b"},
+        )
+        self.assertEqual(
+            {e.provider_content_id for e in self.service.list_unofficial(year_max=2010)},
+            {"row-a"},
+        )
+
+        self.assertEqual(
+            {e.provider_content_id for e in self.service.list_unofficial(providers={"hydra"})},
+            {"row-a", "row-b"},
+        )
+        self.assertEqual(
+            {e.provider_content_id for e in self.service.list_unofficial(providers={"cbc_gem"})},
+            set(),
+        )
+        self.assertEqual(
+            {e.provider_content_id for e in self.service.list_unofficial(providers=set())},
+            set(),
+        )
+
+    def test_exclude_tmdb_ids_drops_resolved_but_keeps_unresolved(self):
+        self._row("unresolved")
+        self._row("resolved")
+        self._row("other")
+        self._resolve("resolved", 100)
+        self._resolve("other", 200)
+
+        self.assertEqual(
+            {e.provider_content_id for e in self.service.list_unofficial()},
+            {"unresolved", "resolved", "other"},
+        )
+        self.assertEqual(
+            {
+                e.provider_content_id
+                for e in self.service.list_unofficial(exclude_tmdb_ids={100})
+            },
+            {"unresolved", "other"},
+        )
+
+    def test_entries_carry_provenance_and_normalized_metadata(self):
+        self._row(
+            "enriched",
+            title="Enriched",
+            release_date=date(1999, 3, 4),
+            provider_url="https://hydra.example/enriched",
+            metadata={
+                "poster": "/p.jpg",
+                "audio_languages": ["en"],
+                "subtitle_languages": ["ES", "es"],
+                "country_code": "gb",
+            },
+        )
+        self._resolve("enriched", 42, confidence=0.65,
+                      match_method=MatchMethod.MANUAL)
+
+        [entry] = self.service.list_unofficial()
+
+        self.assertIsInstance(entry, UnofficialCatalogueEntry)
+        self.assertEqual(entry.provider, "hydra")
+        self.assertEqual(entry.provider_name, "Hydra")
+        self.assertEqual(entry.provider_category, ProviderCategory.SCRAPER)
+        self.assertEqual(entry.source_indicator, "Scraper")
+        self.assertEqual(entry.content_type, ContentType.MOVIE)
+        self.assertEqual(entry.title, "Enriched")
+        self.assertEqual(entry.year, 1999)
+        self.assertEqual(entry.poster_path, "/p.jpg")
+        self.assertEqual(entry.provider_url, "https://hydra.example/enriched")
+        self.assertEqual(entry.tmdb_id, 42)
+        self.assertEqual(entry.confidence, 0.65)
+        self.assertEqual(entry.match_method, MatchMethod.MANUAL)
+        self.assertEqual(entry.audio_languages, ["EN"])
+        self.assertEqual(entry.subtitle_languages, ["ES"])
+
+    def test_unresolved_entries_report_no_mapping_outcome(self):
+        self._row("bare", release_date=None)
+
+        [entry] = self.service.list_unofficial()
+
+        self.assertIsNone(entry.tmdb_id)
+        self.assertIsNone(entry.confidence)
+        self.assertEqual(entry.match_method, "")
+        self.assertIsNone(entry.year)
+
+    def test_results_are_deterministically_ordered(self):
+        row_a = self._row("row-a")
+        self._row("row-b")
+        row_c = self._row("row-c")
+
+        now = timezone.now()
+        ProviderContent.objects.filter(pk=row_a.pk).update(
+            updated_at=now - timedelta(days=2)
+        )
+        ProviderContent.objects.filter(pk=row_c.pk).update(
+            updated_at=now - timedelta(days=1)
+        )
+
+        # Newest observation first, stable under equal timestamps.
+        self.assertEqual(
+            [e.provider_content_id for e in self.service.list_unofficial()],
+            ["row-b", "row-c", "row-a"],
+        )
+
+        ProviderContent.objects.filter(pk__in=[row_a.pk, row_c.pk]).update(
+            updated_at=now - timedelta(days=5)
+        )
+        self.assertEqual(
+            [e.provider_content_id for e in self.service.list_unofficial()],
+            ["row-b", "row-a", "row-c"],
+        )
+
+    def test_list_unofficial_reads_in_two_queries(self):
+        self._row("q-1")
+        self._row("q-2")
+        self._resolve("q-1", 7)
+
+        # rows + one bulk mapping lookup; entry building issues none.
+        with self.assertNumQueries(2):
+            entries = self.service.list_unofficial()
+        self.assertEqual(len(entries), 2)
+
+    def test_empty_catalogue_returns_no_entries(self):
+        self.assertEqual(self.service.list_unofficial(), [])

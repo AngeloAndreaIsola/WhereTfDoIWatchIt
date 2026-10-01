@@ -35,8 +35,23 @@ from typing import Optional
 from tracker.models import Provider
 
 from ..domain.enums import ContentType
-from ..domain.models import ProviderContentView
-from ..persistence.repositories import ProviderContentRepository
+from ..domain.models import ProviderContentView, UnofficialCatalogueEntry
+from ..persistence.repositories import (
+    MappingRepository,
+    ProviderContentRepository,
+)
+
+
+def _upper_languages(values) -> list[str]:
+    """Upper-cased, de-duplicated language codes (legacy read semantics)."""
+    if not isinstance(values, (list, tuple)):
+        return []
+    normalized = []
+    for value in values:
+        code = str(value).strip().upper()
+        if code and code not in normalized:
+            normalized.append(code)
+    return normalized
 
 
 class ProviderCatalogueQueryService:
@@ -54,8 +69,9 @@ class ProviderCatalogueQueryService:
     are assembled in a fixed number of queries regardless of result size.
     """
 
-    def __init__(self, repository=None):
+    def __init__(self, repository=None, mappings=None):
         self.repo = repository or ProviderContentRepository()
+        self.mappings = mappings or MappingRepository()
 
     # ------------------------------------------------------------------ read
 
@@ -149,6 +165,73 @@ class ProviderCatalogueQueryService:
         if currently_available is not None:
             filters["currently_available"] = currently_available
         return self._views(list(self.repo.search_by_title(term, **filters)))
+
+    def list_unofficial(
+        self,
+        *,
+        providers: Optional[set[str]] = None,
+        search: Optional[str] = None,
+        country: Optional[str] = None,
+        year_min: Optional[int] = None,
+        year_max: Optional[int] = None,
+        exclude_tmdb_ids: Optional[set[int]] = None,
+    ) -> list[UnofficialCatalogueEntry]:
+        """Unofficial catalogue entries for the unified catalogue read path.
+
+        The canonical replacement for reading ``tracker.ScrapedContentMapping``
+        directly: rows are ``ProviderContent`` observations owned by
+        scraper-category providers or ingested by the legacy scraper bridge,
+        enriched with their ``ContentMapping`` resolution in one bulk query.
+
+        ``exclude_tmdb_ids`` drops entries whose TMDb id already appears
+        through the official half of the unified response — deduplication by
+        resolved outcome, so a legacy row and a canonical row for the same
+        title never surface twice.
+
+        Local-only like every other method in this service: no source, HTTP
+        client, or refresh module is reachable, and a stale row is answered
+        as-is rather than refreshed.
+        """
+        rows = self.repo.list_unofficial(
+            provider_slugs=providers,
+            search=search,
+            country=country,
+            year_min=year_min,
+            year_max=year_max,
+        )
+        if not rows:
+            return []
+        summaries = self.mappings.summaries_for_provider_content(rows)
+        entries = []
+        for row in rows:
+            key = (row.provider_id, row.provider_content_id)
+            tmdb_id, confidence, match_method = summaries.get(key, (None, None, ""))
+            if tmdb_id is not None and exclude_tmdb_ids and tmdb_id in exclude_tmdb_ids:
+                continue
+            metadata = row.metadata if isinstance(row.metadata, dict) else {}
+            entries.append(
+                UnofficialCatalogueEntry(
+                    content_id=row.pk,
+                    provider=row.provider.slug,
+                    provider_name=row.provider.name,
+                    provider_category=row.provider.category,
+                    source_indicator=row.provider.source_indicator or "Scraper",
+                    provider_content_id=row.provider_content_id,
+                    content_type=row.content_type,
+                    title=row.title,
+                    year=row.release_date.year if row.release_date else None,
+                    poster_path=str(metadata.get("poster") or ""),
+                    provider_url=row.provider_url,
+                    tmdb_id=tmdb_id,
+                    confidence=confidence,
+                    match_method=match_method or "",
+                    audio_languages=_upper_languages(metadata.get("audio_languages")),
+                    subtitle_languages=_upper_languages(
+                        metadata.get("subtitle_languages")
+                    ),
+                )
+            )
+        return entries
 
     # --------------------------------------------------------------- private
 

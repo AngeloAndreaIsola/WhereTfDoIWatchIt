@@ -183,6 +183,8 @@ The `17 */6 * * *` frequency is a recommendation, not enforced — the per-sourc
 
 `ProviderContent` rows written here are read back offline through `ProviderCatalogueQueryService` → `ProviderContentRepository` (`ProviderContentView` per entry: provider identity, metadata, observation lifecycle, optional `tmdb_id`, active-offer presence). Reads never trigger a fetch, never call an external API, and stay fully usable when a scheduled refresh has not run yet — a stale catalogue is a slower `last_seen`, not an error.
 
+Legacy scraper rows (`tracker.ScrapedContentMapping`) reach the same canonical tables through the ingestion bridge (`availability.services.legacy_ingest`) — written on every scraper save/confirm, with a one-off backfill (`python manage.py ingest_legacy_scraper_catalogue`) for rows that predate it. The bridge needs no cron entry; only re-ingestion of pre-existing rows does, once.
+
 ### Read-side freshness (reconciliation)
 
 Availability is served through the reconciliation layer

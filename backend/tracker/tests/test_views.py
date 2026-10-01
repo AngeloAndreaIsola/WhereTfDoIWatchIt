@@ -862,16 +862,18 @@ class MovieDetailEndpointTests(TestCase):
 
 class UnifiedCatalogEndpointTests(TestCase):
     def test_unified_catalog_merges_official_and_unofficial(self):
+        from availability.services.legacy_ingest import ingest_scraped_mapping
         from tracker.models import ScrapedContentMapping
         m = Movie.objects.create(tmdb_id=101, title="Official Movie", year=2021)
         p = Provider.objects.create(slug="hydra", name="Hydra", category="scraper", is_enabled=True)
-        ScrapedContentMapping.objects.create(
+        mapping = ScrapedContentMapping.objects.create(
             provider=p,
             scraped_title="Scraper Movie",
             scraped_year=2022,
             scraped_url="https://hydra.example/movie",
             is_available=True,
         )
+        ingest_scraped_mapping(mapping)
 
         resp = self.client.get("/api/catalog/unified/")
         self.assertEqual(resp.status_code, 200)
@@ -881,18 +883,28 @@ class UnifiedCatalogEndpointTests(TestCase):
         sources = {item["source"] for item in data["results"]}
         self.assertEqual(sources, {"official", "scraper"})
 
+        scraper_item = next(i for i in data["results"] if i["source"] == "scraper")
+        self.assertEqual(scraper_item["title"], "Scraper Movie")
+        self.assertEqual(scraper_item["year"], 2022)
+        self.assertIsNone(scraper_item["watchability"])
+        self.assertEqual(
+            scraper_item["unofficial_details"]["scraped_url"],
+            "https://hydra.example/movie",
+        )
+
     def test_unified_catalog_filters_by_provider(self):
+        from availability.services.legacy_ingest import ingest_scraped_mapping
         from tracker.models import ScrapedContentMapping
         Movie.objects.create(tmdb_id=101, title="Official Movie", year=2021)
         p1 = Provider.objects.create(slug="hydra", name="Hydra", category="scraper", is_enabled=True)
         p2 = Provider.objects.create(slug="kissanime", name="KissAnime", category="scraper", is_enabled=True)
 
-        ScrapedContentMapping.objects.create(
+        ingest_scraped_mapping(ScrapedContentMapping.objects.create(
             provider=p1, scraped_title="Hydra Film", scraped_year=2021, scraped_url="https://hydra.ex", is_available=True
-        )
-        ScrapedContentMapping.objects.create(
+        ))
+        ingest_scraped_mapping(ScrapedContentMapping.objects.create(
             provider=p2, scraped_title="Kiss Film", scraped_year=2021, scraped_url="https://kiss.ex", is_available=True
-        )
+        ))
 
         resp = self.client.get("/api/catalog/unified/?providers=hydra")
         self.assertEqual(resp.status_code, 200)

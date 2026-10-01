@@ -45,7 +45,9 @@ from .serializers import (
 )
 from tracker.scrapers import SCRAPER_REGISTRY, ContentMatcher, ScrapedItem, resolve_scraper_class
 from tracker.services.filtering import apply_composable_filters
+from tracker.services.unified_catalogue import resolve_catalogue_scope, unofficial_catalogue_items
 from tracker.services.watchability import evaluate_watchability, get_user_subscriptions
+from availability.services.legacy_ingest import ingest_scraped_mapping
 import math
 
 
@@ -205,63 +207,10 @@ def unified_catalog(request):
     pref = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
     user_subs = get_user_subscriptions(user_id=1)
 
-    raw_providers = request.GET.get("providers") or request.GET.get("provider") or ""
-    raw_categories = request.GET.get("provider_categories") or ""
-
-    requested_slugs: set[str] = set()
-    if raw_providers:
-        for p in raw_providers.split(","):
-            if p.strip():
-                requested_slugs.add(p.strip().lower())
-
-    if raw_categories:
-        cats = [c.strip().lower() for c in raw_categories.split(",") if c.strip()]
-        cat_providers = Provider.objects.filter(is_enabled=True)
-        cat_slugs = set()
-        for c in cats:
-            if c == "major":
-                cat_slugs.update(cat_providers.filter(is_major=True).values_list("slug", flat=True))
-            elif c in ("bvod", "free"):
-                cat_slugs.update(cat_providers.filter(category="bvod", is_major=False).values_list("slug", flat=True))
-            elif c in ("scraper", "unofficial"):
-                cat_slugs.update(cat_providers.filter(category="scraper").values_list("slug", flat=True))
-            else:
-                cat_slugs.update(cat_providers.filter(category=c).values_list("slug", flat=True))
-        requested_slugs.update({s.lower() for s in cat_slugs})
-
-    allowed_provider_slugs = requested_slugs if (raw_providers or raw_categories) else None
-
-    # Determine whether official or scraper or both should be queried
-    include_official = True
-    include_scraper = True
-    if allowed_provider_slugs is not None:
-        official_providers = set(
-            Provider.objects.filter(is_enabled=True)
-            .filter(is_major=True)
-            .values_list("slug", flat=True)
-        ) | set(
-            Provider.objects.filter(is_enabled=True, category__in=["bvod", "avod", "tvod", "fast"])
-            .values_list("slug", flat=True)
-        )
-        scraper_providers = set(
-            Provider.objects.filter(is_enabled=True, category="scraper")
-            .values_list("slug", flat=True)
-        )
-
-        # Also include any provider matching allowed_provider_slugs
-        matched_official = False
-        matched_scraper = False
-
-        for slug in allowed_provider_slugs:
-            if slug in official_providers or Provider.objects.filter(slug__iexact=slug, category__in=["official", "bvod", "avod", "tvod", "fast"]).exists():
-                matched_official = True
-            if slug in scraper_providers or Provider.objects.filter(slug__iexact=slug, category="scraper").exists():
-                matched_scraper = True
-
-        # If user explicitly selected provider(s), only query matching source types
-        if matched_official or matched_scraper:
-            include_official = matched_official
-            include_scraper = matched_scraper
+    scope = resolve_catalogue_scope(request.GET)
+    allowed_provider_slugs = scope.allowed_provider_slugs
+    include_official = scope.include_official
+    include_scraper = scope.include_scraper
 
     unified_items = []
     seen_tmdb_ids = set()
@@ -315,71 +264,15 @@ def unified_catalog(request):
                 "watch_url": watch_url,
             })
 
-    # 2. Fetch Scraper Content Mappings
+    # 2. Fetch Unofficial Catalog Items (canonical, via the scraper bridge)
     if include_scraper:
-        qs = ScrapedContentMapping.objects.select_related("provider", "movie").filter(
-            provider__is_enabled=True,
-            is_available=True,
+        unified_items.extend(
+            unofficial_catalogue_items(
+                request.GET,
+                allowed_provider_slugs=allowed_provider_slugs,
+                exclude_tmdb_ids=seen_tmdb_ids,
+            )
         )
-
-        # Apply provider filtering
-        if allowed_provider_slugs is not None:
-            qs = qs.filter(provider__slug__in=list(allowed_provider_slugs))
-
-        # Text search filter
-        q = (request.GET.get("q") or request.GET.get("query") or "").strip()
-        if q:
-            qs = qs.filter(scraped_title__icontains=q)
-
-        # Country filter
-        country_code = (request.GET.get("country") or "").strip().upper()
-        if country_code:
-            qs = qs.filter(provider__country_code=country_code) | qs.filter(country_code=country_code)
-
-        # Year filter
-        year_min = request.GET.get("year_min")
-        year_max = request.GET.get("year_max")
-        if year_min and str(year_min).isdigit():
-            qs = qs.filter(scraped_year__gte=int(year_min))
-        if year_max and str(year_max).isdigit():
-            qs = qs.filter(scraped_year__lte=int(year_max))
-
-        qs = qs.order_by("-updated_at")
-
-        for mapping in qs:
-            m = mapping.movie
-            # If movie is already in official catalog results, deduplicate / skip or merge
-            if m and m.tmdb_id in seen_tmdb_ids:
-                continue
-
-            payload = mapping.raw_payload or {}
-            audio = [str(a).upper() for a in (payload.get("audio_languages") or payload.get("audio") or [])]
-            subs = [str(s).upper() for s in (payload.get("subtitle_languages") or payload.get("subtitles") or [])]
-
-            unified_items.append({
-                "id": f"scraper_{mapping.id}",
-                "tmdb_id": m.tmdb_id if m else None,
-                "source": "scraper",
-                "source_indicator": mapping.provider.source_indicator or "Scraper",
-                "title": m.title if m else mapping.scraped_title,
-                "year": m.year if m else mapping.scraped_year,
-                "poster_path": m.poster_path if m else "",
-                "content_type": m.content_type if m else (payload.get("content_type") or "movie"),
-                "provider": {
-                    "slug": mapping.provider.slug,
-                    "name": mapping.provider.name,
-                    "category": mapping.provider.category,
-                },
-                "watchability": None,
-                "unofficial_details": {
-                    "scraped_url": mapping.scraped_url,
-                    "confidence_score": mapping.confidence_score,
-                    "is_confirmed": mapping.is_confirmed,
-                    "audio_languages": audio,
-                    "subtitle_languages": subs,
-                },
-                "watch_url": mapping.scraped_url,
-            })
 
     # Sort combined results if sort_by parameter is provided
     sort_by = (request.GET.get("sort_by") or request.GET.get("sort") or "").lower().strip()
@@ -708,7 +601,7 @@ def scraper_run(request):
     for item in items:
         payload = dict(item.raw_payload) if isinstance(item.raw_payload, dict) else {}
         payload.setdefault("content_type", item.content_type)
-        ScrapedContentMapping.objects.get_or_create(
+        mapping, _created = ScrapedContentMapping.objects.get_or_create(
             provider=provider,
             scraped_title=item.title,
             scraped_year=item.year,
@@ -718,6 +611,9 @@ def scraper_run(request):
                 "is_available": item.availability,
             },
         )
+        # Bridge every saved row onto the canonical catalogue (the unified
+        # endpoint reads only those tables).
+        ingest_scraped_mapping(mapping)
 
     matcher = ContentMatcher()
     results = []
@@ -752,11 +648,28 @@ def scraper_run(request):
 @api_view(["DELETE"])
 def provider_delete(request, slug: str):
     """Delete a custom scraper provider and its scraped mappings."""
+    from availability.models import (
+        ContentMapping,
+        Offer as AvailabilityOffer,
+        ProviderContent,
+        SyncCursor,
+        SyncRun,
+    )
+
     provider = get_object_or_404(Provider, slug__iexact=slug)
     if provider.is_major:
         return Response({"error": "Major canonical providers cannot be deleted."}, status=400)
 
-    provider.delete()
+    # The availability tables PROTECT their provider, so the canonical rows
+    # this provider owns are removed first (the legacy mappings cascade away
+    # with the provider itself).
+    with transaction.atomic():
+        ContentMapping.objects.filter(provider=provider).delete()
+        ProviderContent.objects.filter(provider=provider).delete()
+        AvailabilityOffer.objects.filter(provider=provider).delete()
+        SyncRun.objects.filter(provider=provider).delete()
+        SyncCursor.objects.filter(provider=provider).delete()
+        provider.delete()
     return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -878,6 +791,9 @@ def scraper_confirm_match(request):
     mapping.is_confirmed = True
     mapping.confidence_score = 1.0
     mapping.save()
+    # Re-project the confirmed mapping so the canonical row carries the
+    # manual match (MatchMethod.MANUAL) the catalogue reads back.
+    ingest_scraped_mapping(mapping)
 
     return Response(ScrapedContentMappingSerializer(mapping).data)
 

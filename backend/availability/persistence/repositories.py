@@ -1,8 +1,11 @@
-from django.db.models import Count
+from django.db.models import Count, Q
 from django.utils import timezone
+
+from tracker.models import ProviderCategory
 
 from ..domain.enums import ContentType, MatchMethod, SyncStatus
 from ..models import (
+    LEGACY_SCRAPER_SOURCE_SLUG,
     Country,
     ContentMapping,
     Offer,
@@ -277,6 +280,46 @@ class ProviderContentRepository:
             qs = qs.filter(currently_available=currently_available)
         return qs.select_related("provider").order_by("identity")
 
+    def list_unofficial(self, *, provider_slugs=None, search=None, country=None,
+                        year_min=None, year_max=None):
+        """Catalogue rows for the unofficial section of the unified catalogue.
+
+        An *unofficial* row is one observed by the legacy scraper ingestion
+        bridge (``legacy_scraper`` source) or owned by a scraper-category
+        provider — the same entries the unified catalogue has always shown in
+        its unofficial section, now served from the canonical tables instead
+        of ``tracker.ScrapedContentMapping``.
+
+        Filters mirror that legacy read: enabled providers, currently
+        available rows, an optional provider slug set, case-insensitive title
+        search, provider-or-row country, and a year range over the stored
+        year-precision release date (rows without one drop out of a bounded
+        range, as legacy rows without a year did). Ordered by recency of
+        observation with identity as a stable tiebreak. Purely local: no
+        source, client, or refresh module is reachable from here.
+        """
+        qs = (
+            ProviderContent.objects.select_related("provider", "source")
+            .filter(provider__is_enabled=True, currently_available=True)
+            .filter(
+                Q(provider__category=ProviderCategory.SCRAPER)
+                | Q(source__slug=LEGACY_SCRAPER_SOURCE_SLUG)
+            )
+        )
+        if provider_slugs is not None:
+            qs = qs.filter(provider__slug__in=list(provider_slugs))
+        if search:
+            qs = qs.filter(title__icontains=search)
+        if country:
+            qs = qs.filter(
+                Q(provider__country_code=country) | Q(metadata__country_code=country)
+            )
+        if year_min is not None:
+            qs = qs.filter(release_date__year__gte=year_min)
+        if year_max is not None:
+            qs = qs.filter(release_date__year__lte=year_max)
+        return qs.order_by("-updated_at", "identity")
+
     def search_by_title(self, title, *, provider=None, content_type=None,
                         currently_available=None):
         """Case-insensitive partial title match over persisted catalogue rows.
@@ -515,6 +558,37 @@ class MappingRepository:
             if key in keys:
                 resolved[key] = tmdb_id
         return resolved
+
+    def summaries_for_provider_content(self, observations) -> dict:
+        """Bulk mapping read: ``{(provider_id, pcid): (tmdb_id, confidence, match_method)}``.
+
+        Same keys and cross-match guards as ``tmdb_ids_for_provider_content``,
+        carrying the provenance the unified catalogue's unofficial section
+        surfaces (resolution outcome plus how it was matched). An absent key
+        means unresolved — first-class state, never an error.
+        """
+        keys = {
+            (row.provider_id, row.provider_content_id)
+            for row in observations
+            if row.provider_content_id
+        }
+        if not keys:
+            return {}
+        rows = ContentMapping.objects.filter(
+            provider_id__in={provider_id for provider_id, _ in keys},
+            provider_content_id__in={pcid for _, pcid in keys},
+        ).values_list(
+            "provider_id", "provider_content_id",
+            "tmdb_id", "confidence", "match_method",
+        )
+        return {
+            (provider_id, provider_content_id): (
+                tmdb_id, confidence, match_method
+            )
+            for provider_id, provider_content_id, tmdb_id, confidence, match_method
+            in rows
+            if (provider_id, provider_content_id) in keys
+        }
 
 
 class SyncRunRepository:

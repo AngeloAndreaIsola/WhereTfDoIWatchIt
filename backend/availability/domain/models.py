@@ -107,3 +107,39 @@ class ProviderContentView:
     def has_offers(self) -> bool:
         return self.offer_count > 0
 
+
+@dataclass(frozen=True)
+class UnofficialCatalogueEntry:
+    """One unofficial/unresolved catalogue entry for the unified catalogue.
+
+    A superset of ``ProviderContentView`` for the read path behind
+    ``GET /api/catalog/unified/``: the canonical ``ProviderContent`` row plus
+    the enrichment the response needs, all read from local canonical tables —
+    ``ContentMapping`` for the optional TMDb resolution (``tmdb_id``/
+    ``confidence``/``match_method``), ``Provider`` for display identity, and
+    the row's stored metadata for poster/languages/country. Never carries an
+    offer: an unofficial entry is a catalogue observation, so watchability
+    stays out of this shape.
+
+    Unlike ``ProviderContentView`` this view is year-precision (the stored
+    ``release_date`` collapses to its year) because that is what the API
+    contract exposes.
+    """
+
+    content_id: int
+    provider: str
+    provider_name: str
+    provider_category: str
+    source_indicator: str
+    provider_content_id: str
+    content_type: str
+    title: str
+    year: Optional[int]
+    poster_path: str
+    provider_url: str
+    tmdb_id: Optional[int] = None
+    confidence: Optional[float] = None
+    match_method: str = ""
+    audio_languages: list[str] = field(default_factory=list)
+    subtitle_languages: list[str] = field(default_factory=list)
+

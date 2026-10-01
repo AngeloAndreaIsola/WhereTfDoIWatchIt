@@ -229,11 +229,19 @@ class ContentMatcher:
         The mapping table has no ``content_type`` column, so the item's type is
         stamped into ``raw_payload`` — it is what the unresolved-review flow reads
         back to search TMDb in the right type.
+
+        Every write is projected onto the canonical availability models through
+        the legacy ingestion bridge, so ``ScrapedContentMapping`` and
+        ``ProviderContent``/``ContentMapping`` stay in lockstep and the unified
+        catalogue (which reads only the canonical tables) never lags behind a
+        scrape or a manual confirmation.
         """
+        from availability.services.legacy_ingest import ingest_scraped_mapping
+
         payload = dict(item.raw_payload) if isinstance(item.raw_payload, dict) else {}
         payload.setdefault("content_type", item.content_type)
         try:
-            ScrapedContentMapping.objects.update_or_create(
+            mapping, _created = ScrapedContentMapping.objects.update_or_create(
                 provider=provider,
                 scraped_title=item.title,
                 scraped_year=item.year,
@@ -255,7 +263,7 @@ class ContentMatcher:
                 scraped_title=item.title,
                 scraped_year=item.year,
             ).values_list('id', flat=True).first()).delete()
-            ScrapedContentMapping.objects.update_or_create(
+            mapping, _created = ScrapedContentMapping.objects.update_or_create(
                 provider=provider,
                 scraped_title=item.title,
                 scraped_year=item.year,
@@ -267,6 +275,7 @@ class ContentMatcher:
                     "raw_payload": payload,
                 },
             )
+        ingest_scraped_mapping(mapping)
 
     @staticmethod
     def calculate_confidence(item: ScrapedItem, candidate: TMDbMovie) -> float:
