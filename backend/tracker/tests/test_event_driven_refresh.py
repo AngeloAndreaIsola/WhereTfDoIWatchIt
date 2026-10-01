@@ -55,7 +55,7 @@ class EnqueueServiceTests(TestCase):
 
     def test_never_fetched_title_is_bumped_to_new_priority(self):
         movie = Movie.objects.create(tmdb_id=101, title="Never", year=2020)
-        request = request_availability_refresh(movie, priority=RefreshPriority.INTENT)
+        request = request_availability_refresh(movie, priority=RefreshPriority.RECENTLY_VIEWED)
         self.assertIsNotNone(request)
         self.assertEqual(request.priority, RefreshPriority.NEW)
         self.assertEqual(request.status, RefreshRequestStatus.PENDING)
@@ -70,8 +70,8 @@ class EnqueueServiceTests(TestCase):
         movie = Movie.objects.create(tmdb_id=103, title="Stale", year=2020)
         local_offer(movie)
         _backdate_offers(movie)
-        request = request_availability_refresh(movie, priority=RefreshPriority.INTENT)
-        self.assertEqual(request.priority, RefreshPriority.INTENT)
+        request = request_availability_refresh(movie, priority=RefreshPriority.RECENTLY_VIEWED)
+        self.assertEqual(request.priority, RefreshPriority.RECENTLY_VIEWED)
 
     def test_enqueue_is_idempotent_and_never_downgrades(self):
         movie = Movie.objects.create(tmdb_id=104, title="Repeat", year=2020)
@@ -79,7 +79,7 @@ class EnqueueServiceTests(TestCase):
         _backdate_offers(movie)
 
         first = request_availability_refresh(movie, priority=RefreshPriority.STALE)
-        upgraded = request_availability_refresh(movie, priority=RefreshPriority.INTENT)
+        upgraded = request_availability_refresh(movie, priority=RefreshPriority.RECENTLY_VIEWED)
         downgraded = request_availability_refresh(
             movie, priority=RefreshPriority.BACKGROUND
         )
@@ -88,14 +88,14 @@ class EnqueueServiceTests(TestCase):
         self.assertEqual(first.pk, upgraded.pk)
         self.assertEqual(upgraded.pk, downgraded.pk)
         self.assertEqual(
-            RefreshRequest.objects.get().priority, RefreshPriority.INTENT
+            RefreshRequest.objects.get().priority, RefreshPriority.RECENTLY_VIEWED
         )
 
     def test_if_stale_false_enqueues_even_a_fresh_title(self):
         movie = Movie.objects.create(tmdb_id=105, title="Forced", year=2020)
         local_offer(movie)
         request = request_availability_refresh(
-            movie, priority=RefreshPriority.INTENT, if_stale=False
+            movie, priority=RefreshPriority.RECENTLY_VIEWED, if_stale=False
         )
         self.assertIsNotNone(request)
         self.assertEqual(RefreshRequest.objects.count(), 1)
@@ -145,6 +145,67 @@ class EnqueueServiceTests(TestCase):
                 movie, priority=RefreshPriority.WATCHLIST, entering=True
             )
         )
+
+    def test_explicit_action_keeps_top_priority_on_never_fetched_titles(self):
+        movie = Movie.objects.create(tmdb_id=111, title="Confirmed", year=2020)
+        request = request_availability_refresh(movie, priority=RefreshPriority.EXPLICIT)
+        self.assertIsNotNone(request)
+        self.assertEqual(request.priority, RefreshPriority.EXPLICIT)
+
+    def test_explicit_upgrades_a_recently_viewed_request_and_never_downgrades(self):
+        movie = Movie.objects.create(tmdb_id=112, title="Upgrade", year=2020)
+        local_offer(movie)
+        _backdate_offers(movie)
+
+        first = request_availability_refresh(
+            movie, priority=RefreshPriority.RECENTLY_VIEWED
+        )
+        upgraded = request_availability_refresh(movie, priority=RefreshPriority.EXPLICIT)
+        downgraded = request_availability_refresh(
+            movie, priority=RefreshPriority.WATCHLIST
+        )
+
+        self.assertEqual(RefreshRequest.objects.count(), 1)
+        self.assertEqual(first.pk, upgraded.pk)
+        self.assertEqual(upgraded.pk, downgraded.pk)
+        self.assertEqual(
+            RefreshRequest.objects.get().priority, RefreshPriority.EXPLICIT
+        )
+
+
+class PriorityHierarchyTests(TestCase):
+    """The single priority ladder encodes the user-intent hierarchy."""
+
+    def test_ladder_is_strictly_ordered_by_intent(self):
+        ladder = [
+            RefreshPriority.EXPLICIT,
+            RefreshPriority.NEW,
+            RefreshPriority.RECENTLY_VIEWED,
+            RefreshPriority.VISIBLE,
+            RefreshPriority.WATCHLIST,
+            RefreshPriority.WATCHED,
+            RefreshPriority.STALE,
+            RefreshPriority.BACKGROUND,
+        ]
+        values = [int(level) for level in ladder]
+        self.assertEqual(values, sorted(values))
+        self.assertEqual(len(set(values)), len(values))
+
+    def test_no_caller_enqueues_visible_yet(self):
+        """VISIBLE is a reserved slot: nothing enqueues it until the
+        frontend has a reliable visibility signal to send."""
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parents[1]
+        offenders = []
+        for path in root.rglob("*.py"):
+            if path.name == "models.py":
+                continue
+            if "tests" in path.parts or "migrations" in path.parts:
+                continue
+            if "RefreshPriority.VISIBLE" in path.read_text():
+                offenders.append(str(path.relative_to(root)))
+        self.assertEqual(offenders, [])
 
 
 class WatchlistAddEndpointTests(TestCase):
@@ -235,11 +296,55 @@ class WatchlistResolveEndpointTests(TestCase):
         self.assertEqual(RefreshRequest.objects.filter(status="pending").count(), 1)
 
 
+class MarkWatchedEndpointTests(TestCase):
+    """POST /api/watched/<tmdb_id>/ queues a freshness-guarded WATCHED refresh."""
+
+    def _mark_watched(self, tmdb_id):
+        return self.client.post(
+            f"/api/watched/{tmdb_id}/",
+            data={},
+            content_type="application/json",
+        )
+
+    def test_mark_watched_stale_title_queues_watched_refresh_without_fetching(self):
+        movie = Movie.objects.create(tmdb_id=401, title="SeenStale", year=2020)
+        local_offer(movie)
+        _backdate_offers(movie)
+
+        with patch(REFRESH_CONTENT) as refresh_content:
+            refresh_content.side_effect = AssertionError("mark-watched fetched")
+            resp = self._mark_watched(movie.tmdb_id)
+
+        self.assertEqual(resp.status_code, 200, resp.content)
+        refresh_content.assert_not_called()
+        request = RefreshRequest.objects.get()
+        self.assertEqual(request.status, RefreshRequestStatus.PENDING)
+        self.assertEqual(request.priority, RefreshPriority.WATCHED)
+
+    def test_mark_watched_fresh_title_queues_nothing(self):
+        movie = Movie.objects.create(tmdb_id=402, title="SeenFresh", year=2020)
+        local_offer(movie)
+
+        resp = self._mark_watched(movie.tmdb_id)
+
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(RefreshRequest.objects.count(), 0)
+
+    def test_mark_watched_never_fetched_title_bumps_to_new(self):
+        movie = Movie.objects.create(tmdb_id=403, title="SeenUnseen", year=2020)
+
+        resp = self._mark_watched(movie.tmdb_id)
+
+        self.assertEqual(resp.status_code, 200, resp.content)
+        request = RefreshRequest.objects.get()
+        self.assertEqual(request.priority, RefreshPriority.NEW)
+
+
 class RefreshOnViewTests(TestCase):
     """Detail views queue an async refresh but never fetch inline."""
 
     @patch("tracker.views.enrich_movie_from_tmdb")
-    def test_movie_detail_stale_title_queues_intent_refresh(self, enrich):
+    def test_movie_detail_stale_title_queues_recently_viewed_refresh(self, enrich):
         movie = Movie.objects.create(tmdb_id=301, title="Stale", year=2020)
         local_offer(movie)
         _backdate_offers(movie)
@@ -252,7 +357,7 @@ class RefreshOnViewTests(TestCase):
         refresh_content.assert_not_called()
         request = RefreshRequest.objects.get()
         self.assertEqual(request.status, RefreshRequestStatus.PENDING)
-        self.assertEqual(request.priority, RefreshPriority.INTENT)
+        self.assertEqual(request.priority, RefreshPriority.RECENTLY_VIEWED)
 
     @patch("tracker.views.enrich_movie_from_tmdb")
     def test_movie_detail_never_fetched_title_queues_new_priority(self, enrich):
@@ -288,7 +393,7 @@ class RefreshOnViewTests(TestCase):
         refresh_content.assert_not_called()
         request = RefreshRequest.objects.get()
         self.assertEqual(request.status, RefreshRequestStatus.PENDING)
-        self.assertEqual(request.priority, RefreshPriority.INTENT)
+        self.assertEqual(request.priority, RefreshPriority.RECENTLY_VIEWED)
 
 
 class LetterboxdImportEnqueueTests(TestCase):
@@ -440,7 +545,7 @@ class DrainTests(TestCase):
         intent = Movie.objects.create(tmdb_id=901, title="Viewed", year=2020)
         new = Movie.objects.create(tmdb_id=902, title="BrandNew", year=2021)
         watch = Movie.objects.create(tmdb_id=903, title="Watchlisted", year=2022)
-        self._request(intent, RefreshPriority.INTENT)
+        self._request(intent, RefreshPriority.RECENTLY_VIEWED)
         self._request(new, RefreshPriority.NEW)
         self._request(watch, RefreshPriority.WATCHLIST)
 
@@ -450,7 +555,7 @@ class DrainTests(TestCase):
             call.args[0].tmdb_id
             for call in self.refresh_service.refresh_content.call_args_list
         ]
-        self.assertEqual(order, [902, 903, 901])  # NEW, WATCHLIST, INTENT
+        self.assertEqual(order, [902, 903, 901])  # NEW, WATCHLIST, RECENTLY_VIEWED
         self.assertEqual(summary["refreshed"], 3)
         self.assertEqual(summary["requests_drained"], 3)
         self.assertEqual(summary["requests_pending"], 0)
@@ -479,6 +584,75 @@ class DrainTests(TestCase):
             RefreshRequest.objects.get(movie=second).status,
             RefreshRequestStatus.PENDING,
         )
+
+    def _stale_backlog_and_fresh_event(self):
+        """An old BACKGROUND request plus a brand-new RECENTLY_VIEWED one."""
+        backlog = Movie.objects.create(tmdb_id=971, title="Backlog", year=2019)
+        event = Movie.objects.create(tmdb_id=972, title="Event", year=2020)
+        local_offer(backlog)
+        _backdate_offers(backlog)
+        local_offer(event)
+        _backdate_offers(event)
+        old = self._request(backlog, RefreshPriority.BACKGROUND)
+        # Make the backlog request the oldest waiting row by a wide margin.
+        RefreshRequest.objects.filter(pk=old.pk).update(
+            requested_at=timezone.now() - dt.timedelta(days=30)
+        )
+        self._request(event, RefreshPriority.RECENTLY_VIEWED)
+        return backlog, event
+
+    @staticmethod
+    def _refreshed_ids(refresh_service):
+        return [
+            call.args[0].tmdb_id
+            for call in refresh_service.refresh_content.call_args_list
+        ]
+
+    def test_fairness_slot_drains_the_oldest_backlog_request_last(self):
+        self._stale_backlog_and_fresh_event()
+
+        summary = self._run(budget=2)
+
+        # Strict priority first (the event), then the reserved slot (the
+        # longest-waiting request) with the held-back budget unit.
+        self.assertEqual(self._refreshed_ids(self.refresh_service), [972, 971])
+        self.assertEqual(summary["refreshed"], 2)
+        self.assertEqual(summary["remaining_budget"], 0)
+        self.assertEqual(summary["requests_pending"], 0)
+
+    def test_fairness_slot_never_overrides_priority_when_budget_is_one(self):
+        self._stale_backlog_and_fresh_event()
+
+        summary = self._run(budget=1)
+
+        self.assertEqual(self._refreshed_ids(self.refresh_service), [972])
+        self.assertEqual(summary["refreshed"], 1)
+        self.assertEqual(summary["skipped_budget_exhausted"], 1)
+        self.assertEqual(
+            RefreshRequest.objects.get(movie__tmdb_id=971).status,
+            RefreshRequestStatus.PENDING,
+        )
+
+    def test_fairness_slot_returns_the_unit_when_reserved_request_is_fresh(self):
+        backlog = Movie.objects.create(tmdb_id=973, title="FreshBacklog", year=2019)
+        event = Movie.objects.create(tmdb_id=974, title="StaleEvent", year=2020)
+        local_offer(backlog)  # fresh: the reserved pass settles it for free
+        local_offer(event)
+        _backdate_offers(event)
+        old = self._request(backlog, RefreshPriority.BACKGROUND)
+        RefreshRequest.objects.filter(pk=old.pk).update(
+            requested_at=timezone.now() - dt.timedelta(days=30)
+        )
+        self._request(event, RefreshPriority.RECENTLY_VIEWED)
+
+        summary = self._run(budget=2)
+
+        self.assertEqual(self._refreshed_ids(self.refresh_service), [974])
+        self.assertEqual(summary["refreshed"], 1)
+        self.assertEqual(summary["skipped_cached"], 1)
+        # The held-back unit was not spent, so it goes back to the run.
+        self.assertEqual(summary["remaining_budget"], 1)
+        self.assertEqual(summary["requests_pending"], 0)
 
     def test_rate_limit_is_never_bypassed(self):
         self.limiter.acquire.side_effect = RateLimitExceeded("daily quota")

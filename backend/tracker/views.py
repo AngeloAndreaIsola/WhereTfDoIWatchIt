@@ -798,7 +798,7 @@ def scraper_confirm_match(request):
     ingest_scraped_mapping(mapping)
     # Manual match = explicit user intent: if the canonical path has no
     # availability for this TMDb id yet, request an asynchronous refresh.
-    request_availability_refresh(movie, priority=RefreshPriority.INTENT)
+    request_availability_refresh(movie, priority=RefreshPriority.EXPLICIT)
 
     return Response(ScrapedContentMappingSerializer(mapping).data)
 
@@ -1511,7 +1511,7 @@ def _prime_detail_response(request, item: Movie, key: str) -> Response:
     # Refresh-on-view (Phase B): this is the title detail page the frontend
     # opens. Local offers are returned immediately; a stale/missing title
     # gets an asynchronous refresh request, never a synchronous fetch.
-    request_availability_refresh(item, priority=RefreshPriority.INTENT)
+    request_availability_refresh(item, priority=RefreshPriority.RECENTLY_VIEWED)
 
     user_data = UserMovieData.objects.filter(user_id=1, movie=item).first()
     is_in_watchlist = WatchlistItem.objects.filter(user_id=1, movie=item).exists()
@@ -1703,7 +1703,7 @@ def movie_detail(request, pk: int):
     # Refresh-on-view (Phase B): opening a title is meaningful user intent.
     # The local availability is served above; a stale/missing title only
     # *requests* an asynchronous refresh here — the response never waits.
-    request_availability_refresh(movie, priority=RefreshPriority.INTENT)
+    request_availability_refresh(movie, priority=RefreshPriority.RECENTLY_VIEWED)
 
     user_data = UserMovieData.objects.filter(user_id=1, movie=movie).first()
     watch_events = MovieWatchEvent.objects.filter(user_id=1, movie=movie).order_by("-watched_date", "-created_at")
@@ -1762,7 +1762,7 @@ def link_tmdb(request, pk: int):
             Availability.objects.filter(movie=movie).delete()
             # The canonical offers now key on a TMDb id that has likely never
             # been fetched — request a refresh (local insert, async drain).
-            request_availability_refresh(movie, priority=RefreshPriority.INTENT)
+            request_availability_refresh(movie, priority=RefreshPriority.EXPLICIT)
 
     return Response({
         "message": f"Linked to TMDB {details.tmdb_id}",
@@ -1946,6 +1946,12 @@ def mark_movie_watched(request, tmdb_id: int):
                     "rewatch": rewatch,
                 },
             )
+
+        # Refresh-on-watch: the title just became history worth keeping
+        # accurate. Freshness-guarded (a title checked within the stale
+        # window enqueues nothing) and never-fetched titles still bump to
+        # NEW — a local insert only, the response never waits for a fetch.
+        request_availability_refresh(movie, priority=RefreshPriority.WATCHED)
 
         return Response({
             "message": "Movie marked as watched",

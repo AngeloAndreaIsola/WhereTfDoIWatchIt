@@ -311,18 +311,43 @@ class RefreshRun(models.Model):
 class RefreshPriority(models.IntegerChoices):
     """Deterministic priority for event-driven availability refresh requests.
 
-    Lower numbers run first, so explicit user intent always outranks
-    background maintenance: a watchlist addition is drained before the
-    nightly stale sweep, which is drained before historical backlog.
-    ``request_availability_refresh`` bumps a never-fetched title to ``NEW``
-    automatically, so callers only describe *why* they are asking.
+    One ladder, one ranking system: lower numbers run first, and the order
+    is exactly the user-intent hierarchy — the more directly a user asked
+    for this title *now*, the earlier it drains:
+
+        EXPLICIT < NEW < RECENTLY_VIEWED < VISIBLE < WATCHLIST
+                  < WATCHED < STALE < BACKGROUND
+
+    - ``EXPLICIT`` — a deliberate action on one title (manual match
+      confirmation, link-to-TMDb): the strongest signal short of never
+      having fetched the title at all.
+    - ``NEW`` — never fetched by the canonical path
+      (``request_availability_refresh`` bumps any never-fetched title here).
+    - ``RECENTLY_VIEWED`` — the title's detail page was opened (refresh on
+      view); lower intent than a watchlist addition because views are cheap
+      and frequent.
+    - ``VISIBLE`` — the title is on screen right now. Reserved: the frontend
+      has no reliable visibility signal yet, so nothing enqueues at this
+      level; the slot is kept so the hierarchy stays stable when one lands.
+    - ``WATCHLIST`` — added to the watchlist or imported.
+    - ``WATCHED`` — marked as watched (freshness-guarded: a fresh title is
+      not enqueued).
+    - ``STALE`` — regular stale refresh (the default for a bare request).
+    - ``BACKGROUND`` — low-priority historical/import backlog.
+
+    Callers only describe *why* they are asking; deduplication, freshness
+    gating and upgrade-only merging all live in
+    ``tracker.services.refresh_requests``.
     """
 
-    NEW = 10, "New / never fetched"
-    WATCHLIST = 20, "Watchlist addition"
-    INTENT = 30, "Recently viewed / explicitly requested"
-    STALE = 40, "Regular stale refresh"
-    BACKGROUND = 50, "Low-priority historical content"
+    EXPLICIT = 10, "Explicit user action on this title"
+    NEW = 20, "New / never fetched"
+    RECENTLY_VIEWED = 30, "Recently viewed detail page"
+    VISIBLE = 40, "Visible right now (reserved — no signal yet)"
+    WATCHLIST = 50, "Watchlist addition"
+    WATCHED = 60, "Marked as watched"
+    STALE = 70, "Regular stale refresh"
+    BACKGROUND = 80, "Low-priority historical content"
 
 
 class RefreshRequestStatus(models.TextChoices):

@@ -156,11 +156,13 @@ def process_watchlist_refresh(
 
     Candidates selection & priority:
     1. Pending event-driven refresh requests (``tracker.RefreshRequest``),
-       drained first in their deterministic priority order — explicit user
-       intent (watchlist additions, imports, detail views) outranks
-       background maintenance. Draining shares this run's budget, rate
-       limiter and ``RefreshRun`` audit row, so event triggers can never
-       bypass the daily API quota.
+       drained first in their deterministic priority order — the user-intent
+       ladder (``RefreshPriority``: explicit action, never-fetched, recent
+       view, watchlist, watched, stale, background) outranks background
+       maintenance, with one bounded fairness slot so the oldest waiting
+       request cannot be starved (see ``drain_refresh_requests``). Draining
+       shares this run's budget, rate limiter and ``RefreshRun`` audit row,
+       so event triggers can never bypass the daily API quota.
     2. Watchlist movies for user_id with no canonical availability yet.
     3. Watchlist movies with oldest/stalest canonical Offer.last_seen.
 
