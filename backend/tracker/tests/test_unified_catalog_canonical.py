@@ -249,7 +249,6 @@ class UnifiedCatalogLocalReadTests(UnifiedCatalogCanonicalTestCase):
 
         seams = [
             "tracker.services.streaming_api.StreamingAvailabilityClient.get_availability",
-            "tracker.services.cache.AvailabilityCache.get_or_refresh",
             "availability.services.refresh.AvailabilityRefreshService.refresh_content",
             "availability.services.refresh.AvailabilityRefreshService.refresh_catalogue",
             "tracker.services.tmdb.TMDbClient.search",

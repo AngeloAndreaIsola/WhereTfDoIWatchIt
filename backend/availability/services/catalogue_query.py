@@ -175,6 +175,8 @@ class ProviderCatalogueQueryService:
         year_min: Optional[int] = None,
         year_max: Optional[int] = None,
         exclude_tmdb_ids: Optional[set[int]] = None,
+        provider_categories: Optional[set[str]] = None,
+        currently_available: Optional[bool] = True,
     ) -> list[UnofficialCatalogueEntry]:
         """Unofficial catalogue entries for the unified catalogue read path.
 
@@ -186,7 +188,11 @@ class ProviderCatalogueQueryService:
         ``exclude_tmdb_ids`` drops entries whose TMDb id already appears
         through the official half of the unified response — deduplication by
         resolved outcome, so a legacy row and a canonical row for the same
-        title never surface twice.
+        title never surface twice. ``provider_categories`` narrows to raw
+        ``Provider`` categories and ``currently_available`` is tri-state
+        (``None`` skips the availability filter — the legacy
+        ``available=false`` answer); both default to the unified-catalogue
+        behaviour.
 
         Local-only like every other method in this service: no source, HTTP
         client, or refresh module is reachable, and a stale row is answered
@@ -198,7 +204,37 @@ class ProviderCatalogueQueryService:
             country=country,
             year_min=year_min,
             year_max=year_max,
+            provider_categories=provider_categories,
+            currently_available=currently_available,
         )
+        return self._unofficial_entries(rows, exclude_tmdb_ids=exclude_tmdb_ids)
+
+    def list_for_tmdb(
+        self,
+        tmdb_id: int,
+        *,
+        provider_categories: Optional[set[str]] = None,
+    ) -> list[UnofficialCatalogueEntry]:
+        """Unofficial catalogue rows mapped to *tmdb_id*, newest observation first.
+
+        The canonical replacement for reading ``ScrapedContentMapping`` by
+        ``movie=`` (prime BVOD block and v2 per-movie offers): same unofficial
+        row predicate as ``list_unofficial`` — enabled providers, currently
+        available, scraper-owned or legacy-bridge-observed — joined through
+        ``ContentMapping``, with the optional raw provider category set
+        (bvod/avod/tvod/fast) applied. Local-only like every other method in
+        this service: no source, HTTP client, or refresh module is reachable.
+        """
+        rows = self.repo.list_mapped_to_tmdb(
+            tmdb_id=tmdb_id,
+            provider_categories=provider_categories,
+        )
+        return self._unofficial_entries(rows)
+
+    def _unofficial_entries(
+        self, rows, *, exclude_tmdb_ids: Optional[set[int]] = None
+    ) -> list[UnofficialCatalogueEntry]:
+        """Assemble entries for evaluated rows in one bulk mapping query."""
         if not rows:
             return []
         summaries = self.mappings.summaries_for_provider_content(rows)
@@ -222,6 +258,7 @@ class ProviderCatalogueQueryService:
                     year=row.release_date.year if row.release_date else None,
                     poster_path=str(metadata.get("poster") or ""),
                     provider_url=row.provider_url,
+                    country=str(metadata.get("country_code") or ""),
                     tmdb_id=tmdb_id,
                     confidence=confidence,
                     match_method=match_method or "",
@@ -229,6 +266,10 @@ class ProviderCatalogueQueryService:
                     subtitle_languages=_upper_languages(
                         metadata.get("subtitle_languages")
                     ),
+                    currently_available=row.currently_available,
+                    first_seen=row.first_seen,
+                    last_seen=row.last_seen,
+                    updated_at=row.updated_at,
                 )
             )
         return entries

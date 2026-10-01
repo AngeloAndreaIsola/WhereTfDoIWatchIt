@@ -1467,9 +1467,9 @@ def _build_prime_offers(request, movie: Movie, season: int | None = None) -> lis
     rows are show-level and carry no season signal.
     """
     from tracker.models import ProviderCategory
-    from tracker.services.offers import Offer
     from tracker.services.presentation import present_offer
     from tracker.services.ranking import rank_offers
+    from tracker.services.scraped_offers import BVOD_CATEGORIES, get_scraped_offers
 
     from .services.offer_pipeline import OfficialOffersPipeline
 
@@ -1486,34 +1486,14 @@ def _build_prime_offers(request, movie: Movie, season: int | None = None) -> lis
     if season is not None:
         return offers_out
 
-    # Include BVOD scraped offers in the main offers list
-    bvod_categories = ["bvod", "avod", "tvod", "fast"]
-    scraped = ScrapedContentMapping.objects.filter(
-        movie=movie,
-        is_available=True,
-        provider__category__in=bvod_categories,
-        provider__is_enabled=True,
-    ).select_related("provider")
-
-    if scraped:
+    # Include BVOD scraped offers in the main offers list — read through the
+    # canonical catalogue (provider observations + ContentMapping resolution)
+    # instead of the legacy ScrapedContentMapping table.
+    bvod_offers, provider_map = get_scraped_offers(
+        movie, provider_categories=BVOD_CATEGORIES
+    )
+    if bvod_offers:
         preference = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
-        provider_map = {p.provider.slug: p.provider for p in scraped}
-        bvod_offers = []
-        for mapping in scraped:
-            payload = mapping.raw_payload or {}
-            audio = payload.get("audio_languages", []) if isinstance(payload, dict) else []
-            subs = payload.get("subtitle_languages", []) if isinstance(payload, dict) else []
-            bvod_offers.append(Offer.from_dict({
-                "country": payload.get("country", "") if isinstance(payload, dict) else "",
-                "service": mapping.provider.slug,
-                "offer_type": "free",
-                "quality": mapping.provider.config.get("quality") if mapping.provider.config else "",
-                "url": mapping.scraped_url,
-                "audio": [str(a).upper() for a in audio],
-                "subs": [str(s).upper() for s in subs],
-                "is_scraped_source": True,
-            }))
-
         ranked = rank_offers(bvod_offers, preference, current_country=current_country)
         for offer in ranked:
             presented = present_offer(offer, provider_map)

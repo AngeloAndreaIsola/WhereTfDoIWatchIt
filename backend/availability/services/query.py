@@ -1,8 +1,8 @@
 """Query-only service for availability reads — no network calls, no refresh triggers.
 
 AvailabilityQueryService reads only from the canonical availability database
-(availability.Offer, Country, Source). It does not call StreamingAvailabilityClient,
-AvailabilityCache.get_or_refresh(), or perform any network requests.
+(availability.Offer, Country, Source). It does not call StreamingAvailabilityClient
+or perform any network requests.
 
 The service provides a simple, focused interface for querying currently-available
 offers by content type and TMDB ID, with optional country filtering.

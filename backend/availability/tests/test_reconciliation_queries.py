@@ -113,7 +113,6 @@ class ReconciledQueryServiceTests(ReconciliationFixtureMixin, TestCase):
             "requests.post",
             "requests.sessions.Session.request",
             "tracker.services.streaming_api.StreamingAvailabilityClient.get_availability",
-            "tracker.services.cache.AvailabilityCache.get_or_refresh",
             "availability.services.refresh.AvailabilityRefreshService.refresh_content",
             "availability.services.refresh.AvailabilityRefreshService.refresh_catalogue",
         ]

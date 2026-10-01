@@ -13,8 +13,7 @@ from django.test import TestCase
 from django.utils import timezone
 
 from availability.models import Offer
-from tracker.models import Availability, Movie, Preference, Region, WatchlistItem
-from tracker.services.cache import AvailabilityCache
+from tracker.models import Movie, Preference, WatchlistItem
 from tracker.tests.availability_factories import local_offer
 
 
@@ -170,66 +169,3 @@ class WatchlistReportNonBlockingTests(TestCase):
         self.assertIn("report", data)
         self.assertEqual(len(data["report"]), 3)
         self.assertEqual(call_count[0], 3)
-
-
-class AvailabilityCacheNonBlockingMethodTests(TestCase):
-    """Test AvailabilityCache.get_cached_only method."""
-
-    def setUp(self):
-        self.movie = Movie.objects.create(tmdb_id=123, title="Test Movie", year=2020)
-        self.cache = AvailabilityCache()
-
-    def test_get_cached_only_with_fresh_data(self):
-        """get_cached_only returns fresh status without calling API."""
-        region = Region.objects.create(provider="prime", country="US")
-        Availability.objects.create(
-            movie=self.movie,
-            region=region,
-            last_checked_at=timezone.now(),
-            is_available=True,
-            offer_type="subscription",
-            quality="hd",
-        )
-
-        with patch.object(self.cache.client, "get_availability") as mock_api:
-            status = self.cache.get_cached_only(self.movie)
-
-            # Should not call external API
-            mock_api.assert_not_called()
-            self.assertEqual(status.reason, "fresh")
-            self.assertEqual(status.offers_written, 1)
-            self.assertFalse(status.refreshed)
-
-    def test_get_cached_only_with_stale_data(self):
-        """get_cached_only returns stale status without calling API."""
-        region = Region.objects.create(provider="prime", country="US")
-        Availability.objects.create(
-            movie=self.movie,
-            region=region,
-            last_checked_at=timezone.now() - timedelta(hours=48),
-            is_available=True,
-            offer_type="subscription",
-            quality="hd",
-        )
-
-        with patch.object(self.cache.client, "get_availability") as mock_api:
-            status = self.cache.get_cached_only(self.movie)
-
-            # Should not call external API even for stale data
-            mock_api.assert_not_called()
-            self.assertEqual(status.reason, "stale")
-            self.assertEqual(status.offers_written, 1)
-            self.assertFalse(status.refreshed)
-
-    def test_get_cached_only_with_missing_data(self):
-        """get_cached_only returns missing status without calling API."""
-        # No availability created
-
-        with patch.object(self.cache.client, "get_availability") as mock_api:
-            status = self.cache.get_cached_only(self.movie)
-
-            # Should not call external API for missing data
-            mock_api.assert_not_called()
-            self.assertEqual(status.reason, "missing")
-            self.assertEqual(status.offers_written, 0)
-            self.assertFalse(status.refreshed)

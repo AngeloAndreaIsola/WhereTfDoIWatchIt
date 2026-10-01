@@ -13,9 +13,15 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from tracker.models import Movie, Availability, Region, LanguageInfo, LanguageEntry, Provider, Subscription
+from tracker.models import Movie, Availability, Region, LanguageInfo, LanguageEntry, Provider, ScrapedContentMapping, Subscription
 from tracker.services.offers import Offer
 from tracker.tests.availability_factories import local_offer
+
+from availability.domain.enums import ContentType as CanonicalContentType
+from availability.domain.enums import MatchMethod, SourceType
+from availability.models import Source
+from availability.persistence.repositories import MappingRepository, ProviderContentRepository
+from availability.services.legacy_ingest import ingest_scraped_mapping
 
 
 class PrimeUrlRoutingTests(TestCase):
@@ -546,19 +552,151 @@ class PrimeSeriesEndpointTests(TestCase):
         self.assertEqual(kwargs.get("current_country"), "BR")
 
 
-class SeriesAvailabilityCacheTests(TestCase):
-    """Series rows must refresh through the TMDb-TV twin /shows/tv/ endpoint."""
+class PrimeScrapedBvodBlockTests(TestCase):
+    """The prime detail page's scraped BVOD block reads the canonical catalogue.
 
-    def test_stale_series_row_refreshes_with_series_content_type(self):
-        from tracker.services.cache import AvailabilityCache
-        from tracker.services.rate_limit import RateLimiter
+    Legacy behaviour kept through the Phase C read migration: an ingested
+    scraper row for a bvod/avod/tvod/fast provider appears in the main offers
+    list (show-level only), rows that are unavailable or owned by a disabled
+    provider do not, and rows a canonical source observed stay out — they
+    belong to the official read path.
+    """
 
-        series = Movie.objects.create(tmdb_id=1396, title="Breaking Bad", year=2008,
-                                      content_type="series")
-        client = MagicMock()
-        client.get_availability.return_value = MagicMock(offers=[])
+    def setUp(self):
+        self.movie = Movie.objects.create(
+            tmdb_id=770001, title="Scraped BVOD Film", year=2021,
+            content_type="movie",
+        )
+        self.series = Movie.objects.create(
+            tmdb_id=770002, title="Scraped BVOD Show", year=2019,
+            content_type="series",
+            seasons_data=[{"season_number": 1, "name": "Season 1"}],
+        )
+        self.provider, _ = Provider.objects.get_or_create(
+            slug="bvod-ione",
+            defaults={
+                "name": "BVOD One",
+                "category": "bvod",
+                "is_enabled": True,
+                "country_code": "IT",
+            },
+        )
+        self.provider.category = "bvod"
+        self.provider.is_enabled = True
+        self.provider.save()
 
-        cache = AvailabilityCache(client=client, limiter=RateLimiter("test_series_cache"))
-        cache.get_or_refresh(series)
+    def _ingest(self, target, *, is_available=True):
+        row = ScrapedContentMapping.objects.create(
+            provider=self.provider,
+            movie=target,
+            scraped_title=target.title,
+            scraped_year=target.year,
+            scraped_url="https://bvod-ione.example/watch",
+            country_code="IT",
+            is_available=is_available,
+            raw_payload={"audio_languages": ["EN"], "subtitle_languages": ["IT"]},
+        )
+        ingest_scraped_mapping(row)
+        return row
 
-        client.get_availability.assert_called_once_with(1396, content_type="series")
+    @patch("tracker.services.enrichment.TMDbClient")
+    @patch("tracker.views.TMDbClient")
+    def test_ingested_bvod_row_appears_once_in_prime_offers(self, *_):
+        self._ingest(self.movie)
+
+        from django.test import Client
+        response = Client().get(f"/api/prime/movie/{self.movie.tmdb_id}/")
+
+        self.assertEqual(response.status_code, 200)
+        offers = response.json()["offers"]
+        self.assertEqual(len(offers), 1)
+        offer = offers[0]
+        self.assertEqual(offer["service"], "BVOD One")
+        self.assertEqual(offer["source_indicator"], "BVOD")
+        self.assertEqual(offer["offer_type"], "free")
+        self.assertEqual(offer["country"], "IT")
+        self.assertEqual(offer["audio_languages"], ["EN"])
+        self.assertEqual(offer["subtitle_languages"], ["IT"])
+        # The scraped block ranks its offers, so the payload is the
+        # RankedOffer shape, exactly like the official offers above it.
+        self.assertIn("ranking", offer)
+        self.assertIn("is_language_match", offer)
+
+    @patch("tracker.services.enrichment.TMDbClient")
+    @patch("tracker.views.TMDbClient")
+    def test_season_request_skips_the_scraped_block(self, *_):
+        self._ingest(self.series)
+
+        from django.test import Client
+        client = Client()
+        # Without a season param the show-level scraped row is served.
+        no_season = client.get(
+            f"/api/prime/series/{self.series.tmdb_id}/"
+        ).json()
+        self.assertEqual(len(no_season["offers"]), 1)
+
+        # Scraper rows carry no season signal: a season-filtered request
+        # never includes them.
+        with_season = client.get(
+            f"/api/prime/series/{self.series.tmdb_id}/?season=1"
+        ).json()
+        self.assertEqual(with_season["offers"], [])
+        self.assertEqual(with_season["selected_season"], 1)
+
+    @patch("tracker.services.enrichment.TMDbClient")
+    @patch("tracker.views.TMDbClient")
+    def test_unavailable_scraped_row_is_excluded(self, *_):
+        self._ingest(self.movie, is_available=False)
+
+        from django.test import Client
+        response = Client().get(f"/api/prime/movie/{self.movie.tmdb_id}/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["offers"], [])
+
+    @patch("tracker.services.enrichment.TMDbClient")
+    @patch("tracker.views.TMDbClient")
+    def test_disabled_provider_row_is_excluded(self, *_):
+        self._ingest(self.movie)
+        self.provider.is_enabled = False
+        self.provider.save()
+
+        from django.test import Client
+        response = Client().get(f"/api/prime/movie/{self.movie.tmdb_id}/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["offers"], [])
+
+    @patch("tracker.services.enrichment.TMDbClient")
+    @patch("tracker.views.TMDbClient")
+    def test_canonical_source_row_is_not_in_the_scraped_block(self, *_):
+        # A row a canonical source observed for the same bvod provider: it
+        # surfaces through the official read path, never the scraped block.
+        source, _ = Source.objects.get_or_create(
+            slug="availability-api",
+            defaults={"name": "Availability API", "type": SourceType.API},
+        )
+        content, _ = ProviderContentRepository().upsert(
+            provider=self.provider,
+            source=source,
+            provider_content_id="canon-770001",
+            content_type=CanonicalContentType.MOVIE,
+            title=self.movie.title,
+            provider_url="https://bvod-ione.example/canon",
+        )
+        MappingRepository().record(
+            provider=self.provider,
+            source=source,
+            provider_content_id="canon-770001",
+            content_type=CanonicalContentType.MOVIE,
+            tmdb_id=self.movie.tmdb_id,
+            confidence=1.0,
+            match_method=MatchMethod.TITLE_YEAR,
+            content=content,
+        )
+
+        from django.test import Client
+        response = Client().get(f"/api/prime/movie/{self.movie.tmdb_id}/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["offers"], [])

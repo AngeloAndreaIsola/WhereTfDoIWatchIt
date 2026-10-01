@@ -2,25 +2,22 @@
 
 Three layers:
 - upstream payload parsing + season-number resolution (no network, no DB);
-- cache write and season-filtered read of ``Availability.seasons_available``;
-- the series detail endpoint end-to-end: ``?season=N`` in, filtered offers out.
+- the legacy ``_write_result`` helper persisting ``seasons_available``;
+- the series detail endpoint end-to-end: ``?season=N`` in, canonical
+  season-filtered offers out.
 """
-import datetime as dt
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from django.test import SimpleTestCase, TestCase
-from django.utils import timezone
 
 from tracker.models import (
     Availability,
     Movie,
     Provider,
-    ScrapedContentMapping,
     Subscription,
 )
 from tracker.services.cache import AvailabilityCache
 from tracker.services.offers import Offer
-from tracker.services.rate_limit import ApiCallCounter, RateLimiter
 from tracker.services.streaming_api import (
     StreamingAvailabilityClient,
     StreamingOffer,
@@ -159,7 +156,13 @@ class ResolveSeasonNumberTests(SimpleTestCase):
 
 
 class SeasonCacheTests(TestCase):
-    """``seasons_available`` write + season-filtered ``read_offers``."""
+    """``seasons_available`` write semantics of the legacy ``_write_result`` helper.
+
+    Season-filtered *reads* live on the canonical read path
+    (``SeasonEndToEndEndpointTests`` below and the availability query tests);
+    this class only guards the legacy write helper that ``seed_prime_fixture``
+    still uses.
+    """
 
     @staticmethod
     def _result(with_seasons=True):
@@ -194,16 +197,11 @@ class SeasonCacheTests(TestCase):
             content_type="series",
             seasons_data=SEASONS_DATA,
         )
-        self.upstream = MagicMock()
-        self.upstream.get_availability.return_value = self._result()
-        self.cache = AvailabilityCache(
-            client=self.upstream, limiter=RateLimiter("test_seasons")
-        )
-        ApiCallCounter.objects.filter(service="test_seasons").delete()
+        self.cache = AvailabilityCache()
 
-    def test_refresh_persists_seasons_per_region(self):
-        status = self.cache.get_or_refresh(self.series)
-        self.assertTrue(status.refreshed)
+    def test_write_persists_seasons_per_region(self):
+        written = self.cache._write_result(self.series, self._result())
+        self.assertEqual(written, 3)
 
         prime = Availability.objects.get(
             movie=self.series, region__provider="prime", region__country="US"
@@ -222,73 +220,20 @@ class SeasonCacheTests(TestCase):
         )
         self.assertEqual(hulu.seasons_available, [])
 
-    def test_read_offers_filters_by_season(self):
-        self.cache.get_or_refresh(self.series)
-
-        self.assertEqual(
-            {o.service for o in self.cache.read_offers(self.series, season=1)},
-            {"prime", "netflix"},
-        )
-        self.assertEqual(
-            {o.service for o in self.cache.read_offers(self.series, season=2)},
-            {"netflix"},
-        )
-        self.assertEqual(self.cache.read_offers(self.series, season=9), [])
-
-        # Unfiltered read is untouched by season logic.
-        self.assertEqual(
-            {o.service for o in self.cache.read_offers(self.series)},
-            {"prime", "netflix", "hulu"},
-        )
-
-    def test_season_view_excludes_scraped_offers(self):
-        provider = Provider.objects.create(
-            slug="hydra", name="Hydra", category="scraper", is_enabled=True
-        )
-        ScrapedContentMapping.objects.create(
-            provider=provider,
-            movie=self.series,
-            scraped_title="Game of Thrones",
-            scraped_year=2011,
-            scraped_url="https://hydra.example/got",
-            is_available=True,
-        )
-        self.cache.get_or_refresh(self.series)
-
-        unfiltered = {o.service for o in self.cache.read_offers(self.series)}
-        self.assertIn("hydra", unfiltered)
-
-        for season in (1, 2, 3):
-            self.assertNotIn(
-                "hydra",
-                {o.service for o in self.cache.read_offers(self.series, season=season)},
-                f"scraper row leaked into season {season} view",
-            )
-
-    def test_refresh_without_seasons_clears_stale_values(self):
-        self.cache.get_or_refresh(self.series)
+    def test_write_without_seasons_clears_stale_values(self):
+        self.cache._write_result(self.series, self._result())
         self.assertTrue(
             Availability.objects.get(
                 movie=self.series, region__provider="prime"
             ).seasons_available
         )
 
-        self.upstream.get_availability.return_value = self._result(with_seasons=False)
-        Availability.objects.update(
-            movie=self.series, last_checked_at=timezone.now() - dt.timedelta(days=2)
-        )
-        status = self.cache.get_or_refresh(self.series)
-        self.assertTrue(status.refreshed)
+        self.cache._write_result(self.series, self._result(with_seasons=False))
 
         prime = Availability.objects.get(
             movie=self.series, region__provider="prime"
         )
         self.assertEqual(prime.seasons_available, [])
-
-    def test_cached_series_answer_is_not_rewritten_when_fresh(self):
-        self.cache.get_or_refresh(self.series)
-        self.cache.get_or_refresh(self.series)
-        self.assertEqual(self.upstream.get_availability.call_count, 1)
 
 
 class SeasonDetailEndpointTests(TestCase):

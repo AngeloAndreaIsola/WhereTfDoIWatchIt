@@ -1,9 +1,7 @@
-"""Tests for caching layer + rate limiter."""
+"""Tests for the legacy ``_write_result`` helper + rate limiter."""
 import datetime as dt
-from unittest.mock import MagicMock
 
 from django.test import TestCase
-from django.utils import timezone
 
 from tracker.models import Availability, LanguageEntry, LanguageInfo, Movie, Region
 from tracker.services.cache import AvailabilityCache
@@ -16,7 +14,7 @@ from tracker.services.rate_limit import (
 from tracker.services.streaming_api import StreamingOffer, StreamingResult
 
 
-def _offer(country="us", service="Netflix", offer_type="subscription", quality="4k", audio=("en",), subs=("en",)):
+def _offer(country="US", service="Netflix", offer_type="subscription", quality="4k", audio=("en",), subs=("en",)):
     return StreamingOffer(
         country=country,
         service_id=service.lower(),
@@ -29,63 +27,50 @@ def _offer(country="us", service="Netflix", offer_type="subscription", quality="
 
 
 class CacheTests(TestCase):
+    """The legacy write helper ``AvailabilityCache._write_result``.
+
+    Reads retired with the Phase C read-path migration: freshness and
+    rate-limit behaviour now live in the event-driven refresh
+    (``test_event_driven_refresh``) and the canonical query services.
+    """
+
     def setUp(self):
         self.movie = Movie.objects.create(tmdb_id=1, title="Cache Test", year=2020)
-        self.client = MagicMock()
-        self.client.get_availability.return_value = StreamingResult(
+        self.cache = AvailabilityCache()
+
+    def test_write_result_persists_offers_and_languages(self):
+        result = StreamingResult(
             tmdb_id=1,
-            offers=[_offer(), _offer(country="it", service="Prime")],
+            offers=[_offer(), _offer(country="IT", service="Prime")],
         )
-        self.limiter = RateLimiter("test_cache")
-        ApiCallCounter.objects.filter(service="test_cache").delete()
-        self.cache = AvailabilityCache(client=self.client, limiter=self.limiter)
+        written = self.cache._write_result(self.movie, result)
 
-    def test_fresh_cache_skips_api(self):
-        # Pre-seed a fresh Availability row.
-        region = Region.objects.create(provider="Netflix", country="US")
-        Availability.objects.create(
-            movie=self.movie, region=region,
-            last_checked_at=timezone.now(), is_available=True,
-            offer_type="subscription", quality="4k",
+        self.assertEqual(written, 2)
+        self.assertEqual(
+            {a.region.country for a in self.movie.availabilities.all()},
+            {"US", "IT"},
         )
-        status_obj = self.cache.get_or_refresh(self.movie)
-        self.assertFalse(status_obj.refreshed)
-        self.assertEqual(status_obj.reason, "fresh")
-        self.client.get_availability.assert_not_called()
-
-    def test_stale_cache_triggers_refresh(self):
-        region = Region.objects.create(provider="Netflix", country="US")
-        Availability.objects.create(
-            movie=self.movie, region=region,
-            last_checked_at=timezone.now() - dt.timedelta(days=8),
-            is_available=True, offer_type="subscription", quality="4k",
-        )
-        status_obj = self.cache.get_or_refresh(self.movie)
-        self.assertTrue(status_obj.refreshed)
-        self.assertEqual(status_obj.reason, "stale")
-        self.assertEqual(status_obj.offers_written, 2)
-        self.assertGreater(LanguageInfo.objects.count(), 0)
-
-    def test_missing_cache_refreshes(self):
-        status_obj = self.cache.get_or_refresh(self.movie)
-        self.assertTrue(status_obj.refreshed)
-        self.assertEqual(status_obj.offers_written, 2)
         # Language entries created per movie+region.
         infos = LanguageInfo.objects.filter(movie=self.movie)
         self.assertEqual(infos.count(), 2)
-        self.assertEqual(LanguageEntry.objects.filter(language_info__in=infos).count(), 4)  # 2 audio + 2 subs
+        self.assertEqual(
+            LanguageEntry.objects.filter(language_info__in=infos).count(), 4
+        )  # 2 audio + 2 subs
 
-    def test_rate_limit_returns_cached(self):
-        # Fill counter to cap.
-        ApiCallCounter.objects.create(
-            service="test_cache",
-            call_date=dt.datetime.utcnow().date(),
-            count=DAILY_LIMIT,
+    def test_write_result_is_idempotent(self):
+        result = StreamingResult(
+            tmdb_id=1,
+            offers=[_offer(), _offer(country="IT", service="Prime")],
         )
-        status_obj = self.cache.get_or_refresh(self.movie)
-        self.assertFalse(status_obj.refreshed)
-        self.assertEqual(status_obj.reason, "rate_limited")
-        self.client.get_availability.assert_not_called()
+        self.cache._write_result(self.movie, result)
+        self.cache._write_result(self.movie, result)
+
+        self.assertEqual(Availability.objects.filter(movie=self.movie).count(), 2)
+        infos = LanguageInfo.objects.filter(movie=self.movie)
+        self.assertEqual(infos.count(), 2)
+        self.assertEqual(
+            LanguageEntry.objects.filter(language_info__in=infos).count(), 4
+        )
 
 
 class RateLimiterTests(TestCase):

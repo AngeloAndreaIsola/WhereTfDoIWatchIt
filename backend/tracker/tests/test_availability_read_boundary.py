@@ -33,14 +33,11 @@ class AvailabilityReadBoundaryTests(TestCase):
 
     def request_without_refresh(self, url, **patches):
         with patch("tracker.services.streaming_api.StreamingAvailabilityClient.get_availability") as fetch, patch(
-            "tracker.services.cache.AvailabilityCache.get_or_refresh"
-        ) as refresh, patch(
             "availability.services.refresh.AvailabilityRefreshService.refresh_content"
         ) as refresh_content, patch(
             "availability.services.refresh.AvailabilityRefreshService.refresh_catalogue"
         ) as refresh_catalogue:
             fetch.side_effect = AssertionError("HTTP request triggered availability fetch")
-            refresh.side_effect = AssertionError("HTTP request triggered availability refresh")
             refresh_content.side_effect = AssertionError(
                 "HTTP request triggered availability refresh service"
             )
@@ -49,7 +46,6 @@ class AvailabilityReadBoundaryTests(TestCase):
             )
             response = self.client.get(url)
         fetch.assert_not_called()
-        refresh.assert_not_called()
         refresh_content.assert_not_called()
         refresh_catalogue.assert_not_called()
         return response

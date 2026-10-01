@@ -140,11 +140,10 @@ class LocalOffersReconciliationTests(ReconciliationFixtureMixin, TestCase):
         enrich.assert_not_called()
 
     @patch("tracker.services.streaming_api.StreamingAvailabilityClient.get_availability")
-    @patch("tracker.services.cache.AvailabilityCache.get_or_refresh")
     @patch("availability.services.refresh.AvailabilityRefreshService.refresh_content")
     @patch("availability.services.refresh.AvailabilityRefreshService.refresh_catalogue")
     def test_reads_never_fetch_or_refresh(self, refresh_catalogue, refresh_content,
-                                          cache_refresh, fetch):
+                                          fetch):
         self.offer(provider_content_id="pc")
 
         offers = get_local_offers(self.movie)
@@ -153,6 +152,5 @@ class LocalOffersReconciliationTests(ReconciliationFixtureMixin, TestCase):
         self.assertEqual(len(offers), 1)
         self.assertEqual(response.status_code, 200)
         fetch.assert_not_called()
-        cache_refresh.assert_not_called()
         refresh_content.assert_not_called()
         refresh_catalogue.assert_not_called()

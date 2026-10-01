@@ -2,21 +2,19 @@
 
 Regression tests for series language detection. Each season of a series can
 carry its own audio/subtitle lists upstream; those lists must survive the
-cache round-trip keyed per (movie, region, season), be returned by
-``read_offers(movie, season=N)``, and reach the language matcher — without
-collapsing into the show-level row or leaking between seasons. Movies keep
-the show-level-only behavior they always had.
+legacy ``_write_result`` round-trip keyed per (movie, region, season) —
+without collapsing into the show-level row or leaking between seasons.
+Season *reads* go through the canonical read path
+(``SeasonLanguageEndpointTests`` below and the availability reconciliation
+tests), where each season's offers carry their own languages to the matcher.
+Movies keep the show-level-only behavior they always had.
 """
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import datetime as dt
 from django.db import IntegrityError, transaction
 from django.test import SimpleTestCase, TestCase
-from django.utils import timezone
 
 from tracker.models import (
-    Availability,
-    LanguageEntry,
     LanguageInfo,
     Movie,
     Preference,
@@ -24,10 +22,8 @@ from tracker.models import (
     Region,
     Subscription,
 )
+from tracker.services.availability_reads import get_local_offers
 from tracker.services.cache import AvailabilityCache
-from tracker.services.offer_pipeline import OfficialOffersPipeline
-from tracker.services.offers import Offer
-from tracker.services.rate_limit import ApiCallCounter, RateLimiter
 from tracker.services.score import score_offer
 from tracker.services.streaming_api import (
     StreamingAvailabilityClient,
@@ -105,7 +101,7 @@ class SeasonLanguageParsingTests(SimpleTestCase):
 
 
 class SeasonLanguageCacheTests(TestCase):
-    """Season-level languages persist per (movie, region, season) and are read back."""
+    """Season-level languages persist per (movie, region, season) on write."""
 
     @staticmethod
     def _result(with_seasons=True):
@@ -134,15 +130,10 @@ class SeasonLanguageCacheTests(TestCase):
             content_type="series",
             seasons_data=SEASONS_DATA,
         )
-        self.upstream = MagicMock()
-        self.upstream.get_availability.return_value = self._result()
-        self.cache = AvailabilityCache(
-            client=self.upstream, limiter=RateLimiter("test_season_langs")
-        )
-        ApiCallCounter.objects.filter(service="test_season_langs").delete()
+        self.cache = AvailabilityCache()
 
     def test_season_level_languages_are_persisted_per_season(self):
-        self.cache.get_or_refresh(self.series)
+        self.cache._write_result(self.series, self._result())
 
         region = Region.objects.get(provider="prime", country="NL")
         season_one = LanguageInfo.objects.get(
@@ -169,41 +160,9 @@ class SeasonLanguageCacheTests(TestCase):
         self.assertEqual(codes(show_level, "audio"), ["EN"])
         self.assertEqual(codes(show_level, "subtitle"), ["EN"])
 
-    def test_read_offers_returns_the_selected_seasons_languages(self):
-        self.cache.get_or_refresh(self.series)
-
-        season_one = {
-            o.service: o for o in self.cache.read_offers(self.series, season=1)
-        }["prime"]
-        self.assertEqual(season_one.audio_languages, ["EN"])
-        self.assertEqual(season_one.subtitle_languages, ["EN", "NL"])
-
-        season_two = {
-            o.service: o for o in self.cache.read_offers(self.series, season=2)
-        }["prime"]
-        self.assertEqual(season_two.audio_languages, ["DE"])
-        self.assertEqual(season_two.subtitle_languages, ["DE"])
-
-        # The unfiltered view keeps the show-level languages (pre-fix shape).
-        unfiltered = {
-            o.service: o for o in self.cache.read_offers(self.series)
-        }["prime"]
-        self.assertEqual(unfiltered.audio_languages, ["EN"])
-        self.assertEqual(unfiltered.subtitle_languages, ["EN"])
-
     def test_two_seasons_do_not_cross_contaminate(self):
-        self.cache.get_or_refresh(self.series)
+        self.cache._write_result(self.series, self._result())
 
-        season_one = {
-            o.service: o for o in self.cache.read_offers(self.series, season=1)
-        }["prime"]
-        season_two = {
-            o.service: o for o in self.cache.read_offers(self.series, season=2)
-        }["prime"]
-
-        self.assertNotEqual(season_one.audio_languages, season_two.audio_languages)
-        self.assertNotIn("DE", season_one.audio_languages)
-        self.assertNotIn("EN", season_two.audio_languages)
         # Season rows exist independently for the same (movie, region).
         region = Region.objects.get(provider="prime", country="NL")
         self.assertEqual(
@@ -214,45 +173,34 @@ class SeasonLanguageCacheTests(TestCase):
             ),
             {1, 2, None},
         )
+        season_one = LanguageInfo.objects.get(
+            movie=self.series, region=region, season=1
+        )
+        season_two = LanguageInfo.objects.get(
+            movie=self.series, region=region, season=2
+        )
+        one_audio = [e.language_code for e in season_one.entries.filter(kind="audio")]
+        two_audio = [e.language_code for e in season_two.entries.filter(kind="audio")]
+        self.assertNotEqual(one_audio, two_audio)
+        self.assertNotIn("DE", one_audio)
+        self.assertNotIn("EN", two_audio)
 
-    def test_season_read_falls_back_to_show_level_when_no_season_row(self):
-        """Legacy caches (pre-migration) only have show-level rows."""
-        self.cache.get_or_refresh(self.series)
-        LanguageInfo.objects.filter(
-            movie=self.series, season__isnull=False
-        ).delete()
-
-        fallback = {
-            o.service: o for o in self.cache.read_offers(self.series, season=1)
-        }["prime"]
-
-        self.assertEqual(fallback.audio_languages, ["EN"])
-        self.assertEqual(fallback.subtitle_languages, ["EN"])
-
-    def test_refresh_without_seasons_drops_stale_season_language_rows(self):
-        self.cache.get_or_refresh(self.series)
+    def test_write_without_seasons_drops_stale_season_language_rows(self):
+        self.cache._write_result(self.series, self._result())
         self.assertTrue(
             LanguageInfo.objects.filter(
                 movie=self.series, season__isnull=False
             ).exists()
         )
 
-        self.upstream.get_availability.return_value = self._result(
-            with_seasons=False
-        )
-        Availability.objects.update(
-            movie=self.series,
-            last_checked_at=timezone.now() - dt.timedelta(days=2),
-        )
-        status = self.cache.get_or_refresh(self.series)
-        self.assertTrue(status.refreshed)
+        self.cache._write_result(self.series, self._result(with_seasons=False))
 
         self.assertFalse(
             LanguageInfo.objects.filter(
                 movie=self.series, season__isnull=False
             ).exists()
         )
-        # Show-level rows survive the refresh.
+        # Show-level rows survive the write.
         self.assertTrue(
             LanguageInfo.objects.filter(
                 movie=self.series, season=None
@@ -263,15 +211,6 @@ class SeasonLanguageCacheTests(TestCase):
 class SeasonLanguageScoringTests(TestCase):
     """The language matcher evaluates the selected season's own languages."""
 
-    @staticmethod
-    def _result():
-        show = [_offer(audio=("EN",), subs=("EN",))]
-        seasons = [
-            StreamingSeason(title="Season 1", offers=[_offer(audio=("EN",), subs=("EN",))]),
-            StreamingSeason(title="Season 2", offers=[_offer(audio=("DE",), subs=("DE",))]),
-        ]
-        return StreamingResult(tmdb_id=2316, offers=show, seasons=seasons)
-
     def setUp(self):
         self.series = Movie.objects.create(
             tmdb_id=2316,
@@ -280,13 +219,10 @@ class SeasonLanguageScoringTests(TestCase):
             content_type="series",
             seasons_data=SEASONS_DATA,
         )
-        self.upstream = MagicMock()
-        self.upstream.get_availability.return_value = self._result()
-        self.cache = AvailabilityCache(
-            client=self.upstream, limiter=RateLimiter("test_season_score")
-        )
-        ApiCallCounter.objects.filter(service="test_season_score").delete()
-        self.cache.get_or_refresh(self.series)
+        local_offer(self.series, country="NL", service="prime", season_number=1,
+                    audio_languages=["EN"], subtitle_languages=["EN"])
+        local_offer(self.series, country="NL", service="prime", season_number=2,
+                    audio_languages=["DE"], subtitle_languages=["DE"])
 
     @staticmethod
     def _preference(language_rule=None):
@@ -301,8 +237,8 @@ class SeasonLanguageScoringTests(TestCase):
     def test_language_rule_matches_the_seasons_own_language(self):
         rule = {"type": "condition", "field": "audio", "languages": ["DE"]}
 
-        season_one = self.cache.read_offers(self.series, season=1)[0]
-        season_two = self.cache.read_offers(self.series, season=2)[0]
+        season_one = get_local_offers(self.series, season=1)[0]
+        season_two = get_local_offers(self.series, season=2)[0]
 
         self.assertFalse(
             score_offer(season_one, self._preference(rule)).is_match
@@ -320,8 +256,8 @@ class SeasonLanguageScoringTests(TestCase):
             language_rule=None,
         )
 
-        season_one = self.cache.read_offers(self.series, season=1)[0]
-        season_two = self.cache.read_offers(self.series, season=2)[0]
+        season_one = get_local_offers(self.series, season=1)[0]
+        season_two = get_local_offers(self.series, season=2)[0]
 
         self.assertFalse(score_offer(season_one, preference).is_match)
         self.assertTrue(score_offer(season_two, preference).is_match)
@@ -392,27 +328,25 @@ class MovieLanguageRegressionTests(TestCase):
         self.movie = Movie.objects.create(
             tmdb_id=680, title="Pulp Fiction", year=1994, content_type="movie"
         )
-        self.upstream = MagicMock()
-        self.upstream.get_availability.return_value = self._result()
-        self.cache = AvailabilityCache(
-            client=self.upstream, limiter=RateLimiter("test_movie_langs")
-        )
-        ApiCallCounter.objects.filter(service="test_movie_langs").delete()
+        self.cache = AvailabilityCache()
 
-    def test_movie_writes_only_show_level_rows_and_reads_unchanged(self):
-        self.cache.get_or_refresh(self.movie)
+    def test_movie_writes_only_show_level_rows(self):
+        self.cache._write_result(self.movie, self._result())
 
         infos = LanguageInfo.objects.filter(movie=self.movie)
         self.assertEqual(infos.count(), 2)
         self.assertFalse(infos.exclude(season=None).exists())
 
-        offers = {o.service: o for o in self.cache.read_offers(self.movie)}
-        self.assertEqual(offers["prime"].audio_languages, ["EN"])
-        self.assertEqual(offers["netflix"].audio_languages, ["IT"])
-        self.assertEqual(offers["netflix"].subtitle_languages, ["IT", "EN"])
+        def codes(info, kind):
+            return [
+                e.language_code
+                for e in info.entries.filter(kind=kind).order_by("id")
+            ]
 
-        # Movie views never pass a season, and season reads stay empty.
-        self.assertEqual(self.cache.read_offers(self.movie, season=1), [])
+        by_provider = {i.region.provider: i for i in infos}
+        self.assertEqual(codes(by_provider["prime"], "audio"), ["EN"])
+        self.assertEqual(codes(by_provider["netflix"], "audio"), ["IT"])
+        self.assertEqual(codes(by_provider["netflix"], "subtitle"), ["IT", "EN"])
 
 
 class LanguageInfoSeasonModelTests(TestCase):

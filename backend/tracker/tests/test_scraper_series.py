@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 from django.test import TestCase
 from rest_framework.test import APIClient
 
+from availability.services.legacy_ingest import ingest_scraped_mapping
 from tracker.models import Movie, Provider, ScrapedContentMapping
 from tracker.scrapers import (
     BBCScraper,
@@ -545,7 +546,7 @@ class UnofficialOffersSeasonGatingTests(TestCase):
         self.provider.save()
 
         for target in (self.series, self.movie):
-            ScrapedContentMapping.objects.create(
+            mapping = ScrapedContentMapping.objects.create(
                 provider=self.provider,
                 movie=target,
                 scraped_title=target.title,
@@ -554,6 +555,10 @@ class UnofficialOffersSeasonGatingTests(TestCase):
                 is_available=True,
                 raw_payload={"audio_languages": ["EN"], "subtitle_languages": ["EN"]},
             )
+            # The v2 offers endpoint reads the canonical catalogue, so the
+            # fixture must go through the ingestion bridge like production
+            # scraper writes do.
+            ingest_scraped_mapping(mapping)
 
     def test_no_season_returns_the_scraper_offers(self):
         response = self.client.get("/api/v2/unofficial/movie/1396/offers/")

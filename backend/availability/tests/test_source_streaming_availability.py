@@ -69,10 +69,12 @@ class StreamingAvailabilitySourceTests(TestCase):
             tmdb_id=1396,
             offers=[_offer(service_id="prime")],
         )
-        source, _client = _source(result)
+        source, client = _source(result)
 
         response = source.fetch(self.series)
 
+        # The series row must refresh through the /shows/tv/ twin endpoint.
+        client.get_availability.assert_called_once_with(1396, content_type="series")
         offer = response.offers[0]
         self.assertEqual(offer.content_type, ContentType.SERIES)
         self.assertIsNone(offer.season_number, "a series-level offer must not become a season offer")

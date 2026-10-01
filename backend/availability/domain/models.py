@@ -124,6 +124,12 @@ class UnofficialCatalogueEntry:
     Unlike ``ProviderContentView`` this view is year-precision (the stored
     ``release_date`` collapses to its year) because that is what the API
     contract exposes.
+
+    ``country`` and the observation timestamps exist for the
+    ``GET /api/v2/unofficial/`` contract, which serialises the row's scrape
+    country and its observation times: ``first_seen``/``updated_at``/
+    ``last_seen`` map onto the legacy ``created_at``/``updated_at``/
+    ``last_scraped_at`` fields one-to-one.
     """
 
     content_id: int
@@ -137,9 +143,14 @@ class UnofficialCatalogueEntry:
     year: Optional[int]
     poster_path: str
     provider_url: str
+    country: str = ""
     tmdb_id: Optional[int] = None
     confidence: Optional[float] = None
     match_method: str = ""
     audio_languages: list[str] = field(default_factory=list)
     subtitle_languages: list[str] = field(default_factory=list)
+    currently_available: bool = True
+    first_seen: Optional[datetime] = None
+    last_seen: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 

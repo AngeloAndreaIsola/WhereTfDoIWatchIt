@@ -281,7 +281,8 @@ class ProviderContentRepository:
         return qs.select_related("provider").order_by("identity")
 
     def list_unofficial(self, *, provider_slugs=None, search=None, country=None,
-                        year_min=None, year_max=None):
+                        year_min=None, year_max=None, provider_categories=None,
+                        currently_available=True):
         """Catalogue rows for the unofficial section of the unified catalogue.
 
         An *unofficial* row is one observed by the legacy scraper ingestion
@@ -290,22 +291,31 @@ class ProviderContentRepository:
         its unofficial section, now served from the canonical tables instead
         of ``tracker.ScrapedContentMapping``.
 
-        Filters mirror that legacy read: enabled providers, currently
-        available rows, an optional provider slug set, case-insensitive title
-        search, provider-or-row country, and a year range over the stored
-        year-precision release date (rows without one drop out of a bounded
-        range, as legacy rows without a year did). Ordered by recency of
-        observation with identity as a stable tiebreak. Purely local: no
-        source, client, or refresh module is reachable from here.
+        Filters mirror that legacy read: enabled providers, an optional
+        provider slug set, case-insensitive title search, provider-or-row
+        country, and a year range over the stored year-precision release date
+        (rows without one drop out of a bounded range, as legacy rows without
+        a year did). ``provider_categories`` narrows to raw ``Provider``
+        categories (the ``/api/v2/unofficial/`` category scope);
+        ``currently_available`` is tri-state — ``True`` (default) only
+        available rows, ``None`` does not filter on availability at all (the
+        legacy ``available=false`` answer), ``False`` only unavailable ones.
+        Ordered by recency of observation with identity as a stable tiebreak.
+        Purely local: no source, client, or refresh module is reachable from
+        here.
         """
         qs = (
             ProviderContent.objects.select_related("provider", "source")
-            .filter(provider__is_enabled=True, currently_available=True)
+            .filter(provider__is_enabled=True)
             .filter(
                 Q(provider__category=ProviderCategory.SCRAPER)
                 | Q(source__slug=LEGACY_SCRAPER_SOURCE_SLUG)
             )
         )
+        if currently_available is not None:
+            qs = qs.filter(currently_available=currently_available)
+        if provider_categories is not None:
+            qs = qs.filter(provider__category__in=list(provider_categories))
         if provider_slugs is not None:
             qs = qs.filter(provider__slug__in=list(provider_slugs))
         if search:
@@ -319,6 +329,37 @@ class ProviderContentRepository:
         if year_max is not None:
             qs = qs.filter(release_date__year__lte=year_max)
         return qs.order_by("-updated_at", "identity")
+
+    def list_mapped_to_tmdb(self, *, tmdb_id, provider_categories=None):
+        """Catalogue rows whose ``ContentMapping`` resolves to *tmdb_id*.
+
+        The canonical replacement for reading ``ScrapedContentMapping`` by
+        ``movie=`` (the prime BVOD block and ``/api/v2/unofficial/movie/<id>/offers/``).
+        Same *unofficial row* predicate and observation filters as
+        ``list_unofficial`` — enabled providers, currently available, owned by
+        a scraper-category provider or observed by the legacy scraper bridge —
+        narrowed through the mapping join, with an optional raw provider
+        category set (bvod/avod/tvod/fast vs scraper). Rows a canonical
+        source (BBC iPlayer, Tubi, …) observed for the same provider are
+        deliberately out of scope: they surface through the official read
+        path, never here. Purely local: no source, client, or refresh module
+        is reachable from here.
+        """
+        qs = (
+            ProviderContent.objects.select_related("provider", "source")
+            .filter(
+                mappings__tmdb_id=tmdb_id,
+                provider__is_enabled=True,
+                currently_available=True,
+            )
+            .filter(
+                Q(provider__category=ProviderCategory.SCRAPER)
+                | Q(source__slug=LEGACY_SCRAPER_SOURCE_SLUG)
+            )
+        )
+        if provider_categories is not None:
+            qs = qs.filter(provider__category__in=list(provider_categories))
+        return qs.distinct().order_by("-updated_at", "identity")
 
     def search_by_title(self, title, *, provider=None, content_type=None,
                         currently_available=None):
