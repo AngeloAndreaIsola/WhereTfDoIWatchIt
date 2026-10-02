@@ -38,6 +38,7 @@ Contracts:
 """
 from __future__ import annotations
 
+import datetime as dt
 import logging
 
 from django.db import IntegrityError
@@ -45,11 +46,16 @@ from django.utils import timezone
 
 from availability.models import Offer
 from availability.services.refresh import AvailabilityRefreshService
-from availability.sources import source_registry
+from availability.sources import DEFAULT_SOURCE_SLUG, source_registry
 
-from ..models import RefreshPriority, RefreshRequest, RefreshRequestStatus
-from .bulk_refresh import is_stale
-from .rate_limit import RateLimitExceeded
+from ..models import (
+    RefreshPriority,
+    RefreshRequest,
+    RefreshRequestStatus,
+    RefreshRun,
+)
+from .bulk_refresh import BulkRefreshSummary, is_stale
+from .rate_limit import RateLimitExceeded, RateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -57,10 +63,34 @@ logger = logging.getLogger(__name__)
 # and left alone (a later event may legitimately open a fresh request).
 MAX_ATTEMPTS = 3
 
+# After a completed attempt (done or failed), the same (movie, source) scope
+# is left alone for this long even when the title still reads as stale. A
+# completed refresh that found nothing is *not* "fresh" (absence is not
+# evidence), so without this window every detail view or frontend poll of an
+# unavailable title would enqueue — and the worker would spend — a brand-new
+# external fetch on each read.
+RECENT_ATTEMPT_WINDOW = dt.timedelta(minutes=10)
+
 
 def has_canonical_offers(movie) -> bool:
     """True when the canonical path has ever observed this title."""
     return Offer.objects.filter(tmdb_id=movie.tmdb_id).exists()
+
+
+def recently_attempted(movie, source: str = "") -> bool:
+    """True when this scope already had a completed attempt within the window.
+
+    Guards the enqueue side against churn: a drain that found nothing leaves
+    the title stale, and this read-side check is what stops the next detail
+    view (or frontend poll) from immediately opening another attempt for the
+    very same observation window.
+    """
+    return RefreshRequest.objects.filter(
+        movie=movie,
+        source=source,
+        status__in=[RefreshRequestStatus.DONE, RefreshRequestStatus.FAILED],
+        completed_at__gte=timezone.now() - RECENT_ATTEMPT_WINDOW,
+    ).exists()
 
 
 def request_availability_refresh(
@@ -79,14 +109,20 @@ def request_availability_refresh(
 
     ``if_stale`` (default) skips titles whose canonical offers *for the
     requested source scope* are fresh (that scope's own freshness window, see
-    ``availability.freshness``), so repeated events (detail views, re-adds)
-    do not churn the queue — and one source's fresh observation never makes
-    another source's stale scope look fresh. Never raises: an enqueue failure
-    is logged and swallowed so it cannot break the user action that triggered
-    it.
+    ``availability.freshness``) and titles whose same scope completed an
+    attempt within ``RECENT_ATTEMPT_WINDOW``, so repeated events (detail
+    views, frontend polls, re-adds) do not churn the queue — and one source's
+    fresh observation never makes another source's stale scope look fresh.
+    Never raises: an enqueue failure is logged and swallowed so it cannot
+    break the user action that triggered it.
     """
     try:
         if if_stale and not is_stale(movie, source=source):
+            return None
+        if if_stale and recently_attempted(movie, source):
+            # Already fetched (or failed) moments ago for this scope — the
+            # title may legitimately still be stale because the provider has
+            # nothing for it; do not open a new attempt on every read.
             return None
 
         effective_priority = priority
@@ -314,3 +350,64 @@ def drain_refresh_requests(
         )
 
     return excluded
+
+
+def process_refresh_queue(
+    *,
+    budget: int = 10,
+    service: AvailabilityRefreshService | None = None,
+    limiter: RateLimiter | None = None,
+) -> dict | None:
+    """Drain the pending ``RefreshRequest`` queue exactly once (worker tick).
+
+    The queue-only counterpart to ``process_watchlist_refresh``: it settles
+    pending event-driven requests in priority order under the same
+    ``RateLimiter``/daily quota, the same per-source freshness policy and the
+    same ``RefreshRun`` audit row — but it never runs the background stale
+    sweep. The refresh worker loops on this function, so a tick must not be
+    able to spend the daily API budget on maintenance the scheduled
+    ``refresh_availability`` run already owns.
+
+    Returns the run summary dict, or ``None`` when the queue is empty (the
+    common idle tick: no ``RefreshRun`` row, no work). When the daily quota
+    is already exhausted the queue is left untouched and a summary with
+    ``rate_limited=True`` is returned without creating a ``RefreshRun`` —
+    there is nothing to audit when not a single request can be attempted.
+    """
+    pending = RefreshRequest.objects.filter(status=RefreshRequestStatus.PENDING)
+    if not pending.exists():
+        return None
+
+    service = service or AvailabilityRefreshService()
+    limiter = limiter or RateLimiter(DEFAULT_SOURCE_SLUG)
+
+    summary = BulkRefreshSummary(budget=budget, remaining_budget=budget)
+    if limiter.remaining() <= 0:
+        summary.rate_limited = True
+        summary.requests_pending = pending.count()
+        return summary.to_dict()
+
+    run = RefreshRun.objects.create(
+        service=DEFAULT_SOURCE_SLUG,
+        started_at=timezone.now(),
+    )
+    drain_refresh_requests(summary=summary, service=service, limiter=limiter)
+    run.rows_refreshed = summary.refreshed
+    run.rows_skipped = (
+        summary.skipped_cached
+        + summary.skipped_budget_exhausted
+        + summary.skipped_rate_limited
+    )
+    run.rate_limited = summary.rate_limited
+    run.finished_at = timezone.now()
+    run.save()
+
+    summary.requests_pending = pending.count()
+    return summary.to_dict()
+
+
+def has_pending_request(tmdb_id: int) -> bool:
+    """True when any source scope for this title still waits in the queue."""
+    return RefreshRequest.objects.filter(
+        movie__tmdb_id=tmdb_id, status=RefreshRequestStatus.PENDING
+    ).exists()

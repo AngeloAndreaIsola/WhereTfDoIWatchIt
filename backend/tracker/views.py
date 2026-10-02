@@ -24,6 +24,8 @@ from .models import (
     Preference,
     Provider,
     RefreshPriority,
+    RefreshRequest,
+    RefreshRequestStatus,
     Region,
     ScrapedContentMapping,
     Subscription,
@@ -1523,6 +1525,12 @@ def _prime_detail_response(request, item: Movie, key: str) -> Response:
         "is_in_watchlist": is_in_watchlist,
         "watch_events": MovieWatchEventSerializer(watch_events, many=True).data,
         "offers": _build_prime_offers(request, item, season=season),
+        # True while this title still waits in the refresh queue — the
+        # frontend polls on it ("Checking availability…") until the worker
+        # drains the request and canonical offers land.
+        "refresh_pending": RefreshRequest.objects.filter(
+            movie=item, status=RefreshRequestStatus.PENDING
+        ).exists(),
     }
     if key == "series":
         payload["seasons"] = _season_summaries(item)

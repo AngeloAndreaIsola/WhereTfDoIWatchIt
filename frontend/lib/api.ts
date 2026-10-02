@@ -76,6 +76,8 @@ export interface PrimeMovieResponse {
   is_in_watchlist?: boolean;
   watch_events?: MovieWatchEvent[];
   offers: PrimeOffer[];
+  /** True while this title still waits in the backend refresh queue — the page polls until it clears. */
+  refresh_pending?: boolean;
 }
 
 export interface SeriesDetail {
@@ -110,6 +112,8 @@ export interface PrimeSeriesResponse {
   seasons?: SeasonSummary[];
   /** Season echoed back for `?season=N`; null/absent when unfiltered. */
   selected_season?: number | null;
+  /** True while this title still waits in the backend refresh queue — the page polls until it clears. */
+  refresh_pending?: boolean;
 }
 
 export interface WatchResult {

@@ -82,7 +82,11 @@ docker compose exec -T backend python manage.py ingest_legacy_scraper_catalogue
 The command is idempotent (re-running upserts the same `legacy-<pk>` identities) and local-only — no network, no TMDb, no offers written. New scraper rows are bridged automatically on save, so this never needs re-running.
 
 ### Event-driven availability refresh (Phase B)
-No additional service, worker or cron entry is required: watchlist adds, imports and detail views only queue `tracker.RefreshRequest` rows (migration `tracker.0029_refreshrequest`, applied automatically by the entrypoint above), and the existing `refresh_availability` cron plus `POST /api/watchlist/refresh/` drain that queue first, within the same daily budget. The pending backlog and any `failed` requests are inspectable read-only in the Django admin under **Tracker → Refresh requests**.
+Watchlist adds, imports and detail views only queue `tracker.RefreshRequest` rows (migration `tracker.0029_refreshrequest`, applied automatically by the entrypoint above) — they never perform network I/O. The queue is consumed by the dedicated **`worker` service** in `docker-compose.yml`, which runs `python manage.py refresh_worker`: a loop that drains pending requests in priority order (the `RefreshPriority` ladder), through the same `RateLimiter`/daily budget and `RefreshRun` audit row as the scheduled sweep, but never runs the sweep itself (that stays with the `refresh_availability` cron). The worker entrypoint (`worker-entrypoint.sh`) waits for `migrate --check` instead of migrating, so the `backend` container remains the only migrator.
+
+Because the drain is asynchronous, the prime detail payload reports `refresh_pending`; while it is `true` and no offers exist yet, the frontend shows "Checking availability…" and polls until the worker lands offers (or the request settles). Detail views of an already-attempted title are left alone for `RECENT_ATTEMPT_WINDOW` (10 minutes) by the enqueue guard, so polling never re-spends API budget on a settled observation.
+
+The existing `refresh_availability` cron and `POST /api/watchlist/refresh/` also drain the queue first as a fallback. The pending backlog and any `failed` requests are inspectable read-only in the Django admin under **Tracker → Refresh requests**.
 
 ---
 
@@ -192,7 +196,7 @@ To restore a SQL dump into the database:
 
 1. Stop application containers to prevent write conflicts:
    ```bash
-   docker compose stop backend frontend
+   docker compose stop backend frontend worker
    ```
 
 2. Drop and recreate database or restore directly:
@@ -206,7 +210,7 @@ To restore a SQL dump into the database:
 
 3. Restart application services:
    ```bash
-   docker compose start backend frontend
+   docker compose start backend frontend worker
    ```
 
 > **Warning**:

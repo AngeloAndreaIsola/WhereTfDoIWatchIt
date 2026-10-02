@@ -48,5 +48,28 @@ services:
         condition: service_started
     restart: unless-stopped
 
+  worker:
+    build: ./backend
+    command: python manage.py refresh_worker
+    entrypoint: ["/worker-entrypoint.sh"]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_HOST: ${POSTGRES_HOST:-db}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
+      DJANGO_DEBUG: ${DJANGO_DEBUG}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS}
+      TMDB_API_KEY: ${TMDB_API_KEY:-}
+      RAPIDAPI_KEY: ${RAPIDAPI_KEY:-}
+      DEFAULT_PREFERENCE_PROVIDER: ${DEFAULT_PREFERENCE_PROVIDER:-prime}
+    depends_on:
+      db:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    restart: unless-stopped
+
 volumes:
   pgdata:

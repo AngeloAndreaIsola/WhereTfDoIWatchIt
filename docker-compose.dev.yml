@@ -4,6 +4,10 @@ services:
     volumes:
       - ./backend:/app
 
+  worker:
+    volumes:
+      - ./backend:/app
+
   frontend:
     command: npm run dev
     volumes:

@@ -33,6 +33,11 @@ interface MovieDetailPageProps {
   params: { tmdb_id: string };
 }
 
+/** How often to re-check local availability while a refresh is queued. */
+const AVAILABILITY_POLL_INTERVAL_MS = 4000;
+/** Give up polling after this long; the queued refresh can still land later. */
+const AVAILABILITY_POLL_TIMEOUT_MS = 60000;
+
 export default function MovieDetailPage({ params }: MovieDetailPageProps) {
   const tmdbId = parseInt(params.tmdb_id, 10);
   const router = useRouter();
@@ -47,6 +52,7 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
   const [error, setError] = useState<string | null>(null);
   const [unofficialOffers, setUnofficialOffers] = useState<UnofficialOffer[] | null>(null);
   const [unofficialLoading, setUnofficialLoading] = useState(false);
+  const [pollTimedOut, setPollTimedOut] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
 
   useEffect(() => {
@@ -54,6 +60,7 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
     setLoading(true);
     setError(null);
     setData(null);
+    setPollTimedOut(false);
 
     // Fetch user preferences for exact language match highlighting
     fetch("/api/preferences/")
@@ -127,6 +134,36 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
     };
   }, [tmdbId, currentCountry]);
 
+  // The backend queues an async refresh when the detail page is opened; the
+  // worker drains it and only then are canonical offers written. While this
+  // title has no offers and the queue still holds a pending request, poll the
+  // same endpoint until offers arrive, the request settles, or we time out
+  // (a rate-limited refresh can still land later — see the queued note).
+  const waitingForRefresh = !!data && data.offers.length === 0 && !!data.refresh_pending;
+
+  useEffect(() => {
+    if (!waitingForRefresh || pollTimedOut) return;
+    let cancelled = false;
+    const startedAt = Date.now();
+    const id = setInterval(() => {
+      if (cancelled) return;
+      if (Date.now() - startedAt >= AVAILABILITY_POLL_TIMEOUT_MS) {
+        clearInterval(id);
+        setPollTimedOut(true);
+        return;
+      }
+      fetchPrimeMovieOffers(tmdbId, currentCountry)
+        .then((d) => {
+          if (!cancelled) setData(d);
+        })
+        .catch(() => {});
+    }, AVAILABILITY_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [waitingForRefresh, pollTimedOut, tmdbId, currentCountry]);
+
   const posterUrl = data?.movie?.poster_path
     ? `https://image.tmdb.org/t/p/w500${data.movie.poster_path}`
     : null;
@@ -163,6 +200,7 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
   );
 
   const reloadMovie = useCallback(() => {
+    setPollTimedOut(false);
     fetchPrimeMovieOffers(tmdbId, currentCountry).then((d) => setData(d)).catch(() => {});
   }, [tmdbId, currentCountry]);
 
@@ -439,9 +477,33 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
             </h2>
 
             {data.offers.length === 0 ? (
-              <div className="rounded-xl border border-gray-200 bg-white p-6 text-center text-sm text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400">
-                Not currently available on your subscribed streaming services.
-              </div>
+              waitingForRefresh && !pollTimedOut ? (
+                <div className="rounded-xl border border-dashed border-blue-300 bg-blue-50/50 p-6 text-center text-sm text-blue-700 dark:border-blue-700 dark:bg-blue-900/20 dark:text-blue-300">
+                  <span className="inline-flex items-center gap-2">
+                    <span className="h-2 w-2 animate-pulse rounded-full bg-blue-500" />
+                    Checking availability…
+                  </span>
+                  <p className="mt-2 text-xs text-blue-600/80 dark:text-blue-400/80">
+                    This title has no local availability yet — we&rsquo;re fetching it now.
+                  </p>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-gray-200 bg-white p-6 text-center text-sm text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400">
+                  Not currently available on your subscribed streaming services.
+                  {data.refresh_pending && (
+                    <p className="mt-2 text-xs">
+                      An availability refresh is still queued.
+                      <button
+                        type="button"
+                        onClick={reloadMovie}
+                        className="ml-1 font-semibold text-blue-600 hover:underline dark:text-blue-400"
+                      >
+                        Check again
+                      </button>
+                    </p>
+                  )}
+                </div>
+              )
             ) : (
               <div className="space-y-3">
                 {/* Best match card */}
