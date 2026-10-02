@@ -12,6 +12,10 @@ Contracts under test:
 - same guards as every other refresh path: rate limiter (upfront and per
   request), per-source freshness (a fresh scope settles without spending
   budget), ``RefreshRun`` audit row;
+- after the title queue the tick runs the watchlist's pending
+  ``CatalogueRefreshRequest`` marker (whole-catalogue syncs, no API budget),
+  and a rate-limited tick is *printed* instead of staying silent — an
+  exhausted quota must be observable, not mistaken for a dead worker;
 - the detail payload reports ``refresh_pending`` so the frontend can show
   "Checking availability…" and poll instead of a premature empty state.
 
@@ -20,12 +24,16 @@ provider.
 """
 from __future__ import annotations
 
+import io
+import json
 from unittest.mock import MagicMock, patch
 
 from django.core.management import call_command
 from django.test import TestCase
 
 from tracker.models import (
+    CatalogueRefreshRequest,
+    CatalogueRefreshStatus,
     Movie,
     RefreshRequestStatus,
     RefreshRun,
@@ -34,6 +42,7 @@ from tracker.services.refresh_requests import (
     has_pending_request,
     process_refresh_queue,
     request_availability_refresh,
+    request_catalogue_refresh,
 )
 from tracker.tests.availability_factories import local_offer
 
@@ -172,6 +181,90 @@ class RefreshWorkerCommandTests(TestCase):
         call_command("refresh_worker", "--once", verbosity=0)  # must not raise
 
         process.assert_called_once()
+
+    @patch("tracker.management.commands.refresh_worker.process_refresh_queue")
+    def test_rate_limited_tick_is_printed(self, process):
+        """An exhausted quota must be visible in the logs, not silent."""
+        process.return_value = {
+            "rate_limited": True,
+            "requests_drained": 0,
+            "requests_pending": 7,
+            "errors": 0,
+            "refreshed": 0,
+        }
+
+        out = io.StringIO()
+        call_command("refresh_worker", "--once", stdout=out)
+
+        summary = json.loads(out.getvalue().strip())
+        self.assertTrue(summary["rate_limited"])
+        self.assertEqual(summary["requests_pending"], 7)
+
+    @patch("tracker.management.commands.refresh_worker.process_refresh_queue")
+    def test_idle_quiet_tick_prints_nothing(self, process):
+        process.return_value = None
+
+        out = io.StringIO()
+        call_command("refresh_worker", "--once", stdout=out)
+
+        self.assertEqual(out.getvalue().strip(), "")
+
+
+class WorkerCatalogueMarkerTests(TestCase):
+    """The worker drains titles first, then the queued catalogue marker."""
+
+    @patch("tracker.management.commands.refresh_worker.process_refresh_queue")
+    @patch("tracker.services.bulk_refresh.process_catalogue_refresh")
+    def test_tick_runs_the_pending_marker_after_the_title_queue(
+        self, run_catalogue, process_queue
+    ):
+        process_queue.return_value = None
+        run_catalogue.return_value = {"errors": 0}
+        request_catalogue_refresh(["src_x"])
+
+        out = io.StringIO()
+        call_command("refresh_worker", "--once", stdout=out)
+
+        run_catalogue.assert_called_once_with(source_slug="src_x")
+        marker = CatalogueRefreshRequest.objects.get()
+        self.assertEqual(marker.status, CatalogueRefreshStatus.DONE)
+        payload = json.loads(out.getvalue().strip())
+        self.assertEqual(payload["catalogue"]["sources"], ["src_x"])
+        self.assertEqual(payload["catalogue"]["failed_sources"], [])
+
+    @patch("tracker.management.commands.refresh_worker.process_refresh_queue")
+    @patch("tracker.services.bulk_refresh.process_catalogue_refresh")
+    def test_marker_runs_even_when_the_title_queue_is_rate_limited(
+        self, run_catalogue, process_queue
+    ):
+        # Catalogue syncs spend no API budget, so quota exhaustion on the
+        # title side must not park them.
+        process_queue.return_value = {
+            "rate_limited": True,
+            "requests_drained": 0,
+            "errors": 0,
+            "refreshed": 0,
+            "requests_pending": 3,
+        }
+        run_catalogue.return_value = {"errors": 0}
+        request_catalogue_refresh(["src_x"])
+
+        call_command("refresh_worker", "--once", stdout=io.StringIO())
+
+        run_catalogue.assert_called_once_with(source_slug="src_x")
+
+    @patch("tracker.management.commands.refresh_worker.process_refresh_queue")
+    @patch("tracker.management.commands.refresh_worker.process_pending_catalogue_refresh")
+    def test_titles_always_drain_before_the_catalogue_marker(
+        self, marker, process_queue
+    ):
+        order = []
+        process_queue.side_effect = lambda **kwargs: order.append("titles") or None
+        marker.side_effect = lambda: order.append("catalogue")
+
+        call_command("refresh_worker", "--once", stdout=io.StringIO())
+
+        self.assertEqual(order, ["titles", "catalogue"])
 
 
 class PrimeDetailPendingFlagTests(TestCase):

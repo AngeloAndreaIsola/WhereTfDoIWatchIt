@@ -10,12 +10,29 @@ const api = vi.hoisted(() => ({
 
 vi.mock("@/lib/api", () => api);
 
-function queued(now = 1000, count = 3) {
-  return { queued: count, total_watchlist: count, now };
+const BATCH = "11111111-1111-4111-8111-111111111111";
+
+function queued(now = 1000, count = 3, catalogue_queued: string[] = []) {
+  return { queued: count, total_watchlist: count, now, batch: BATCH, catalogue_queued };
 }
 
-function status(pending: number, refreshed: number, failed = 0) {
-  return { pending, refreshed, failed, since: 1000 };
+function status(
+  pending: number,
+  refreshed: number,
+  failed = 0,
+  rate_limited = false
+) {
+  return {
+    pending,
+    refreshed,
+    failed,
+    since: 1000,
+    batch: BATCH,
+    rate_limited,
+    quota_remaining: rate_limited ? 0 : 100,
+    quota_limit: 100,
+    resets_at: 2000,
+  };
 }
 
 async function flush() {
@@ -54,7 +71,7 @@ describe("WatchlistRefreshButton", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5000);
     });
-    expect(api.getWatchlistRefreshStatus).toHaveBeenCalledWith(1000);
+    expect(api.getWatchlistRefreshStatus).toHaveBeenCalledWith(1000, BATCH);
     expect(screen.getByRole("button")).toHaveTextContent("Refreshing… 0/3");
 
     await act(async () => {
@@ -150,5 +167,79 @@ describe("WatchlistRefreshButton", () => {
     expect(screen.getByRole("button")).toHaveTextContent(
       "Refresh all availability"
     );
+  });
+
+  it("scopes every poll to the run's batch id", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    api.requestWatchlistRefresh.mockResolvedValue(queued());
+    api.getWatchlistRefreshStatus.mockResolvedValue(status(1, 2));
+
+    render(<WatchlistRefreshButton />);
+    await flush();
+    fireEvent.click(screen.getByRole("button"));
+    await flush();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+
+    expect(api.getWatchlistRefreshStatus).toHaveBeenCalledTimes(2);
+    for (const call of api.getWatchlistRefreshStatus.mock.calls) {
+      expect(call).toEqual([1000, BATCH]);
+    }
+  });
+
+  it("says the quota is spent instead of a generic timeout", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    api.requestWatchlistRefresh.mockResolvedValue(queued());
+    api.getWatchlistRefreshStatus.mockResolvedValue(status(2, 1, 0, true));
+
+    render(<WatchlistRefreshButton />);
+    await flush();
+    fireEvent.click(screen.getByRole("button"));
+    await flush();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(
+      screen.getByText(/Daily API quota used/)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/2 titles resume/)).toBeInTheDocument();
+
+    // Past the timeout the quota note still wins over the generic copy.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+    });
+    expect(
+      screen.queryByText(/Refresh still running in the background/)
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/Daily API quota used/)
+    ).toBeInTheDocument();
+  });
+
+  it("mentions queued catalogue syncs while polling", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    api.requestWatchlistRefresh.mockResolvedValue(
+      queued(1000, 3, ["cbc_gem"])
+    );
+    api.getWatchlistRefreshStatus.mockResolvedValue(status(1, 2));
+
+    render(<WatchlistRefreshButton />);
+    await flush();
+    fireEvent.click(screen.getByRole("button"));
+    await flush();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+
+    expect(
+      screen.getByText(/Also syncing 1 catalogue source/)
+    ).toBeInTheDocument();
   });
 });

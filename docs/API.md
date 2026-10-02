@@ -48,8 +48,8 @@ This document provides the complete API contract specification for the **WhereTf
 | `POST` | `/api/watchlist/resolve/` | Resolve selected ambiguous/confirmed movies into watchlist. |
 | `GET` | `/api/watchlist/report/` | Generate aggregated availability report for watchlist items. |
 | `POST` | `/api/watchlist/refresh/` | Run a budgeted live availability refresh (returns `429` when rate-limited). |
-| `POST` | `/api/watchlist/refresh-explicit/` | Queue an explicit bulk refresh for every watchlisted title (enqueue-only, `202`). |
-| `GET` | `/api/watchlist/refresh-status/` | Progress counters (`pending` / `refreshed` / `failed`) for a bulk refresh since an epoch timestamp. |
+| `POST` | `/api/watchlist/refresh-explicit/` | Queue an explicit bulk refresh for every watchlisted title (enqueue-only, `202`). Returns a `batch` id for progress scoping and lists any stale catalogue sources queued alongside. |
+| `GET` | `/api/watchlist/refresh-status/` | Progress counters (`pending` / `refreshed` / `failed`) for a bulk refresh — scoped by `since` epoch and/or `batch` id — plus the shared daily quota (`rate_limited` / `quota_*` / `resets_at`). |
 | `GET` | `/api/catalog/unified/` | Unified catalogue: official titles with watchability merged with scraper sources, filtered and paginated. |
 | `GET` | `/api/prime/popular/` | Return trending/popular movies from TMDb for the homepage browse grid. |
 | `GET` | `/api/prime/movie/<tmdb_id>/` | Return ranked Prime Video availability offers for a single movie. |
@@ -307,6 +307,7 @@ This document provides the complete API contract specification for the **WhereTf
 - **Purpose**: Return an aggregated availability overview for all watchlist movies belonging to `user_id=1`.
 - **Behavior & Performance**:
   - Iterates through watchlist movies reading local canonical offers (reconciled `Offer` rows) — no external API calls.
+  - Each `watchability` object carries the title's queue evidence in `refresh_state` (`pending` / `checked` / `failed` / `never_checked`), which only matters when no offers are stored: a queued title reads `status: "checking"` (🔵 Checking availability…), a checked-but-empty one `status: "not_watchable"` with label "Not available" (⚫), a failed attempt "Unknown — last check failed" (⚪), and only a never-fetched title plain "Unknown" (⚪). Known offers always win — a queued re-check never hides a 🟢/🟡/⚫ verdict (the state stays visible on `refresh_state`).
   - Determines all available country codes (uppercase), the best country match, and best streaming service for each movie; supports the same composable filters as the unified catalogue (`q`, `content_type`, `year_min`/`year_max`, `country`, `providers`, `status`, `quality`, `genre`, `actors`, `score_min`) plus pagination (`page`, `page_size`).
 - **Response**: `200 OK`
   - Example: [`docs/examples/api/watchlist_report_response.json`](examples/api/watchlist_report_response.json)
@@ -323,7 +324,7 @@ This document provides the complete API contract specification for the **WhereTf
         "available_countries": ["GB", "US"],
         "best_country": "US",
         "best_service": "Netflix",
-        "watchability": { "status": "watchable_here", "status_label": "…", "best_offer": {} },
+        "watchability": { "status": "watchable_here", "status_label": "…", "refresh_state": "checked", "best_offer": {} },
         "is_watched": false,
         "user_data": null
       }
@@ -531,35 +532,43 @@ This document provides the complete API contract specification for the **WhereTf
 #### `POST /api/watchlist/refresh-explicit/`
 - **Purpose**: Backend for the "Refresh all availability" button on the watchlist page. One enqueue-only request queues a bulk explicit refresh for every distinct watchlisted title — the HTTP request never contacts a provider and never consumes API quota.
 - **Request Body**: none (an empty JSON object is accepted).
-- **Behavior**: for each distinct watchlisted `movie_id` (`user_id=1`) it calls the same enqueue path as the per-title button (`request_availability_refresh` with `priority=EXPLICIT`, `if_stale=False`, `source=""`): fresh titles are still re-checked (the `EXPLICIT` priority bypasses the freshness short-circuit in the drain), repeated clicks and already-pending titles collapse into the same pending row (partial unique constraint), queued lower-priority requests are upgraded to `EXPLICIT`, and never-fetched titles are bumped. The existing refresh worker drains the backlog with the same rate limiter, daily budget and `RefreshRun` audit row as every other path — when the daily quota is exhausted the backlog simply drains over the following days.
+- **Behavior**: for each distinct watchlisted `movie_id` (`user_id=1`) it calls the same enqueue path as the per-title button (`request_availability_refresh` with `priority=EXPLICIT`, `if_stale=False`, `source=""`): fresh titles are still re-checked (the `EXPLICIT` priority bypasses the freshness short-circuit in the drain), repeated clicks and already-pending titles collapse into the same pending row (partial unique constraint), queued lower-priority requests are upgraded to `EXPLICIT`, and never-fetched titles are bumped. Every request the run touches is stamped with a freshly generated `batch` uuid (re-stamping rows opened by earlier events — last click wins) so the status endpoint can count *this run's* backlog. When any catalogue-capable source (whole-catalogue syncers such as CBC Gem, Prime, BBC iPlayer) reads stale, a single `CatalogueRefreshRequest` marker is queued too and the refresh worker runs those syncs after draining the title queue — they spend no API quota. The existing refresh worker drains the backlog with the same rate limiter, daily budget and `RefreshRun` audit row as every other path — when the daily quota is exhausted the backlog simply drains over the following days.
 - **Response**: `202 Accepted`
   ```json
   {
     "queued": 354,
     "total_watchlist": 354,
-    "now": 1790943478.142056
+    "now": 1790943478.142056,
+    "batch": "0f6b2a1e-8f6d-4c62-9a41-2f1f6f6c9a11",
+    "catalogue_queued": ["cbc_gem", "prime_video"]
   }
   ```
-  `queued` is the number of pending `source=""` requests after the enqueue (i.e. the polling target); `total_watchlist` is the number of distinct watchlisted titles; `now` is the server epoch timestamp to pass as `since` to the status endpoint.
+  `queued` is the number of pending `source=""` requests after the enqueue (i.e. the polling target); `total_watchlist` is the number of distinct watchlisted titles; `now` is the server epoch timestamp to pass as `since` to the status endpoint; `batch` is this run's id — pass it as `batch` to the status endpoint; `catalogue_queued` lists the stale catalogue sources queued for a worker-side sync (`[]` when none were stale).
 - **Error Responses**:
   - `500 Internal Server Error`: `{"error": "failed to queue availability refresh"}` — only when there are watchlisted titles but not a single request could be queued (surfaced instead of pretending work was queued).
 
 #### `GET /api/watchlist/refresh-status/`
-- **Purpose**: Progress counters for the bulk refresh, polled by the watchlist button (every ~5 s) until `pending` reaches 0 or the UI's poll timeout expires.
+- **Purpose**: Progress counters for the bulk refresh, polled by the watchlist button (every ~5 s) until `pending` reaches 0 or the UI's poll timeout expires. Also reports the shared daily API quota so the UI can say "quota used, resumes tomorrow" instead of implying a failure.
 - **Query Parameters**:
   - `since` *(required, epoch seconds — e.g. the `now` value from the enqueue response)*: counts only completions at or after this instant, so each click tracks its own run.
+  - `batch` *(optional UUID — e.g. the `batch` value from the enqueue response)*: scopes **every** counter to requests stamped with that run's id — `pending` then means "this button's backlog", never requests queued elsewhere; `refreshed`/`failed` are scoped to the batch without the `since` cutoff. Repeated clicks re-stamp rows, so the newest batch always sees the queue it owns.
 - **Response**: `200 OK`
   ```json
   {
     "pending": 334,
     "refreshed": 20,
     "failed": 1,
-    "since": 1790943478.0
+    "since": 1790943478.0,
+    "batch": "0f6b2a1e-8f6d-4c62-9a41-2f1f6f6c9a11",
+    "rate_limited": false,
+    "quota_remaining": 41,
+    "quota_limit": 100,
+    "resets_at": 1791004800.0
   }
   ```
-  All three counters are scoped to watchlisted titles and `source=""` requests: `pending` (still queued), `refreshed` (`done` with `completed_at >= since`), `failed` (`failed` with `completed_at >= since`).
+  All counters are scoped to watchlisted titles and `source=""` requests: `pending` (still queued), `refreshed` (`done` with `completed_at >= since`, or any `done` stamped with `batch`), `failed` (same rule for `failed`). Quota fields: `rate_limited` (the shared daily quota is exhausted for now), `quota_remaining` / `quota_limit` (calls left today / per UTC day), `resets_at` (epoch of the next UTC midnight).
 - **Error Responses**:
-  - `400 Bad Request`: missing or non-numeric `since` (`{"error": "since must be an epoch timestamp"}`).
+  - `400 Bad Request`: missing or non-numeric `since` (`{"error": "since must be an epoch timestamp"}`), or a `batch` that is not a valid UUID (`{"error": "batch must be a UUID"}`).
 
 ---
 

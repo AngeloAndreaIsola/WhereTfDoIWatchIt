@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import uuid
 
 from django.db import IntegrityError
 from django.utils import timezone
@@ -51,6 +52,8 @@ from availability.services.refresh import AvailabilityRefreshService
 from availability.sources import DEFAULT_SOURCE_SLUG, source_registry
 
 from ..models import (
+    CatalogueRefreshRequest,
+    CatalogueRefreshStatus,
     Movie,
     RefreshPriority,
     RefreshRequest,
@@ -60,6 +63,7 @@ from ..models import (
 )
 from .bulk_refresh import BulkRefreshSummary, is_stale
 from .rate_limit import RateLimitExceeded, RateLimiter
+from .watchability import RefreshState
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +107,7 @@ def request_availability_refresh(
     *,
     source: str = "",
     if_stale: bool = True,
+    batch: uuid.UUID | None = None,
 ) -> RefreshRequest | None:
     """Request an asynchronous canonical availability refresh for *movie*.
 
@@ -117,6 +122,13 @@ def request_availability_refresh(
     attempt within ``RECENT_ATTEMPT_WINDOW``, so repeated events (detail
     views, frontend polls, re-adds) do not churn the queue — and one source's
     fresh observation never makes another source's stale scope look fresh.
+
+    ``batch`` stamps the request (or a pending row it collapses into) with
+    the id of the bulk run that asked — the watchlist's "Refresh all" uses
+    it so its progress endpoint counts exactly the rows this run owns, not
+    every pending request in the system. Single-title events pass nothing
+    and leave any existing stamp untouched.
+
     Never raises: an enqueue failure is logged and swallowed so it cannot
     break the user action that triggered it.
     """
@@ -138,7 +150,7 @@ def request_availability_refresh(
                 movie=movie,
                 source=source,
                 status=RefreshRequestStatus.PENDING,
-                defaults={"priority": effective_priority},
+                defaults={"priority": effective_priority, "batch": batch},
             )
         except IntegrityError:
             # Concurrent event won the partial unique constraint; the row we
@@ -147,9 +159,18 @@ def request_availability_refresh(
                 movie=movie, source=source, status=RefreshRequestStatus.PENDING
             ), False
 
-        if not created and effective_priority < request.priority:
-            request.priority = effective_priority
-            request.save(update_fields=["priority"])
+        if not created:
+            update_fields: list[str] = []
+            if effective_priority < request.priority:
+                request.priority = effective_priority
+                update_fields.append("priority")
+            if batch is not None and request.batch != batch:
+                # Re-stamp: this pending row now belongs to the newest bulk
+                # run (last click wins — its progress loop is the live one).
+                request.batch = batch
+                update_fields.append("batch")
+            if update_fields:
+                request.save(update_fields=update_fields)
         return request
     except Exception:  # noqa: BLE001 - enqueue must never break the caller
         logger.exception(
@@ -158,6 +179,45 @@ def request_availability_refresh(
             priority,
         )
         return None
+
+
+def refresh_states_for(movie_ids) -> dict[int, str]:
+    """Derive each title's default-scope refresh state in one batched query.
+
+    Returns ``{movie_id: RefreshState}`` — the queue-side evidence the read
+    path needs to tell ⚪ Unknown (never fetched) from ⚫ Not available
+    (checked, nothing found), and to show 🔵 while a title waits:
+
+    - ``PENDING``      — a request is queued (checked/failed distinctions
+      below only matter once the queue lets go);
+    - ``CHECKED``      — at least one request completed successfully: the
+      canonical store's contents (including "no offers") are a real answer;
+    - ``FAILED``       — attempts exist but none ever succeeded;
+    - ``NEVER_CHECKED`` — no request at all.
+
+    ``DONE``/``FAILED`` rows are this evidence: they must outlive the queue
+    (do not prune them) or titles revert to "unknown".
+    """
+    movie_ids = list(movie_ids)
+    per_movie: dict[int, set[str]] = {}
+    for movie_id, state in RefreshRequest.objects.filter(
+        movie_id__in=movie_ids,
+        source="",
+    ).values_list("movie_id", "status"):
+        per_movie.setdefault(movie_id, set()).add(state)
+
+    states: dict[int, str] = {}
+    for movie_id in movie_ids:
+        statuses = per_movie.get(movie_id, set())
+        if RefreshRequestStatus.PENDING in statuses:
+            states[movie_id] = RefreshState.PENDING
+        elif RefreshRequestStatus.DONE in statuses:
+            states[movie_id] = RefreshState.CHECKED
+        elif RefreshRequestStatus.FAILED in statuses:
+            states[movie_id] = RefreshState.FAILED
+        else:
+            states[movie_id] = RefreshState.NEVER_CHECKED
+    return states
 
 
 def request_watchlist_refresh(
@@ -182,22 +242,36 @@ def request_watchlist_refresh(
     endpoint): a deliberate "refresh everything" must check every title even
     while its current offers still read fresh.
 
-    Returns ``{"queued": <pending rows for those titles right now>,
-    "total_watchlist": <titles covered>}``.
+    Every touched request is stamped with a freshly generated ``batch`` id
+    (created *and* reused pending rows — the latter so a row opened by an
+    earlier event becomes part of this run), and that id is returned: the
+    progress endpoint scopes its counts to it, so "pending" always means
+    *this* run's backlog rather than every pending request in the system.
+
+    Returns ``{"queued": <rows this batch now owns>,
+    "total_watchlist": <titles covered>, "batch": <uuid str>}``.
     """
+    batch = uuid.uuid4()
     movie_ids = list(
         WatchlistItem.objects.filter(user_id=user_id)
         .values_list("movie_id", flat=True)
         .distinct()
     )
-    for movie_id, movie in Movie.objects.in_bulk(movie_ids).items():
-        request_availability_refresh(movie, priority=priority, if_stale=if_stale)
+    for _movie_id, movie in Movie.objects.in_bulk(movie_ids).items():
+        request_availability_refresh(
+            movie, priority=priority, if_stale=if_stale, batch=batch
+        )
     queued = RefreshRequest.objects.filter(
         movie_id__in=movie_ids,
         source="",
         status=RefreshRequestStatus.PENDING,
+        batch=batch,
     ).count()
-    return {"queued": queued, "total_watchlist": len(movie_ids)}
+    return {
+        "queued": queued,
+        "total_watchlist": len(movie_ids),
+        "batch": str(batch),
+    }
 
 
 def request_import_refresh(
@@ -222,6 +296,33 @@ def request_import_refresh(
     if not entering and has_canonical_offers(movie):
         return None
     return request_availability_refresh(movie, priority=priority, if_stale=True)
+
+
+def request_catalogue_refresh(sources) -> CatalogueRefreshRequest:
+    """Queue the worker's catalogue-sync job (enqueue side, local-only).
+
+    Counterpart of the per-title queue for sources that sync their *whole*
+    catalogue: the watchlist's "Refresh all" calls this with the slugs that
+    currently read stale (``bulk_refresh.stale_catalogue_sources``), and the
+    refresh worker runs them via
+    ``bulk_refresh.process_pending_catalogue_refresh`` after draining its
+    title queue — catalogue syncs spend no API budget.
+
+    Idempotent: repeated clicks collapse into the one pending marker (partial
+    unique constraint), merging newly stale slugs into it instead of
+    stacking jobs.
+    """
+    wanted = sorted(set(sources))
+    marker, created = CatalogueRefreshRequest.objects.get_or_create(
+        status=CatalogueRefreshStatus.PENDING,
+        defaults={"sources": wanted},
+    )
+    if not created:
+        merged = sorted(set(marker.sources) | set(wanted))
+        if merged != marker.sources:
+            marker.sources = merged
+            marker.save(update_fields=["sources"])
+    return marker
 
 
 def _service_for_scope(source: str, default_service: AvailabilityRefreshService):

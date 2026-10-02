@@ -10,7 +10,9 @@ Each tick calls ``process_refresh_queue`` — queue-only: strict priority order
 (``RefreshPriority`` ladder), the shared ``RateLimiter``/daily quota and a
 ``RefreshRun`` audit row, but never the background stale sweep (that stays
 with the scheduled ``refresh_availability`` run), so looping cannot burn the
-daily API budget on maintenance.
+daily API budget on maintenance. After the title queue drains, the tick also
+runs a pending ``CatalogueRefreshRequest`` marker, if any: whole-catalogue
+syncs pressed by the watchlist's "Refresh all" (no API budget of their own).
 
 Typical deployment: the ``worker`` service in docker-compose.
 """
@@ -25,6 +27,7 @@ from django.db import connections
 
 from availability.sources import DEFAULT_SOURCE_SLUG
 
+from ...services.bulk_refresh import process_pending_catalogue_refresh
 from ...services.rate_limit import RateLimiter
 from ...services.refresh_requests import process_refresh_queue
 
@@ -67,17 +70,38 @@ class Command(BaseCommand):
             try:
                 summary = process_refresh_queue(budget=budget, limiter=limiter)
                 if summary:
-                    if summary["requests_drained"] or summary["errors"]:
+                    # Rate-limited ticks are printed too: they are the
+                    # *interesting* ones (queue stuck until the quota
+                    # resets) and were previously silent, which made a
+                    # quota-exhausted worker indistinguishable from a dead
+                    # one. The 60s backoff keeps the line rate at ~1/min.
+                    if (
+                        summary["requests_drained"]
+                        or summary["errors"]
+                        or summary["rate_limited"]
+                    ):
                         self.stdout.write(json.dumps(summary))
                     if summary["rate_limited"]:
                         sleep_for = RATE_LIMITED_SLEEP
+                # Catalogue marker after the title queue: whole-catalogue
+                # syncs spend no API budget, but the title queue always
+                # gets its budgeted drain first.
+                catalogue = process_pending_catalogue_refresh()
+                if catalogue:
+                    self.stdout.write(json.dumps({"catalogue": catalogue}))
             except Exception:  # noqa: BLE001 - a transient DB error must not kill the worker
                 logger.exception("refresh_worker_tick_failed")
                 sleep_for = interval
             finally:
-                # Long-running loop: drop the connection so a stale one
-                # (db restart, idle timeout) is re-established next tick.
-                connections.close_all()
+                # Drop the connection so a stale one (db restart, idle
+                # timeout) is re-established next tick — but never
+                # mid-transaction: a test (or any caller wrapping a tick
+                # in an atomic block) would lose its open transaction,
+                # and closing one is wrong regardless.
+                if not any(
+                    conn.in_atomic_block for conn in connections.all()
+                ):
+                    connections.close_all()
 
             if options["once"]:
                 return

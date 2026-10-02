@@ -39,6 +39,8 @@ interface WatchlistItemRow {
     status?: string;
     status_symbol?: string;
     status_label?: string;
+    /** Queue-side state: pending | checked | failed | never_checked. */
+    refresh_state?: string;
     best_offer?: {
       country: string;
       service: string;
@@ -381,15 +383,18 @@ export default function WatchlistPage() {
 
               const isWatchable =
                 status === "watchable_here" || status === "watchable_vpn";
+              // 🔵 Checking… is transient queue state, not a verdict — the
+              // card stays undimmed until the check lands (⚫ / 🟢 / …).
+              const isDimmed = !isWatchable && status !== "checking";
               const isWatched = !!(row.user_data?.is_watched ?? row.is_watched ?? movie.user_data?.is_watched);
 
               return (
                 <div
                   key={movie.id || idx}
                   className={`bg-white dark:bg-gray-900 border rounded-xl overflow-hidden shadow-sm flex flex-col transition-all ${
-                    isWatchable
-                      ? "border-gray-200 dark:border-gray-800 hover:shadow-md"
-                      : "border-gray-200 dark:border-gray-800/60 opacity-60 grayscale hover:opacity-100 hover:grayscale-0"
+                    isDimmed
+                      ? "border-gray-200 dark:border-gray-800/60 opacity-60 grayscale hover:opacity-100 hover:grayscale-0"
+                      : "border-gray-200 dark:border-gray-800 hover:shadow-md"
                   }`}
                 >
                   <Link

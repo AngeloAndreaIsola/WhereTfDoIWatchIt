@@ -13,10 +13,11 @@
    ],
    "best_country": "US",
    "best_service": "Netflix",
-   "watchability": {
-    "status": "watchable_here",
-    "status_label": "Available on your subscriptions",
-    "status_symbol": "🟢",
+    "watchability": {
+     "status": "watchable_here",
+     "status_label": "Available on your subscriptions",
+     "status_symbol": "🟢",
+     "refresh_state": "checked",
     "best_offer": {
      "country": "US",
      "service": "netflix",
@@ -42,10 +43,11 @@
    "available_countries": [],
    "best_country": null,
    "best_service": null,
-   "watchability": {
-    "status": "not_watchable",
-    "status_label": "Not available on your subscriptions",
-    "status_symbol": "🔴",
+    "watchability": {
+     "status": "not_watchable",
+     "status_label": "Not available on your subscriptions",
+     "status_symbol": "🔴",
+     "refresh_state": "checked",
     "best_offer": null,
     "watchable_offers": [],
     "excluded_offers": [],

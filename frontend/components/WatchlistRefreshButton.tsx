@@ -22,10 +22,11 @@ interface WatchlistRefreshButtonProps {
  * One click queues an explicit refresh for every watchlisted title (one
  * enqueue request, never one per title) and then polls the status endpoint
  * until the worker drains the queue — rate limits and the daily budget stay
- * authoritative, so a large queue simply keeps draining across ticks. On
- * completion `onRefreshed` lets the page reload the report; if polling
- * outlives its timeout the run keeps going server-side and the button
- * returns to idle with a note.
+ * authoritative, so a large queue simply keeps draining across ticks, over
+ * several days if needed. Progress is scoped to the run's `batch` id, so
+ * only this run's backlog counts; when the shared daily quota runs out the
+ * note switches to "quota used, resumes tomorrow" instead of a generic
+ * timeout. On completion `onRefreshed` lets the page reload the report.
  */
 export default function WatchlistRefreshButton({
   onRefreshed,
@@ -34,6 +35,9 @@ export default function WatchlistRefreshButton({
   const [queued, setQueued] = useState(0);
   const [refreshed, setRefreshed] = useState(0);
   const [failed, setFailed] = useState(0);
+  const [pendingLeft, setPendingLeft] = useState(0);
+  const [quotaExhausted, setQuotaExhausted] = useState(false);
+  const [catalogueCount, setCatalogueCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   const runRef = useRef(0);
@@ -51,14 +55,16 @@ export default function WatchlistRefreshButton({
   );
 
   const schedulePoll = useCallback(
-    (since: number, startedAt: number, runId: number) => {
+    (since: number, batch: string, startedAt: number, runId: number) => {
       timerRef.current = setTimeout(async () => {
         if (runRef.current !== runId) return;
         try {
-          const status = await getWatchlistRefreshStatus(since);
+          const status = await getWatchlistRefreshStatus(since, batch);
           if (runRef.current !== runId) return;
           setRefreshed(status.refreshed);
           setFailed(status.failed);
+          setPendingLeft(status.pending);
+          setQuotaExhausted(status.rate_limited);
           if (status.pending === 0) {
             setPhase("done");
             onRefreshedRef.current?.();
@@ -73,7 +79,7 @@ export default function WatchlistRefreshButton({
           setPhase("timeout");
           return;
         }
-        schedulePoll(since, startedAt, runId);
+        schedulePoll(since, batch, startedAt, runId);
       }, WATCHLIST_POLL_INTERVAL_MS);
     },
     []
@@ -86,10 +92,13 @@ export default function WatchlistRefreshButton({
     setError(null);
     setRefreshed(0);
     setFailed(0);
+    setPendingLeft(0);
+    setQuotaExhausted(false);
     setPhase("queueing");
     try {
       const result = await requestWatchlistRefresh();
       if (runRef.current !== runId) return;
+      setCatalogueCount(result.catalogue_queued?.length ?? 0);
       if (result.queued === 0) {
         setQueued(0);
         setPhase("done");
@@ -97,7 +106,7 @@ export default function WatchlistRefreshButton({
       }
       setQueued(result.queued);
       setPhase("polling");
-      schedulePoll(result.now, Date.now(), runId);
+      schedulePoll(result.now, result.batch, Date.now(), runId);
     } catch (err) {
       if (runRef.current !== runId) return;
       setError(err instanceof Error ? err.message : "Failed to queue refresh");
@@ -116,6 +125,10 @@ export default function WatchlistRefreshButton({
             ? "Nothing to refresh"
             : `✓ Refreshed ${refreshed} title${refreshed === 1 ? "" : "s"}`
           : "Refresh all availability";
+
+  const quotaNote = quotaExhausted
+    ? `Daily API quota used — ${pendingLeft} title${pendingLeft === 1 ? "" : "s"} resume when it resets at 00:00 UTC. They show 🔵 until checked.`
+    : null;
 
   return (
     <div className="flex flex-col items-start gap-1">
@@ -144,15 +157,22 @@ export default function WatchlistRefreshButton({
       </button>
       {phase === "polling" && (
         <p className="text-xs text-gray-500 dark:text-gray-400" role="status">
-          {failed > 0
-            ? `${failed} failed — the rest keep draining in the background.`
-            : `Checked in the background — rate limits may spread this over time.`}
+          {quotaNote ??
+            (failed > 0
+              ? `${failed} failed — the rest keep draining in the background.`
+              : `Checked in the background — rate limits may spread this over time.`)}
+          {catalogueCount > 0 &&
+            ` Also syncing ${catalogueCount} catalogue source${catalogueCount === 1 ? "" : "s"}.`}
         </p>
       )}
       {phase === "timeout" && (
         <p className="text-xs text-gray-500 dark:text-gray-400" role="status">
-          Refresh still running in the background — check back in a few
-          minutes.
+          {quotaNote ?? (
+            <>
+              Refresh still running in the background — check back in a few
+              minutes.
+            </>
+          )}
         </p>
       )}
       {error && (

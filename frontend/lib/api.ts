@@ -359,13 +359,18 @@ export async function requestAvailabilityRefresh(
  * bypassed) and answers immediately — the refresh worker drains the queue
  * under the shared rate limit and daily budget. Progress is read back with
  * `getWatchlistRefreshStatus`, using the returned `now` as the `since`
- * anchor so earlier refreshes never count toward this run.
+ * anchor and `batch` to scope every count to *this* run's backlog, so
+ * requests queued elsewhere never inflate or deflate it.
  */
 export interface WatchlistRefreshQueuedResponse {
   queued: number;
   total_watchlist: number;
   /** Server epoch seconds captured when the run started. */
   now: number;
+  /** Id of the batch this run stamped onto every request it touched. */
+  batch: string;
+  /** Catalogue-capable sources that were stale and got queued too. */
+  catalogue_queued?: string[];
 }
 
 export async function requestWatchlistRefresh(): Promise<WatchlistRefreshQueuedResponse> {
@@ -387,22 +392,34 @@ export async function requestWatchlistRefresh(): Promise<WatchlistRefreshQueuedR
 
 /**
  * Progress of one bulk watchlist refresh run: requests still queued plus
- * those completed at or after `since` (the enqueue response's `now`),
- * split into refreshed and failed.
+ * those completed — `pending` scoped to `batch` when given (this run's own
+ * backlog), `refreshed`/`failed` scoped by `since` (or the batch). Also
+ * reports the shared daily API quota: at ~100 calls/day a large watchlist
+ * drains over several days, so the UI can say "quota used, resumes
+ * tomorrow" instead of implying a failure.
  */
 export interface WatchlistRefreshStatusResponse {
   pending: number;
   refreshed: number;
   failed: number;
   since: number;
+  batch: string | null;
+  /** True when the shared daily quota is exhausted for now. */
+  rate_limited: boolean;
+  /** Calls left today (0 when rate_limited). */
+  quota_remaining: number;
+  quota_limit: number;
+  /** Epoch seconds of the next UTC midnight — when the quota resets. */
+  resets_at: number;
 }
 
 export async function getWatchlistRefreshStatus(
-  since: number
+  since: number,
+  batch?: string
 ): Promise<WatchlistRefreshStatusResponse> {
-  const res = await fetch(
-    `/api/watchlist/refresh-status/?since=${encodeURIComponent(since)}`
-  );
+  const params = new URLSearchParams({ since: String(since) });
+  if (batch) params.set("batch", batch);
+  const res = await fetch(`/api/watchlist/refresh-status/?${params}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(

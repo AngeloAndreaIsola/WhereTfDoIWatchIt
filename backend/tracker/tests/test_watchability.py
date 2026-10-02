@@ -3,6 +3,7 @@ from django.test import TestCase
 from tracker.models import Movie, Preference, Provider, Subscription
 from tracker.services.offers import Offer
 from tracker.services.watchability import (
+    RefreshState,
     WatchabilityStatus,
     evaluate_watchability,
 )
@@ -215,3 +216,101 @@ class WatchabilityEvaluationTests(TestCase):
         self.assertEqual(len(res.excluded_offers), 1)
         self.assertFalse(res.excluded_offers[0].is_language_match)
         self.assertIn("Language information unknown", res.excluded_offers[0].rejection_reasons)
+
+
+class RefreshStateBadgeTests(TestCase):
+    """With no offers stored, the queue's evidence picks the badge.
+
+    ⚫ Not available (checked, nothing found) vs 🔵 Checking (queued) vs
+    ⚪ Unknown (never fetched / last attempt failed) — the three states the
+    watchlist "Refresh all" UX depends on.
+    """
+
+    def setUp(self):
+        self.movie = Movie.objects.create(
+            tmdb_id=2001, title="Nothing Yet", year=2021, content_type="movie"
+        )
+        netflix, _ = Provider.objects.get_or_create(
+            slug="netflix",
+            defaults={"name": "Netflix", "is_enabled": True},
+        )
+        Subscription.objects.create(
+            user_id=1, provider=netflix, name="Netflix"
+        )
+        self.pref = Preference.objects.create(
+            user_id=1,
+            audio_languages=["EN"],
+            subtitle_languages=["EN"],
+            candidate_countries=["US"],
+        )
+
+    def _evaluate(self, refresh_state):
+        return evaluate_watchability(
+            self.movie,
+            [],
+            self.pref,
+            current_country="US",
+            refresh_state=refresh_state,
+        )
+
+    def test_checked_but_empty_reads_not_available(self):
+        res = self._evaluate(RefreshState.CHECKED)
+
+        self.assertEqual(res.status, WatchabilityStatus.NOT_WATCHABLE)
+        self.assertEqual(res.status_symbol, "⚫")
+        self.assertEqual(res.status_label, "Not available")
+        self.assertEqual(res.refresh_state, RefreshState.CHECKED)
+
+    def test_pending_but_never_checked_reads_checking(self):
+        res = self._evaluate(RefreshState.PENDING)
+
+        self.assertEqual(res.status, WatchabilityStatus.CHECKING)
+        self.assertEqual(res.status_symbol, "🔵")
+        self.assertEqual(res.status_label, "Checking availability…")
+        self.assertEqual(res.refresh_state, RefreshState.PENDING)
+
+    def test_failed_attempt_reads_unknown_with_a_reason(self):
+        res = self._evaluate(RefreshState.FAILED)
+
+        self.assertEqual(res.status, WatchabilityStatus.UNKNOWN)
+        self.assertEqual(res.status_symbol, "⚪")
+        self.assertEqual(res.status_label, "Unknown — last check failed")
+        self.assertEqual(res.refresh_state, RefreshState.FAILED)
+
+    def test_no_queue_knowledge_reads_plain_unknown(self):
+        res = self._evaluate(None)
+
+        self.assertEqual(res.status, WatchabilityStatus.UNKNOWN)
+        self.assertEqual(res.status_symbol, "⚪")
+        self.assertEqual(res.status_label, "Unknown")
+        self.assertIsNone(res.refresh_state)
+
+    def test_known_offers_win_over_a_queued_recheck(self):
+        offers = [Offer(
+            country="US",
+            service="netflix",
+            offer_type="subscription",
+            quality="hd",
+            url="https://netflix.com/watch/1",
+            audio_languages=["EN"],
+            subtitle_languages=["EN"],
+        )]
+
+        res = evaluate_watchability(
+            self.movie,
+            offers,
+            self.pref,
+            current_country="US",
+            refresh_state=RefreshState.PENDING,
+        )
+
+        self.assertEqual(res.status, WatchabilityStatus.WATCHABLE_HERE)
+        self.assertEqual(res.status_symbol, "🟢")
+        # The queue state stays visible even though it did not decide.
+        self.assertEqual(res.refresh_state, RefreshState.PENDING)
+
+    def test_to_dict_exposes_refresh_state(self):
+        res = self._evaluate(RefreshState.CHECKED)
+
+        self.assertEqual(res.to_dict()["refresh_state"], RefreshState.CHECKED)
+        self.assertEqual(res.to_dict()["status_symbol"], "⚫")

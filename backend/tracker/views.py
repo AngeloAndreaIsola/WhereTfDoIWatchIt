@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone as dt_timezone
+import uuid
+from datetime import datetime, time, timedelta, timezone as dt_timezone
 from typing import Any
 
 from django.conf import settings
@@ -56,6 +57,7 @@ from tracker.services.filtering import apply_composable_filters
 from tracker.services.unified_catalogue import resolve_catalogue_scope, unofficial_catalogue_items
 from tracker.services.watchability import evaluate_watchability, get_user_subscriptions
 from availability.services.legacy_ingest import ingest_scraped_mapping
+from availability.sources import DEFAULT_SOURCE_SLUG
 import math
 
 
@@ -78,10 +80,13 @@ def paginate_list(items: list, page: int, page_size: int) -> tuple[list, dict]:
         "has_previous": page > 1,
     }
     return page_items, pagination
-from .services.bulk_refresh import process_watchlist_refresh
+from .services.bulk_refresh import process_watchlist_refresh, stale_catalogue_sources
 from .services.availability_reads import get_local_offers
+from .services.rate_limit import RateLimiter
 from .services.refresh_requests import (
+    refresh_states_for,
     request_availability_refresh,
+    request_catalogue_refresh,
     request_watchlist_refresh,
 )
 from .services.letterboxd import (
@@ -1064,6 +1069,12 @@ def watchlist_report(request):
     )
     watchlist_movies = [item.movie for item in items]
 
+    # What the refresh queue knows about each title (pending/checked/failed/
+    # never_checked): threaded into the watchability evaluation so a title
+    # with no offers reads 🔵 Checking… while its refresh is queued, ⚫ Not
+    # available once checked, and ⚪ Unknown only when never fetched.
+    refresh_states = refresh_states_for({m.id for m in watchlist_movies})
+
     # Apply composable filters to the watchlist movies
     evaluated_filtered, _ = apply_composable_filters(
         watchlist_movies,
@@ -1071,6 +1082,7 @@ def watchlist_report(request):
         preference,
         user_subscriptions=user_subs,
         current_country=curr_country,
+        refresh_states=refresh_states,
     )
 
     report = []
@@ -1314,6 +1326,17 @@ def watchlist_refresh_explicit(request):
     ``refresh_worker`` drains the queue under the shared rate limit and
     daily budget; the frontend polls ``refresh-status`` for progress.
 
+    The run owns a ``batch`` uuid stamped onto every request it touches, so
+    the progress endpoint counts *this run's* backlog — repeated clicks and
+    rows opened earlier by other events collapse into the same batch.
+
+    Catalogue-capable sources (the scheduled whole-catalogue syncers) are
+    not per-title work: when any of them reads stale, a
+    ``CatalogueRefreshRequest`` marker is queued too and the worker syncs
+    those whole catalogues after the title queue — so "Refresh all" genuinely
+    covers every source, not only the default title-targeted one.
+    ``catalogue_queued`` reports which.
+
     ``now`` is the server epoch captured *before* the enqueue pass, so every
     completion this run produces (including ones racing the response) counts
     toward the status endpoint's progress, while earlier refreshes never do.
@@ -1330,22 +1353,49 @@ def watchlist_refresh_explicit(request):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
+    stale_catalogue = stale_catalogue_sources()
+    if stale_catalogue:
+        request_catalogue_refresh(stale_catalogue)
+
     return Response(
-        {**result, "now": started_at.timestamp()},
+        {
+            **result,
+            "now": started_at.timestamp(),
+            "catalogue_queued": stale_catalogue,
+        },
         status=status.HTTP_202_ACCEPTED,
     )
 
 
+def _next_utc_midnight_ts() -> float:
+    """Epoch seconds of the next UTC midnight — where the daily quota resets."""
+    now = datetime.now(dt_timezone.utc)
+    tomorrow = now.date() + timedelta(days=1)
+    midnight = datetime.combine(tomorrow, time.min, tzinfo=dt_timezone.utc)
+    return midnight.timestamp()
+
+
 @api_view(["GET"])
 def watchlist_refresh_status(request):
-    """GET /api/watchlist/refresh-status/?since=<epoch seconds> — bulk progress.
+    """GET /api/watchlist/refresh-status/?since=<epoch>[&batch=<uuid>] — bulk progress.
 
-    Counts the watchlist titles' default-scope refresh requests: ``pending``
-    (still queued for the worker) plus everything completed at or after
-    ``since``, split into ``refreshed`` (done) and ``failed``. ``since``
-    should be the ``now`` value the enqueue endpoint returned — both sides
-    are server clock, so progress cannot leak across runs. Non-watchlist
-    titles and other source scopes are never counted.
+    Counts the watchlist titles' default-scope refresh requests, split into
+    ``pending`` (still queued for the worker) plus ``refreshed`` (done) and
+    ``failed``. ``since`` should be the ``now`` value the enqueue endpoint
+    returned — both sides are server clock, so progress cannot leak across
+    runs.
+
+    With ``batch`` (the enqueue response's ``batch`` uuid) every count is
+    scoped to that run's stamped rows: ``pending`` then means "this button's
+    backlog", never unrelated requests queued elsewhere — repeated clicks
+    re-stamp rows, so the newest batch always sees the full queue it owns.
+    Without ``batch`` the legacy unscoped behavior stands.
+
+    Also reports the shared daily quota (``rate_limited``,
+    ``quota_remaining``, ``quota_limit``, ``resets_at``): at ~100 calls/day
+    a large watchlist drains over several days, and the UI needs to say
+    "quota used, resumes tomorrow" instead of implying a failure. Non-
+    watchlist titles and other source scopes are never counted.
     """
     since_raw = request.GET.get("since")
     try:
@@ -1357,21 +1407,50 @@ def watchlist_refresh_status(request):
         )
     since = datetime.fromtimestamp(since_ts, tz=dt_timezone.utc)
 
+    batch_raw = request.GET.get("batch")
+    batch_id = None
+    if batch_raw:
+        try:
+            batch_id = uuid.UUID(batch_raw)
+        except ValueError:
+            return Response(
+                {"error": "batch must be a UUID"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
     watchlist_movie_ids = WatchlistItem.objects.filter(user_id=1).values("movie_id")
     scope = RefreshRequest.objects.filter(
         movie_id__in=Subquery(watchlist_movie_ids),
         source="",
     )
+    if batch_id is not None:
+        batch_scope = scope.filter(batch=batch_id)
+        pending = batch_scope.filter(status=RefreshRequestStatus.PENDING).count()
+        refreshed = batch_scope.filter(status=RefreshRequestStatus.DONE).count()
+        failed = batch_scope.filter(status=RefreshRequestStatus.FAILED).count()
+    else:
+        pending = scope.filter(status=RefreshRequestStatus.PENDING).count()
+        refreshed = scope.filter(
+            status=RefreshRequestStatus.DONE, completed_at__gte=since
+        ).count()
+        failed = scope.filter(
+            status=RefreshRequestStatus.FAILED, completed_at__gte=since
+        ).count()
+
+    limiter = RateLimiter(DEFAULT_SOURCE_SLUG)
+    quota_remaining = limiter.remaining()
+
     return Response(
         {
-            "pending": scope.filter(status=RefreshRequestStatus.PENDING).count(),
-            "refreshed": scope.filter(
-                status=RefreshRequestStatus.DONE, completed_at__gte=since
-            ).count(),
-            "failed": scope.filter(
-                status=RefreshRequestStatus.FAILED, completed_at__gte=since
-            ).count(),
+            "pending": pending,
+            "refreshed": refreshed,
+            "failed": failed,
             "since": since_ts,
+            "batch": str(batch_id) if batch_id else None,
+            "rate_limited": quota_remaining <= 0,
+            "quota_remaining": quota_remaining,
+            "quota_limit": limiter.daily_limit,
+            "resets_at": _next_utc_midnight_ts(),
         },
         status=status.HTTP_200_OK,
     )

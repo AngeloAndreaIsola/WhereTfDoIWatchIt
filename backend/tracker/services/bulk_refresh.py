@@ -46,12 +46,20 @@ from django.db import connection
 from django.db.models import Max
 from django.utils import timezone
 
-from availability.freshness import source_is_stale, stale_sources
+from availability.freshness import freshness_for, source_is_stale, stale_sources
 from availability.models import Country, Offer, Source
 from availability.services.refresh import AvailabilityRefreshService
 from availability.sources import DEFAULT_SOURCE_SLUG, source_registry
 
-from ..models import Movie, RefreshRequest, RefreshRequestStatus, RefreshRun, WatchlistItem
+from ..models import (
+    CatalogueRefreshRequest,
+    CatalogueRefreshStatus,
+    Movie,
+    RefreshRequest,
+    RefreshRequestStatus,
+    RefreshRun,
+    WatchlistItem,
+)
 from .rate_limit import RateLimitExceeded, RateLimiter
 
 logger = logging.getLogger(__name__)
@@ -493,6 +501,39 @@ def _catalogue_source_slugs(
     )
 
 
+def stale_catalogue_sources(now=None) -> list[str]:
+    """Catalogue-capable slugs whose last successful sync left its window.
+
+    Evidence is the legacy ``RefreshRun(service=slug)`` audit row
+    ``process_catalogue_refresh`` writes for every attempted source (``error``
+    set when the attempt failed): the newest error-free ``finished_at`` per
+    slug — a slug with no such row has never synced and is stale by
+    definition. Each slug is measured against its own freshness window
+    (``availability.freshness``), the same policy the title scopes use, and
+    disabled sources are excluded exactly like the bare catalogue run does.
+
+    One aggregate query regardless of how many catalogue sources exist —
+    the watchlist's bulk refresh calls it to decide whether to press the
+    catalogue marker.
+    """
+    slugs, _disabled = _catalogue_source_slugs()
+    last_success = {
+        row["service"]: row["last"]
+        for row in RefreshRun.objects.filter(
+            service__in=slugs, error="", finished_at__isnull=False
+        )
+        .values("service")
+        .annotate(last=Max("finished_at"))
+    }
+    moment = now or timezone.now()
+    return sorted(
+        slug
+        for slug in slugs
+        if last_success.get(slug) is None
+        or moment - last_success[slug] > freshness_for(slug)
+    )
+
+
 def _refresh_one_source(
     slug: str,
     source,
@@ -648,9 +689,65 @@ def process_catalogue_refresh(
         "catalogue_refresh_summary attempted=%s refreshed=%s errors=%s "
         "locked=%s disabled=%s discovered=%s offers=%s unresolved=%s "
         "duration_s=%s",
-        summary.attempted, summary.refreshed, summary.errors, summary.locked,
-        summary.disabled, summary.discovered,
+        summary.attempted, summary.refreshed, summary.errors,
+        summary.locked, summary.disabled, summary.discovered,
         summary.created + summary.updated, summary.unresolved,
         summary.duration_seconds,
     )
     return summary.to_dict()
+
+
+def process_pending_catalogue_refresh() -> Optional[dict]:
+    """Run the queued catalogue-sync marker, if any (refresh worker tick).
+
+    The counterpart of ``request_catalogue_refresh``: one pending marker =
+    one pass over exactly the sources that read stale when the watchlist's
+    "Refresh all" pressed it, each under its own advisory lock — so an
+    overlapping scheduled cron simply skips that source as ``locked``, which
+    is success by definition (someone else is syncing it right now). Only
+    genuine per-source errors (or usage errors escaping
+    ``process_catalogue_refresh``) fail the marker; it stays consumed either
+    way — a later button press opens a fresh job.
+
+    Returns the marker's JSON-able summary, or ``None`` when no marker is
+    pending (the common idle tick). Catalogue syncs spend no API budget, so
+    this runs regardless of the daily rate limit.
+    """
+    marker = (
+        CatalogueRefreshRequest.objects.filter(
+            status=CatalogueRefreshStatus.PENDING
+        )
+        .order_by("requested_at")
+        .first()
+    )
+    if marker is None:
+        return None
+
+    sources = list(marker.sources)
+    failed: list[str] = []
+    for slug in sources:
+        try:
+            result = process_catalogue_refresh(source_slug=slug)
+            if result.get("errors"):
+                failed.append(slug)
+        except Exception:  # noqa: BLE001 - one broken source must not stop the rest
+            logger.exception("catalogue_marker_source_failed source=%s", slug)
+            failed.append(slug)
+
+    marker.completed_at = timezone.now()
+    marker.status = (
+        CatalogueRefreshStatus.FAILED if failed else CatalogueRefreshStatus.DONE
+    )
+    marker.last_error = ", ".join(failed)
+    marker.save(update_fields=["status", "completed_at", "last_error"])
+    logger.info(
+        "catalogue_marker_processed sources=%s failed=%s status=%s",
+        ",".join(sources) or "none",
+        ",".join(failed) or "none",
+        marker.status,
+    )
+    return {
+        "sources": sources,
+        "failed_sources": failed,
+        "status": marker.status,
+    }

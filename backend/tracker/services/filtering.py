@@ -23,8 +23,17 @@ def apply_composable_filters(
     user_subscriptions: Optional[set[str]] = None,
     current_country: Optional[str] = None,
     allowed_provider_slugs: Optional[set[str]] = None,
+    refresh_states: Optional[dict[int, str]] = None,
 ) -> tuple[list[dict], int]:
-    """Filter Movie queryset or list using AND semantics for structured parameters & watchability."""
+    """Filter Movie queryset or list using AND semantics for structured parameters & watchability.
+
+    ``refresh_states`` (movie id -> ``RefreshState``, from
+    ``refresh_requests.refresh_states_for``) lets the caller tell the read
+    path *what the refresh queue knows* about each title: with no offers
+    stored, a queued title evaluates to 🔵 Checking…, a checked one to ⚫
+    Not available and only a never-fetched one to ⚪ Unknown. Omitted (or a
+    missing id) keeps today's behavior: no offers = Unknown.
+    """
     # 1. Text Search (Title/Overview)
     q = (params.get("q") or params.get("query") or "").strip()
     if q:
@@ -157,6 +166,7 @@ def apply_composable_filters(
             preference,
             current_country=current_country,
             user_subscriptions=user_subscriptions,
+            refresh_state=(refresh_states or {}).get(m.id),
         )
 
         # Apply Provider Filter

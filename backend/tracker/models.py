@@ -428,6 +428,12 @@ class RefreshRequest(models.Model):
     last_error = models.TextField(blank=True, default="")
     requested_at = models.DateTimeField(default=timezone.now)
     completed_at = models.DateTimeField(null=True, blank=True)
+    # Bulk-run stamp: the watchlist's "Refresh all" assigns one uuid per
+    # click to every request it touches (created *and* collapsed-into rows),
+    # so GET /api/watchlist/refresh-status/ can count exactly that run's
+    # backlog instead of every pending request in the system. NULL for
+    # single-title events (detail page, imports, cron).
+    batch = models.UUIDField(null=True, blank=True, db_index=True)
 
     class Meta:
         ordering = ["priority", "requested_at"]
@@ -451,6 +457,54 @@ class RefreshRequest(models.Model):
             f"RefreshRequest {self.movie_id} scope={scope} "
             f"{self.get_status_display()} priority={self.priority}"
         )
+
+
+class CatalogueRefreshStatus(models.TextChoices):
+    PENDING = "pending", "Pending"
+    DONE = "done", "Done"
+    FAILED = "failed", "Failed"
+
+
+class CatalogueRefreshRequest(models.Model):
+    """One queued "sync the catalogue-capable sources" job for the worker.
+
+    The per-title ``RefreshRequest`` queue only covers title-targeted
+    sources; sources that sync their *whole* catalogue (CBC Gem, Prime,
+    BBC iPlayer, …) are refreshed by ``process_catalogue_refresh`` instead.
+    The watchlist's "Refresh all availability" presses this marker when
+    those sources read stale, so one button covers every source, and the
+    refresh worker runs the job after draining its title queue — catalogue
+    syncs spend no API budget.
+
+    Idempotent by construction: at most one pending row exists (partial
+    unique constraint), repeated clicks merge their stale-slug sets into it
+    instead of stacking jobs. ``sources`` freezes the slugs that were stale
+    at enqueue time; a later failure is recorded, never silently dropped —
+    the next button press opens a fresh job.
+    """
+
+    sources = models.JSONField(default=list)
+    status = models.CharField(
+        max_length=12,
+        choices=CatalogueRefreshStatus.choices,
+        default=CatalogueRefreshStatus.PENDING,
+        db_index=True,
+    )
+    requested_at = models.DateTimeField(default=timezone.now)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.TextField(blank=True, default="")
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["status"],
+                condition=models.Q(status="pending"),
+                name="uniq_cataloguerefreshrequest_pending",
+            ),
+        ]
+
+    def __str__(self):
+        return f"CatalogueRefreshRequest {self.get_status_display()} {self.sources}"
 
 
 class UserMovieData(models.Model):

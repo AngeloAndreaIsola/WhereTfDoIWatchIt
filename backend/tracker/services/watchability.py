@@ -20,6 +20,23 @@ class WatchabilityStatus:
     WATCHABLE_VPN = "watchable_vpn"     # 🟡
     NOT_WATCHABLE = "not_watchable"     # ⚫
     UNKNOWN = "unknown"                 # ⚪
+    CHECKING = "checking"               # 🔵
+
+
+class RefreshState:
+    """Per-title refresh-queue state, derived from ``RefreshRequest`` rows.
+
+    The vocabulary the read path uses to tell "no offers because never
+    checked" apart from "no offers because a check found none" (and to show
+    queued/failed checks) — produced by
+    ``tracker.services.refresh_requests.refresh_states_for`` and consumed by
+    :func:`evaluate_watchability` when the canonical store holds no offers.
+    """
+
+    PENDING = "pending"            # a refresh for this title is queued
+    CHECKED = "checked"            # at least one refresh completed successfully
+    FAILED = "failed"              # attempts exist, none ever succeeded
+    NEVER_CHECKED = "never_checked"  # no refresh request at all
 
 
 @dataclass
@@ -62,13 +79,14 @@ class EvaluatedOffer:
 @dataclass
 class WatchabilityResult:
     movie_id: int
-    status: str  # watchable_here | watchable_vpn | not_watchable | unknown
+    status: str  # watchable_here | watchable_vpn | not_watchable | unknown | checking
     status_label: str
     status_symbol: str
     best_offer: Optional[EvaluatedOffer] = None
     watchable_offers: list[EvaluatedOffer] = field(default_factory=list)
     excluded_offers: list[EvaluatedOffer] = field(default_factory=list)
     explanation: list[str] = field(default_factory=list)
+    refresh_state: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -79,6 +97,7 @@ class WatchabilityResult:
             "watchable_offers": [o.to_dict() for o in self.watchable_offers],
             "excluded_offers": [o.to_dict() for o in self.excluded_offers],
             "explanation": self.explanation,
+            "refresh_state": self.refresh_state,
         }
 
 
@@ -108,8 +127,18 @@ def evaluate_watchability(
     preference: Preference,
     current_country: Optional[str] = None,
     user_subscriptions: Optional[set[str]] = None,
+    refresh_state: Optional[str] = None,
 ) -> WatchabilityResult:
-    """Evaluate full watchability status and best way to watch for a movie/series."""
+    """Evaluate full watchability status and best way to watch for a movie/series.
+
+    ``refresh_state`` (a :class:`RefreshState` value, or ``None`` when the
+    caller has no queue knowledge) is consulted only when the canonical
+    store holds no offers for the title: it is what separates "checked, the
+    providers really have nothing" (⚫ Not available) from "queued right
+    now" (🔵 Checking…) and "never fetched at all" (⚪ Unknown). When offers
+    exist they always decide the status; a queued re-check never hides a
+    known result.
+    """
     if user_subscriptions is None:
         user_subscriptions = get_user_subscriptions(preference.user_id if preference else 1)
 
@@ -122,11 +151,52 @@ def evaluate_watchability(
     }
 
     if not offers:
+        # Checked beats pending: a title whose last known state is "nothing
+        # out there" keeps ⚫ while a re-check runs (the queue state is still
+        # exposed on refresh_state), so the badge only drops to 🔵 for a
+        # title we have never successfully checked.
+        if refresh_state == RefreshState.CHECKED:
+            return WatchabilityResult(
+                movie_id=movie.id,
+                status=WatchabilityStatus.NOT_WATCHABLE,
+                status_label="Not available",
+                status_symbol="⚫",
+                refresh_state=refresh_state,
+                explanation=[
+                    "Availability was checked — no qualifying offers found "
+                    "for this title."
+                ],
+            )
+        if refresh_state == RefreshState.PENDING:
+            return WatchabilityResult(
+                movie_id=movie.id,
+                status=WatchabilityStatus.CHECKING,
+                status_label="Checking availability…",
+                status_symbol="🔵",
+                refresh_state=refresh_state,
+                explanation=[
+                    "A refresh for this title is queued — results appear "
+                    "once the worker gets to it."
+                ],
+            )
+        if refresh_state == RefreshState.FAILED:
+            return WatchabilityResult(
+                movie_id=movie.id,
+                status=WatchabilityStatus.UNKNOWN,
+                status_label="Unknown — last check failed",
+                status_symbol="⚪",
+                refresh_state=refresh_state,
+                explanation=[
+                    "The last availability check failed — it is retried on "
+                    "the next refresh."
+                ],
+            )
         return WatchabilityResult(
             movie_id=movie.id,
             status=WatchabilityStatus.UNKNOWN,
             status_label="Unknown",
             status_symbol="⚪",
+            refresh_state=refresh_state,
             explanation=["No availability data found for this title."],
         )
 
@@ -274,4 +344,5 @@ def evaluate_watchability(
         watchable_offers=watchable_offers,
         excluded_offers=excluded_offers,
         explanation=explanations,
+        refresh_state=refresh_state,
     )
