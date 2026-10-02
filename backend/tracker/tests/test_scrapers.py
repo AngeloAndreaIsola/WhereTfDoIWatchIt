@@ -151,7 +151,7 @@ class RaiPlayScraperTest(TestCase):
         items = self.scraper.run(query=None)
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0].title, "Il Commissario Montalbano")
-        self.assertEqual(items[0].provider_slug, "rai-play")
+        self.assertEqual(items[0].provider_slug, "raiplay")
         self.assertEqual(items[0].year, 1999)
         self.assertEqual(items[0].content_type, "movie")
         self.assertIn("IT", items[0].audio_languages)
@@ -213,7 +213,7 @@ class ScraperRegistryTest(TestCase):
     """The registry drives both the v1 scraper views and the v2/unofficial API."""
 
     def test_priority_sources_registered(self):
-        for slug in ("bbc_iplayer", "nhk_world", "rai-play"):
+        for slug in ("bbc_iplayer", "nhk_world", "raiplay"):
             self.assertIn(slug, SCRAPER_REGISTRY)
             # resolve_scraper_class returns an instantiable scraper class
             cls = resolve_scraper_class(slug)
@@ -230,10 +230,10 @@ class ScraperRegistryTest(TestCase):
     def test_get_or_create_provider_from_registry_slug(self):
         """Providers referenced by the registry exist or can be created.
 
-        bbc_iplayer / rai-play / nhk are seeded as BVOD providers by
+        bbc_iplayer / raiplay / nhk_world are seeded as BVOD providers by
         the migrations, so they are NOT scrapers — assert that here.
         """
-        for slug in ("bbc_iplayer", "nhk_world", "rai-play"):
+        for slug in ("bbc_iplayer", "nhk_world", "raiplay"):
             provider, _ = Provider.objects.get_or_create(
                 slug=slug,
                 defaults={

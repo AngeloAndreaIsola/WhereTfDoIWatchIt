@@ -1,14 +1,15 @@
-"""Seed unofficial scraping providers (RaiPlay, BBC, NHK) and create regions."""
+"""Seed imported scraper providers (KissKH, HydraHD, AnimeWorld)."""
 from __future__ import annotations
 
 from django.core.management.base import BaseCommand
 from tracker.models import Provider, ProviderCategory
 
 # Unofficial / priority scraper sources per docs/PLAN.md Phase A/B.
-# NOTE: bbc_iplayer, rai-play and nhk are seeded as Free Streaming Providers by
-# the migrations (0011 / 0014 / 0018) — they are public broadcasters, not scrapers.
-# This command only seeds the small imported scraper sources (KissKH, HydraHD,
-# AnimeWorld) when missing; it will not downgrade a Free provider back to scraper.
+# NOTE: bbc_iplayer, raiplay and nhk_world are seeded as Free Streaming
+# Providers by the migrations (0011 / 0014 / 0018) — they are public
+# broadcasters, not scrapers. This command only seeds the small imported
+# scraper sources (KissKH, HydraHD, AnimeWorld) when missing; it will not
+# downgrade a Free provider back to scraper.
 UNOFFICIAL_PROVIDERS = [
     {"slug": "kisskh", "name": "KissKH", "country": "", "domain": "kisskh.co", "url": "https://kisskh.co"},
     {"slug": "hydrahd", "name": "HydraHD", "country": "", "domain": "hydrahd.org", "url": "https://hydrahd.org"},
@@ -17,7 +18,7 @@ UNOFFICIAL_PROVIDERS = [
 
 
 class Command(BaseCommand):
-    help = "Seed unofficial scraping providers (RaiPlay, BBC, NHK)."
+    help = "Seed imported scraper providers (KissKH, HydraHD, AnimeWorld)."
 
     def handle(self, *args, **options):
         created_prov = 0

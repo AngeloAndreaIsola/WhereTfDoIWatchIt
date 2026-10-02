@@ -3,10 +3,14 @@
 Replays the canonical provider inserts from migrations/commands:
 - migration 0007 (MAJOR_PROVIDERS + initial SCRAPER_PROVIDERS)
 - migration 0011 (FREE_PROVIDERS: European public broadcasters & global free)
-- migration 0012 (rai-play, bbc, nhk unofficial seeds)
 - migration 0014 (move bbc_iplayer -> free)
 - migration 0018 (NHK -> free)
 - seed_unofficial_providers command (kisskh, hydrahd, animeworld)
+
+The alias providers from migration 0012 (rai-play, bbc, nhk) are deliberately
+NOT replayed: they were duplicates of raiplay / bbc_iplayer / nhk_world and
+were merged away by migration 0033, which also makes sharing a domain root
+between two provider rows impossible.
 
 Safe to run multiple times — uses get_or_create and preserves existing rows.
 """
@@ -67,12 +71,6 @@ UNOFFICIAL_PROVIDERS = [
     {"slug": "animeworld", "name": "AnimeWorld", "domain": "animeworld.to"},
 ]
 
-LEGACY_SCRAPERS = [
-    {"slug": "rai-play", "name": "RaiPlay", "domain": "raiplay.it", "country": "IT"},
-    {"slug": "bbc", "name": "BBC", "domain": "bbc.co.uk", "country": "GB"},
-    {"slug": "nhk", "name": "NHK", "domain": "nhk.or.jp", "country": "JP"},
-]
-
 
 def upsert(slug, defaults):
     obj, _ = Provider.objects.get_or_create(slug=slug, defaults=defaults)
@@ -109,16 +107,6 @@ for s in UNOFFICIAL_PROVIDERS:
         "is_major": False,
         "is_enabled": True,
         "domain": s["domain"],
-    })
-
-for s in LEGACY_SCRAPERS:
-    upsert(s["slug"], {
-        "name": s["name"],
-        "category": ProviderCategory.BVOD,
-        "is_major": False,
-        "is_enabled": True,
-        "domain": s["domain"],
-        "country_code": s["country"],
     })
 
 print("total_providers", Provider.objects.count())

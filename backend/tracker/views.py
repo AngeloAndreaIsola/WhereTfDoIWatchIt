@@ -34,6 +34,8 @@ from .models import (
     Subscription,
     UserMovieData,
     WatchlistItem,
+    provider_domain_root,
+    provider_domain_root_expr,
 )
 from .serializers import (
     LanguageInfoSerializer,
@@ -533,7 +535,13 @@ from django.utils import timezone
 
 
 def detect_provider_from_url(url: str) -> tuple[Provider, str]:
-    """Dynamically get or create a scraper provider from any URL."""
+    """Dynamically get or create a scraper provider from any URL.
+
+    The lookup goes through the provider's *domain root* first, so a URL on a
+    site that already has a provider row (e.g. bbc.co.uk/iplayer) reuses it
+    instead of minting a second row from the domain's first label — the
+    historical source of duplicate provider cards.
+    """
     parsed = urlparse(url.strip())
     domain = parsed.netloc.lower() or parsed.path.split("/")[0].lower()
     domain_clean = domain.replace("www.", "")
@@ -545,20 +553,32 @@ def detect_provider_from_url(url: str) -> tuple[Provider, str]:
     slug = domain_clean.split(".")[0]
     name = domain_clean.capitalize()
 
-    provider, _ = Provider.objects.get_or_create(
-        slug=slug,
-        defaults={
-            "name": name,
-            "category": "scraper",
-            "is_major": False,
-            "is_enabled": True,
-            "icon_name": slug,
-            "domain": domain_clean,
-        },
+    existing = (
+        Provider.objects.annotate(_domain_root=provider_domain_root_expr())
+        .filter(_domain_root=provider_domain_root(domain_clean))
+        .order_by("id")
+        .first()
     )
-    if not provider.domain:
-        provider.domain = domain_clean
-        provider.save()
+    if existing is not None:
+        if not existing.domain:
+            existing.domain = domain_clean
+            existing.save()
+        provider = existing
+    else:
+        provider, _ = Provider.objects.get_or_create(
+            slug=slug,
+            defaults={
+                "name": name,
+                "category": "scraper",
+                "is_major": False,
+                "is_enabled": True,
+                "icon_name": slug,
+                "domain": domain_clean,
+            },
+        )
+        if not provider.domain:
+            provider.domain = domain_clean
+            provider.save()
 
     parts = [p for p in parsed.path.split("/") if p]
     query = parts[-1].replace("-", " ").replace("_", " ") if parts else name

@@ -253,7 +253,7 @@ def unofficial_scrape(request):
     Returns matched results with TMDb IDs where available.
 
     Body:
-      - provider_slug: required (e.g. 'rai-play')
+      - provider_slug: required (e.g. 'raiplay')
       - query: optional search term
       - country: optional ISO country code
 

@@ -1,5 +1,6 @@
 import os
 from django.db import models
+from django.db.models.functions import Concat, Lower, StrIndex, Substr, Trim
 from django.utils import timezone
 
 if os.environ.get("USE_SQLITE") == "1":
@@ -140,6 +141,25 @@ class ProviderCategory(models.TextChoices):
     SCRAPER = "scraper", "Scraper / Small Source"
 
 
+def provider_domain_root_expr():
+    """SQL expression for a provider's domain root.
+
+    The root is the domain up to its first path separator ("bbc.co.uk" for
+    "bbc.co.uk/iplayer"), lower-cased and trimmed, so two providers pointing
+    at the same site collide under ``uniq_provider_domain_root`` regardless of
+    the path they carry. Concatenating "/" before locating it keeps the
+    "no path present" case portable (the whole domain becomes the root)
+    without a CASE expression.
+    """
+    position = StrIndex(Concat(models.F("domain"), models.Value("/")), models.Value("/"))
+    return Trim(Lower(Substr(models.F("domain"), 1, position - 1)))
+
+
+def provider_domain_root(domain) -> str:
+    """Python twin of :func:`provider_domain_root_expr` (keep them in sync)."""
+    return (domain or "").split("/", 1)[0].strip().lower()
+
+
 class Provider(models.Model):
     slug = models.SlugField(max_length=50, unique=True, db_index=True)
     name = models.CharField(max_length=100)
@@ -169,6 +189,19 @@ class Provider(models.Model):
         if self.category == ProviderCategory.SCRAPER:
             return "Scraper"
         return self.category.upper()
+
+    class Meta:
+        constraints = [
+            # One provider row per site: the domain root (host up to the first
+            # path separator) must be unique across all providers with a domain.
+            # This is what keeps seeded lineages and URL-driven provider creation
+            # from producing duplicate cards (RaiPlay, BBC iPlayer, NHK).
+            models.UniqueConstraint(
+                provider_domain_root_expr(),
+                condition=~models.Q(domain=""),
+                name="uniq_provider_domain_root",
+            ),
+        ]
 
 
 class ExternalProviderMapping(models.Model):

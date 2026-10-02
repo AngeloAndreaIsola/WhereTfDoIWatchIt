@@ -181,22 +181,12 @@ export default function SubscriptionsPage() {
     }
   };
 
-  const PUBLIC_BROADCASTER_SLUGS = new Set([
-    "raiplay",
-    "rai-play",
-    "bbc",
-    "bbc_iplayer",
-    "nhk",
-    "nhk_world",
-  ]);
-
   const majorProviders = providers.filter((p) => p.is_major);
   const bvodProviders = providers.filter((p) => p.category === "bvod");
+  // Public broadcasters are BVOD providers, so every scraper-category provider
+  // is an imported source by construction — no slug allowlist needed here.
   const scraperProviders = providers.filter(
-    (p) =>
-      !p.is_major &&
-      p.category === "scraper" &&
-      !PUBLIC_BROADCASTER_SLUGS.has(p.slug.toLowerCase())
+    (p) => !p.is_major && p.category === "scraper"
   );
 
   return (

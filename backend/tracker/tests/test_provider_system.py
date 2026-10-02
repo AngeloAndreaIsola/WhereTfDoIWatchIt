@@ -76,10 +76,10 @@ class ProviderSystemTests(TestCase):
             )
             self.assertEqual(provider.category, ProviderCategory.SCRAPER)
 
-        # Public broadcasters (bbc_iplayer, rai-play, nhk_world) are BVOD
+        # Public broadcasters (bbc_iplayer, raiplay, nhk_world) are BVOD
         # providers, not scrapers. Assert the migration's effect by re-asserting
         # the category (idempotent — matches what migration 0018 guarantees).
-        for slug in ("bbc_iplayer", "rai-play", "nhk_world"):
+        for slug in ("bbc_iplayer", "raiplay", "nhk_world"):
             provider = Provider.objects.filter(slug=slug).first()
             self.assertIsNotNone(provider, f"{slug} should exist")
             provider.category = ProviderCategory.BVOD

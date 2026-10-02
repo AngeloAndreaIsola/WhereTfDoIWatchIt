@@ -30,7 +30,7 @@ GEO_BLOCK_PATTERNS = [
 
 class RaiPlayScraper(BaseScraper):
     """Scraper for RaiPlay streaming service (Italy)."""
-    provider_slug = "rai-play"
+    provider_slug = "raiplay"
     country_code = "IT"
 
     def __init__(self, timeout: Optional[int] = None):
