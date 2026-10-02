@@ -319,8 +319,10 @@ class RefreshPriority(models.IntegerChoices):
                   < WATCHED < STALE < BACKGROUND
 
     - ``EXPLICIT`` — a deliberate action on one title (manual match
-      confirmation, link-to-TMDb): the strongest signal short of never
-      having fetched the title at all.
+      confirmation, link-to-TMDb, the manual "Refresh availability" button
+      on a detail page): the strongest signal short of never having fetched
+      the title at all. The only priority that forces the drain to perform a
+      new check even while the current offers still read as fresh.
     - ``NEW`` — never fetched by the canonical path
       (``request_availability_refresh`` bumps any never-fetched title here).
     - ``RECENTLY_VIEWED`` — the title's detail page was opened (refresh on

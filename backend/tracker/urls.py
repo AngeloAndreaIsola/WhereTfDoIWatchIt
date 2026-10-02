@@ -11,6 +11,7 @@ urlpatterns = [
     path("catalog/", views.catalog_list, name="catalog-list"),
     path("catalog/unified/", views.unified_catalog, name="catalog-unified"),
     path("movie/<int:tmdb_id>/availability/", views.movie_availability, name="movie-availability"),
+    path("movie/<int:tmdb_id>/refresh/", views.refresh_availability, name="movie-refresh"),
     path("movie/<int:tmdb_id>/language-info/", views.movie_language_info, name="movie-language-info"),
     path("providers/", views.providers_list, name="providers-list"),
     path("providers/<str:slug>/toggle/", views.provider_toggle, name="provider-toggle"),
@@ -26,6 +27,16 @@ urlpatterns = [
     path("preferences/", views.preferences, name="preferences"),
     path("watchlist/", views.watchlist, name="watchlist"),
     path("watchlist/refresh/", views.watchlist_refresh, name="watchlist-refresh"),
+    path(
+        "watchlist/refresh-explicit/",
+        views.watchlist_refresh_explicit,
+        name="watchlist-refresh-explicit",
+    ),
+    path(
+        "watchlist/refresh-status/",
+        views.watchlist_refresh_status,
+        name="watchlist-refresh-status",
+    ),
     path("watchlist/report/", views.watchlist_report, name="watchlist-report"),
     path("watchlist/resolve/", views.watchlist_resolve, name="watchlist-resolve"),
     # --- Watchlist export (canonical round-trip CSV backup) ---

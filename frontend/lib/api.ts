@@ -78,6 +78,8 @@ export interface PrimeMovieResponse {
   offers: PrimeOffer[];
   /** True while this title still waits in the backend refresh queue — the page polls until it clears. */
   refresh_pending?: boolean;
+  /** Status of the newest refresh request: `"pending"` / `"done"` / `"failed"`, null when never requested. */
+  refresh_status?: "pending" | "done" | "failed" | null;
 }
 
 export interface SeriesDetail {
@@ -114,6 +116,8 @@ export interface PrimeSeriesResponse {
   selected_season?: number | null;
   /** True while this title still waits in the backend refresh queue — the page polls until it clears. */
   refresh_pending?: boolean;
+  /** Status of the newest refresh request: `"pending"` / `"done"` / `"failed"`, null when never requested. */
+  refresh_status?: "pending" | "done" | "failed" | null;
 }
 
 export interface WatchResult {
@@ -307,6 +311,106 @@ export async function fetchPrimeSeriesOffers(
     );
   }
 
+  return res.json();
+}
+
+/**
+ * Queue an explicit availability refresh for one title (movie or series).
+ *
+ * Enqueue-only: the backend creates a high-priority refresh request and
+ * returns immediately — the refresh worker performs the actual provider
+ * fetch, and the detail page picks the new canonical offers up by polling
+ * `refresh_pending` on the detail endpoint.
+ */
+export interface RefreshAvailabilityResponse {
+  message: string;
+  tmdb_id: number;
+  content_type: string;
+  refresh_pending: boolean;
+  refresh_status: "pending";
+  priority: number;
+  request_id: number | null;
+}
+
+export async function requestAvailabilityRefresh(
+  tmdbId: number
+): Promise<RefreshAvailabilityResponse> {
+  const res = await fetch(`/api/movie/${tmdbId}/refresh/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(
+      body.error ??
+        body.detail ??
+        `Failed to queue availability refresh (${res.status})`
+    );
+  }
+  return res.json();
+}
+
+/**
+ * Queue an explicit availability refresh for every watchlisted title.
+ *
+ * Enqueue-only: one local pass creates at most one pending refresh request
+ * per title (deduplicated against anything already queued, freshness
+ * bypassed) and answers immediately — the refresh worker drains the queue
+ * under the shared rate limit and daily budget. Progress is read back with
+ * `getWatchlistRefreshStatus`, using the returned `now` as the `since`
+ * anchor so earlier refreshes never count toward this run.
+ */
+export interface WatchlistRefreshQueuedResponse {
+  queued: number;
+  total_watchlist: number;
+  /** Server epoch seconds captured when the run started. */
+  now: number;
+}
+
+export async function requestWatchlistRefresh(): Promise<WatchlistRefreshQueuedResponse> {
+  const res = await fetch(`/api/watchlist/refresh-explicit/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(
+      body.error ??
+        body.detail ??
+        `Failed to queue watchlist refresh (${res.status})`
+    );
+  }
+  return res.json();
+}
+
+/**
+ * Progress of one bulk watchlist refresh run: requests still queued plus
+ * those completed at or after `since` (the enqueue response's `now`),
+ * split into refreshed and failed.
+ */
+export interface WatchlistRefreshStatusResponse {
+  pending: number;
+  refreshed: number;
+  failed: number;
+  since: number;
+}
+
+export async function getWatchlistRefreshStatus(
+  since: number
+): Promise<WatchlistRefreshStatusResponse> {
+  const res = await fetch(
+    `/api/watchlist/refresh-status/?since=${encodeURIComponent(since)}`
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(
+      body.error ??
+        body.detail ??
+        `Failed to read refresh progress (${res.status})`
+    );
+  }
   return res.json();
 }
 

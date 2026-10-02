@@ -33,6 +33,7 @@ from tracker.services.bulk_refresh import process_watchlist_refresh
 from tracker.services.rate_limit import RateLimitExceeded, RateLimiter
 from tracker.services.refresh_requests import (
     MAX_ATTEMPTS,
+    process_refresh_queue,
     request_availability_refresh,
     request_import_refresh,
 )
@@ -394,6 +395,138 @@ class RefreshOnViewTests(TestCase):
         request = RefreshRequest.objects.get()
         self.assertEqual(request.status, RefreshRequestStatus.PENDING)
         self.assertEqual(request.priority, RefreshPriority.RECENTLY_VIEWED)
+
+
+class ExplicitRefreshEndpointTests(TestCase):
+    """POST /api/movie/<tmdb_id>/refresh/ — the manual "Refresh availability" action.
+
+    Enqueue-only: the HTTP request creates (or upgrades, deduplicated) a
+    pending ``RefreshRequest`` at ``EXPLICIT`` priority with
+    ``if_stale=False`` — even for a title whose offers still read as fresh —
+    and never contacts a provider; the existing worker performs the actual
+    refresh. Movies and series share the endpoint and the mechanism.
+    """
+
+    def _post(self, tmdb_id):
+        return self.client.post(
+            f"/api/movie/{tmdb_id}/refresh/",
+            data={},
+            content_type="application/json",
+        )
+
+    def test_queues_pending_explicit_request_without_provider_io(self):
+        movie = Movie.objects.create(tmdb_id=550, title="Fight Club", year=1999)
+        local_offer(movie)  # fresh: if_stale=False must still enqueue
+
+        with patch(REFRESH_CONTENT) as refresh_content:
+            refresh_content.side_effect = AssertionError("endpoint fetched")
+            resp = self._post(movie.tmdb_id)
+
+        self.assertEqual(resp.status_code, 202, resp.content)
+        refresh_content.assert_not_called()
+        request = RefreshRequest.objects.get()
+        self.assertEqual(request.movie, movie)
+        self.assertEqual(request.status, RefreshRequestStatus.PENDING)
+        self.assertEqual(request.priority, RefreshPriority.EXPLICIT)
+        self.assertTrue(resp.data["refresh_pending"])
+        self.assertEqual(resp.data["refresh_status"], RefreshRequestStatus.PENDING)
+        self.assertEqual(resp.data["priority"], int(RefreshPriority.EXPLICIT))
+
+    def test_worker_performs_the_refresh_for_a_fresh_title(self):
+        """EXPLICIT outranks the freshness short-circuit at drain time too.
+
+        A fresh title's pending request normally settles as ``done`` without
+        spending budget — but the manual button means "check now", so the
+        worker must perform the new availability check.
+        """
+        movie = Movie.objects.create(tmdb_id=551, title="Fresh", year=2000)
+        local_offer(movie)
+
+        resp = self._post(movie.tmdb_id)
+        self.assertEqual(resp.status_code, 202, resp.content)
+
+        service = MagicMock()
+        summary = process_refresh_queue(budget=5, service=service)
+
+        service.refresh_content.assert_called_once_with(movie)
+        self.assertEqual(summary["refreshed"], 1)
+        request = RefreshRequest.objects.get()
+        self.assertEqual(request.status, RefreshRequestStatus.DONE)
+        self.assertIsNotNone(request.completed_at)
+
+    def test_upgrades_a_lower_priority_pending_request(self):
+        movie = Movie.objects.create(tmdb_id=552, title="Stale", year=2001)
+        local_offer(movie)
+        _backdate_offers(movie)
+        first = request_availability_refresh(
+            movie, priority=RefreshPriority.RECENTLY_VIEWED
+        )
+
+        resp = self._post(movie.tmdb_id)
+
+        self.assertEqual(resp.status_code, 202, resp.content)
+        self.assertEqual(RefreshRequest.objects.count(), 1)
+        request = RefreshRequest.objects.get()
+        self.assertEqual(request.pk, first.pk)
+        self.assertEqual(request.priority, RefreshPriority.EXPLICIT)
+
+    def test_repeated_clicks_stay_deduplicated(self):
+        movie = Movie.objects.create(tmdb_id=553, title="Repeat", year=2002)
+        local_offer(movie)
+
+        first = self._post(movie.tmdb_id)
+        second = self._post(movie.tmdb_id)
+
+        self.assertEqual(first.status_code, 202, first.content)
+        self.assertEqual(second.status_code, 202, second.content)
+        self.assertEqual(RefreshRequest.objects.filter(status="pending").count(), 1)
+        self.assertEqual(
+            RefreshRequest.objects.get().priority, RefreshPriority.EXPLICIT
+        )
+
+    def test_never_fetched_title_keeps_explicit_priority(self):
+        movie = Movie.objects.create(tmdb_id=554, title="Unseen", year=2003)
+
+        resp = self._post(movie.tmdb_id)
+
+        self.assertEqual(resp.status_code, 202, resp.content)
+        request = RefreshRequest.objects.get()
+        self.assertEqual(request.priority, RefreshPriority.EXPLICIT)
+
+    def test_series_title_shares_the_same_refresh_path(self):
+        movie = Movie.objects.create(
+            tmdb_id=1396,
+            title="Breaking Bad",
+            year=2008,
+            content_type="series",
+        )
+        local_offer(movie)
+
+        with patch(REFRESH_CONTENT) as refresh_content:
+            refresh_content.side_effect = AssertionError("endpoint fetched")
+            resp = self._post(movie.tmdb_id)
+
+        self.assertEqual(resp.status_code, 202, resp.content)
+        refresh_content.assert_not_called()
+        request = RefreshRequest.objects.get()
+        self.assertEqual(request.movie.content_type, "series")
+        self.assertEqual(request.status, RefreshRequestStatus.PENDING)
+        self.assertEqual(request.priority, RefreshPriority.EXPLICIT)
+        self.assertEqual(resp.data["content_type"], "series")
+
+    def test_unknown_title_returns_404(self):
+        resp = self._post(999999)
+        self.assertEqual(resp.status_code, 404)
+        self.assertEqual(RefreshRequest.objects.count(), 0)
+
+    def test_enqueue_failure_surfaces_instead_of_looking_queued(self):
+        movie = Movie.objects.create(tmdb_id=555, title="Doomed", year=2004)
+
+        with patch("tracker.views.request_availability_refresh", return_value=None):
+            resp = self._post(movie.tmdb_id)
+
+        self.assertEqual(resp.status_code, 500)
+        self.assertIn("error", resp.data)
 
 
 class LetterboxdImportEnqueueTests(TestCase):

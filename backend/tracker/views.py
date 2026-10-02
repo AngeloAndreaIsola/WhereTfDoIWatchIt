@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone as dt_timezone
 from typing import Any
 
 from django.conf import settings
 from django.db import connection, transaction
+from django.db.models import Subquery
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from django.views.decorators.http import require_GET
 from rest_framework import status
 from rest_framework.decorators import api_view, parser_classes
@@ -75,7 +78,10 @@ def paginate_list(items: list, page: int, page_size: int) -> tuple[list, dict]:
     return page_items, pagination
 from .services.bulk_refresh import process_watchlist_refresh
 from .services.availability_reads import get_local_offers
-from .services.refresh_requests import request_availability_refresh
+from .services.refresh_requests import (
+    request_availability_refresh,
+    request_watchlist_refresh,
+)
 from .services.letterboxd import (
     LetterboxdFetchError,
     LetterboxdInvalidURLError,
@@ -397,6 +403,58 @@ def movie_availability(request, tmdb_id: int):
             },
             "offers": RankedOfferSerializer([offer.to_dict() for offer in ranked], many=True).data,
         }
+    )
+
+
+@api_view(["POST"])
+def refresh_availability(request, tmdb_id: int):
+    """POST /api/movie/<tmdb_id>/refresh/ — queue an explicit availability refresh.
+
+    The backend for the manual "Refresh availability" button on the
+    movie/series detail pages. One endpoint serves both pages: movies and
+    series are the same tracked title row and share the canonical
+    availability pipeline, so the refresh mechanism is identical.
+
+    Enqueue-only by contract — the HTTP request never contacts a provider.
+    It creates (or upgrades, preserving deduplication) at most one pending
+    ``RefreshRequest`` at ``RefreshPriority.EXPLICIT`` and answers
+    immediately; the existing ``refresh_worker`` drains the queue and the
+    ``AvailabilityRefreshService`` writes the canonical offers, which the
+    frontend then picks up by refetching the detail payload. Enqueueing with
+    ``if_stale=False`` forces the refresh even when the current offers still
+    read as fresh — the whole point of a manual refresh — while the partial
+    unique constraint keeps repeated clicks on the same pending row.
+    """
+    movie = get_object_or_404(Movie, tmdb_id=tmdb_id)
+
+    refresh_request = request_availability_refresh(
+        movie,
+        priority=RefreshPriority.EXPLICIT,
+        if_stale=False,
+    )
+
+    pending = RefreshRequest.objects.filter(
+        movie=movie, status=RefreshRequestStatus.PENDING
+    ).exists()
+    if not pending and refresh_request is None:
+        # request_availability_refresh swallows enqueue failures so it can
+        # never break a read; for an explicit user action the failure must
+        # surface instead of masquerading as a queued refresh.
+        return Response(
+            {"error": "failed to queue availability refresh"}, status=500
+        )
+
+    return Response(
+        {
+            "message": "Availability refresh queued",
+            "tmdb_id": movie.tmdb_id,
+            "content_type": movie.content_type,
+            "refresh_pending": True,
+            "refresh_status": RefreshRequestStatus.PENDING,
+            "priority": int(RefreshPriority.EXPLICIT),
+            "request_id": refresh_request.pk if refresh_request else None,
+        },
+        status=status.HTTP_202_ACCEPTED,
     )
 
 
@@ -1224,6 +1282,81 @@ def watchlist_refresh(request):
     return Response(summary, status=status.HTTP_200_OK)
 
 
+@api_view(["POST"])
+def watchlist_refresh_explicit(request):
+    """POST /api/watchlist/refresh-explicit/ — queue a bulk explicit refresh.
+
+    Backend for the watchlist page's "Refresh all availability" action. The
+    single-title refresh endpoint does one title; this one enqueues every
+    watchlisted title at ``RefreshPriority.EXPLICIT`` in one local pass and
+    answers immediately — enqueue-only by contract, so the HTTP request
+    never contacts a provider and never spends API budget. The existing
+    ``refresh_worker`` drains the queue under the shared rate limit and
+    daily budget; the frontend polls ``refresh-status`` for progress.
+
+    ``now`` is the server epoch captured *before* the enqueue pass, so every
+    completion this run produces (including ones racing the response) counts
+    toward the status endpoint's progress, while earlier refreshes never do.
+    """
+    started_at = timezone.now()
+    result = request_watchlist_refresh(user_id=1)
+
+    if result["total_watchlist"] and not result["queued"]:
+        # request_watchlist_refresh swallows enqueue failures (same contract
+        # as the per-title path); for an explicit user action a total
+        # failure must surface instead of reporting a phantom success.
+        return Response(
+            {"error": "failed to queue availability refresh"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    return Response(
+        {**result, "now": started_at.timestamp()},
+        status=status.HTTP_202_ACCEPTED,
+    )
+
+
+@api_view(["GET"])
+def watchlist_refresh_status(request):
+    """GET /api/watchlist/refresh-status/?since=<epoch seconds> — bulk progress.
+
+    Counts the watchlist titles' default-scope refresh requests: ``pending``
+    (still queued for the worker) plus everything completed at or after
+    ``since``, split into ``refreshed`` (done) and ``failed``. ``since``
+    should be the ``now`` value the enqueue endpoint returned — both sides
+    are server clock, so progress cannot leak across runs. Non-watchlist
+    titles and other source scopes are never counted.
+    """
+    since_raw = request.GET.get("since")
+    try:
+        since_ts = float(since_raw)
+    except (TypeError, ValueError):
+        return Response(
+            {"error": "since must be an epoch timestamp"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    since = datetime.fromtimestamp(since_ts, tz=dt_timezone.utc)
+
+    watchlist_movie_ids = WatchlistItem.objects.filter(user_id=1).values("movie_id")
+    scope = RefreshRequest.objects.filter(
+        movie_id__in=Subquery(watchlist_movie_ids),
+        source="",
+    )
+    return Response(
+        {
+            "pending": scope.filter(status=RefreshRequestStatus.PENDING).count(),
+            "refreshed": scope.filter(
+                status=RefreshRequestStatus.DONE, completed_at__gte=since
+            ).count(),
+            "failed": scope.filter(
+                status=RefreshRequestStatus.FAILED, completed_at__gte=since
+            ).count(),
+            "since": since_ts,
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
 @api_view(["GET"])
 def health_full(request):
     """Alias kept for legacy; identical to health."""
@@ -1519,6 +1652,14 @@ def _prime_detail_response(request, item: Movie, key: str) -> Response:
     is_in_watchlist = WatchlistItem.objects.filter(user_id=1, movie=item).exists()
     watch_events = MovieWatchEvent.objects.filter(user_id=1, movie=item).order_by("-watched_date", "-created_at")
     season = _requested_season(request, item)
+    pending = RefreshRequest.objects.filter(
+        movie=item, status=RefreshRequestStatus.PENDING
+    ).exists()
+    latest = (
+        RefreshRequest.objects.filter(movie=item)
+        .order_by("-requested_at", "-pk")
+        .first()
+    )
     payload = {
         key: MovieDetailSerializer(item).data,
         "user_data": UserMovieDataSerializer(user_data).data if user_data else None,
@@ -1528,9 +1669,13 @@ def _prime_detail_response(request, item: Movie, key: str) -> Response:
         # True while this title still waits in the refresh queue — the
         # frontend polls on it ("Checking availability…") until the worker
         # drains the request and canonical offers land.
-        "refresh_pending": RefreshRequest.objects.filter(
-            movie=item, status=RefreshRequestStatus.PENDING
-        ).exists(),
+        "refresh_pending": pending,
+        # Status of the newest request for this title ("pending" / "done" /
+        # "failed", null when never requested) straight off the same
+        # RefreshRequest rows the queue maintains — so the frontend can tell
+        # a completed refresh from one the worker gave up on, without a
+        # second status system.
+        "refresh_status": latest.status if latest else None,
     }
     if key == "series":
         payload["seasons"] = _season_summaries(item)

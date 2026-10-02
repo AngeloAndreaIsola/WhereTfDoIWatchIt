@@ -217,3 +217,25 @@ class PrimeDetailPendingFlagTests(TestCase):
 
         resp = self.client.get(f"/api/prime/movie/{movie.tmdb_id}/")
         self.assertFalse(resp.data["refresh_pending"])
+
+    def test_refresh_status_distinguishes_a_failed_refresh_from_a_done_one(self):
+        """The frontend must be able to tell "refreshed" from "gave up"."""
+        from django.utils import timezone
+
+        from tracker.models import RefreshRequest
+
+        movie = Movie.objects.create(tmdb_id=912, title="Queued", year=2020)
+        request_availability_refresh(movie)
+
+        resp = self.client.get(f"/api/prime/movie/{movie.tmdb_id}/")
+        self.assertTrue(resp.data["refresh_pending"])
+        self.assertEqual(resp.data["refresh_status"], RefreshRequestStatus.PENDING)
+
+        # The worker gave up after MAX_ATTEMPTS: no longer pending, but the
+        # detail payload must not report it as a completed refresh.
+        RefreshRequest.objects.update(
+            status=RefreshRequestStatus.FAILED, completed_at=timezone.now()
+        )
+        resp = self.client.get(f"/api/prime/movie/{movie.tmdb_id}/")
+        self.assertFalse(resp.data["refresh_pending"])
+        self.assertEqual(resp.data["refresh_status"], RefreshRequestStatus.FAILED)

@@ -8,6 +8,7 @@ import { useCurrentLocation } from "@/components/CurrentLocationProvider";
 import { VpnWatchModal } from "@/components/VpnWatchModal";
 import { WhyCantIWatchModal, ExcludedOffer } from "@/components/WhyCantIWatchModal";
 import { Pagination } from "@/components/Pagination";
+import WatchlistRefreshButton from "@/components/WatchlistRefreshButton";
 import {
   addToWatchlist,
   markMovieWatched,
@@ -327,6 +328,23 @@ export default function WatchlistPage() {
           >
             Import / Export
           </Link>
+        </div>
+      </section>
+
+      {/* ─── Bulk availability refresh ─────────────────────────────────────── */}
+      <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-xs dark:border-gray-700 dark:bg-gray-800">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+              Availability
+            </h2>
+            <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+              Re-check every watchlisted title against the streaming
+              catalogues now — queued in the background, so rate limits may
+              spread it over time.
+            </p>
+          </div>
+          <WatchlistRefreshButton onRefreshed={refreshWatchlistData} />
         </div>
       </section>
 

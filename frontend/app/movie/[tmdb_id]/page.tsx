@@ -7,8 +7,9 @@ import { useRouter } from "next/navigation";
 import OfferRow from "@/components/OfferRow";
 import { useCurrentLocation } from "@/components/CurrentLocationProvider";
 import MovieEditModal from "@/components/MovieEditModal";
+import RefreshAvailabilityButton from "@/components/RefreshAvailabilityButton";
 import type { PrimeOffer, PrimeMovieResponse } from "@/lib/api";
-import { fetchPrimeMovieOffers, addToWatchlist, markMovieWatched, unmarkMovieWatched, removeWatchlistItem } from "@/lib/api";
+import { fetchPrimeMovieOffers, addToWatchlist, markMovieWatched, unmarkMovieWatched, removeWatchlistItem, requestAvailabilityRefresh } from "@/lib/api";
 import type { LinkTmdbResponse } from "@/lib/api";
 
 interface UnofficialOffer {
@@ -53,6 +54,10 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
   const [unofficialOffers, setUnofficialOffers] = useState<UnofficialOffer[] | null>(null);
   const [unofficialLoading, setUnofficialLoading] = useState(false);
   const [pollTimedOut, setPollTimedOut] = useState(false);
+  // Manual "Refresh availability" state: in flight from click until the
+  // worker settles the request (or we give up waiting for it).
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
 
   useEffect(() => {
@@ -134,15 +139,23 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
     };
   }, [tmdbId, currentCountry]);
 
-  // The backend queues an async refresh when the detail page is opened; the
-  // worker drains it and only then are canonical offers written. While this
-  // title has no offers and the queue still holds a pending request, poll the
-  // same endpoint until offers arrive, the request settles, or we time out
-  // (a rate-limited refresh can still land later — see the queued note).
+  // The backend queues an async refresh when the detail page is opened (and
+  // again on the manual "Refresh availability" button); the worker drains it
+  // and only then are canonical offers written. While this title has no
+  // offers and the queue still holds a pending request, poll the same
+  // endpoint until offers arrive, the request settles, or we time out (a
+  // rate-limited refresh can still land later — see the queued note).
   const waitingForRefresh = !!data && data.offers.length === 0 && !!data.refresh_pending;
 
+  // Poll whenever the queue holds a request for this title — whether it came
+  // from the page's own auto-enqueue or from an explicit click — and keep
+  // polling while a manual refresh is in flight even if a stale response
+  // still reads as settled.
+  const shouldPoll =
+    !!data && !pollTimedOut && (!!data.refresh_pending || refreshing);
+
   useEffect(() => {
-    if (!waitingForRefresh || pollTimedOut) return;
+    if (!shouldPoll) return;
     let cancelled = false;
     const startedAt = Date.now();
     const id = setInterval(() => {
@@ -150,11 +163,28 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
       if (Date.now() - startedAt >= AVAILABILITY_POLL_TIMEOUT_MS) {
         clearInterval(id);
         setPollTimedOut(true);
+        if (refreshing) {
+          setRefreshing(false);
+          setRefreshError(
+            "The refresh is still queued — try again in a minute."
+          );
+        }
         return;
       }
       fetchPrimeMovieOffers(tmdbId, currentCountry)
         .then((d) => {
-          if (!cancelled) setData(d);
+          if (cancelled) return;
+          setData(d);
+          if (!d.refresh_pending && refreshing) {
+            // Manual refresh settled: re-enable the button, surfacing a
+            // worker-side failure so the user can retry.
+            setRefreshing(false);
+            if (d.refresh_status === "failed") {
+              setRefreshError(
+                "The refresh failed on the server — try again."
+              );
+            }
+          }
         })
         .catch(() => {});
     }, AVAILABILITY_POLL_INTERVAL_MS);
@@ -162,7 +192,7 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
       cancelled = true;
       clearInterval(id);
     };
-  }, [waitingForRefresh, pollTimedOut, tmdbId, currentCountry]);
+  }, [shouldPoll, refreshing, pollTimedOut, tmdbId, currentCountry]);
 
   const posterUrl = data?.movie?.poster_path
     ? `https://image.tmdb.org/t/p/w500${data.movie.poster_path}`
@@ -203,6 +233,36 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
     setPollTimedOut(false);
     fetchPrimeMovieOffers(tmdbId, currentCountry).then((d) => setData(d)).catch(() => {});
   }, [tmdbId, currentCountry]);
+
+  // Enqueue an explicit refresh and let the poll effect above watch the
+  // queue settle; existing offers stay on screen until new ones land.
+  const handleRefreshAvailability = async () => {
+    setRefreshError(null);
+    setPollTimedOut(false);
+    setRefreshing(true);
+    try {
+      const result = await requestAvailabilityRefresh(tmdbId);
+      setData((prev) =>
+        prev
+          ? {
+              ...prev,
+              refresh_pending: result.refresh_pending,
+              refresh_status: result.refresh_status,
+            }
+          : prev
+      );
+    } catch (err) {
+      setRefreshing(false);
+      setRefreshError(
+        err instanceof Error
+          ? err.message
+          : "Failed to queue the refresh — try again."
+      );
+    }
+  };
+
+  const refreshInProgress =
+    refreshing || (!!data?.refresh_pending && !pollTimedOut);
 
   const handleAddToWatchlist = async () => {
     try {
@@ -472,9 +532,16 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
 
           {/* Offers List */}
           <section>
-            <h2 className="mb-4 text-lg font-bold text-gray-900 dark:text-gray-100">
-              Streaming Availability & Language Matches
-            </h2>
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-lg font-bold text-gray-900 dark:text-gray-100">
+                Streaming Availability & Language Matches
+              </h2>
+              <RefreshAvailabilityButton
+                inProgress={refreshInProgress}
+                error={refreshError}
+                onRefresh={handleRefreshAvailability}
+              />
+            </div>
 
             {data.offers.length === 0 ? (
               waitingForRefresh && !pollTimedOut ? (

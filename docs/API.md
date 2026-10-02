@@ -16,7 +16,7 @@ This document provides the complete API contract specification for the **WhereTf
 
 1. **Streaming Availability API Quota**:
    - The Streaming Availability API provider has a strict free-tier daily rate limit of **100 requests per day**.
-   - The quota is consumed only by budgeted refreshes (the `refresh_availability` cron job and `POST /api/watchlist/refresh/`), never by a read and never by merely *requesting* a refresh: event-driven `RefreshRequest` rows (watchlist adds, imports, refresh-on-view) are drained inside those same budgeted runs and share their budget, rate limiter and `RefreshRun` audit row.
+   - The quota is consumed only by budgeted refreshes (the `refresh_availability` cron job and `POST /api/watchlist/refresh/`), never by a read and never by merely *requesting* a refresh: event-driven `RefreshRequest` rows (watchlist adds, imports, refresh-on-view, the manual `POST /api/movie/<tmdb_id>/refresh/`, the bulk `POST /api/watchlist/refresh-explicit/`) are drained inside those same budgeted runs and share their budget, rate limiter and `RefreshRun` audit row.
 
 2. **Reads are local**:
    - Read endpoints (`GET /api/movie/<tmdb_id>/availability/`, `GET /api/watchlist/report/`, `GET /api/watch/<tmdb_id>/`, `GET /api/catalog/unified/`, …) answer from canonical Postgres rows — reconciled offers for availability, `ProviderContent`/`ContentMapping` for the catalogue. They never call an external API, never trigger a refresh, and cannot return HTTP 429 for rate-limit reasons.
@@ -40,6 +40,7 @@ This document provides the complete API contract specification for the **WhereTf
 | `GET` | `/api/health_full/` | Legacy / compatibility alias for `/api/health/`. |
 | `GET` | `/api/search/` | Search TMDb for movies and TV series by title (optional `type`: `movie`/`series`/`all`). |
 | `GET` | `/api/movie/<tmdb_id>/availability/` | Fetch cached, ranked streaming availability for a movie. |
+| `POST` | `/api/movie/<tmdb_id>/refresh/` | Queue an explicit availability refresh for one movie or series (manual button; enqueue-only, `202`). |
 | `GET` | `/api/preferences/` | Read user streaming preferences. |
 | `PUT` | `/api/preferences/` | Update user streaming preferences. |
 | `GET` | `/api/watchlist/` | List user watchlist items. |
@@ -47,6 +48,8 @@ This document provides the complete API contract specification for the **WhereTf
 | `POST` | `/api/watchlist/resolve/` | Resolve selected ambiguous/confirmed movies into watchlist. |
 | `GET` | `/api/watchlist/report/` | Generate aggregated availability report for watchlist items. |
 | `POST` | `/api/watchlist/refresh/` | Run a budgeted live availability refresh (returns `429` when rate-limited). |
+| `POST` | `/api/watchlist/refresh-explicit/` | Queue an explicit bulk refresh for every watchlisted title (enqueue-only, `202`). |
+| `GET` | `/api/watchlist/refresh-status/` | Progress counters (`pending` / `refreshed` / `failed`) for a bulk refresh since an epoch timestamp. |
 | `GET` | `/api/catalog/unified/` | Unified catalogue: official titles with watchability merged with scraper sources, filtered and paginated. |
 | `GET` | `/api/prime/popular/` | Return trending/popular movies from TMDb for the homepage browse grid. |
 | `GET` | `/api/prime/movie/<tmdb_id>/` | Return ranked Prime Video availability offers for a single movie. |
@@ -375,7 +378,7 @@ This document provides the complete API contract specification for the **WhereTf
 - **Purpose**: Return ranked Prime Video (provider=`amazon`) availability offers for a single movie, filtered to `subscription`/`free` offer types only, ranked by strict priority: audio language match (JA > EN) → subtitle language match (EN > JA) → quality (4K > HDR > HD > SD) → country code (alphabetical tiebreak).
 - **Path Parameters**:
   - `tmdb_id` *(required, integer)*: The TMDb ID of the movie.
-- **Data source**: served entirely from cached availability rows — a detail request never triggers a live upstream fetch. If the title is stale or was never fetched, the read *queues* an asynchronous refresh (`RefreshRequest`, detail-view priority) that the budgeted refresh run drains later; the response still returns the local rows immediately. This applies to `GET /api/prime/movie/<tmdb_id>/`, `GET /api/prime/series/<tmdb_id>/` and `GET /api/movie/<pk>/` alike.
+- **Data source**: served entirely from cached availability rows — a detail request never triggers a live upstream fetch. If the title is stale or was never fetched, the read *queues* an asynchronous refresh (`RefreshRequest`, detail-view priority) that the budgeted refresh run drains later; the response still returns the local rows immediately. This applies to `GET /api/prime/movie/<tmdb_id>/`, `GET /api/prime/series/<tmdb_id>/` and `GET /api/movie/<pk>/` alike. The payload reports the queue state for this title: `refresh_pending` (any pending request — the frontend polls until it clears) and `refresh_status` (status of the newest request: `pending` / `done` / `failed`, `null` when never requested). A manual refresh is queued with `POST /api/movie/<tmdb_id>/refresh/` (section 13).
 - **Response**: `200 OK`
   - Example: [`docs/examples/api/prime_movie_response.json`](examples/api/prime_movie_response.json)
   ```json
@@ -496,7 +499,71 @@ This document provides the complete API contract specification for the **WhereTf
 
 ---
 
-### 13. Unified Catalogue
+### 13. Explicit Title Refresh (Manual Button)
+
+#### `POST /api/movie/<tmdb_id>/refresh/`
+- **Purpose**: Queue an explicit availability refresh for one tracked title — the backend for the manual "Refresh availability" button on the movie and series detail pages. One endpoint serves both pages: movies and series are the same tracked-title model and share the canonical availability pipeline.
+- **Path Parameters**:
+  - `tmdb_id` *(required, integer)*: The TMDb ID of the movie or series.
+- **Request Body**: none (an empty JSON object is accepted).
+- **Behavior**: enqueue-only — the HTTP request never contacts a provider. It creates (or upgrades, deduplicated) a single pending `RefreshRequest` at `EXPLICIT` priority with `if_stale=False` and answers immediately; the existing refresh worker drains it with the same rate limiter, daily budget and `RefreshRun` audit row as every other refresh path. `EXPLICIT` is the one priority that makes the drain perform a new availability check even while the current offers still read as fresh — a manual refresh is never skipped by the freshness short-circuit. Repeated clicks collapse into the same pending request (partial unique constraint); a queued lower-priority request for the title is upgraded to `EXPLICIT`.
+- **Response**: `202 Accepted`
+  ```json
+  {
+    "message": "Availability refresh queued",
+    "tmdb_id": 27205,
+    "content_type": "movie",
+    "refresh_pending": true,
+    "refresh_status": "pending",
+    "priority": 10,
+    "request_id": 123
+  }
+  ```
+- **Completion detection**: poll `GET /api/prime/movie/<tmdb_id>/` or `GET /api/prime/series/<tmdb_id>/` (every ~4 s) until `refresh_pending` is `false` (section 9); `refresh_status` then reports the newest request's outcome (`done` or `failed`). Existing offers stay on screen until the worker writes the new canonical ones.
+- **Error Responses**:
+  - `404 Not Found`: no tracked title with that `tmdb_id`.
+  - `500 Internal Server Error`: the enqueue failed — surfaced instead of pretending the refresh was queued.
+
+---
+
+### 14. Watchlist Bulk Explicit Refresh (Refresh All Button)
+
+#### `POST /api/watchlist/refresh-explicit/`
+- **Purpose**: Backend for the "Refresh all availability" button on the watchlist page. One enqueue-only request queues a bulk explicit refresh for every distinct watchlisted title — the HTTP request never contacts a provider and never consumes API quota.
+- **Request Body**: none (an empty JSON object is accepted).
+- **Behavior**: for each distinct watchlisted `movie_id` (`user_id=1`) it calls the same enqueue path as the per-title button (`request_availability_refresh` with `priority=EXPLICIT`, `if_stale=False`, `source=""`): fresh titles are still re-checked (the `EXPLICIT` priority bypasses the freshness short-circuit in the drain), repeated clicks and already-pending titles collapse into the same pending row (partial unique constraint), queued lower-priority requests are upgraded to `EXPLICIT`, and never-fetched titles are bumped. The existing refresh worker drains the backlog with the same rate limiter, daily budget and `RefreshRun` audit row as every other path — when the daily quota is exhausted the backlog simply drains over the following days.
+- **Response**: `202 Accepted`
+  ```json
+  {
+    "queued": 354,
+    "total_watchlist": 354,
+    "now": 1790943478.142056
+  }
+  ```
+  `queued` is the number of pending `source=""` requests after the enqueue (i.e. the polling target); `total_watchlist` is the number of distinct watchlisted titles; `now` is the server epoch timestamp to pass as `since` to the status endpoint.
+- **Error Responses**:
+  - `500 Internal Server Error`: `{"error": "failed to queue availability refresh"}` — only when there are watchlisted titles but not a single request could be queued (surfaced instead of pretending work was queued).
+
+#### `GET /api/watchlist/refresh-status/`
+- **Purpose**: Progress counters for the bulk refresh, polled by the watchlist button (every ~5 s) until `pending` reaches 0 or the UI's poll timeout expires.
+- **Query Parameters**:
+  - `since` *(required, epoch seconds — e.g. the `now` value from the enqueue response)*: counts only completions at or after this instant, so each click tracks its own run.
+- **Response**: `200 OK`
+  ```json
+  {
+    "pending": 334,
+    "refreshed": 20,
+    "failed": 1,
+    "since": 1790943478.0
+  }
+  ```
+  All three counters are scoped to watchlisted titles and `source=""` requests: `pending` (still queued), `refreshed` (`done` with `completed_at >= since`), `failed` (`failed` with `completed_at >= since`).
+- **Error Responses**:
+  - `400 Bad Request`: missing or non-numeric `since` (`{"error": "since must be an epoch timestamp"}`).
+
+---
+
+### 15. Unified Catalogue
 
 #### `GET /api/catalog/unified/`
 - **Purpose**: One paginated feed merging the official catalogue (tracked `Movie` rows with watchability) and the unofficial scraper catalogue, powering the catalog page.

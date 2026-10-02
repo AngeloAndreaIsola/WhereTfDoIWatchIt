@@ -23,10 +23,12 @@ Contracts:
 - **Draining reuses the existing refresh infrastructure**: the same
   ``RateLimiter``/daily budget, the same per-source freshness policy
   (``availability.freshness``, evaluated for the request's own source scope —
-  a fresh pending request settles without spending budget), the same
-  ``RefreshRun`` audit row, and the same ``AvailabilityRefreshService`` as the
-  scheduled stale sweep — so event triggers can never bypass rate limits or
-  duplicate freshness/reconciliation logic.
+  a fresh pending request settles without spending budget, while an
+  ``EXPLICIT`` one — the manual "Refresh availability" action — forces the
+  new check even when the current data still reads fresh), the same
+  ``RefreshRun`` audit row, and the same ``AvailabilityRefreshService`` as
+  the scheduled stale sweep — so event triggers can never bypass rate limits
+  or duplicate freshness/reconciliation logic.
 - **Failures never propagate to the originating user action.** A failed
   drain records ``attempts``/``last_error`` on the request row and retries at
   most ``MAX_ATTEMPTS`` times before being marked ``failed`` permanently.
@@ -49,10 +51,12 @@ from availability.services.refresh import AvailabilityRefreshService
 from availability.sources import DEFAULT_SOURCE_SLUG, source_registry
 
 from ..models import (
+    Movie,
     RefreshPriority,
     RefreshRequest,
     RefreshRequestStatus,
     RefreshRun,
+    WatchlistItem,
 )
 from .bulk_refresh import BulkRefreshSummary, is_stale
 from .rate_limit import RateLimitExceeded, RateLimiter
@@ -156,6 +160,46 @@ def request_availability_refresh(
         return None
 
 
+def request_watchlist_refresh(
+    user_id: int = 1,
+    *,
+    priority: int = RefreshPriority.EXPLICIT,
+    if_stale: bool = False,
+) -> dict:
+    """Queue an availability refresh for every title on a user's watchlist.
+
+    Bulk counterpart of the detail-page refresh button and the enqueue side
+    of the watchlist's "Refresh all availability" action. One local pass over
+    the watchlist calls the regular ``request_availability_refresh`` per
+    title, so deduplication (one pending row per title), priority upgrades,
+    the never-fetched bump and the swallow-on-failure contract stay exactly
+    the per-title ones — repeated clicks and titles already queued by an
+    event collapse into the same rows instead of multiplying them. No
+    network I/O happens here; the queue is drained later by the existing
+    ``refresh_worker`` under the shared rate limit and daily budget.
+
+    ``if_stale=False`` by default (mirroring the single-title explicit
+    endpoint): a deliberate "refresh everything" must check every title even
+    while its current offers still read fresh.
+
+    Returns ``{"queued": <pending rows for those titles right now>,
+    "total_watchlist": <titles covered>}``.
+    """
+    movie_ids = list(
+        WatchlistItem.objects.filter(user_id=user_id)
+        .values_list("movie_id", flat=True)
+        .distinct()
+    )
+    for movie_id, movie in Movie.objects.in_bulk(movie_ids).items():
+        request_availability_refresh(movie, priority=priority, if_stale=if_stale)
+    queued = RefreshRequest.objects.filter(
+        movie_id__in=movie_ids,
+        source="",
+        status=RefreshRequestStatus.PENDING,
+    ).count()
+    return {"queued": queued, "total_watchlist": len(movie_ids)}
+
+
 def request_import_refresh(
     movie,
     priority: int = RefreshPriority.WATCHLIST,
@@ -212,6 +256,14 @@ def _drain_one(
     (``limiter.acquire()``), which priority never bypasses, then the remaining
     run budget.
 
+    The one guard an ``EXPLICIT`` request does not take: the freshness
+    short-circuit. Every other priority settles fresh scopes without
+    spending budget, but ``EXPLICIT`` is the manual "Refresh availability"
+    action — a deliberate *"check now"* that must perform a new availability
+    check even while the current observation still reads as fresh (the
+    enqueue side mirrors this with ``if_stale=False``). Rate limiting and
+    the run budget are never bypassed.
+
     Outcomes:
 
     - refreshed / already fresh -> ``done``;
@@ -224,8 +276,12 @@ def _drain_one(
     """
     movie = request.movie
 
-    # Freshness is free: settle fresh scopes without touching the budget.
-    if not is_stale(movie, source=request.source):
+    # Freshness is free: settle fresh scopes without touching the budget —
+    # unless the user explicitly asked for a new check right now.
+    if (
+        request.priority != RefreshPriority.EXPLICIT
+        and not is_stale(movie, source=request.source)
+    ):
         _finish(request, RefreshRequestStatus.DONE)
         summary.skipped_cached += 1
         summary.requests_drained += 1
