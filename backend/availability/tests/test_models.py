@@ -192,7 +192,9 @@ class SyncCursorTests(TestCase):
     def setUp(self):
         self.provider, _ = Provider.objects.get_or_create(slug="bbc-iplayer", defaults={"name": "BBC iPlayer"})
         self.source = Source.objects.create(slug="bbc-api", name="BBC API", type="api")
-        self.country = Country.objects.create(code="GB", name="United Kingdom")
+        self.country, _ = Country.objects.get_or_create(
+            code="GB", defaults={"name": "United Kingdom"}
+        )
 
     def test_provider_source_country_unique(self):
         SyncCursor.objects.create(

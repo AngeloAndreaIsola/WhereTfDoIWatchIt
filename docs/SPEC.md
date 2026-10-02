@@ -54,7 +54,7 @@ Just you (and optionally a couple of friends later, sharing the same instance wi
 - **Streaming Availability API** (movieofthenight / RapidAPI) — country/service availability. Free tier: 100 requests/day. One request per movie returns availability across all countries (no per-country request needed).
 - **TMDb API** — movie metadata + title/year search for ID matching. Free.
 - **Letterboxd CSV export** — manual upload, no live sync in v1.
-- **Provider catalogues + scraper sources (added after v1)** — regional catalogues and scraper sites are read as public catalogue pages, persisted as canonical `ProviderContent`/`ContentMapping`/`Offer` rows, and surfaced through the unified catalogue alongside official results. This is a read of public catalogue data only; the streaming search/ranking flow itself still runs exclusively on the licensed API data above.
+- **Provider catalogues + scraper sources (added after v1)** — regional catalogues and scraper sites are read as public catalogue pages, persisted as canonical `ProviderContent`/`ContentMapping`/`Offer` rows, and surfaced through the unified catalogue alongside official results. This is a read of public catalogue data only; the streaming search/ranking flow itself still runs exclusively on the licensed API data above. The same boundary covers the credential-free official sources (YouTube free program listings, Pluto TV, Mediaset Infinity, PBS, ABC iview): no API key in the repo, fixture-only tests, and rent/buy offers observed from any source are logged but never persisted.
 
 ## Ranking Logic
 

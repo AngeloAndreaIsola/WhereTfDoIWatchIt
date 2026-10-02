@@ -90,6 +90,13 @@ export default function ProviderIcon({ slug, name, className = "h-8 w-8" }: Prov
           <polygon points="10,8 16,12 10,16" fill="#FFFFFF" />
         </svg>
       );
+    case "youtube":
+      return (
+        <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+          <rect width="24" height="24" rx="6" fill="#FF0000" />
+          <polygon points="9.5,7.5 16.5,12 9.5,16.5" fill="#FFFFFF" />
+        </svg>
+      );
     case "crunchyroll":
       return (
         <svg className={className} viewBox="0 0 24 24" fill="currentColor">

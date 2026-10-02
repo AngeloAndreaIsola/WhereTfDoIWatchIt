@@ -123,7 +123,7 @@ docker compose logs -f frontend
 
 ## 5. Scheduled Background Tasks (Cron)
 
-Daily availability background updates are capped to preserve API limits; provider catalogue refreshes (CBC Gem, BBC iPlayer, Tubi, Prime Video, and RaiPlay) run uncapped because they use public catalogue endpoints.
+Daily availability background updates are capped to preserve API limits; provider catalogue refreshes (CBC Gem, BBC iPlayer, Tubi, Prime Video, RaiPlay, Pluto TV, PBS, and ABC iview) run uncapped because they use public catalogue endpoints.
 
 To run the refresh commands automatically via host `crontab`:
 
@@ -149,19 +149,24 @@ To run the refresh commands automatically via host `crontab`:
 
    The catalogue command exits `0` on success, `1` when every attempted source failed, and `2` on partial failure; overlapping runs of the same source skip cleanly under a per-source lock.
 
-5. Optionally move the four heavy catalogue sources onto their own slots (BBC walks thousands of pages; Tubi and Prime Video each walk up to 500 title pages per run; RaiPlay walks up to 400 programme+video pages per run):
+5. Optionally move the heavy catalogue sources onto their own slots (BBC walks thousands of pages; Tubi and Prime Video each walk up to 500 title pages per run; RaiPlay walks up to 400 programme+video pages per run; ABC iview reads one detail page per series — ~1613 requests paced 0.18 s apart, ≈5 minutes per run):
    ```cron
    17 4 * * *  cd /opt/streaming-tracker && docker compose exec -T backend python manage.py refresh_provider_catalogue --source bbc_iplayer >> ./logs/catalogue.log 2>&1
    17 1 * * *  cd /opt/streaming-tracker && docker compose exec -T backend python manage.py refresh_provider_catalogue --source tubi >> ./logs/catalogue.log 2>&1
    17 7 * * *  cd /opt/streaming-tracker && docker compose exec -T backend python manage.py refresh_provider_catalogue --source prime_video >> ./logs/catalogue.log 2>&1
    17 10 * * * cd /opt/streaming-tracker && docker compose exec -T backend python manage.py refresh_provider_catalogue --source rai_play >> ./logs/catalogue.log 2>&1
+   17 13 * * * cd /opt/streaming-tracker && docker compose exec -T backend python manage.py refresh_provider_catalogue --source pluto_tv >> ./logs/catalogue.log 2>&1
+   17 19 * * * cd /opt/streaming-tracker && docker compose exec -T backend python manage.py refresh_provider_catalogue --source abc_iview >> ./logs/catalogue.log 2>&1
    ```
+   PBS is cheap (one index page plus ~20 batch calls) and can stay on the bare every-6-hours command.
 
    **Region requirement (Tubi)**: Tubi only serves the United States, so this deployment must egress from a US IP for `--source tubi` to succeed. On a geo-blocked egress the Tubi fetch raises `SourceFetchError` and the run exits `1`/`2` with nothing written — a loud failure, never a silently empty catalogue. If the host cannot egress from the US, disable the source (`availability.Source → enabled = false` in the Django admin at `/admin/`) so scheduled runs stop attempting it; re-enable it when a US egress path exists.
 
    **Region requirement (Prime Video)**: the Prime Video source is hard-bound to the one territory it was researched against — the Netherlands (`COUNTRY == "NL"` in `backend/availability/sources/prime_video.py`). Prime selects its catalogue by the caller's IP, not by the URL path, so this deployment must egress from an NL IP (or another path that makes Prime answer `currentTerritory == "NL"`). Every fetched page — the `/categories` seed included — carries that territory, and a mismatch raises `SourceFetchError` → run exits `1`/`2` with nothing written, rather than silently persisting another country's catalogue. If the host cannot egress from the Netherlands, disable the source (`availability.Source → enabled = false` in the Django admin at `/admin/`) so scheduled runs stop attempting it; re-enable it when an NL egress path exists. Offers are only written for `Country` rows that exist and are enabled — `NL` is seeded by migration `availability.0004_seed_nl_country`, and a disabled `NL` row skips Prime offers without failing the run (logged per offer).
 
 **Region requirement (RaiPlay)**: none — unlike Tubi and Prime Video, RaiPlay needs no special egress. The source declares the one country the catalogue is published for (`COUNTRY == "IT"` in `backend/availability/sources/rai_play.py`), but that country is read from each video's access specification (`eligibleRegion.name`), not from the caller's IP: the catalogue pages and their specs are readable from any egress (verified from a non-IT host on 2026-09-30), a spec naming another country skips that offer (logged, `reason=region_mismatch`) instead of failing the run, and a spec that states no region skips it as unobservable (`reason=region_unobserved`). A bounded run makes ≈1.2k requests (≈8 minutes) against RaiPlay's public site — no API key, no quota, no effect on the Streaming Availability budget. If RaiPlay stops answering from this host the run fails loudly (`SourceFetchError` → exit `1`/`2`, nothing written); disable the source (`availability.Source → enabled = false`) to stop scheduled attempts.
+
+**Region requirement (Phase E sources)**: `pbs`, `abc_iview` and `mediaset_infinity` need no special egress — the PBS content API serves the same US catalogue from any IP, the iview catalogue endpoints answer from any egress (verified from a non-AU host; only playback is geo-blocked, and playback is never fetched), and Mediaset's gateway exposes no egress probe. `youtube` pins its own region (default `US`; offers are written only for its five `FREE_PROGRAM_COUNTRIES`). `pluto_tv` is IP-sensitive: Pluto derives `collection.region` server-side from the egress IP and cannot be overridden, so an IP Pluto serves only its international landing to is a successful observation of nothing (`pluto_tv_unsupported_region`, exit `0`, no offers) — no failure and no config, but offers only appear when the egress is one Pluto serves as a real market. All five are 24h-fresh sources (`youtube`, `pluto_tv`, `mediaset_infinity`, `pbs`, `abc_iview` in `availability.freshness`); `youtube` and `mediaset_infinity` are title-targeted and run inside the budgeted daily `refresh_availability` sweep, never under `refresh_provider_catalogue`.
 
 Refer to [`docs/CRON.md`](CRON.md) for further background task details, including the full scheduling semantics (discovery, locking, country scope, failure isolation).
 

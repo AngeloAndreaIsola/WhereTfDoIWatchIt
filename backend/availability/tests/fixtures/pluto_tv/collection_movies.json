@@ -1,0 +1,22 @@
+{
+  "data": {
+    "collection": {
+      "region": "US",
+      "locale": "en-US",
+      "hubId": "587765e6e71a8b31e1a40d51",
+      "hubSlug": "movies-all-movies",
+      "title": "Movies",
+      "pageType": "category",
+      "hubCarousels": [
+        {
+          "carouselId": "all-movies",
+          "title": "All Movies",
+          "token": "all-movies:fixture@v1",
+          "href": "/category/43612471-1e39-4a3b-8f4d-69c1d77ac0ae/",
+          "position": "1",
+          "carouselType": "grid"
+        }
+      ]
+    }
+  }
+}

@@ -27,7 +27,7 @@ Or if running directly on the host / server environment:
 
 ## Provider Catalogue Refresh
 
-Provider catalogues (CBC Gem, BBC iPlayer, Tubi, Prime Video, and RaiPlay) are refreshed by a separate command: a catalogue source reports its whole configured scope through public catalogue endpoints, so **no API budget applies** and there is no `--budget` flag.
+Provider catalogues (CBC Gem, BBC iPlayer, Tubi, Prime Video, RaiPlay, Pluto TV, PBS, and ABC iview) are refreshed by a separate command: a catalogue source reports its whole configured scope through public catalogue endpoints, so **no API budget applies** and there is no `--budget` flag.
 
 Recommended: every 6 hours at minute 17 (offset from the 03:17 availability job):
 
@@ -49,6 +49,10 @@ walks all 27 A-Z pages and then one detail page per brand, thousands of
 requests — for Tubi, which reads one detail page per title, for Prime Video,
 which reads one 140 kB..1 MB SSR detail page per title after its index walk,
 and for RaiPlay, which reads a programme page plus its video pages per title.
+The Phase E sources land at both ends of that range: PBS is cheap (one index
+page plus ~20 batch calls), Pluto TV is a handful of grid pages per catalogue,
+and ABC iview is the heaviest walker yet — one detail request per series,
+~1613 requests paced 0.18 s apart (≈5 minutes per run).
 Give each heavy source its own, slower slot with `--source`:
 
 ```cron
@@ -57,6 +61,9 @@ Give each heavy source its own, slower slot with `--source`:
 17 1 * * *  cd /path/to/streaming-tracker && docker compose exec -T backend python manage.py refresh_provider_catalogue --source tubi >> ./logs/catalogue.log 2>&1
 17 7 * * *  cd /path/to/streaming-tracker && docker compose exec -T backend python manage.py refresh_provider_catalogue --source prime_video >> ./logs/catalogue.log 2>&1
 17 10 * * * cd /path/to/streaming-tracker && docker compose exec -T backend python manage.py refresh_provider_catalogue --source rai_play >> ./logs/catalogue.log 2>&1
+17 13 * * * cd /path/to/streaming-tracker && docker compose exec -T backend python manage.py refresh_provider_catalogue --source pluto_tv >> ./logs/catalogue.log 2>&1
+17 16 * * * cd /path/to/streaming-tracker && docker compose exec -T backend python manage.py refresh_provider_catalogue --source pbs >> ./logs/catalogue.log 2>&1
+17 19 * * * cd /path/to/streaming-tracker && docker compose exec -T backend python manage.py refresh_provider_catalogue --source abc_iview >> ./logs/catalogue.log 2>&1
 ```
 
 `--source <slug>` targets one source and bypasses the `enabled` filter (manual
@@ -159,6 +166,39 @@ together at one frequency.
 - **No API key, no quota**: RaiPlay is a public site, so the run never touches
   the Streaming Availability budget that `refresh_availability` guards.
 
+#### Phase E scheduling notes (Pluto TV, PBS, ABC iview)
+
+- **Measured / estimated cost**: PBS is one `allShows` page-walk (~10 pages)
+  plus ~20 `showsBatch` calls — tens of requests per run, safe on the bare
+  `17 */6 * * *` entry. Pluto TV reads one `collection` plus its grid pages
+  (24 rows each) per catalogue. ABC iview reads one index plus one detail
+  per series: ~1613 detail requests at the built-in `DEFAULT_DELAY`
+  (0.18 s) ≈ **5 minutes per run**; the walk stops at `MAX_SERIES` (3000,
+  code-level default) and logs `abc_iview_series_cap` if the index ever
+  runs away.
+- **Cadence**: daily is plenty for all three — catalogues churn slowly and
+  offer windows change rarely. Keep `abc_iview` on its own slot (it is the
+  longest run); the cheap `pbs` may stay on the bare command.
+- **Egress**: none of the three needs a special egress. The PBS content API
+  serves the same US catalogue from any IP (verified), the iview catalogue
+  endpoints answer from any IP (verified from a non-AU egress; only playback
+  is geo-blocked, and playback is never fetched), and Mediaset's gateway
+  exposes no egress probe. Pluto TV is the exception: `collection.region` is
+  derived server-side from the egress IP, so an IP Pluto serves only its
+  international landing to is a successful observation of nothing — logged
+  `pluto_tv_unsupported_region`, exit `0`, no offers invented. A browser
+  `Mozilla/5.0*` UA also trips Pluto's bot gate from datacenter IPs; the
+  client already pins the verified `python-requests` UA, so no config is
+  needed.
+- **Never authoritative**: all three report `authoritative=False`
+  (`complete_snapshot=False`, `sync_mode=FULL`), so a truncated walk, a
+  dropped batch or a vanished series deactivates no offer and removes no
+  catalogue row.
+- **Targeted siblings**: `youtube` and `mediaset_infinity` are *not*
+  catalogue sources — they run title-targeted inside the budgeted daily
+  `refresh_availability` sweep (`docs/CRON.md` budget/quota section), not
+  under `refresh_provider_catalogue`.
+
 ### Exit codes
 
 | Code | Meaning |
@@ -202,8 +242,8 @@ on this page feed it:
   {"expected_refresh_interval_seconds": <seconds>}` (admin → Availability →
   Sources) overrides the built-in `SOURCE_FRESHNESS` policy — `21600` (6h)
   for `cbc_gem`, `43200` (12h) for `legacy_scraper`, `86400` (24h) for
-  `streaming_availability`, `bbc_iplayer`, `tubi`, `prime_video` and
-  `rai_play`. Keep an override **at or above that source's crontab cadence**
+  `streaming_availability`, `bbc_iplayer`, `tubi`, `prime_video`, `rai_play`,
+  `youtube`, `pluto_tv`, `mediaset_infinity`, `pbs` and `abc_iview`. Keep an override **at or above that source's crontab cadence**
   or every observation will read stale between runs. Slugs in neither place
   (undeclared sources) report `unknown` — the read side has deliberately no
   global default timeout; only the refresh side falls back to 24h.

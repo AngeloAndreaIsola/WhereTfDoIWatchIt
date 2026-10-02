@@ -59,6 +59,14 @@ SOURCE_FRESHNESS: dict[str, timedelta] = {
     "tubi": timedelta(hours=24),
     "prime_video": timedelta(hours=24),
     "rai_play": timedelta(hours=24),
+    # Phase E sources: the targeted ones ride the daily title-targeted sweep
+    # (03:17), the catalogue ones a daily ``refresh_provider_catalogue`` slot
+    # (see docs/CRON.md for the exact slot per source) -> all 24h windows.
+    "youtube": timedelta(hours=24),
+    "pluto_tv": timedelta(hours=24),
+    "mediaset_infinity": timedelta(hours=24),
+    "pbs": timedelta(hours=24),
+    "abc_iview": timedelta(hours=24),
     "legacy_scraper": timedelta(hours=12),
 }
 

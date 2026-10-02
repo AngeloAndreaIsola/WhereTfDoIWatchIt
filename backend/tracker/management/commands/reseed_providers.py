@@ -58,6 +58,7 @@ FREE_PROVIDERS = [
     {"slug": "tv_publica", "name": "TV Pública", "icon": "tv_publica", "domain": "tvpublica.com.ar", "country": "AR"},
     {"slug": "kbs", "name": "KBS", "icon": "kbs", "domain": "kbs.co.kr", "country": "KR"},
     {"slug": "nhk_world", "name": "NHK WORLD-JAPAN", "icon": "nhk_world", "domain": "nhk.or.jp/nhkworld", "country": "JP"},
+    {"slug": "youtube", "name": "YouTube", "icon": "youtube", "domain": "youtube.com", "country": ""},
 ]
 
 UNOFFICIAL_PROVIDERS = [

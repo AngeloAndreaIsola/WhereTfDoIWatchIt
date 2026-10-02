@@ -554,10 +554,12 @@ class CatalogueCountryTests(TestCase):
 
     def test_unrestricted_country_scope_initializes_nothing(self):
         # No declared countries -> nothing to initialize, behavior unchanged.
+        # Offer country must be a code with no Country row (0005 seeds
+        # US/AU/JP/DE/GB/IT at migrate time) so the refresh service skips it.
         registry = registry_of(
             StubSource(
                 slug="any_country_source",
-                response=fetch_result(normalized_offer(tmdb_id=550, country="US")),
+                response=fetch_result(normalized_offer(tmdb_id=550, country="PT")),
                 capabilities=STUB_CAPABILITIES,
             )
         )

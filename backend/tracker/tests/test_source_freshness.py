@@ -37,7 +37,7 @@ from tracker.services.refresh_requests import request_availability_refresh
 from tracker.tests.availability_factories import local_offer
 
 PRIME = "prime_video"
-CATALOGUE_SLUGS = ("cbc_gem", "bbc_iplayer", "tubi", PRIME, "rai_play")
+CATALOGUE_SLUGS = ("cbc_gem", "bbc_iplayer", "tubi", PRIME, "rai_play", "pluto_tv", "pbs", "abc_iview")
 
 
 def _scope_offer(movie, slug, *, age, tag, currently_available=True):

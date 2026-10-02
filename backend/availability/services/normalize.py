@@ -5,6 +5,7 @@ writes belong to the refresh service and repositories respectively.
 """
 from __future__ import annotations
 
+import unicodedata
 from typing import Iterable, Optional
 
 from tracker.languages import normalize_language_code
@@ -43,6 +44,21 @@ def normalize_country(value: str) -> str:
     if len(code) != 2 or not code.isalpha():
         raise ValueError(f"Unsupported country code: {value!r}")
     return code
+
+
+def normalize_title(value) -> str:
+    """Casefolded, accent-stripped, punctuation-insensitive title key.
+
+    The shared key behind title-verification matching: sources compare a
+    candidate's title with the requested one through this function so two
+    collectors never disagree on what "the same title" means (e.g. YouTube's
+    private copy — kept untouched mid-Phase-E — and Mediaset's lookup).
+    """
+    decomposed = unicodedata.normalize("NFKD", str(value or ""))
+    stripped = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    lowered = stripped.casefold()
+    keep = "".join(ch if (ch.isalnum() or ch.isspace()) else " " for ch in lowered)
+    return " ".join(keep.split())
 
 
 def normalize_languages(values: Optional[Iterable[object]]) -> Optional[list[str]]:

@@ -1,0 +1,31 @@
+{
+ "data": {
+  "getMoviePage": {
+   "title": "Karol un uomo diventato Papa",
+   "type": "movie",
+   "url": "https://mediasetinfinity.mediaset.it/movie/karolunuomodiventatopapa/karol-un-uomo-diventato-papa_F011844503000101",
+   "dataSource": {
+    "__typename": "VideoItem",
+    "guid": "F011844503000101",
+    "title": "Karol un uomo diventato Papa",
+    "url": "https://mediasetinfinity.mediaset.it/movie/karolunuomodiventatopapa/karol-un-uomo-diventato-papa_F011844503000101",
+    "description": "ITALIA, 2004 | La vita di papa Giovanni Paolo II, Karol Wojtyla, dalla giovinezza fino all'elezione a pontefice, il 16 ottobre 1978. Fu testimone dell'occupazione nazista della Polonia e perseguitato come sacerdote cattolico sotto Stalin. Con Raoul Bova, Ennio Fantastichini, Piotr Adamczyk e Violante Placido.",
+    "editorialType": "Movie",
+    "contentRight": "AVOD",
+    "channelRights": [
+     "MediasetPlay_ANY",
+     "MediasetPlay_AVOD"
+    ],
+    "channelLabels": null,
+    "expirationDate": null,
+    "audioLanguages": [
+     "ita"
+    ],
+    "subLanguages": [
+     "ita"
+    ],
+    "duration": 9806
+   }
+  }
+ }
+}

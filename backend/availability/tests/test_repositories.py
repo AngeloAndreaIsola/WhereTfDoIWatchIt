@@ -37,7 +37,7 @@ class OfferRepositoryTests(TestCase):
         self.country, _ = Country.objects.get_or_create(
             code="NL", defaults={"name": "Netherlands"}
         )
-        self.it = Country.objects.create(code="IT", name="Italy")
+        self.it, _ = Country.objects.get_or_create(code="IT", defaults={"name": "Italy"})
         self.source = Source.objects.create(slug="justwatch", name="JustWatch", type="aggregator")
         self.repo = OfferRepository()
 
@@ -143,7 +143,7 @@ class OfferDeactivateTests(TestCase):
         self.country, _ = Country.objects.get_or_create(
             code="NL", defaults={"name": "Netherlands"}
         )
-        self.it = Country.objects.create(code="IT", name="Italy")
+        self.it, _ = Country.objects.get_or_create(code="IT", defaults={"name": "Italy"})
         self.source = Source.objects.create(slug="justwatch", name="JustWatch", type="aggregator")
         self.repo = OfferRepository()
         self.runs = SyncRunRepository()
@@ -862,7 +862,9 @@ class CursorRepositoryTests(TestCase):
     def setUp(self):
         self.provider, _ = Provider.objects.get_or_create(slug="bbc-iplayer", defaults={"name": "BBC iPlayer"})
         self.source = Source.objects.create(slug="bbc-api", name="BBC API", type="api")
-        self.country = Country.objects.create(code="GB", name="United Kingdom")
+        self.country, _ = Country.objects.get_or_create(
+            code="GB", defaults={"name": "United Kingdom"}
+        )
         self.repo = CursorRepository()
 
     def test_get_returns_none_when_missing(self):
