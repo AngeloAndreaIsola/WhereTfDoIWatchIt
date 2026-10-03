@@ -85,6 +85,15 @@ class ProviderSerializer(serializers.ModelSerializer):
     scraped_content_count = serializers.SerializerMethodField()
     source_indicator = serializers.SerializerMethodField()
     has_scraper = serializers.SerializerMethodField()
+    # Square-card operational fields, batched by the subscriptions endpoint
+    # (see tracker.services.provider_status): one aggregate pass for the whole
+    # list instead of one query per card.
+    refresh_kind = serializers.SerializerMethodField()
+    source_slug = serializers.SerializerMethodField()
+    last_run = serializers.SerializerMethodField()
+    last_run_error = serializers.SerializerMethodField()
+    available_items = serializers.SerializerMethodField()
+    refreshing = serializers.SerializerMethodField()
 
     class Meta:
         model = Provider
@@ -103,8 +112,50 @@ class ProviderSerializer(serializers.ModelSerializer):
             "scraped_content_count",
             "source_indicator",
             "has_scraper",
+            "refresh_kind",
+            "source_slug",
+            "last_run",
+            "last_run_error",
+            "available_items",
+            "refreshing",
             "external_mappings",
         ]
+
+    def _card_status(self, obj: Provider) -> dict:
+        """Batched status from context; registry-only fallback without it.
+
+        ``GET /api/providers/`` passes ``provider_status`` (every field, one
+        fixed set of queries). Serializers built elsewhere — nested
+        subscriptions, imports, the v2 catalogue — resolve only the
+        registry-derived fields so they never issue per-object aggregates.
+        """
+        batched = self.context.get("provider_status")
+        if batched is not None and obj.id in batched:
+            return batched[obj.id]
+        cache = self.context.setdefault("_card_status_fallback", {})
+        if obj.id not in cache:
+            from tracker.services.provider_status import minimal_card_status
+
+            cache[obj.id] = minimal_card_status(obj)
+        return cache[obj.id]
+
+    def get_refresh_kind(self, obj: Provider):
+        return self._card_status(obj)["refresh_kind"]
+
+    def get_source_slug(self, obj: Provider):
+        return self._card_status(obj)["source_slug"]
+
+    def get_last_run(self, obj: Provider):
+        return self._card_status(obj)["last_run"]
+
+    def get_last_run_error(self, obj: Provider):
+        return self._card_status(obj)["last_run_error"]
+
+    def get_available_items(self, obj: Provider):
+        return self._card_status(obj)["available_items"]
+
+    def get_refreshing(self, obj: Provider):
+        return self._card_status(obj)["refreshing"]
 
     def get_source_indicator(self, obj: Provider) -> str:
         return obj.source_indicator
@@ -116,6 +167,9 @@ class ProviderSerializer(serializers.ModelSerializer):
         return Subscription.objects.filter(user_id=1, provider__id=obj.id).exists()
 
     def get_scraped_content_count(self, obj: Provider) -> int:
+        annotated = getattr(obj, "scraped_total", None)
+        if annotated is not None:
+            return annotated
         return obj.scraped_mappings.count()
 
     def get_has_scraper(self, obj: Provider) -> bool:

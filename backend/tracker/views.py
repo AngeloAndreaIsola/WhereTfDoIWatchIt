@@ -8,7 +8,7 @@ from typing import Any
 
 from django.conf import settings
 from django.db import connection, transaction
-from django.db.models import Subquery
+from django.db.models import Count, Subquery
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.views.decorators.http import require_GET
@@ -82,6 +82,12 @@ def paginate_list(items: list, page: int, page_size: int) -> tuple[list, dict]:
     return page_items, pagination
 from .services.bulk_refresh import process_watchlist_refresh, stale_catalogue_sources
 from .services.availability_reads import get_local_offers
+from .services.provider_status import (
+    CATALOGUE,
+    SCRAPER,
+    provider_card_status,
+    refresh_target,
+)
 from .services.rate_limit import RateLimiter
 from .services.refresh_requests import (
     refresh_states_for,
@@ -89,6 +95,7 @@ from .services.refresh_requests import (
     request_catalogue_refresh,
     request_watchlist_refresh,
 )
+from .services.scraper_runner import run_provider_scraper
 from .services.letterboxd import (
     LetterboxdFetchError,
     LetterboxdInvalidURLError,
@@ -467,22 +474,42 @@ def refresh_availability(request, tmdb_id: int):
 
 @api_view(["GET"])
 def providers_list(request):
-    """List canonical providers catalog with subscription state for user_id=1."""
+    """List canonical providers catalog with subscription state for user_id=1.
+
+    Also carries every operational field the square source cards render (last
+    run, available items, refresh target, refreshing state) so the page can
+    paint N cards from one response — see ``tracker.services.provider_status``
+    for the batched computation and the refresh-target rules.
+    """
     category = request.GET.get("category")
     is_major = request.GET.get("is_major")
 
-    qs = Provider.objects.filter(is_enabled=True).prefetch_related("external_mappings").order_by("id")
+    qs = (
+        Provider.objects.filter(is_enabled=True)
+        .prefetch_related("external_mappings")
+        # Batched scraped-item count: the serializer prefers this annotation
+        # over its per-object fallback count.
+        .annotate(scraped_total=Count("scraped_mappings", distinct=True))
+        .order_by("id")
+    )
     if category:
         qs = qs.filter(category=category.lower())
     if is_major is not None:
         qs = qs.filter(is_major=is_major.lower() in ("true", "1"))
+
+    providers = list(qs)
 
     user_sub_provider_ids = set(
         Subscription.objects.filter(user_id=1, provider__isnull=False).values_list("provider_id", flat=True)
     )
 
     serializer = ProviderSerializer(
-        qs, many=True, context={"user_subscribed_ids": user_sub_provider_ids}
+        providers,
+        many=True,
+        context={
+            "user_subscribed_ids": user_sub_provider_ids,
+            "provider_status": provider_card_status(providers),
+        },
     )
     return Response(serializer.data)
 
@@ -505,6 +532,87 @@ def provider_toggle(request, slug: str):
         "is_subscribed": is_subscribed,
         "message": f"{'Subscribed to' if is_subscribed else 'Unsubscribed from'} {provider.name}"
     })
+
+
+@api_view(["POST"])
+def provider_refresh(request, slug: str):
+    """POST /api/providers/<slug>/refresh/ — run this one source's collector.
+
+    Source-specific by construction: the target comes from the same registry
+    mapping the cards use (``provider_status.refresh_target``) and is never a
+    request parameter, so one press can only ever run one collector:
+
+    - catalogue sources enqueue the existing ``CatalogueRefreshRequest``
+      marker; the running ``refresh_worker`` drains it through
+      ``process_catalogue_refresh(source_slug=...)`` under the per-source
+      advisory lock. Enqueue-only by contract (202 ``queued: true``), so the
+      HTTP request never contacts a provider;
+    - scraper providers run their own scraper synchronously through
+      ``run_provider_scraper`` — the same execution path
+      ``/api/scrapers/run/`` uses (200 with the scraped count).
+
+    Subscription state is deliberately untouched: refreshing and the
+    active/inactive toggle are independent concepts, and a failed refresh
+    records its error on the source's ``RefreshRun`` instead of pretending
+    it succeeded.
+    """
+    provider = get_object_or_404(Provider, slug__iexact=slug, is_enabled=True)
+    refresh_kind, source_slug = refresh_target(provider)
+
+    if refresh_kind == CATALOGUE:
+        marker = request_catalogue_refresh([source_slug])
+        return Response(
+            {
+                "provider": provider.slug,
+                "kind": CATALOGUE,
+                "source": source_slug,
+                "queued": True,
+                "refreshing": True,
+                "marker_id": marker.pk,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+    if refresh_kind == SCRAPER:
+        try:
+            items = run_provider_scraper(provider)
+        except Exception as exc:  # noqa: BLE001 - surface the collector error to the card
+            logger.exception(
+                "provider_refresh_scraper_failed provider=%s error=%s",
+                provider.slug, exc,
+            )
+            return Response(
+                {
+                    "provider": provider.slug,
+                    "kind": SCRAPER,
+                    "queued": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        # run_provider_scraper stamps provider.last_scraped_at on this same
+        # instance as part of its persistence pass.
+        return Response(
+            {
+                "provider": provider.slug,
+                "kind": SCRAPER,
+                "queued": False,
+                "count": len(items),
+                "last_run": provider.last_scraped_at,
+            }
+        )
+
+    return Response(
+        {
+            "provider": provider.slug,
+            "error": (
+                f"No collector is registered for '{provider.name}'; "
+                "only sources with their own scraper or availability source "
+                "can be refreshed."
+            ),
+        },
+        status=status.HTTP_409_CONFLICT,
+    )
 
 
 @api_view(["GET", "POST"])
@@ -658,8 +766,6 @@ def scraper_import_url(request):
 @api_view(["POST"])
 def scraper_run(request):
     """Trigger a scraper run for a given scraper provider slug."""
-    from tracker.scrapers.adapters import GenericURLAdapter
-
     data = request.data if isinstance(request.data, dict) else {}
     provider_slug = data.get("provider_slug") or data.get("slug") or ""
     query = data.get("query")
@@ -673,34 +779,9 @@ def scraper_run(request):
     if not provider:
         return Response({"error": f"Provider '{provider_slug}' not found"}, status=404)
 
-    scraper_cls = resolve_scraper_class(provider.slug)
-    if scraper_cls:
-        scraper = scraper_cls()
-    else:
-        scraper = GenericURLAdapter(provider_slug=provider.slug, domain=provider.domain or "example.com")
-
-    items = scraper.run(query=query)
-
-    provider.last_scraped_at = timezone.now()
-    provider.save()
-
-    # Ensure all scraped items are saved to database mappings for provider stats
-    for item in items:
-        payload = dict(item.raw_payload) if isinstance(item.raw_payload, dict) else {}
-        payload.setdefault("content_type", item.content_type)
-        mapping, _created = ScrapedContentMapping.objects.get_or_create(
-            provider=provider,
-            scraped_title=item.title,
-            scraped_year=item.year,
-            defaults={
-                "scraped_url": item.source_url,
-                "raw_payload": payload,
-                "is_available": item.availability,
-            },
-        )
-        # Bridge every saved row onto the canonical catalogue (the unified
-        # endpoint reads only those tables).
-        ingest_scraped_mapping(mapping)
+    # Shared with POST /api/providers/<slug>/refresh/: same scraper
+    # execution, same persistence, same bridge onto the canonical catalogue.
+    items = run_provider_scraper(provider, query=query)
 
     matcher = ContentMatcher()
     results = []

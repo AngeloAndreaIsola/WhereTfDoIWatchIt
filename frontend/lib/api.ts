@@ -656,6 +656,51 @@ export async function triggerScraperRun(
   return res.json();
 }
 
+// ─── Per-source refresh (square source cards) ───────────────────────────────
+
+/**
+ * One card, one source: run *this* provider's collector and nothing else.
+ *
+ * The endpoint resolves the collector itself (registry, not request input),
+ * so the response tells the caller what kind of work was started:
+ *
+ * - `kind: "catalogue"` — enqueue-only (202): the refresh worker drains the
+ *   queued source; the card stays in its loading state until `GET
+ *   /api/providers/` reports `refreshing: false` again. Poll the list, do
+ *   not poll this endpoint.
+ * - `kind: "scraper"` — synchronous: the scraper ran inside this request and
+ *   the response carries the scraped `count` and the new `last_run`.
+ *
+ * A provider with no registered collector answers 409 with `error` — the
+ * cards hide their refresh control for those, so that status is a real
+ * failure, not an expected state.
+ */
+export interface ProviderRefreshResponse {
+  provider: string;
+  kind: "catalogue" | "scraper";
+  source?: string;
+  queued: boolean;
+  refreshing?: boolean;
+  count?: number;
+  last_run?: string | null;
+  marker_id?: number;
+  error?: string;
+}
+
+export async function refreshProvider(
+  providerSlug: string
+): Promise<ProviderRefreshResponse> {
+  const res = await fetch(
+    `/api/providers/${encodeURIComponent(providerSlug)}/refresh/`,
+    { method: "POST" }
+  );
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(body.error ?? `Refresh failed (${res.status})`);
+  }
+  return body as ProviderRefreshResponse;
+}
+
 
 // ─── Movie editing & poster matching ────────────────────────────────────────
 
