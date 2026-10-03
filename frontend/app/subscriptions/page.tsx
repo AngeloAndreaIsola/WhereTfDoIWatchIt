@@ -452,6 +452,7 @@ export default function SubscriptionsPage() {
                   onToggle={handleToggleProvider}
                   onRefresh={refreshOne}
                   onRemove={handleDeleteProvider}
+                  useFavicons
                   refreshPending={refreshPending}
                   refreshErrors={refreshErrors}
                   loading={loading}

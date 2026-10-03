@@ -29,6 +29,8 @@ export interface ProviderItem {
   available_items?: number;
   /** Queue/worker state read server-side — the card must not guess it. */
   refreshing?: boolean;
+  /** Site host used to fetch this card's favicon. Absent for catalogue providers, which use the brand badges. */
+  favicon_domain?: string;
 }
 
 interface ProviderGridProps {
@@ -38,6 +40,12 @@ interface ProviderGridProps {
   onRefresh?: (slug: string) => Promise<unknown>;
   /** Delete control, offered by the imported-sources section only. */
   onRemove?: (slug: string) => void;
+  /**
+   * Draw each card's icon from the source's own favicon instead of the brand
+   * badges. Set by the imported-sources section: those sites are arbitrary, so
+   * only the site itself has a recognisable icon.
+   */
+  useFavicons?: boolean;
   /** Slugs whose refresh was pressed in this session but is not yet reflected by `provider.refreshing`. */
   refreshPending?: ReadonlySet<string>;
   /** Per-slug failure text from the last press (backend `last_run_error` is the fallback). */
@@ -50,6 +58,7 @@ export default function ProviderGrid({
   onToggle,
   onRefresh,
   onRemove,
+  useFavicons = false,
   refreshPending,
   refreshErrors,
   loading = false,
@@ -92,6 +101,8 @@ export default function ProviderGrid({
             Boolean(provider.refreshing) || Boolean(refreshPending?.has(provider.slug));
           const canRefresh = Boolean(onRefresh && provider.refresh_kind);
           const errorText = refreshErrors?.[provider.slug] || provider.last_run_error || "";
+          // Favicons need a domain to resolve; sources without one keep the badge.
+          const faviconDomain = useFavicons ? provider.domain || undefined : undefined;
 
           return (
             <div key={provider.slug} className="relative">
@@ -110,7 +121,12 @@ export default function ProviderGrid({
               >
                 {/* Icon */}
                 <div className="mb-2.5">
-                  <ProviderIcon slug={provider.slug} name={provider.name} className="h-10 w-10" />
+                  <ProviderIcon
+                    slug={provider.slug}
+                    name={provider.name}
+                    className="h-10 w-10"
+                    faviconDomain={faviconDomain}
+                  />
                 </div>
 
                 {/* Name */}

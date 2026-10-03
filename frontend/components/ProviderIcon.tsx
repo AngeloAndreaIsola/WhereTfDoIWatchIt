@@ -1,13 +1,82 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 
 interface ProviderIconProps {
   slug: string;
   name: string;
   className?: string;
+  /**
+   * When set, the site's own favicon is used instead of a brand badge. Passed by
+   * the imported-sources section, where the site is arbitrary and no badge
+   * exists. Resolvers are tried in order; if all fail we fall back to initials.
+   */
+  faviconDomain?: string;
 }
 
-export default function ProviderIcon({ slug, name, className = "h-8 w-8" }: ProviderIconProps) {
+/** Favicon resolvers, tried in order; each takes a bare host and returns a URL. */
+const FAVICON_SOURCES: ((domain: string) => string)[] = [
+  (d) => `https://icons.duckduckgo.com/ip3/${d}.ico`,
+  (d) => `https://www.google.com/s2/favicons?domain=${d}&sz=64`,
+];
+
+/** Bare registrable host: strips scheme, path, port and a leading "www.". */
+function normalizeDomain(domain: string): string {
+  return (domain || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//, "")
+    .split("/")[0]
+    .split("?")[0]
+    .split(":")[0]
+    .replace(/^www\./, "");
+}
+
+/** Initials tile — the last resort when a favicon cannot be loaded. */
+function InitialsTile({ name, className }: { name: string; className: string }) {
+  return (
+    <div
+      className={`${className} flex items-center justify-center rounded bg-gray-200 text-xs font-bold text-gray-700 dark:bg-gray-700 dark:text-gray-200`}
+    >
+      {name.slice(0, 2).toUpperCase()}
+    </div>
+  );
+}
+
+function FaviconIcon({ domain, name, className }: { domain: string; name: string; className: string }) {
+  const [sourceIndex, setSourceIndex] = useState(0);
+
+  // Each card remounts per domain, but guard anyway so the chain always restarts.
+  useEffect(() => {
+    setSourceIndex(0);
+  }, [domain]);
+
+  const resolver = FAVICON_SOURCES[sourceIndex];
+  if (!resolver) return <InitialsTile name={name} className={className} />;
+
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      key={sourceIndex}
+      src={resolver(domain)}
+      alt=""
+      width={40}
+      height={40}
+      className={`${className} rounded object-contain`}
+      onError={() => setSourceIndex((i) => i + 1)}
+    />
+  );
+}
+
+export default function ProviderIcon({
+  slug,
+  name,
+  className = "h-8 w-8",
+  faviconDomain,
+}: ProviderIconProps) {
   const cleanSlug = (slug || "").toLowerCase();
+
+  // An imported source has no brand badge to draw — show the site's favicon.
+  const domain = normalizeDomain(faviconDomain || "");
+  if (domain) return <FaviconIcon domain={domain} name={name} className={className} />;
 
   switch (cleanSlug) {
     case "prime":
@@ -397,12 +466,6 @@ export default function ProviderIcon({ slug, name, className = "h-8 w-8" }: Prov
       );
 
     default:
-      return (
-        <div
-          className={`${className} flex items-center justify-center rounded bg-gray-200 text-xs font-bold text-gray-700 dark:bg-gray-700 dark:text-gray-200`}
-        >
-          {name.slice(0, 2).toUpperCase()}
-        </div>
-      );
+      return <InitialsTile name={name} className={className} />;
   }
 }
