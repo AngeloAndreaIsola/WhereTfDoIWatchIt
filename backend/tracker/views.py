@@ -1136,35 +1136,43 @@ def watchlist_resolve(request):
     )
 
 
-@api_view(["GET"])
-def watchlist_report(request):
-    """Return aggregated report for watchlist items (user_id=1) with full watchability evaluation, composable filters & pagination."""
+def _build_report(request, movies: list[Movie]):
+    """Shared report pipeline for the title-list endpoints.
+
+    ``movies`` is the already-scoped source of titles — the watchlist passes
+    its WatchlistItem movies, /watched/ passes the UserMovieData(is_watched)
+    movies — so both listings run ONE evaluation path (watchability,
+    composable filters, country/service summary, pagination) and answer with
+    the same shape. ``UserMovieData`` is read once for the whole page rather
+    than per title.
+    """
     curr_country = request.GET.get("current_country") or request.query_params.get("current_country") or request.GET.get("country") or "US"
     preference = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
     user_subs = get_user_subscriptions(user_id=1)
-
-    items = (
-        WatchlistItem.objects.select_related("movie")
-        .filter(user_id=1)
-        .order_by("-added_at")
-    )
-    watchlist_movies = [item.movie for item in items]
 
     # What the refresh queue knows about each title (pending/checked/failed/
     # never_checked): threaded into the watchability evaluation so a title
     # with no offers reads 🔵 Checking… while its refresh is queued, ⚫ Not
     # available once checked, and ⚪ Unknown only when never fetched.
-    refresh_states = refresh_states_for({m.id for m in watchlist_movies})
+    refresh_states = refresh_states_for({m.id for m in movies})
 
-    # Apply composable filters to the watchlist movies
+    # Apply composable filters to the scoped movies
     evaluated_filtered, _ = apply_composable_filters(
-        watchlist_movies,
+        movies,
         request.GET,
         preference,
         user_subscriptions=user_subs,
         current_country=curr_country,
         refresh_states=refresh_states,
     )
+
+    # One batched read of the per-title watch state for this page.
+    user_data_by_movie = {
+        ud.movie_id: ud
+        for ud in UserMovieData.objects.filter(
+            user_id=1, movie_id__in={m.id for m in movies}
+        )
+    }
 
     report = []
     country_movie_sets: dict[str, set[int]] = {}
@@ -1176,7 +1184,7 @@ def watchlist_report(request):
         watch_res = eval_item["watchability"]
 
         # Check if movie is marked as watched for watchlist status
-        user_data = UserMovieData.objects.filter(user_id=1, movie=movie).first()
+        user_data = user_data_by_movie.get(movie.id)
         is_watched = bool(user_data and user_data.is_watched)
 
         # A single corrupt/failing read must not take down the whole report.
@@ -1248,6 +1256,48 @@ def watchlist_report(request):
             "summary": summary,
         }
     )
+
+
+@api_view(["GET"])
+def watchlist_report(request):
+    """Return aggregated report for watchlist items (user_id=1) with full watchability evaluation, composable filters & pagination."""
+    items = (
+        WatchlistItem.objects.select_related("movie")
+        .filter(user_id=1)
+        .order_by("-added_at")
+    )
+    return _build_report(request, [item.movie for item in items])
+
+
+@api_view(["GET"])
+def watched_report(request):
+    """GET /api/watched/report/ — the Watchlist report scoped to watched titles.
+
+    Same evaluation, filters, summary and pagination as
+    /api/watchlist/report/; the only difference is the source of titles:
+    ``UserMovieData.is_watched`` rows (the same watch state the
+    mark/unmark endpoints write), so there is no second watched-list model.
+    Ordered most-recently-watched first, undated rows last.
+    """
+    from datetime import date
+
+    watched = list(
+        UserMovieData.objects.select_related("movie")
+        .filter(user_id=1, is_watched=True)
+        .order_by("-updated_at")
+    )
+    # Most-recently-watched first, undated rows last. Sorted in Python rather
+    # than with F(...).desc(nulls_last=True) so the ordering also holds on
+    # backends without NULLS LAST (the SQLite test settings shim).
+    watched.sort(
+        key=lambda row: (
+            row.watched_date is not None,
+            row.watched_date or date.min,
+            row.updated_at,
+        ),
+        reverse=True,
+    )
+    return _build_report(request, [row.movie for row in watched])
 
 
 def _canonical_provider(provider: str) -> str:

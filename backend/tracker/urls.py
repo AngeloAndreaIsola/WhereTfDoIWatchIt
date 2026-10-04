@@ -40,6 +40,8 @@ urlpatterns = [
     ),
     path("watchlist/report/", views.watchlist_report, name="watchlist-report"),
     path("watchlist/resolve/", views.watchlist_resolve, name="watchlist-resolve"),
+    # --- Watched section (same report pipeline, scoped to is_watched rows) ---
+    path("watched/report/", views.watched_report, name="watched-report"),
     # --- Watchlist export (canonical round-trip CSV backup) ---
     path("export/watchlist/", views.export_watchlist, name="export-watchlist"),
     path("export/watched/", views.export_watched, name="export-watched"),
