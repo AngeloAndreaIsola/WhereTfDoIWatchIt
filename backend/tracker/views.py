@@ -1539,7 +1539,38 @@ def watchlist_refresh_status(request):
         failed = batch_scope.filter(status=RefreshRequestStatus.FAILED).count()
         total = batch_scope.count()
     else:
-        pending = scope.filter(status=RefreshRequestStatus.PENDING).count()
+        # No run boundary was supplied, so this endpoint is reporting global
+        # progress. "Outstanding" must therefore mean *outstanding work some
+        # live run still owns* — not "any pending row that ever existed".
+        #
+        # These are different, and conflating them is a live defect. Two runs
+        # (5 and 6) were recorded `partial` under the pre-P6a contract while
+        # still owning 476 pending rows. Those rows are historical and runnable:
+        # no source is out of budget, so they were never legitimately settled,
+        # and inventing an outcome for them would falsify the record. They are
+        # left untouched — but they must not be counted as work in flight,
+        # because there is no active run and the frontend would render 382
+        # pending requests as a refresh currently progressing.
+        #
+        # A row belongs to live work if either (a) a non-terminal refresh owns
+        # it, or (b) it has no batch at all.
+        #
+        # Case (b) matters and was missed in the first pass of this fix. A
+        # single-title refresh — the detail page, an import, cron — is queued
+        # with `batch=NULL` and is genuinely outstanding work that no run
+        # "owns". Excluding it made the endpoint report zero pending for a
+        # watchlist with a real queued title, which is the mirror image of the
+        # bug being fixed. So: exclude rows sitting behind a *terminal* run, and
+        # keep everything else.
+        #
+        # `since` still bounds *completion* counts; ownership bounds pending.
+        terminal_batches = AvailabilityRefresh.objects.filter(
+            status__in=TERMINAL_STATUSES
+        ).exclude(batch=None).values_list("batch", flat=True)
+
+        pending = scope.filter(status=RefreshRequestStatus.PENDING).exclude(
+            batch__in=terminal_batches
+        ).count()
         refreshed = scope.filter(
             status=RefreshRequestStatus.DONE, completed_at__gte=since
         ).count()
