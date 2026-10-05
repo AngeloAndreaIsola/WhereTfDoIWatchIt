@@ -556,6 +556,220 @@ class CatalogueRefreshRequest(models.Model):
         return f"CatalogueRefreshRequest {self.get_status_display()} {self.sources}"
 
 
+class AvailabilityResolutionReason(models.TextChoices):
+    """Why one (title, source) pair has not produced an answer.
+
+    The read path used to collapse every unresolved title into a single
+    ``unknown``, which conflated four very different situations:
+
+    - the source was never asked (``NOT_CHECKED``),
+    - it is asked but has not run yet (``QUEUED``),
+    - it cannot answer for a structural reason (``NOT_SUPPORTED`` — the
+      title is not in a country the source serves, or the title-level
+      endpoint does not accept this scope),
+    - it answered, and the answer is legitimately "nothing here"
+      (``NO_OFFER``),
+    - it answered "this title does not exist" (``TITLE_NOT_FOUND``, a
+      permanent upstream 404 that must never be retried),
+    - it could not be asked because of budget or an outage
+      (``QUOTA_EXHAUSTED`` / ``SOURCE_UNAVAILABLE``).
+
+    Only the last two are *absence of availability*. Everything else is an
+    absence of **information**, and a title whose sources are all in the
+    second group is genuinely unknown — one in the first group is not
+    actually unavailable.
+
+    ``NOT_APPLICABLE`` exists for a source that is not applicable to a
+    title at all (a catalogue-driven source asked about one film, or a
+    country the provider does not serve). It is deliberately distinct from
+    ``NO_OFFER``: "we looked and there was nothing" is an answer, "we were
+    never in a position to look" is not.
+    """
+
+    NOT_CHECKED = "not_checked", "Not checked yet"
+    QUEUED = "queued", "Queued, not run yet"
+    RESOLVED = "resolved", "Resolved (offers found or checked)"
+    NO_OFFER = "no_offer", "Checked — no offer at any provider"
+    NOT_SUPPORTED = "not_supported", "Source does not serve this scope"
+    NOT_APPLICABLE = "not_applicable", "Source not applicable to this title"
+    TITLE_NOT_FOUND = "title_not_found", "Upstream has no such title"
+    QUOTA_EXHAUSTED = "quota_exhausted", "Source quota exhausted"
+    SOURCE_UNAVAILABLE = "source_unavailable", "Source temporarily unavailable"
+    COLLECTOR_NOT_RUN = "collector_not_run", "Catalogue never synced"
+    UNKNOWN_REASON = "unknown_reason", "Unclassified"
+
+
+class AvailabilityRefreshType(models.TextChoices):
+    WATCHLIST = "watchlist", "Watchlist bulk refresh"
+    TITLE = "title", "Single title"
+    CATALOGUE = "catalogue", "Catalogue sync"
+
+
+class AvailabilityRefreshStatus(models.TextChoices):
+    QUEUED = "queued", "Queued"
+    RUNNING = "running", "Running"
+    COMPLETED = "completed", "Completed"
+    PARTIAL = "partial", "Partially completed"
+    FAILED = "failed", "Failed"
+
+
+class AvailabilityRefresh(models.Model):
+    """One persisted availability refresh *run*.
+
+    A durable job record, not a frontend concern. The refresh button used to
+    own the state of a long-running operation in component state, so
+    reloading the browser erased every trace of what was running; the queue
+    rows survived in the database but nothing reconstructed the run from
+    them. This model is that reconstruction: the UI asks
+    ``GET /api/availability/refreshes?active=true`` after a reload and
+    redraws the same progress it showed before.
+
+    Deliberately *not* an owner of work. ``RefreshRequest`` and
+    ``CatalogueRefreshRequest`` remain the units of work — this row is the
+    run's identity, its summary counters, and its per-source progress
+    (:class:`AvailabilityRefreshSource`), so there is no second scheduling
+    system to keep consistent. ``batch`` is the join key back to the
+    ``RefreshRequest`` rows this run stamped.
+
+    The title counters are the run's *outcome*, and they are the honest
+    answer to "how many titles are still unknown": a title is ``unknown``
+    only when no source resolved it, and that is computed by
+    ``tracker.services.availability_report`` from the same per-source
+    evidence the detail view shows, so the run summary and the per-title
+    breakdown can never disagree.
+    """
+
+    run_type = models.CharField(
+        max_length=12,
+        choices=AvailabilityRefreshType.choices,
+        default=AvailabilityRefreshType.WATCHLIST,
+    )
+    status = models.CharField(
+        max_length=12,
+        choices=AvailabilityRefreshStatus.choices,
+        default=AvailabilityRefreshStatus.QUEUED,
+        db_index=True,
+    )
+    # The uuid stamped onto every RefreshRequest this run touched. Nullable
+    # because a catalogue-only run owns no title requests.
+    batch = models.UUIDField(null=True, blank=True, db_index=True)
+    title_filter = models.JSONField(default=list, blank=True)
+    # Which sources this run is allowed to consult, in tier order. Frozen at
+    # creation so a run's scope is auditable after the fact even if the
+    # policy flags change mid-flight.
+    source_policy = models.JSONField(default=list, blank=True)
+
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    # Outcome counters. `total_titles` is titles *considered*, and
+    # available + unavailable + unknown must equal it — the invariant the
+    # report service maintains and a test pins.
+    total_titles = models.IntegerField(default=0)
+    completed_titles = models.IntegerField(default=0)
+    available_titles = models.IntegerField(default=0)
+    unavailable_titles = models.IntegerField(default=0)
+    unknown_titles = models.IntegerField(default=0)
+    failed_titles = models.IntegerField(default=0)
+
+    # Why titles are still unknown, as {reason: count}. This is the whole
+    # point of the model: the answer to "why are these 28 films unknown?"
+    # becomes a query result rather than an investigation.
+    unknown_reasons = models.JSONField(default=dict, blank=True)
+    error = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["status", "created_at"], name="availrefresh_status_created"),
+        ]
+
+    def __str__(self):
+        return f"AvailabilityRefresh #{self.pk} {self.get_status_display()} ({self.run_type})"
+
+    @property
+    def is_active(self) -> bool:
+        return self.status in (
+            AvailabilityRefreshStatus.QUEUED,
+            AvailabilityRefreshStatus.RUNNING,
+        )
+
+
+class AvailabilityRefreshSource(models.Model):
+    """Per-source progress and outcome for one :class:`AvailabilityRefresh`.
+
+    The report a user actually needs is not "764 checks waiting" but
+    "which source is producing answers, which is out of budget, and which
+    has failed". This table holds one row per source per run:
+
+        #184 RUNNING
+          Collectors              ✓  312/312
+          JustWatch               ↻  843/1120
+          Streaming Availability  ⏸    0/764  quota exhausted
+
+    ``status`` distinguishes a source that *finished with no results* from
+    one that never ran, and ``reason`` carries the same
+    :class:`AvailabilityResolutionReason` vocabulary as the per-title
+    breakdown, so a blocked source reads identically in the run summary and
+    on a movie page.
+    """
+
+    refresh = models.ForeignKey(
+        AvailabilityRefresh, on_delete=models.CASCADE, related_name="sources"
+    )
+    source = models.CharField(max_length=50, db_index=True)
+    # "title" (per-title checks) or "catalogue" (whole-catalogue sync). The
+    # distinction is load-bearing: only a title-level source can produce a
+    # per-title verdict, and the report must never imply a catalogue source
+    # checked a specific film.
+    kind = models.CharField(max_length=12, default="title")
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ("queued", "Queued"),
+            ("running", "Running"),
+            ("completed", "Completed"),
+            ("skipped", "Skipped"),
+            ("quota_exhausted", "Quota exhausted"),
+            ("failed", "Failed"),
+            ("not_applicable", "Not applicable"),
+        ],
+        default="queued",
+        db_index=True,
+    )
+    total = models.IntegerField(default=0)
+    completed = models.IntegerField(default=0)
+    successful = models.IntegerField(default=0)
+    failed = models.IntegerField(default=0)
+    unknown = models.IntegerField(default=0)
+    queued = models.IntegerField(default=0)
+    tier = models.IntegerField(default=0)
+    reason = models.CharField(
+        max_length=32,
+        choices=AvailabilityResolutionReason.choices,
+        blank=True,
+        default="",
+    )
+    error = models.TextField(blank=True, default="")
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["tier", "source"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["refresh", "source"],
+                name="uniq_availrefreshsource_refresh_source",
+            ),
+        ]
+
+    def __str__(self):
+        return f"RefreshSource {self.source} {self.status} {self.completed}/{self.total}"
+
+
 class UserMovieData(models.Model):
     user_id = models.IntegerField(default=1)
     movie = models.ForeignKey(Movie, on_delete=models.CASCADE, related_name="user_data")

@@ -80,6 +80,42 @@ def _watchlist_movie(tmdb_id, title="Title", **kwargs):
     return movie
 
 
+def gate_off(test):
+    """Pin the metered-source gate OFF for a test that predates it.
+
+    The bulk-refresh tests below assert the full ``titles x sources`` fan-out.
+    That is the **default** contract and it stays pinned exactly as it was —
+    but with the metered gate enabled those assertions are meant to change,
+    because a title already resolved by a free source deliberately gets no
+    metered row.
+
+    So rather than weaken the old assertions to "whatever the policy says",
+    each pre-existing test states the configuration it is asserting. That
+    keeps the old contract verifiable *and* lets the whole suite run green
+    under ``AVAILABILITY_CONSULT_METERED_ONLY_WHEN_UNRESOLVED=1`` — which is
+    the only way to know the flag did not break unrelated behaviour. The
+    gate-on path is asserted directly in
+    ``test_refresh_source_policy_enqueue.py``.
+
+    Decorator rather than ``setUp`` so the intent is visible at each call
+    site rather than buried in a base class.
+    """
+
+    def wrapper(*args, **kwargs):
+        import tracker.services.source_policy as sp
+
+        original = sp.CONSULT_METERED_ONLY_WHEN_UNRESOLVED
+        sp.CONSULT_METERED_ONLY_WHEN_UNRESOLVED = False
+        try:
+            return test(*args, **kwargs)
+        finally:
+            sp.CONSULT_METERED_ONLY_WHEN_UNRESOLVED = original
+
+    wrapper.__name__ = test.__name__
+    wrapper.__doc__ = test.__doc__
+    return wrapper
+
+
 class BulkEnqueueServiceTests(TestCase):
     """request_watchlist_refresh: one local pass, per-title contracts intact.
 
@@ -88,6 +124,7 @@ class BulkEnqueueServiceTests(TestCase):
     ``titles x len(title_level_source_slugs())`` — never a bare title count.
     """
 
+    @gate_off
     def test_queues_every_watchlisted_title_at_explicit_priority(self):
         movie_a = _watchlist_movie(101)
         _watchlist_movie(102, content_type="series")
@@ -137,6 +174,7 @@ class BulkEnqueueServiceTests(TestCase):
         self.assertEqual(result["total_watchlist"], 0)
         self.assertEqual(RefreshRequest.objects.count(), 0)
 
+    @gate_off
     def test_repeated_bulk_calls_stay_deduplicated_and_upgrade(self):
         movie = _watchlist_movie(103)
         local_offer(movie)
@@ -199,6 +237,7 @@ class BulkEnqueueEndpointTests(TestCase):
             content_type="application/json",
         )
 
+    @gate_off
     def test_queues_all_titles_without_provider_io(self):
         _watchlist_movie(201)
         local_offer(_watchlist_movie(202))
@@ -221,6 +260,7 @@ class BulkEnqueueEndpointTests(TestCase):
             expected,
         )
 
+    @gate_off
     def test_endpoint_upgrades_a_lower_priority_pending_request(self):
         movie = _watchlist_movie(203)
         local_offer(movie)
@@ -410,6 +450,7 @@ class BulkDrainEndToEndTests(TestCase):
     status endpoint reports the same aggregate.
     """
 
+    @gate_off
     def test_worker_drains_bulk_queue_and_status_reports_it(self):
         movie_a = _watchlist_movie(401)
         movie_b = _watchlist_movie(402, content_type="series")
@@ -494,6 +535,7 @@ class BatchStampingTests(TestCase):
             {batch},
         )
 
+    @gate_off
     def test_a_row_opened_by_another_event_joins_the_run(self):
         movie = _watchlist_movie(414)
         local_offer(movie)

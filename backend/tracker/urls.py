@@ -40,6 +40,26 @@ urlpatterns = [
     ),
     path("watchlist/report/", views.watchlist_report, name="watchlist-report"),
     path("watchlist/resolve/", views.watchlist_resolve, name="watchlist-resolve"),
+    # --- Source-first availability observability (Phase 1/2) ---
+    # The report and the persisted run records are what let a page reload
+    # reconstruct a long-running refresh instead of losing it.
+    path("availability/report/", views.availability_report, name="availability-report"),
+    path(
+        "availability/report/<int:tmdb_id>/",
+        views.availability_title_report,
+        name="availability-title-report",
+    ),
+    path("availability/refresh/", views.availability_refresh_start, name="availability-refresh-start"),
+    path(
+        "availability/refreshes/",
+        views.availability_refresh_list,
+        name="availability-refresh-list",
+    ),
+    path(
+        "availability/refreshes/<int:pk>/",
+        views.availability_refresh_detail,
+        name="availability-refresh-detail",
+    ),
     # --- Watchlist export (canonical round-trip CSV backup) ---
     path("export/watchlist/", views.export_watchlist, name="export-watchlist"),
     path("export/watched/", views.export_watched, name="export-watched"),

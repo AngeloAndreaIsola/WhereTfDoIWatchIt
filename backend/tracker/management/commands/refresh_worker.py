@@ -28,6 +28,11 @@ from django.core.management.base import BaseCommand
 from django.db import connections
 
 from ...services.bulk_refresh import process_pending_catalogue_refresh
+from ...services.refresh_lifecycle import (
+    AvailabilityRefreshLifecycle,
+    claim_active_run,
+    reconcile_stale_runs,
+)
 from ...services.refresh_requests import process_refresh_queue
 
 logger = logging.getLogger(__name__)
@@ -68,7 +73,30 @@ class Command(BaseCommand):
 
         while True:
             sleep_for = interval
+            run = None
             try:
+                # The worker is the authoritative actor for a run's
+                # lifecycle: it claims the active run (QUEUED -> RUNNING)
+                # before doing any work, and finalises it from persisted
+                # state afterwards. A crash in between leaves a RUNNING run
+                # whose request rows are still truthful, which is exactly what
+                # makes the next process able to settle it correctly.
+                run = claim_active_run()
+                if run is not None:
+                    # A run left RUNNING by a dead worker is settled here,
+                    # before this tick adopts anything. Deferred when its
+                    # queue is genuinely still in flight.
+                    for recovered in reconcile_stale_runs():
+                        self.stdout.write(
+                            json.dumps(
+                                {
+                                    "reconciled": recovered.pk,
+                                    "status": recovered.status,
+                                }
+                            )
+                        )
+                    run = claim_active_run()
+
                 summary = process_refresh_queue(budget=budget)
                 if summary:
                     # Rate-limited ticks are printed too: they are the
@@ -108,8 +136,21 @@ class Command(BaseCommand):
                 catalogue = process_pending_catalogue_refresh()
                 if catalogue:
                     self.stdout.write(json.dumps({"catalogue": catalogue}))
+
+                # Finalise from persisted state, never from `summary`: a
+                # finalise that trusted the worker's own tally would report
+                # progress the database never recorded if the tick died
+                # between draining and writing.
+                if run is not None:
+                    AvailabilityRefreshLifecycle.finalise(run)
             except Exception:  # noqa: BLE001 - a transient DB error must not kill the worker
                 logger.exception("refresh_worker_tick_failed")
+                if run is not None:
+                    # The tick failed as a whole. Mark the run failed rather
+                    # than leaving it RUNNING to be mistaken for progress.
+                    AvailabilityRefreshLifecycle.fail(
+                        run, error="worker tick raised"
+                    )
                 sleep_for = interval
             finally:
                 # Drop the connection so a stale one (db restart, idle

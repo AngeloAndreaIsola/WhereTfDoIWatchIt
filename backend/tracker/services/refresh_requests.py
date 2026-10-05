@@ -340,17 +340,53 @@ def request_watchlist_refresh(
 
     Returns ``{"queued": <rows this batch now owns>,
     "total_watchlist": <titles covered>, "sources": <slugs fanned out over>,
-    "checks_per_title": <title-level sources>, "batch": <uuid str>}``.
+    "checks_per_title": <title-level sources>, "batch": <uuid str>,
+    "skipped": {source: reason}, "skipped_counts": {source: n}}``.
+
+    **The source policy is applied here, before the request row is created.**
+    Not after: a source skipped after enqueueing has already cost a queue row,
+    a worker tick, a storage write and a place in the batch's denominator,
+    and the progress bar would then have to render a request that will never
+    run. So each title is classified from its current evidence and only the
+    sources the policy allows get a row.
+
+    With the gate off (the default) every applicable title-level source is
+    enqueued exactly as before — the change is additive, and turning the gate
+    off restores the previous scheduling byte for byte.
     """
     batch = uuid.uuid4()
-    applicable = list(sources) if sources is not None else title_level_source_slugs()
+    base_sources = list(sources) if sources is not None else title_level_source_slugs()
     movie_ids = list(
         WatchlistItem.objects.filter(user_id=user_id)
         .values_list("movie_id", flat=True)
         .distinct()
     )
+
+    # One classification pass for the whole watchlist, so the decision is a
+    # single batched read rather than a per-title query.
+    from .availability_report import title_source_report
+    from .source_policy import decide_sources_for_title
+
+    report = title_source_report(movie_ids) if movie_ids else {}
+
+    # `applicable` is the union across titles (which sources this run touches
+    # at all); `skipped_by_source` records per-source skip counts so the
+    # response can say "not needed for 163 titles" rather than a bare total.
+    applicable: list[str] = []
+    skipped_counts: dict[str, int] = {}
+    skipped_by_source: dict[str, int] = {}
+
     for _movie_id, movie in Movie.objects.in_bulk(movie_ids).items():
-        for source in applicable:
+        decision = decide_sources_for_title(
+            report.get(movie.pk, {}), applicable_slugs=base_sources
+        )
+        allowed = list(decision["allowed_sources"])
+        for source, reason in decision["skipped_sources"].items():
+            skipped_counts[reason] = skipped_counts.get(reason, 0) + 1
+            skipped_by_source[source] = skipped_by_source.get(source, 0) + 1
+        for source in allowed:
+            if source not in applicable:
+                applicable.append(source)
             request_availability_refresh(
                 movie,
                 priority=priority,
@@ -358,6 +394,11 @@ def request_watchlist_refresh(
                 source=source,
                 batch=batch,
             )
+
+    # `queued` counts what this batch actually owns. Counting the union of
+    # sources across titles is wrong once titles legitimately differ — with
+    # gating on, a resolved title contributes no metered row at all, so a
+    # cross-title source count would overstate the run's real size.
     queued = RefreshRequest.objects.filter(
         movie_id__in=movie_ids,
         source__in=applicable,
@@ -370,6 +411,17 @@ def request_watchlist_refresh(
         "sources": applicable,
         "checks_per_title": len(applicable),
         "batch": str(batch),
+        # Per-source skip reasons, plus the count of titles each applies to,
+        # so the UI can render "not needed for 163 titles" instead of a
+        # number that cannot be acted on.
+        "skipped": {
+            source: reason
+            for source, reason in decide_sources_for_title(
+                {"state": "available"}, applicable_slugs=base_sources
+            )["skipped_sources"].items()
+        },
+        "skipped_counts": skipped_counts,
+        "skipped_titles_per_source": skipped_by_source,
     }
 
 

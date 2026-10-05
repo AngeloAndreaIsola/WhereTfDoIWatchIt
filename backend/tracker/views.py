@@ -20,6 +20,10 @@ from rest_framework.response import Response
 from .languages import normalize_language_code
 from .models import (
     Availability,
+    AvailabilityRefresh,
+    AvailabilityRefreshStatus,
+    AvailabilityRefreshType,
+    AvailabilityResolutionReason,
     ExternalProviderMapping,
     LanguageEntry,
     LanguageInfo,
@@ -86,6 +90,16 @@ from .services.bulk_refresh import (
     title_level_source_slugs,
 )
 from .services.availability_reads import get_local_offers
+from .services.availability_report import (
+    active_refresh,
+    build_run_summary,
+    record_run,
+    source_label,
+    sync_run_progress,
+    title_source_report,
+)
+from .services import source_policy
+from .services.refresh_lifecycle import TERMINAL_STATUSES
 from .services.provider_status import (
     CATALOGUE,
     SCRAPER,
@@ -1592,6 +1606,237 @@ def watchlist_refresh_status(request):
             "resets_at": _next_utc_midnight_ts(),
         },
         status=status.HTTP_200_OK,
+    )
+
+
+# --- source-first availability observability ------------------------------
+
+
+def _watchlist_movie_ids() -> list[int]:
+    return list(
+        WatchlistItem.objects.filter(user_id=1).values_list("movie_id", flat=True)
+    )
+
+
+def _serialize_refresh(refresh, movie_ids) -> dict:
+    """One refresh run as the UI consumes it, with live per-source progress.
+
+    **Progress counters are recomputed on read; the run *status* is not.**
+    That split is deliberate and is the fix for the design this replaced.
+
+    Recomputing the per-source and title counters is what makes a poll after
+    a browser reload show exactly what the button showed before it, and it is
+    derived purely from persisted state, so it cannot be wrong. But
+    ``status`` is a *lifecycle* fact written by the worker (see
+    :mod:`tracker.services.refresh_lifecycle`) and is read straight off the
+    row. A reader that inferred "no pending requests, therefore completed"
+    would be making the transition itself — which is how a run gets marked
+    COMPLETED by a GET request, and how a crashed run gets quietly reported
+    as a success.
+    """
+    if refresh.status not in TERMINAL_STATUSES:
+        # Not terminal yet: refresh the progress rows so the UI can show what
+        # is moving, but leave the status to the worker.
+        sync_run_progress(refresh, movie_ids, batch=refresh.batch)
+    return {
+        "id": refresh.pk,
+        "type": refresh.run_type,
+        "status": refresh.status,
+        "batch": str(refresh.batch) if refresh.batch else None,
+        "created_at": refresh.created_at,
+        "started_at": refresh.started_at,
+        "finished_at": refresh.finished_at,
+        "is_active": refresh.is_active,
+        "total_titles": refresh.total_titles,
+        "completed_titles": refresh.completed_titles,
+        "available_titles": refresh.available_titles,
+        "unavailable_titles": refresh.unavailable_titles,
+        "unknown_titles": refresh.unknown_titles,
+        "failed_titles": refresh.failed_titles,
+        "unknown_reasons": refresh.unknown_reasons,
+        "policy": source_policy.policy_description(),
+        "sources": [
+            {
+                "source": row.source,
+                "label": source_label(row.source),
+                "tier": row.tier,
+                "kind": row.kind,
+                "status": row.status,
+                "reason": row.reason,
+                "total": row.total,
+                "completed": row.completed,
+                "successful": row.successful,
+                "failed": row.failed,
+                "unknown": row.unknown,
+                "queued": row.queued,
+                "error": row.error,
+            }
+            for row in refresh.sources.all()
+        ],
+    }
+
+
+@api_view(["GET"])
+def availability_report(request):
+    """GET /api/availability/report/ — the source-first availability picture.
+
+    Answers, in one read, the two questions the old button-state could not:
+
+    - "what is running, what is queued, what succeeded, and which source
+      produced the result" — ``sources`` (per-title checks) and ``collectors``
+      (whole-catalogue syncs, reported separately because a catalogue source
+      cannot answer a question about one film);
+    - "why are these titles still unknown" — ``unknown_reasons``, a
+      ``{reason: count}`` map over the same evidence the per-title breakdown
+      uses.
+
+    Also returns ``policy`` and ``counterfactual`` so the source hierarchy
+    is never implicit: the user can see which ladder is active and what
+    switching it would cost before switching it.
+    """
+    movie_ids = _watchlist_movie_ids()
+    batch_raw = request.GET.get("batch")
+    batch = batch_raw or None
+    summary = build_run_summary(movie_ids, batch=batch)
+    counterfactual = source_policy.counterfactual(
+        summary.pop("_states"), summary.pop("_resolved_sources")
+    )
+    return Response(
+        {
+            **summary,
+            "policy": source_policy.policy_description(),
+            "counterfactual": counterfactual,
+            "resets_at": _next_utc_midnight_ts(),
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["GET"])
+def availability_title_report(request, tmdb_id: int):
+    """GET /api/availability/report/<tmdb_id>/ — one title's per-source verdicts.
+
+    The per-title half of the plan's "Availability sources checked" panel:
+
+        ✓ JustWatch          checked 14:32
+        ✓ YouTube            checked 14:31
+        — BBC iPlayer        not applicable (catalogue source)
+        ⏳ Streaming API      queued — quota exhausted
+
+        Result: Available on BBC iPlayer
+
+    The headline is the *title's* state, which is ``available`` if **any**
+    source produced an offer regardless of how many others are silent — the
+    one behaviour the old single ``unknown`` could not express, and the one
+    that stops a blocked source from being reported as absence of
+    availability.
+    """
+    movie = Movie.objects.filter(tmdb_id=tmdb_id).first()
+    if movie is None:
+        return Response(
+            {"error": "movie not found"}, status=status.HTTP_404_NOT_FOUND
+        )
+    report = title_source_report([movie.pk]).get(movie.pk, {})
+    from .services.availability_report import catalogue_progress
+
+    return Response(
+        {
+            "tmdb_id": movie.tmdb_id,
+            "title": movie.title,
+            **report,
+            "collectors": catalogue_progress(),
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["GET"])
+def availability_refresh_list(request):
+    """GET /api/availability/refreshes/?active=true — runs a page load can resume.
+
+    This is the endpoint that makes a browser reload harmless. The frontend
+    does not own the state of a long-running refresh: it asks for the active
+    run, redraws it, and keeps polling. A finished run stays queryable, so
+    "what happened" survives a reload too.
+    """
+    runs = AvailabilityRefresh.objects.all()[:20]
+    if request.GET.get("active") in ("1", "true", "True"):
+        runs = AvailabilityRefresh.objects.filter(
+            status__in=[
+                AvailabilityRefreshStatus.QUEUED,
+                AvailabilityRefreshStatus.RUNNING,
+            ]
+        )[:20]
+    movie_ids = _watchlist_movie_ids()
+    return Response(
+        {
+            "results": [_serialize_refresh(run, movie_ids) for run in runs],
+            "active": (
+                _serialize_refresh(active_refresh(), movie_ids)
+                if active_refresh()
+                else None
+            ),
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["GET"])
+def availability_refresh_detail(request, pk: int):
+    """GET /api/availability/refreshes/<pk>/ — one run, reconstructable from the DB."""
+    refresh = AvailabilityRefresh.objects.filter(pk=pk).first()
+    if refresh is None:
+        return Response(
+            {"error": "refresh not found"}, status=status.HTTP_404_NOT_FOUND
+        )
+    return Response(
+        _serialize_refresh(refresh, _watchlist_movie_ids()),
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["POST"])
+def availability_refresh_start(request):
+    """POST /api/availability/refresh/ — queue a run and return its id.
+
+    Enqueue-only by contract, exactly like the existing
+    ``refresh-explicit`` endpoint: the HTTP request never contacts a
+    provider. It returns ``{refresh_id, batch, ...}`` and the client polls
+    ``GET /api/availability/refreshes/<refresh_id>/`` — so a reload resumes
+    from the id rather than losing the run.
+    """
+    started_at = timezone.now()
+    result = request_watchlist_refresh(user_id=1)
+
+    if result["total_watchlist"] and not result["queued"]:
+        return Response(
+            {"error": "failed to queue availability refresh"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    stale_catalogue = stale_catalogue_sources()
+    if stale_catalogue:
+        request_catalogue_refresh(stale_catalogue)
+
+    movie_ids = _watchlist_movie_ids()
+    refresh = record_run(
+        AvailabilityRefreshType.WATCHLIST,
+        batch=result.get("batch"),
+        movie_ids=movie_ids,
+        source_policy=source_policy.allowed_sources(
+            title_level_source_slugs()
+        ),
+    )
+    sync_run_progress(refresh, movie_ids, batch=refresh.batch)
+    return Response(
+        {
+            "refresh_id": refresh.pk,
+            **result,
+            "now": started_at.timestamp(),
+            "catalogue_queued": stale_catalogue,
+            "refresh": _serialize_refresh(refresh, movie_ids),
+        },
+        status=status.HTTP_202_ACCEPTED,
     )
 
 
