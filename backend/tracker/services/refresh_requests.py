@@ -530,8 +530,20 @@ def _finish(request: RefreshRequest, status: RefreshRequestStatus) -> None:
     request.save(update_fields=["status", "completed_at", "last_error"])
 
 
-def _metered_source_is_unnecessary(movie, source: str, priority) -> bool:
+def _metered_source_is_unnecessary(
+    movie, source: str, priority, explicitly_named_source: bool = True
+) -> bool:
     """Whether this metered request should never have been spent.
+
+    ``explicitly_named_source`` is the *raw* ``request.source`` field, passed
+    separately from the resolved ``source`` slug. They differ, and the
+    difference is load-bearing: ``resolve_request_source`` maps an empty
+    field onto ``DEFAULT_SOURCE_SLUG``, which is ``'streaming_availability'``
+    — the metered slug itself. So a generic refresh request resolves to the
+    metered aggregator while having named no source at all, and gating on the
+    resolved slug alone would treat it as metered work. Callers pass the raw
+    field so this predicate can tell "explicitly asked for SA" from "asked for
+    availability in general".
 
     The execution-time half of the source hierarchy, and the only place the
     invariant is actually enforced. True means: *a non-metered source has
@@ -559,7 +571,19 @@ def _metered_source_is_unnecessary(movie, source: str, priority) -> bool:
 
     if priority == RefreshPriority.EXPLICIT:
         return False
-    if not source_policy.CONSULT_METERED_ONLY_WHEN_UNRESOLVED:
+    if not source_policy.consult_metered_only_when_unresolved():
+        return False
+    # Gate only on a row that *explicitly names* its source. `DEFAULT_SOURCE_SLUG`
+    # is `'streaming_availability'` — identical to the metered slug — so
+    # `resolve_request_source` maps an empty `source` onto it, and an earlier
+    # version of this guard compared against `DEFAULT_SOURCE_SLUG` and
+    # therefore excluded genuine explicit SA requests too, disabling the gate
+    # for the one source it exists to protect.
+    #
+    # The distinction is emptiness, never slug equality: an unscoped request
+    # (`source=""`) has no metered identity to enforce, and an explicit SA
+    # request does.
+    if not explicitly_named_source:
         return False
     if not source_policy.is_policy_metered(source):
         return False
@@ -636,7 +660,9 @@ def _drain_one(
     # The gate is checked here, immediately before the upstream call, so a
     # row that became unnecessary while queued settles as ``done`` without
     # spending a single request. Non-metered sources are never gated.
-    if _metered_source_is_unnecessary(movie, source, request.priority):
+    if _metered_source_is_unnecessary(
+        movie, source, request.priority, explicitly_named_source=bool(request.source)
+    ):
         _finish(request, RefreshRequestStatus.DONE)
         summary.skipped_policy_gated += 1
         summary.requests_drained += 1

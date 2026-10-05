@@ -32,6 +32,7 @@ Tests here pin, specifically:
 The last one matters as much as the first: switching the gate on must be a
 measured, reversible decision, not a side effect of deploying this module.
 """
+import os
 from unittest.mock import patch
 
 from django.test import TestCase
@@ -221,7 +222,9 @@ class DrainGateTests(TestCase):
 
         Two things are patched, and the second is not optional:
 
-        - ``CONSULT_METERED_ONLY_WHEN_UNRESOLVED`` — the gate switch under test;
+        - ``consult_metered_only_when_unresolved`` — the gate switch under
+          test, patched as a *callable* so the test declares the policy it
+          wants rather than inheriting whatever the environment set;
         - the SA **limiter** — the drain refuses to call upstream for a spent
           source (``_is_spent``), and the real limiter reads the shared
           ``ApiCallCounter`` rows. In a test database those are not isolated
@@ -251,7 +254,9 @@ class DrainGateTests(TestCase):
         # satisfy the signature.
         service = AvailabilityRefreshService()
         with patch.object(
-            source_policy, "CONSULT_METERED_ONLY_WHEN_UNRESOLVED", policy_on
+            source_policy,
+            "consult_metered_only_when_unresolved",
+            return_value=policy_on,
         ), patch.object(rr, "is_stale", return_value=True):
             rr._drain_one(
                 request,
@@ -370,10 +375,43 @@ class DrainGateTests(TestCase):
 
 
 class DrainGateRespectsPolicySwitchTests(TestCase):
-    """The default really is off — checked on the module, not on a patch."""
+    """The switch is read live from the environment, not captured at import.
+
+    These replace a test that asserted the module-level constant, which was
+    both wrong and unfixable: a constant is read when the module is imported,
+    so the assertion could only ever report the state of whatever environment
+    launched the test runner. Enabling the ladder in the dev containers broke
+    it, and the test could not be made to pass by fixing the test — the thing
+    it asserted no longer existed.
+
+    Reading on demand fixes both halves. The default is still asserted, but
+    against a controlled environment, and the "changing the environment
+    changes the policy without a restart" property is now directly testable
+    because it *wasn't* before.
+    """
 
     def test_the_gate_defaults_to_off(self):
-        self.assertFalse(source_policy.CONSULT_METERED_ONLY_WHEN_UNRESOLVED)
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(source_policy.LADDER_ENV_VAR, None)
+            self.assertFalse(source_policy.consult_metered_only_when_unresolved())
+
+    def test_the_gate_is_on_when_the_environment_says_so(self):
+        with patch.dict(
+            os.environ, {source_policy.LADDER_ENV_VAR: "1"}, clear=False
+        ):
+            self.assertTrue(source_policy.consult_metered_only_when_unresolved())
+
+    def test_changing_the_environment_takes_effect_without_a_restart(self):
+        """The property the import-time constant made untestable.
+
+        Same module object, same interpreter, no reload — which is what a
+        deployment needs, since changing a variable should not require
+        recycling the process to take effect.
+        """
+        with patch.dict(os.environ, {source_policy.LADDER_ENV_VAR: "1"}):
+            self.assertTrue(source_policy.consult_metered_only_when_unresolved())
+        with patch.dict(os.environ, {source_policy.LADDER_ENV_VAR: "0"}):
+            self.assertFalse(source_policy.consult_metered_only_when_unresolved())
 
     def test_the_metered_source_is_the_only_gated_one(self):
         metered = [
@@ -382,6 +420,68 @@ class DrainGateRespectsPolicySwitchTests(TestCase):
             if source_policy.is_policy_metered(slug)
         ]
         self.assertEqual(metered, [SA])
+
+
+class GenericRequestHasNoMeteredIdentityTests(TestCase):
+    """A generic refresh request must not acquire metered semantics.
+
+    ``DEFAULT_SOURCE_SLUG`` is literally ``'streaming_availability'``, and
+    ``resolve_request_source`` maps an empty ``source`` onto it. So a request
+    that names no source was being read as a Streaming Availability request
+    by the drain gate — the one metered source in the system.
+
+    The visible damage: with the ladder switched on, nine unrelated drain and
+    freshness tests began settling requests as policy-gated instead of
+    executing them, because a generic request had silently become metered.
+    The tests were right; the identity resolution was wrong.
+    """
+
+    def test_a_generic_request_is_not_gated_as_a_metered_source(self):
+        movie = make_movie(950, "Generic")
+        request = RefreshRequest.objects.create(
+            movie=movie,
+            source="",  # a generic refresh: no source named
+            priority=RefreshPriority.STALE,
+            status=RefreshRequestStatus.PENDING,
+        )
+        resolved_source = rr.resolve_request_source(request)
+
+        with patch.object(
+            source_policy,
+            "consult_metered_only_when_unresolved",
+            return_value=True,
+        ):
+            gated = rr._metered_source_is_unnecessary(
+                movie,
+                resolved_source,
+                RefreshPriority.STALE,
+                # The raw field, which is what the drain passes: a generic
+                # request names no source even though it *resolves* to SA.
+                explicitly_named_source=bool(request.source),
+            )
+
+        self.assertFalse(
+            gated,
+            "a request naming no source must not be gated as metered",
+        )
+
+    def test_an_explicit_sa_request_is_still_gated(self):
+        """The fix must not disable the gate — only stop it misfiring."""
+        movie = make_movie(951, "Explicit SA")
+        offer_for(movie, WM, available=True)  # resolved by a cheaper source
+        with patch.object(
+            source_policy,
+            "consult_metered_only_when_unresolved",
+            return_value=True,
+        ):
+            gated = rr._metered_source_is_unnecessary(
+                movie, SA, RefreshPriority.STALE
+            )
+
+        self.assertTrue(
+            gated,
+            "an explicit metered request for a resolved title must be gated",
+        )
 
 
 class EnqueueAndDrainAgreeTests(TestCase):
@@ -401,7 +501,9 @@ class EnqueueAndDrainAgreeTests(TestCase):
     def test_a_resolved_title_is_skipped_by_both_halves(self):
         offer_for(self.movie, WM, available=True)
         with patch.object(
-            source_policy, "CONSULT_METERED_ONLY_WHEN_UNRESOLVED", True
+            source_policy,
+            "consult_metered_only_when_unresolved",
+            return_value=True,
         ):
             from tracker.services.availability_report import title_source_report
 

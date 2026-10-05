@@ -170,16 +170,38 @@ SOURCE_ROLES: dict[str, AvailabilityRole] = {
     "streaming_availability": AvailabilityRole.METERED_AGGREGATOR,
 }
 
-#: Whether a metered aggregator may only run for titles no cheaper source
-#: has resolved. This is the switch the whole ladder exists to express, and
-#: it is **off by default** so that switching the policy on is a measured,
-#: reversible decision rather than a side effect of deploying this module.
-#:
-#: The report always computes the counterfactual, so the decision can be made
-#: from a number (:func:`counterfactual`) instead of an intuition.
-CONSULT_METERED_ONLY_WHEN_UNRESOLVED = (
-    os.environ.get("AVAILABILITY_CONSULT_METERED_ONLY_WHEN_UNRESOLVED", "0") == "1"
-)
+#: Environment variable holding the ladder switch. Named here so the variable
+#: name lives next to the policy that reads it.
+LADDER_ENV_VAR = "AVAILABILITY_CONSULT_METERED_ONLY_WHEN_UNRESOLVED"
+
+
+def consult_metered_only_when_unresolved() -> bool:
+    """Whether a metered aggregator may run only for unresolved titles.
+
+    This is the switch the whole ladder exists to express, and it is **off by
+    default** so that switching the policy on is a measured, reversible
+    decision rather than a side effect of deploying this module.
+
+    **Read on every call, deliberately, rather than captured at import.** The
+    earlier module-level constant had two problems, both of which this
+    function exists to remove:
+
+    1. *Deployment.* An import-time read means changing the environment does
+       nothing until the process restarts, so an operator who flips the
+       variable sees no change and reasonably concludes the setting is
+       broken. Reading on demand makes the environment genuinely live.
+    2. *Tests.* A module constant is process state that the test runner
+       inherits from whatever environment launched it. Ten tests broke the
+       moment the flag was enabled in the dev containers — not because any of
+       them tested the ladder, but because they asserted on drain counts that
+       the gate changed. That is the test suite being coupled to deployment
+       configuration, which is exactly the coupling this removes: a test that
+       cares about the setting now sets it explicitly.
+
+    The report still always computes the counterfactual, so the decision can
+    be made from a number (:func:`counterfactual`) rather than an intuition.
+    """
+    return os.environ.get(LADDER_ENV_VAR, "0") == "1"
 
 
 def role_of(slug: str) -> AvailabilityRole | None:
@@ -246,7 +268,7 @@ def allowed_sources_for_title(
     title_state: str,
     *,
     applicable_slugs=None,
-    consult_metered_only_when_unresolved: bool | None = None,
+    ladder_switch: bool | None = None,
 ) -> dict[str, list[str]]:
     """Which sources may run for a title in this state, grouped by role.
 
@@ -270,16 +292,14 @@ def allowed_sources_for_title(
     them early is what produces the evidence the metered source would
     otherwise be paying for.
     """
-    if consult_metered_only_when_unresolved is None:
-        consult_metered_only_when_unresolved = (
-            CONSULT_METERED_ONLY_WHEN_UNRESOLVED
-        )
+    if ladder_switch is None:
+        ladder_switch = consult_metered_only_when_unresolved()
     grouped = sources_by_role(applicable_slugs)
     if applicable_slugs is not None:
         keep = set(applicable_slugs)
         grouped = {role: [s for s in slugs if s in keep] for role, slugs in grouped.items()}
 
-    if not consult_metered_only_when_unresolved:
+    if not ladder_switch:
         # Policy off: every applicable source may run. The roles are still
         # reported, so the display and the counterfactual work identically.
         return grouped
@@ -295,7 +315,7 @@ def decide_sources_for_title(
     report_entry: dict,
     *,
     applicable_slugs=None,
-    consult_metered_only_when_unresolved: bool | None = None,
+    ladder_switch: bool | None = None,
 ) -> dict:
     """The scheduling decision for one title, as an auditable object.
 
@@ -340,10 +360,8 @@ def decide_sources_for_title(
     A strict A-then-B-then-C ladder would get the middle case wrong by
     declaring the title resolved once the aggregators had spoken.
     """
-    if consult_metered_only_when_unresolved is None:
-        consult_metered_only_when_unresolved = (
-            CONSULT_METERED_ONLY_WHEN_UNRESOLVED
-        )
+    if ladder_switch is None:
+        ladder_switch = consult_metered_only_when_unresolved()
 
     if applicable_slugs is None:
         applicable_slugs = sorted(
@@ -367,7 +385,7 @@ def decide_sources_for_title(
     skipped: dict[str, str] = {}
     allowed_free = list(free_slugs)
 
-    if not consult_metered_only_when_unresolved:
+    if not ladder_switch:
         allowed_metered = list(metered)
     elif state == "unknown":
         # Nothing has answered. The metered source is the only one left that
@@ -384,14 +402,14 @@ def decide_sources_for_title(
         "allowed_sources": allowed_free + allowed_metered,
         "skipped_sources": skipped,
         "reasons": dict(skipped),
-        "gate": consult_metered_only_when_unresolved,
+        "gate": ladder_switch,
         "state": state,
         "resolved_by": sorted(produced),
         "counterfactual": {
-            "gate": consult_metered_only_when_unresolved,
+            "gate": ladder_switch,
             "metered_would_run_for": sorted(
                 slug for slug in metered
-                if not consult_metered_only_when_unresolved or state == "unknown"
+                if not ladder_switch or state == "unknown"
             ),
         },
     }
@@ -408,13 +426,11 @@ def policy_description() -> dict:
     return {
         "roles": {slug: role.value for slug, role in sorted(SOURCE_ROLES.items())},
         "groups": sources_by_role(),
-        "consult_metered_only_when_unresolved": (
-            CONSULT_METERED_ONLY_WHEN_UNRESOLVED
-        ),
+        "consult_metered_only_when_unresolved": consult_metered_only_when_unresolved(),
         "ladder": (
             "collectors + broad aggregators run freely; the metered aggregator "
             "runs only for titles no other source has resolved"
-            if CONSULT_METERED_ONLY_WHEN_UNRESOLVED
+            if consult_metered_only_when_unresolved()
             else "every applicable title-level source may run (metered-source "
             "gating is OFF; the counterfactual reports what switching it on "
             "would cost)"
@@ -459,7 +475,7 @@ def counterfactual(title_states: dict[int, str], resolved_sources: dict[int, set
 
     return {
         "policy": "consult_metered_only_when_unresolved",
-        "current": CONSULT_METERED_ONLY_WHEN_UNRESOLVED,
+        "current": consult_metered_only_when_unresolved(),
         "titles_still_resolved": still_resolved,
         "titles_losing_their_answer": losing,
         "metered_sources": sorted(metered),

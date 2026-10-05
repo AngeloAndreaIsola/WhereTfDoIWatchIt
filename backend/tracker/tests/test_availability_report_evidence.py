@@ -133,7 +133,7 @@ class SourceRoleTests(TestCase):
         grouped = source_policy.allowed_sources_for_title(
             "available",
             applicable_slugs=["justwatch", SA],
-            consult_metered_only_when_unresolved=False,
+            ladder_switch=False,
         )
         self.assertIn(SA, grouped[source_policy.AvailabilityRole.METERED_AGGREGATOR.value])
 
@@ -141,7 +141,7 @@ class SourceRoleTests(TestCase):
         grouped = source_policy.allowed_sources_for_title(
             "available",
             applicable_slugs=["justwatch", SA],
-            consult_metered_only_when_unresolved=True,
+            ladder_switch=True,
         )
         self.assertEqual(
             grouped[source_policy.AvailabilityRole.METERED_AGGREGATOR.value], []
@@ -157,7 +157,7 @@ class SourceRoleTests(TestCase):
     def test_gating_permits_the_metered_source_for_an_unresolved_title(self):
         grouped = source_policy.allowed_sources_for_title(
             "unknown", applicable_slugs=["justwatch", SA],
-            consult_metered_only_when_unresolved=True,
+            ladder_switch=True,
         )
         self.assertEqual(
             grouped[source_policy.AvailabilityRole.METERED_AGGREGATOR.value], [SA]

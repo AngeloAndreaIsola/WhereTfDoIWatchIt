@@ -102,14 +102,19 @@ def gate_off(test):
     """
 
     def wrapper(*args, **kwargs):
+        import os
+
         import tracker.services.source_policy as sp
 
-        original = sp.CONSULT_METERED_ONLY_WHEN_UNRESOLVED
-        sp.CONSULT_METERED_ONLY_WHEN_UNRESOLVED = False
+        original = os.environ.get(sp.LADDER_ENV_VAR)
+        os.environ[sp.LADDER_ENV_VAR] = "0"
         try:
             return test(*args, **kwargs)
         finally:
-            sp.CONSULT_METERED_ONLY_WHEN_UNRESOLVED = original
+            if original is None:
+                os.environ.pop(sp.LADDER_ENV_VAR, None)
+            else:
+                os.environ[sp.LADDER_ENV_VAR] = original
 
     wrapper.__name__ = test.__name__
     wrapper.__doc__ = test.__doc__

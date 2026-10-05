@@ -261,27 +261,39 @@ class EnqueueGatingTests(TestCase):
 
 
 class _patched_gate:
-    """Context manager flipping the policy module constant.
+    """Context manager switching the ladder policy for the duration of a test.
 
-    Patches the module attribute rather than the environment because the
-    constant is read at import time; a test that set the env var would be
-    testing a different configuration than the one it thinks it is.
+    Sets the **environment variable** rather than patching a module attribute,
+    because the policy is now read on every call. The old version patched a
+    module constant and documented why: "the constant is read at import time;
+    a test that set the env var would be testing a different configuration
+    than the one it thinks it is." That reasoning was valid then and is now
+    exactly backwards — reading live is what lets a test declare the policy it
+    wants instead of inheriting whatever the process started with, and it is
+    what lets an operator change the setting without restarting the service.
     """
 
     def __init__(self, on: bool):
         self.on = on
 
     def __enter__(self):
+        import os
+
         import tracker.services.source_policy as sp
 
-        self._original = sp.CONSULT_METERED_ONLY_WHEN_UNRESOLVED
-        sp.CONSULT_METERED_ONLY_WHEN_UNRESOLVED = self.on
+        self._original = os.environ.get(sp.LADDER_ENV_VAR)
+        os.environ[sp.LADDER_ENV_VAR] = "1" if self.on else "0"
         return self
 
     def __exit__(self, *exc):
+        import os
+
         import tracker.services.source_policy as sp
 
-        sp.CONSULT_METERED_ONLY_WHEN_UNRESOLVED = self._original
+        if self._original is None:
+            os.environ.pop(sp.LADDER_ENV_VAR, None)
+        else:
+            os.environ[sp.LADDER_ENV_VAR] = self._original
         return False
 
 

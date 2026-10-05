@@ -27,6 +27,7 @@ from __future__ import annotations
 import datetime as dt
 import io
 import json
+import os
 from unittest.mock import MagicMock, patch
 
 from django.core.management import call_command
@@ -304,7 +305,22 @@ class PrioritySemanticsTests(TestCase):
         self.assertEqual(summary["errors"], 0)
 
     def test_a_higher_intent_source_scoped_request_drains_before_a_lower_one(self):
-        """Priority ordering holds across source-scoped requests."""
+        """Priority ordering holds across source-scoped requests.
+
+        Declares ladder-off explicitly, and the declaration is load-bearing
+        rather than defensive. ``DEFAULT_SOURCE_SLUG`` *is*
+        ``'streaming_availability'``, so this test creates a request naming
+        the one metered source for a title that already has a local offer. With
+        the ladder on, the drain correctly settles that request as
+        policy-gated without attempting it, so only the YouTube request is
+        refreshed and the count is 1 rather than 2.
+
+        That is the source policy working, not a priority bug — this test is
+        about *ordering*, and it should measure ordering alone. The behaviour
+        it would otherwise be measuring is asserted deliberately, with the gate
+        on, in ``test_refresh_source_policy_drain``; the coverage is moved
+        rather than lost.
+        """
         from tracker.tests.test_event_driven_refresh import _backdate_offers
 
         stale = Movie.objects.create(tmdb_id=61_003, title="Stale", year=2018)
@@ -322,13 +338,14 @@ class PrioritySemanticsTests(TestCase):
             priority=RefreshPriority.RECENTLY_VIEWED,
         )
 
-        with patch(
+        with patch.dict(os.environ, {"AVAILABILITY_CONSULT_METERED_ONLY_WHEN_UNRESOLVED": "0"}), patch(
             "tracker.services.refresh_requests.AvailabilityRefreshService"
         ) as service_cls:
             service_cls.return_value = MagicMock()
             summary = process_refresh_queue(budget=10, service=MagicMock())
 
         self.assertEqual(summary["refreshed"], 2)
+        self.assertEqual(summary["skipped_policy_gated"], 0)
 
     def test_the_priority_ladder_is_unchanged(self):
         self.assertEqual(
