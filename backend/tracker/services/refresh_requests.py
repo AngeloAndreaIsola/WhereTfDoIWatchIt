@@ -530,6 +530,51 @@ def _finish(request: RefreshRequest, status: RefreshRequestStatus) -> None:
     request.save(update_fields=["status", "completed_at", "last_error"])
 
 
+def _metered_source_is_unnecessary(movie, source: str, priority) -> bool:
+    """Whether this metered request should never have been spent.
+
+    The execution-time half of the source hierarchy, and the only place the
+    invariant is actually enforced. True means: *a non-metered source has
+    already resolved this title, so this scarce request has nothing left to
+    find.*
+
+    Three deliberate refusals to gate:
+
+    - a **non-metered** source — free to run, and running it is what produces
+      the evidence the metered source would otherwise pay for;
+    - an ``EXPLICIT`` request — the user's manual "Refresh availability" is a
+      deliberate "ask me anyway", matching the existing freshness contract
+      (see :func:`_drain_one`), so the gate must not silently override a
+      direct instruction;
+    - when the policy is off, which is the default. This is what keeps
+      switching the gate on a measured, reversible decision rather than a
+      side effect of deploying the module.
+
+    Resolution is read through the *report's* classification rather than by
+    asking "does this title have any offer", because only the report knows
+    which offers are currently active and which sources have definitively
+    answered. A withdrawn offer is not an answer and must not gate.
+    """
+    from . import source_policy
+
+    if priority == RefreshPriority.EXPLICIT:
+        return False
+    if not source_policy.CONSULT_METERED_ONLY_WHEN_UNRESOLVED:
+        return False
+    if not source_policy.is_metered_role(source):
+        return False
+
+    from .availability_report import title_source_report
+
+    entry = title_source_report([movie.pk]).get(movie.pk)
+    if not entry:
+        # No classification available: never block a request on missing data.
+        return False
+    return source_policy.decide_sources_for_title(entry).get(
+        "skipped_sources", {}
+    ).get(source) == source_policy.PolicySkipReason.NOT_NEEDED.value
+
+
 def _drain_one(
     request: RefreshRequest,
     *,
@@ -576,6 +621,26 @@ def _drain_one(
     movie = request.movie
     source = resolve_request_source(request)
     scope_limiter = _limiter_for_scope(source, limiter, limiter_overrides)
+
+    # Source policy, re-checked at EXECUTION time, not just at enqueue.
+    #
+    # The enqueue gate (:func:`request_watchlist_refresh`) refuses to create a
+    # metered request for an already-resolved title, but a queued row can
+    # outlive that decision: a cheap source's request may land *after* this
+    # row was written, turning an unresolved title into a resolved one, and
+    # the stale-sweep path enqueues requests that never passed through the
+    # policy at all. Enforcing only at enqueue would therefore still spend the
+    # scarce budget on answers nobody needs — the exact failure the hierarchy
+    # exists to prevent.
+    #
+    # The gate is checked here, immediately before the upstream call, so a
+    # row that became unnecessary while queued settles as ``done`` without
+    # spending a single request. Non-metered sources are never gated.
+    if _metered_source_is_unnecessary(movie, source, request.priority):
+        _finish(request, RefreshRequestStatus.DONE)
+        summary.skipped_policy_gated += 1
+        summary.requests_drained += 1
+        return rate_limit_hit
 
     # Freshness is free: settle fresh scopes without touching the budget —
     # unless the user explicitly asked for a new check right now.

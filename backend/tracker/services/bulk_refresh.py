@@ -272,6 +272,16 @@ class BulkRefreshSummary:
     # it is reported on its own counter instead of inflating ``errors`` and
     # making a healthy run look broken.
     skipped_upstream_missing: int = 0
+    # Requests a metered source would have been asked, but a cheaper source had
+    # already resolved the title by the time the row came up for execution.
+    #
+    # Not a cache hit and not an error: the work was unnecessary, not skipped
+    # for speed, and no upstream call was made. It gets its own counter
+    # because "how much scarce budget did the source hierarchy save?" is the
+    # question the gate exists to answer, and it cannot be read off any other
+    # field — a cached hit still counted a request this run would otherwise
+    # have repeated.
+    skipped_policy_gated: int = 0
     errors: int = 0
     budget: int = 0
     remaining_budget: int = 0
