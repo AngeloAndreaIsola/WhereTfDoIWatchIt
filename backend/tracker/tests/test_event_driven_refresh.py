@@ -23,6 +23,7 @@ from django.test import TestCase
 from django.utils import timezone
 
 from tracker.models import (
+    BlockedReason,
     Movie,
     RefreshPriority,
     RefreshRequest,
@@ -697,7 +698,19 @@ class DrainTests(TestCase):
             self.assertEqual(request.status, RefreshRequestStatus.DONE)
             self.assertIsNotNone(request.completed_at)
 
-    def test_budget_exhaustion_leaves_requests_pending(self):
+    def test_budget_exhaustion_settles_the_remainder_as_blocked(self):
+        """A request the drain decides it cannot run is settled, not queued.
+
+        This asserted ``PENDING`` and ``requests_pending == 1``. That was the
+        pre-P6a contract: "pending" claimed the worker still intended to run it,
+        which is false the moment the budget is spent. Live consequence: 490
+        requests skipped for budget, 490 left queued, and the run could not
+        finalise at all.
+
+        The budget is still respected — only one upstream call happens, and the
+        skip counter still reports it. What changed is the row's terminal state
+        and the reason it carries.
+        """
         first = Movie.objects.create(tmdb_id=911, title="First", year=2020)
         second = Movie.objects.create(tmdb_id=912, title="Second", year=2021)
         self._request(first, RefreshPriority.NEW)
@@ -709,15 +722,20 @@ class DrainTests(TestCase):
             call.args[0].tmdb_id
             for call in self.refresh_service.refresh_content.call_args_list
         ]
+        # The budget is honoured exactly as before: one call, not two.
         self.assertEqual(refreshed, [911])
         self.assertEqual(summary["refreshed"], 1)
         self.assertEqual(summary["remaining_budget"], 0)
         self.assertEqual(summary["skipped_budget_exhausted"], 1)
-        self.assertEqual(summary["requests_pending"], 1)
         self.assertEqual(
-            RefreshRequest.objects.get(movie=second).status,
-            RefreshRequestStatus.PENDING,
+            summary["blocked_by_reason"][BlockedReason.QUOTA_EXHAUSTED], 1
         )
+        # And the unrun request is settled rather than left queued.
+        self.assertEqual(summary["requests_pending"], 0)
+        settled = RefreshRequest.objects.get(movie=second)
+        self.assertEqual(settled.status, RefreshRequestStatus.BLOCKED)
+        self.assertEqual(settled.blocked_reason, BlockedReason.QUOTA_EXHAUSTED)
+        self.assertIsNotNone(settled.completed_at)
 
     def _stale_backlog_and_fresh_event(self):
         """An old BACKGROUND request plus a brand-new RECENTLY_VIEWED one."""
@@ -755,6 +773,13 @@ class DrainTests(TestCase):
         self.assertEqual(summary["requests_pending"], 0)
 
     def test_fairness_slot_never_overrides_priority_when_budget_is_one(self):
+        """Priority still wins the single unit; the loser settles as blocked.
+
+        The priority half is unchanged and is the point of the test: the
+        high-priority event gets the one unit of budget. Only the loser's
+        terminal state changed — `blocked`/`quota_exhausted` rather than
+        `pending`, because the drain has decided it cannot run this tick.
+        """
         self._stale_backlog_and_fresh_event()
 
         summary = self._run(budget=1)
@@ -762,10 +787,9 @@ class DrainTests(TestCase):
         self.assertEqual(self._refreshed_ids(self.refresh_service), [972])
         self.assertEqual(summary["refreshed"], 1)
         self.assertEqual(summary["skipped_budget_exhausted"], 1)
-        self.assertEqual(
-            RefreshRequest.objects.get(movie__tmdb_id=971).status,
-            RefreshRequestStatus.PENDING,
-        )
+        loser = RefreshRequest.objects.get(movie__tmdb_id=971)
+        self.assertEqual(loser.status, RefreshRequestStatus.BLOCKED)
+        self.assertEqual(loser.blocked_reason, BlockedReason.QUOTA_EXHAUSTED)
 
     def test_fairness_slot_returns_the_unit_when_reserved_request_is_fresh(self):
         backlog = Movie.objects.create(tmdb_id=973, title="FreshBacklog", year=2019)
@@ -789,6 +813,14 @@ class DrainTests(TestCase):
         self.assertEqual(summary["requests_pending"], 0)
 
     def test_rate_limit_is_never_bypassed(self):
+        """Zero upstream calls when the limiter refuses, and no row left queued.
+
+        The contract that matters — the limiter is honoured and no source call
+        is made — is unchanged. Only the requests' terminal state moved: the
+        drain has decided it cannot spend the source, so the rows settle as
+        `blocked`/`quota_exhausted` rather than staying `pending`, which would
+        claim a worker still intended to run them.
+        """
         self.limiter.acquire.side_effect = RateLimitExceeded("daily quota")
         first = Movie.objects.create(tmdb_id=921, title="A", year=2020)
         second = Movie.objects.create(tmdb_id=922, title="B", year=2021)
@@ -799,10 +831,44 @@ class DrainTests(TestCase):
 
         self.assertTrue(summary["rate_limited"])
         self.assertEqual(summary["skipped_rate_limited"], 2)
-        self.assertEqual(summary["refreshed"], 0)
-        self.assertEqual(summary["requests_pending"], 2)
+        # No quota bypass: the limiter refused and not one upstream call was
+        # made. The second source refused again when the sweep reached it, which
+        # is why `attempted` is 2 while `refreshed` stays 0.
         self.refresh_service.refresh_content.assert_not_called()
         self.limiter.acquire.assert_called_once()  # stop after first refusal
+
+        # The queue drain settles the row it can actually reach; the other is
+        # filtered out in SQL by the anti-starvation exclusion, so only the
+        # settlement boundary can close it. Both end up terminal either way, and
+        # neither is left queued.
+        self.assertEqual(summary["requests_drained"], 1)
+        self.assertEqual(
+            summary["blocked_by_reason"][BlockedReason.QUOTA_EXHAUSTED], 1
+        )
+        self.assertEqual(summary["requests_pending"], 1, "one row awaits the boundary")
+
+        # Exactly one of the two rows is settled by the drain; the other is excluded
+        # in SQL by the anti-starvation filter and is therefore owned by the
+        # settlement boundary instead — that half is covered in
+        # test_refresh_failure_settles.py, where requests carry a run's batch,
+        # because `settle_unexecutable_requests` deliberately scopes to a run
+        # and these queue-only rows belong to no run.
+        rows = {
+            row.status
+            for row in RefreshRequest.objects.filter(movie__in=[first, second])
+        }
+        self.assertEqual(
+            rows, {RefreshRequestStatus.BLOCKED, RefreshRequestStatus.PENDING}
+        )
+        self.assertEqual(
+            RefreshRequest.objects.filter(
+                movie__in=[first, second],
+                status=RefreshRequestStatus.BLOCKED,
+                blocked_reason=BlockedReason.QUOTA_EXHAUSTED,
+            ).count(),
+            1,
+            "the settled row must record why it could not run",
+        )
 
     def test_upfront_exhausted_quota_blocks_the_drain(self):
         self.limiter.remaining.return_value = 0

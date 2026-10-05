@@ -723,15 +723,58 @@ def _drain_one(
     if _is_spent(scope_limiter):
         summary.note_rate_limited_source(source)
         summary.skipped_rate_limited += 1
+        # Settled for the same reason as the run-budget branch below: the
+        # worker has decided this cannot execute now, so it must not stay
+        # queued. Without this a source whose own daily budget is spent
+        # accumulated a pending backlog that no tick could ever clear.
+        request.settle(
+            RefreshRequestStatus.BLOCKED,
+            blocked_reason=BlockedReason.QUOTA_EXHAUSTED,
+        )
+        summary.blocked_by_reason[BlockedReason.QUOTA_EXHAUSTED] = (
+            summary.blocked_by_reason.get(BlockedReason.QUOTA_EXHAUSTED, 0) + 1
+        )
+        summary.requests_drained += 1
         return rate_limit_hit
 
     if source == DEFAULT_SOURCE_SLUG and rate_limit_hit:
         summary.note_rate_limited_source(source)
         summary.skipped_rate_limited += 1
+        request.settle(
+            RefreshRequestStatus.BLOCKED,
+            blocked_reason=BlockedReason.QUOTA_EXHAUSTED,
+        )
+        summary.blocked_by_reason[BlockedReason.QUOTA_EXHAUSTED] = (
+            summary.blocked_by_reason.get(BlockedReason.QUOTA_EXHAUSTED, 0) + 1
+        )
+        summary.requests_drained += 1
         return rate_limit_hit
 
     if summary.remaining_budget <= 0:
+        # Settled as `blocked`, not skipped-and-left-queued.
+        #
+        # Leaving it pending is the pre-P6a defect wearing a different hat: the
+        # worker has decided this request cannot execute right now, and queued
+        # means "the worker intends to execute this", which is now false. On the
+        # live 191-title watchlist this path skipped 490 requests and left them
+        # all queued, so the run could not finalise — the invariant raised,
+        # the worker caught it and recorded `failed`, and the run ended terminal
+        # with 426 pending requests. Exactly the state P6a exists to prevent.
+        #
+        # Note this is independent of `is_policy_metered`. That predicate answers
+        # "should this source take part in the metered ladder"; a budget answers
+        # "can this request execute now". A free collector has a budget too, and
+        # when it is spent the request is legitimately `quota_exhausted` — it
+        # becomes runnable at the next reset.
+        request.settle(
+            RefreshRequestStatus.BLOCKED,
+            blocked_reason=BlockedReason.QUOTA_EXHAUSTED,
+        )
         summary.skipped_budget_exhausted += 1
+        summary.blocked_by_reason[BlockedReason.QUOTA_EXHAUSTED] = (
+            summary.blocked_by_reason.get(BlockedReason.QUOTA_EXHAUSTED, 0) + 1
+        )
+        summary.requests_drained += 1
         return rate_limit_hit
 
     try:

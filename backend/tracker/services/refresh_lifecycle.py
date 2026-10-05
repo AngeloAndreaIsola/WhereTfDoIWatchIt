@@ -71,6 +71,7 @@ from ..models import (
     AvailabilityRefresh,
     AvailabilityRefreshStatus,
     AvailabilityRefreshType,
+    AvailabilityResolutionReason,
     BlockedReason,
     RefreshRequest,
     RefreshRequestStatus,
@@ -138,20 +139,69 @@ class AvailabilityRefreshLifecycle:
         )
         return refresh
 
-    @staticmethod
     def fail(refresh: AvailabilityRefresh, error: str = "") -> AvailabilityRefresh:
         """Record a fatal, run-level failure.
 
-        The only path to ``FAILED`` besides "every source failed". An
-        exception inside one source's fetch must not come through here.
+        The run-level failure path, and the only route to ``FAILED`` that means
+        "the refresh itself broke". A single source's fetch failing must never
+        arrive here.
+
+        **Settles before it terminates.** The invariant P6a established applies
+        to *every* terminal status, FAILED included:
+
+            terminal refresh
+                => zero queued/running requests
+                => zero queued/running source rows
+                => finished_at IS NOT NULL
+
+        This function used to stamp ``FAILED`` unconditionally, which meant the
+        worker's exception handler could produce precisely the state the
+        invariant forbids. It happened in production: run 8's tick raised
+        ``UnsettledWorkError`` because 563 requests were still queued, the
+        handler caught it, called this, and recorded ``failed`` with 426 pending
+        requests — a terminal run whose terminal status was earned by the very
+        defect the status is supposed to report.
+
+        So: settle what cannot execute, verify nothing is outstanding, then
+        terminate. A failed refresh is full of settled rows — ``done``,
+        ``failed``, ``blocked``/``quota_exhausted`` — and is still ``FAILED``,
+        because settling work is not the same as declaring it successful. The
+        run-level failure is what the status records.
+
+        Refuses rather than records if work remains outstanding afterwards. That
+        guards future callers who bypass the worker's own failure path: a
+        misleading terminal record is worse than a loud failure, because it is
+        believed.
         """
+        settled = settle_unexecutable_requests(refresh)
+        settled_sources = settle_unexecutable_source_rows(refresh)
+
+        outstanding = _outstanding_request_count(refresh)
+        if outstanding:
+            raise UnsettledWorkError(
+                f"cannot fail refresh {refresh.pk}: {outstanding} request(s) are "
+                f"runnable and therefore must be executed or settled first"
+            )
+        unsettled_sources = [
+            f"{r.source}={r.status}"
+            for r in refresh.sources.all()
+            if r.status in NON_TERMINAL_SOURCE_STATUSES
+        ]
+        if unsettled_sources:
+            raise UnsettledWorkError(
+                f"cannot fail refresh {refresh.pk}: unsettled source row(s): "
+                + ", ".join(unsettled_sources)
+            )
+
         refresh.status = AvailabilityRefreshStatus.FAILED
         refresh.finished_at = timezone.now()
         if error:
             refresh.error = error[:2000]
         refresh.save(update_fields=["status", "finished_at", "error"])
         logger.warning(
-            "availability_refresh_failed refresh_id=%s error=%s", refresh.pk, error,
+            "availability_refresh_failed refresh_id=%s error=%s settled=%s "
+            "settled_sources=%s",
+            refresh.pk, error, settled or "{}", settled_sources or "{}",
         )
         return refresh
 
@@ -351,6 +401,88 @@ class UnsettledWorkError(RuntimeError):
     """
 
 
+def settle_unexecutable_source_rows(refresh: AvailabilityRefresh) -> dict[str, int]:
+    """Settle the source rows this run can no longer execute, before finalising.
+
+    The source-level counterpart of :func:`settle_unexecutable_requests`.
+
+    **Settlement is a lifecycle transition, so it only runs on a run that is
+    still live.** A terminal refresh is a historical record: its source rows say
+    what the run left behind at the moment it stopped, and rewriting them would
+    falsify that record. Runs 5, 6 and 8 predate this function and still carry
+    `running` source rows as evidence of the bug it fixes; that evidence is kept
+    on purpose and no migration rewrites it. The guard below makes "historical
+    runs are never repaired" a property of the code rather than a convention
+    someone has to remember.
+
+    **Each settled row records why it is no longer executable**, because that
+    reason is what P6b's result calculation needs and cannot recover afterwards:
+
+    - **out of daily budget** → ``quota_exhausted``. The source was applicable;
+      the run simply may not spend it. Mirrors request-level
+      ``blocked``/``quota_exhausted``.
+    - **no work of this run belonged to it** → ``skipped``. ``running`` was a
+      placeholder the fan-out opened and never needed.
+    - **still runnable** → *left alone*, so ``fail()``/``finalise()`` refuse.
+      Falsely settling it would manufacture terminality by discarding work that
+      could still have executed, which is the failure this boundary exists to
+      prevent.
+
+    A genuine source failure is never reclassified: only ``queued``/``running``
+    rows are considered, so a real ``failed``/``completed`` row keeps its own
+    meaning.
+
+    Scope is strictly this refresh's own rows; other runs are never touched.
+
+    Returns per-source counts for logging and tests.
+    """
+    if refresh.status in TERMINAL_STATUSES:
+        return {}
+
+    rows = [
+        row
+        for row in refresh.sources.all()
+        if row.status in NON_TERMINAL_SOURCE_STATUSES
+    ]
+    if not rows:
+        return {}
+
+    settled: dict[str, int] = {}
+
+    # Budget is per source, so decide once per source rather than per row.
+    exhausted = {row.source for row in rows if _is_out_of_budget(row.source)}
+
+    for row in rows:
+        if row.source in exhausted:
+            target = "quota_exhausted"
+            reason = AvailabilityResolutionReason.QUOTA_EXHAUSTED
+        elif _source_row_had_no_work(refresh, row):
+            target = "skipped"
+            reason = AvailabilityResolutionReason.NOT_CHECKED
+        else:
+            # Genuinely runnable. Left as-is on purpose; the caller refuses.
+            continue
+        row.status = target
+        row.reason = reason
+        row.finished_at = row.finished_at or timezone.now()
+        row.save(update_fields=["status", "reason", "finished_at"])
+        key = f"{row.source}={target}"
+        settled[key] = settled.get(key, 0) + 1
+
+    return settled
+
+
+def _source_row_had_no_work(refresh: AvailabilityRefresh, row) -> bool:
+    """Whether no settled request in this run ever named this source.
+
+    A source row can be ``running`` simply because the fan-out opened it before
+    discovering it had nothing to ask. When the run's requests prove the source
+    was never consulted for any title, ``skipped`` is the truthful terminal state
+    and ``running`` was only ever a placeholder.
+    """
+    return not RefreshRequest.objects.filter(batch=refresh.batch, source=row.source).exists()
+
+
 def settle_unexecutable_requests(refresh: AvailabilityRefresh) -> dict[str, int]:
     """Settle the requests this run can no longer execute, before finalising.
 
@@ -386,6 +518,13 @@ def settle_unexecutable_requests(refresh: AvailabilityRefresh) -> dict[str, int]
 
     # Budget is decided per source, not per request, so a spent source is
     # settled in one statement rather than row by row.
+    #
+    # This also covers a gap the drain cannot reach on its own. `_candidate_batch`
+    # excludes a blocked source in SQL, so a source whose daily budget is spent
+    # never has its requests offered to `_drain_one` at all — the drain's own
+    # budget guard is unreachable for it. Settling here is what stops those rows
+    # accumulating forever: measured on the live watchlist, the drain skipped
+    # 490 budget-exhausted requests and every one of them stayed `pending`.
     exhausted = {
         slug
         for slug in pending.values_list("source", flat=True).distinct()

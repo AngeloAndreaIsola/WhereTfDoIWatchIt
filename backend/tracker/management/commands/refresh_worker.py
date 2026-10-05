@@ -30,6 +30,7 @@ from django.db import connections
 from ...services.bulk_refresh import process_pending_catalogue_refresh
 from ...services.refresh_lifecycle import (
     AvailabilityRefreshLifecycle,
+    UnsettledWorkError,
     claim_active_run,
     reconcile_stale_runs,
 )
@@ -148,9 +149,29 @@ class Command(BaseCommand):
                 if run is not None:
                     # The tick failed as a whole. Mark the run failed rather
                     # than leaving it RUNNING to be mistaken for progress.
-                    AvailabilityRefreshLifecycle.fail(
-                        run, error="worker tick raised"
-                    )
+                    #
+                    # `fail()` settles unexecutable work and then refuses to
+                    # terminate a run that still owns *runnable* work, because
+                    # the terminal invariant applies to FAILED too. So it can
+                    # legitimately raise: that would mean the run genuinely has
+                    # executable backlog, which is not "this refresh failed" —
+                    # it is "this refresh is unfinished and should be resumed".
+                    #
+                    # In that case the run is deliberately left RUNNING for
+                    # `reconcile_stale_runs` / the next tick, and the refusal is
+                    # logged. Swallowing it here is correct: this handler exists
+                    # so one bad tick cannot kill the worker, and letting the
+                    # invariant's exception escape would do exactly that.
+                    try:
+                        AvailabilityRefreshLifecycle.fail(
+                            run, error="worker tick raised"
+                        )
+                    except UnsettledWorkError:
+                        logger.warning(
+                            "refresh_tick_failure_deferred refresh_id=%s: run still "
+                            "owns runnable work, leaving RUNNING for reconciliation",
+                            run.pk,
+                        )
                 sleep_for = interval
             finally:
                 # Drop the connection so a stale one (db restart, idle
