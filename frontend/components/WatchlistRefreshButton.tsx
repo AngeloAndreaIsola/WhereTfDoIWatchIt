@@ -2,222 +2,239 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  getWatchlistRefreshStatus,
-  requestWatchlistRefresh,
+  type AvailabilityRefresh,
+  getAvailabilityRefresh,
+  getAvailabilityRefreshes,
+  startAvailabilityRefresh,
 } from "@/lib/api";
 
-const WATCHLIST_POLL_INTERVAL_MS = 5000;
-const WATCHLIST_POLL_TIMEOUT_MS = 5 * 60 * 1000;
+const POLL_INTERVAL_MS = 5000;
 
-/**
- * Display names for the collectors the status endpoint reports as blocked.
- *
- * Only presentational: the slug is the identity, so an unregistered source
- * simply falls back to its slug rather than disappearing from the message.
- */
-const SOURCE_LABELS: Record<string, string> = {
-  streaming_availability: "Streaming Availability",
-  youtube: "YouTube",
-  mediaset_infinity: "Mediaset Infinity",
-};
+const TERMINAL_STATUSES = new Set(["completed", "partial", "failed"]);
 
-type Phase = "idle" | "queueing" | "polling" | "done" | "timeout" | "error";
+function RefreshTrigger({
+  busy,
+  spinning,
+  label,
+  onClick,
+}: {
+  busy: boolean;
+  spinning: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={busy}
+      title="Re-check every watchlisted title against the streaming catalogues now"
+      className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-xs transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-blue-500 dark:hover:bg-blue-600"
+    >
+      <svg
+        className={`h-4 w-4 ${spinning ? "animate-spin" : ""}`}
+        fill="none"
+        viewBox="0 0 24 24"
+        stroke="currentColor"
+        strokeWidth={2}
+        aria-hidden="true"
+      >
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+        />
+      </svg>
+      {label}
+    </button>
+  );
+}
 
-interface WatchlistRefreshButtonProps {
-  /** Called once when the run finishes (nothing left pending) — reload rows. */
-  onRefreshed?: () => void;
+function CatalogueNote({ slugs }: { slugs: string[] }) {
+  return (
+    <p className="text-xs text-gray-500 dark:text-gray-400">
+      Also syncing {slugs.length} catalogue source{slugs.length === 1 ? "" : "s"}.
+    </p>
+  );
+}
+
+function ErrorNote({ message }: { message: string }) {
+  return (
+    <p role="alert" className="text-xs text-red-600 dark:text-red-400">
+      {message}
+    </p>
+  );
 }
 
 /**
- * "Refresh all availability" for the watchlist page.
+ * "Refresh all availability" — the backend owns the run, this owns nothing.
  *
- * One click queues an explicit refresh for every watchlisted title across
- * every registered title-level source (one enqueue request, never one per
- * title per source) and then polls the status endpoint until the worker
- * drains the queue.
+ * The previous implementation kept the whole lifecycle in React state
+ * (`phase`, `queued`, `refreshed`, `pendingLeft`) and inferred completion from
+ * "no pending requests remain". That is two sources of truth for one question,
+ * and the wrong one: reloading the page mid-run erased every trace of a
+ * refresh that was still going, and a run whose requests had all settled could
+ * be declared finished while the worker had not written a status at all.
  *
- * Progress is counted in **availability checks**, not titles: a run of 29
- * titles over 3 title-level sources is 87 checks, so the label reports
- * `refreshed / total` checks. Progress is scoped to the run's `batch` id, so
- * only this run's backlog counts.
+ * The contract now:
  *
- * Rate limits are per source, so a blocked collector never means the run is
- * stuck: the note names which source is waiting for its quota and says the
- * others are still being checked. The button only reports completion when the
- * backend says nothing is pending — a rate-limited source with pending work is
- * still pending.
+ *     click     -> POST  /api/availability/refresh/   -> { refresh_id }
+ *     poll      -> GET   /api/availability/refreshes/<id>/
+ *     reload    -> GET   /api/availability/refreshes/  -> resume `active`
+ *     terminal  -> stop polling
+ *
+ * Every value rendered below is read back from the server on each poll. The
+ * only thing kept locally is the run *id* — and even that is re-derived from
+ * the list endpoint on mount, so a reload loses nothing. The button never
+ * decides a run has finished; it stops polling because the backend said the
+ * status is terminal.
  */
 export default function WatchlistRefreshButton({
   onRefreshed,
-}: WatchlistRefreshButtonProps) {
-  const [phase, setPhase] = useState<Phase>("idle");
-  const [queued, setQueued] = useState(0);
-  const [total, setTotal] = useState(0);
-  const [refreshed, setRefreshed] = useState(0);
-  const [failed, setFailed] = useState(0);
-  const [pendingLeft, setPendingLeft] = useState(0);
-  const [blockedSources, setBlockedSources] = useState<string[]>([]);
-  const [catalogueCount, setCatalogueCount] = useState(0);
+}: {
+  /** Called once when a run reaches a terminal status — reload rows. */
+  onRefreshed?: () => void;
+}) {
+  const [run, setRun] = useState<AvailabilityRefresh | null>(null);
+  const [starting, setStarting] = useState(false);
+  // Catalogue sources are whole-catalogue syncs, not per-title rows, so they
+  // are not part of the run's own progress. They arrive once with the POST
+  // and are reported from there — the panel renders their steady-state
+  // status separately.
+  const [catalogueQueued, setCatalogueQueued] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  const runRef = useRef(0);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Guards every async continuation against a stale run or an unmount, so a
+  // slow response from an abandoned run cannot overwrite a newer one.
+  const runIdRef = useRef(0);
   const onRefreshedRef = useRef(onRefreshed);
+  const notifiedRef = useRef<number | null>(null);
+
   useEffect(() => {
     onRefreshedRef.current = onRefreshed;
   }, [onRefreshed]);
-  useEffect(
-    () => () => {
-      runRef.current += 1; // invalidate any in-flight poll loop on unmount
-      if (timerRef.current) clearTimeout(timerRef.current);
+
+  const adopt = useCallback((next: AvailabilityRefresh | null) => {
+    setRun(next);
+    // Fire the completion callback exactly once per run, keyed on the run id
+    // rather than on a boolean: two consecutive runs must each notify, and a
+    // re-poll of an already-reported run must not.
+    if (
+      next &&
+      TERMINAL_STATUSES.has(next.status) &&
+      notifiedRef.current !== next.id
+    ) {
+      notifiedRef.current = next.id;
+      onRefreshedRef.current?.();
+    }
+  }, []);
+
+  // Poll one run to a terminal status, then stop.
+  const poll = useCallback(
+    async (id: number) => {
+      const token = runIdRef.current;
+      try {
+        const next = await getAvailabilityRefresh(id);
+        if (runIdRef.current !== token) return; // superseded or unmounted
+        adopt(next);
+        if (!TERMINAL_STATUSES.has(next.status)) {
+          setTimeout(() => {
+            if (runIdRef.current === token) void poll(id);
+          }, POLL_INTERVAL_MS);
+        }
+      } catch {
+        // A failed read is not a failed run. The refresh continues server-side,
+        // so keep polling: the next tick either recovers or reports a real
+        // terminal status. Only the click path surfaces an error to the user.
+        if (runIdRef.current !== token) return;
+        setTimeout(() => {
+          if (runIdRef.current === token) void poll(id);
+        }, POLL_INTERVAL_MS);
+      }
     },
-    []
+    [adopt]
   );
 
-  const schedulePoll = useCallback(
-    (since: number, batch: string, startedAt: number, runId: number) => {
-      timerRef.current = setTimeout(async () => {
-        if (runRef.current !== runId) return;
-        try {
-          const status = await getWatchlistRefreshStatus(since, batch);
-          if (runRef.current !== runId) return;
-          setRefreshed(status.refreshed);
-          setFailed(status.failed);
-          setPendingLeft(status.pending);
-          // Defensive: an older or partial status payload must not blank the
-          // watchlist page — treat a missing list as "nothing blocked".
-          setBlockedSources(status.rate_limited_sources ?? []);
-          // The backend owns the batch total; it is seeded from the enqueue
-          // response and only ever grows as rows settle.
-          setTotal(status.total);
-          if (status.pending === 0) {
-            setPhase("done");
-            onRefreshedRef.current?.();
-            return;
-          }
-        } catch {
-          if (runRef.current !== runId) return;
-          // Transient read failure: the run continues server-side, so keep
-          // retrying until the timeout decides how long we wait.
+  // On mount: resume whatever the backend says is running. This is the whole
+  // point of persisting the run — the page can be reloaded at any moment and
+  // picks the refresh back up.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { active } = await getAvailabilityRefreshes();
+        if (cancelled) return;
+        if (active) {
+          runIdRef.current += 1;
+          adopt(active);
+          if (!TERMINAL_STATUSES.has(active.status)) void poll(active.id);
         }
-        if (Date.now() - startedAt >= WATCHLIST_POLL_TIMEOUT_MS) {
-          setPhase("timeout");
-          return;
-        }
-        schedulePoll(since, batch, startedAt, runId);
-      }, WATCHLIST_POLL_INTERVAL_MS);
-    },
-    []
-  );
+      } catch {
+        // Nothing to resume, and the page's own data load reports any real
+        // failure. Silence here keeps the button from flickering an error on
+        // a page that is otherwise fine.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [adopt, poll]);
 
   const handleClick = useCallback(async () => {
-    const runId = runRef.current + 1;
-    runRef.current = runId;
-    if (timerRef.current) clearTimeout(timerRef.current);
+    runIdRef.current += 1;
+    setStarting(true);
     setError(null);
-    setRefreshed(0);
-    setFailed(0);
-    setPendingLeft(0);
-    setBlockedSources([]);
-    setPhase("queueing");
     try {
-      const result = await requestWatchlistRefresh();
-      if (runRef.current !== runId) return;
-      setCatalogueCount(result.catalogue_queued?.length ?? 0);
-      if (result.queued === 0) {
-        setQueued(0);
-        setTotal(0);
-        setPhase("done");
-        return;
+      const started = await startAvailabilityRefresh();
+      setCatalogueQueued(started.catalogue_queued ?? []);
+      adopt(started.refresh);
+      if (!TERMINAL_STATUSES.has(started.refresh.status)) {
+        void poll(started.refresh_id);
       }
-      setQueued(result.queued);
-      setTotal(result.queued);
-      setPhase("polling");
-      schedulePoll(result.now, result.batch, Date.now(), runId);
     } catch (err) {
-      if (runRef.current !== runId) return;
-      setError(err instanceof Error ? err.message : "Failed to queue refresh");
-      setPhase("error");
+      setError(
+        err instanceof Error ? err.message : "Failed to start availability refresh"
+      );
+    } finally {
+      setStarting(false);
     }
-  }, [schedulePoll]);
+  }, [adopt, poll]);
 
-  const busy = phase === "queueing" || phase === "polling";
-  const label =
-    phase === "queueing"
-      ? "Queueing…"
-      : phase === "polling"
-        ? `Refreshing… ${refreshed}/${total} checks`
-        : phase === "done"
-          ? queued === 0
-            ? "Nothing to refresh"
-            : `✓ Checked ${refreshed} of ${total} availability check${total === 1 ? "" : "s"}`
-          : "Refresh all availability";
+  // One terminality check drives both the disabled state and the label, so
+  // they cannot disagree — the button must never read "idle" while the run is
+  // still going, or show progress for a run that already finished.
+  if (!run) {
+    return (
+      <div className="flex flex-col items-start gap-1">
+        <RefreshTrigger
+          busy={starting}
+          spinning={starting}
+          label="Refresh all availability"
+          onClick={handleClick}
+        />
+        {catalogueQueued.length > 0 && <CatalogueNote slugs={catalogueQueued} />}
+        {error && <ErrorNote message={error} />}
+      </div>
+    );
+  }
 
-  // One exhausted collector is not a stalled run: name it, say the rest are
-  // still moving, and never imply the whole watchlist is waiting.
-  const quotaNote =
-    blockedSources.length > 0
-      ? (() => {
-          const names = blockedSources
-            .map((slug) => SOURCE_LABELS[slug] ?? slug)
-            .join(", ");
-          const waiting = pendingLeft > 0;
-          return waiting
-            ? `${names} quota exhausted — ${pendingLeft} check${pendingLeft === 1 ? "" : "s"} waiting for the reset. Other sources are still being checked.`
-            : `${names} quota exhausted. Other sources are still being checked.`;
-        })()
-      : null;
+  const live = !TERMINAL_STATUSES.has(run.status);
+  const busy = starting || live;
+  const label = starting
+    ? "Queueing…"
+    : live
+      ? `Refreshing… ${run.available_titles}/${run.total_titles} titles`
+      : run.status === "completed"
+        ? `✓ Refreshed ${run.total_titles} titles`
+        : run.status === "partial"
+          ? `✓ Refreshed — ${run.unknown_titles} still unknown`
+          : "Refresh failed";
 
   return (
     <div className="flex flex-col items-start gap-1">
-      <button
-        type="button"
-        onClick={handleClick}
-        disabled={busy}
-        title="Re-check every watchlisted title against the streaming catalogues now"
-        className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-xs transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-blue-500 dark:hover:bg-blue-600"
-      >
-        <svg
-          className={`h-4 w-4 ${busy ? "animate-spin" : ""}`}
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          strokeWidth={2}
-          aria-hidden="true"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-          />
-        </svg>
-        {label}
-      </button>
-      {phase === "polling" && (
-        <p className="text-xs text-gray-500 dark:text-gray-400" role="status">
-          {quotaNote ??
-            (failed > 0
-              ? `${failed} failed — the rest keep draining in the background.`
-              : `Checked in the background — rate limits may spread this over time.`)}
-          {catalogueCount > 0 &&
-            ` Also syncing ${catalogueCount} catalogue source${catalogueCount === 1 ? "" : "s"}.`}
-        </p>
-      )}
-      {phase === "timeout" && (
-        <p className="text-xs text-gray-500 dark:text-gray-400" role="status">
-          {quotaNote ?? (
-            <>
-              Refresh still running in the background — check back in a few
-              minutes.
-            </>
-          )}
-        </p>
-      )}
-      {error && (
-        <p role="alert" className="text-xs text-red-600 dark:text-red-400">
-          {error}
-        </p>
-      )}
+      <RefreshTrigger busy={busy} spinning={busy} label={label} onClick={handleClick} />
+      {catalogueQueued.length > 0 && <CatalogueNote slugs={catalogueQueued} />}
+      {error && <ErrorNote message={error} />}
     </div>
   );
 }

@@ -3,53 +3,98 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, act, fireEvent } from "@testing-library/react";
 import WatchlistRefreshButton from "@/components/WatchlistRefreshButton";
 
+/**
+ * The button is now a *display layer* over persisted backend state, so these
+ * tests mock the three endpoints the real component calls and assert that it
+ * never decides anything the backend has not already decided.
+ *
+ * Two contracts this file deliberately no longer tests, because the
+ * implementation they covered is gone:
+ *
+ * - "completion == nothing pending". Completion is now the backend's
+ *   `status`, read straight off the run. Inferring it client-side from request
+ *   counts is what let a GET mark a run finished.
+ * - batch-scoped poll URLs. Polling is by run id; the batch is the backend's
+ *   business.
+ *
+ * The concerns underneath them survive and *are* still tested: a transient
+ * read failure must not end the run, a blocked source must never be rendered
+ * as "unavailable", and the completion callback must fire exactly once.
+ */
 const api = vi.hoisted(() => ({
-  requestWatchlistRefresh: vi.fn(),
-  getWatchlistRefreshStatus: vi.fn(),
+  startAvailabilityRefresh: vi.fn(),
+  getAvailabilityRefresh: vi.fn(),
+  getAvailabilityRefreshes: vi.fn(),
 }));
 
 vi.mock("@/lib/api", () => api);
 
-const BATCH = "11111111-1111-4111-8111-111111111111";
-const SOURCES = ["streaming_availability", "youtube", "mediaset_infinity"];
+const RUN_ID = 184;
 
-function queued(now = 1000, count = 3, catalogue_queued: string[] = []) {
+function run(
+  status: "queued" | "running" | "completed" | "partial" | "failed",
+  overrides: Record<string, unknown> = {}
+) {
   return {
-    queued: count,
-    total_watchlist: count,
-    now,
-    batch: BATCH,
-    sources: SOURCES,
-    checks_per_title: SOURCES.length,
-    catalogue_queued,
+    id: RUN_ID,
+    type: "watchlist",
+    status,
+    batch: "11111111-1111-4111-8111-111111111111",
+    created_at: "2026-10-05T14:00:00Z",
+    started_at: "2026-10-05T14:00:01Z",
+    finished_at: null,
+    is_active: !["completed", "partial", "failed"].includes(status),
+    total_titles: 191,
+    completed_titles: 100,
+    available_titles: 100,
+    unavailable_titles: 0,
+    unknown_titles: 91,
+    failed_titles: 0,
+    unknown_reasons: { quota_exhausted: 91 },
+    sources: [
+      {
+        source: "watchmode",
+        label: "Watchmode",
+        tier: 1,
+        kind: "title",
+        status: "completed",
+        reason: "",
+        total: 191,
+        completed: 191,
+        successful: 191,
+        failed: 0,
+        unknown: 0,
+        queued: 0,
+      },
+      {
+        source: "streaming_availability",
+        label: "Streaming Availability",
+        tier: 2,
+        kind: "title",
+        status: "quota_exhausted",
+        reason: "quota_exhausted" as const,
+        total: 191,
+        completed: 0,
+        successful: 0,
+        failed: 0,
+        unknown: 0,
+        queued: 191,
+      },
+    ],
+    ...overrides,
   };
 }
 
-/**
- * A status payload in the source-aware shape: counts are availability checks
- * (titles x sources), not titles, and rate limiting names the blocked source.
- */
-function status(
-  pending: number,
-  refreshed: number,
-  failed = 0,
-  rate_limited_sources: string[] = []
-) {
+function started(status: "queued" | "running" = "queued", catalogue: string[] = []) {
   return {
-    total: pending + refreshed + failed,
-    pending,
-    refreshed,
-    failed,
-    titles: 3,
-    checks_per_title: SOURCES.length,
-    since: 1000,
-    batch: BATCH,
-    rate_limited: rate_limited_sources.length > 0,
-    rate_limited_sources,
-    source_quotas: rate_limited_sources.length
-      ? { streaming_availability: { remaining: 0, limit: 100, exhausted: true } }
-      : { streaming_availability: { remaining: 100, limit: 100, exhausted: false } },
-    resets_at: 2000,
+    refresh_id: RUN_ID,
+    batch: "11111111-1111-4111-8111-111111111111",
+    now: 1000,
+    queued: 764,
+    total_watchlist: 191,
+    sources: ["watchmode", "streaming_availability"],
+    catalogue_queued: catalogue,
+    refresh: run(status),
   };
 }
 
@@ -59,71 +104,138 @@ async function flush() {
   }
 }
 
-describe("WatchlistRefreshButton", () => {
+describe("WatchlistRefreshButton — persisted refresh lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    api.getAvailabilityRefreshes.mockResolvedValue({ results: [], active: null });
   });
 
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  it("queues once, polls progress, and reports completion", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    const onRefreshed = vi.fn();
-    api.requestWatchlistRefresh.mockResolvedValue(queued());
-    api.getWatchlistRefreshStatus
-      .mockResolvedValueOnce(status(3, 0))
-      .mockResolvedValueOnce(status(1, 2))
-      .mockResolvedValueOnce(status(0, 3));
-
-    render(<WatchlistRefreshButton onRefreshed={onRefreshed} />);
-    await flush();
-
-    fireEvent.click(screen.getByRole("button"));
-    await flush();
-
-    expect(api.requestWatchlistRefresh).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole("button")).toBeDisabled();
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5000);
-    });
-    expect(api.getWatchlistRefreshStatus).toHaveBeenCalledWith(1000, BATCH);
-    expect(screen.getByRole("button")).toHaveTextContent("Refreshing… 0/3 checks");
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5000);
-    });
-    expect(screen.getByRole("button")).toHaveTextContent("Refreshing… 2/3 checks");
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5000);
-    });
-    expect(screen.getByRole("button")).toHaveTextContent(
-      "✓ Checked 3 of 3 availability checks"
-    );
-    expect(screen.getByRole("button")).not.toBeDisabled();
-    expect(onRefreshed).toHaveBeenCalledTimes(1);
-    expect(api.requestWatchlistRefresh).toHaveBeenCalledTimes(1);
-  });
-
-  it("reports an empty queue without polling", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    api.requestWatchlistRefresh.mockResolvedValue(queued(1000, 0));
+  it("POSTs and starts polling the returned run id", async () => {
+    api.startAvailabilityRefresh.mockResolvedValue(started());
+    api.getAvailabilityRefresh.mockResolvedValue(run("running"));
 
     render(<WatchlistRefreshButton />);
     await flush();
+
     fireEvent.click(screen.getByRole("button"));
     await flush();
 
-    expect(screen.getByRole("button")).toHaveTextContent("Nothing to refresh");
-    expect(api.getWatchlistRefreshStatus).not.toHaveBeenCalled();
-    expect(screen.getByRole("button")).not.toBeDisabled();
+    expect(api.startAvailabilityRefresh).toHaveBeenCalledTimes(1);
+    // Polling keys off the id the server handed back, never a locally
+    // invented batch or timestamp.
+    expect(api.getAvailabilityRefresh).toHaveBeenCalledWith(RUN_ID);
   });
 
-  it("surfaces an enqueue failure and returns to idle", async () => {
-    api.requestWatchlistRefresh.mockRejectedValue(new Error("queue down"));
+  it("resumes an active run on mount, with no click", async () => {
+    // The reload case: the page mounts, the user has not pressed anything, and
+    // the refresh the previous page load started is still being displayed.
+    api.getAvailabilityRefreshes.mockResolvedValue({
+      results: [],
+      active: run("running"),
+    });
+    api.getAvailabilityRefresh.mockResolvedValue(run("running"));
+
+    render(<WatchlistRefreshButton />);
+    await flush();
+
+    expect(api.startAvailabilityRefresh).not.toHaveBeenCalled();
+    expect(api.getAvailabilityRefresh).toHaveBeenCalledWith(RUN_ID);
+    expect(screen.getByRole("button")).toBeDisabled();
+    expect(screen.getByText(/Refreshing/)).toBeInTheDocument();
+  });
+
+  it("stays idle when the backend has no active run", async () => {
+    render(<WatchlistRefreshButton />);
+    await flush();
+
+    expect(screen.getByRole("button")).not.toBeDisabled();
+    expect(screen.getByText("Refresh all availability")).toBeInTheDocument();
+    expect(api.getAvailabilityRefresh).not.toHaveBeenCalled();
+  });
+
+  it("never declares completion the backend has not declared", async () => {
+    api.getAvailabilityRefreshes.mockResolvedValue({
+      results: [],
+      active: run("running"),
+    });
+    // Every source is finished and nothing is pending — but the backend still
+    // says RUNNING, so the button must too. This is the exact case the old
+    // implementation got wrong by inferring completion from counts.
+    api.getAvailabilityRefresh.mockResolvedValue(
+      run("running", { completed_titles: 191, available_titles: 163, unknown_titles: 0 })
+    );
+
+    render(<WatchlistRefreshButton />);
+    await flush();
+
+    expect(screen.getByText(/Refreshing/)).toBeInTheDocument();
+    expect(screen.queryByText(/Refreshed/)).toBeNull();
+  });
+
+  it("stops polling once the backend reports a terminal status", async () => {
+    api.getAvailabilityRefreshes.mockResolvedValue({
+      results: [],
+      active: run("running"),
+    });
+    api.getAvailabilityRefresh.mockResolvedValue(run("completed"));
+
+    const onRefreshed = vi.fn();
+    render(<WatchlistRefreshButton onRefreshed={onRefreshed} />);
+    await flush();
+
+    expect(screen.getByText(/Refreshed 191 titles/)).toBeInTheDocument();
+    expect(screen.getByRole("button")).not.toBeDisabled();
+    expect(onRefreshed).toHaveBeenCalledTimes(1);
+
+    const callsAtTerminal = api.getAvailabilityRefresh.mock.calls.length;
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    // Terminal means terminal: no further polls scheduled.
+    expect(api.getAvailabilityRefresh.mock.calls.length).toBe(callsAtTerminal);
+  });
+
+  it("fires the completion callback once per run, not once per poll", async () => {
+    api.getAvailabilityRefreshes.mockResolvedValue({
+      results: [],
+      active: run("running"),
+    });
+    api.getAvailabilityRefresh.mockResolvedValue(run("completed"));
+
+    const onRefreshed = vi.fn();
+    render(<WatchlistRefreshButton onRefreshed={onRefreshed} />);
+    await flush();
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    expect(onRefreshed).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps polling through a transient read failure", async () => {
+    api.getAvailabilityRefreshes.mockResolvedValue({
+      results: [],
+      active: run("running"),
+    });
+    api.getAvailabilityRefresh
+      .mockRejectedValueOnce(new Error("network blip"))
+      .mockResolvedValue(run("running"));
+
+    render(<WatchlistRefreshButton />);
+    await flush();
+
+    // The button must not conclude anything from a failed read — it neither
+    // reports an error to the user nor stops following the run.
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByText(/Refreshing/)).toBeInTheDocument();
+  });
+
+  it("surfaces an enqueue failure, which is the one real user error", async () => {
+    api.startAvailabilityRefresh.mockRejectedValue(new Error("queue down"));
 
     render(<WatchlistRefreshButton />);
     await flush();
@@ -131,94 +243,26 @@ describe("WatchlistRefreshButton", () => {
     await flush();
 
     expect(screen.getByRole("alert")).toHaveTextContent("queue down");
-    expect(screen.getByRole("button")).not.toBeDisabled();
-    expect(screen.getByRole("button")).toHaveTextContent(
-      "Refresh all availability"
-    );
-    expect(api.getWatchlistRefreshStatus).not.toHaveBeenCalled();
   });
 
-  it("keeps retrying through transient poll failures", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    const onRefreshed = vi.fn();
-    api.requestWatchlistRefresh.mockResolvedValue(queued());
-    api.getWatchlistRefreshStatus
-      .mockRejectedValueOnce(new Error("read failed"))
-      .mockResolvedValueOnce(status(1, 2))
-      .mockResolvedValueOnce(status(0, 3));
-
-    render(<WatchlistRefreshButton onRefreshed={onRefreshed} />);
-    await flush();
-    fireEvent.click(screen.getByRole("button"));
-    await flush();
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5000);
+  it("reports a partial run as partial, with the unknown count", async () => {
+    api.getAvailabilityRefreshes.mockResolvedValue({
+      results: [],
+      active: run("running"),
     });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5000);
-    });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5000);
-    });
-
-    expect(screen.getByRole("button")).toHaveTextContent(
-      "✓ Checked 3 of 3 availability checks"
+    api.getAvailabilityRefresh.mockResolvedValue(
+      run("partial", { unknown_titles: 24, unknown_reasons: { quota_exhausted: 24 } })
     );
-    expect(onRefreshed).toHaveBeenCalledTimes(1);
-  });
-
-  it("stops polling at the timeout and hands back the button", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    api.requestWatchlistRefresh.mockResolvedValue(queued());
-    api.getWatchlistRefreshStatus.mockResolvedValue(status(2, 1));
 
     render(<WatchlistRefreshButton />);
     await flush();
-    fireEvent.click(screen.getByRole("button"));
-    await flush();
 
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5 * 60 * 1000 + 5000);
-    });
-
-    expect(
-      screen.getByText(/Refresh still running in the background/)
-    ).toBeInTheDocument();
-    expect(screen.getByRole("button")).not.toBeDisabled();
-    expect(screen.getByRole("button")).toHaveTextContent(
-      "Refresh all availability"
-    );
+    expect(screen.getByText(/24 still unknown/)).toBeInTheDocument();
   });
 
-  it("scopes every poll to the run's batch id", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    api.requestWatchlistRefresh.mockResolvedValue(queued());
-    api.getWatchlistRefreshStatus.mockResolvedValue(status(1, 2));
-
-    render(<WatchlistRefreshButton />);
-    await flush();
-    fireEvent.click(screen.getByRole("button"));
-    await flush();
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5000);
-    });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5000);
-    });
-
-    expect(api.getWatchlistRefreshStatus).toHaveBeenCalledTimes(2);
-    for (const call of api.getWatchlistRefreshStatus.mock.calls) {
-      expect(call).toEqual([1000, BATCH]);
-    }
-  });
-
-  it("names the blocked source instead of implying the whole run is blocked", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    api.requestWatchlistRefresh.mockResolvedValue(queued());
-    api.getWatchlistRefreshStatus.mockResolvedValue(
-      status(2, 1, 0, ["streaming_availability"])
+  it("mentions queued catalogue syncs", async () => {
+    api.startAvailabilityRefresh.mockResolvedValue(
+      started("queued", ["justwatch", "tubi"])
     );
 
     render(<WatchlistRefreshButton />);
@@ -226,100 +270,22 @@ describe("WatchlistRefreshButton", () => {
     fireEvent.click(screen.getByRole("button"));
     await flush();
 
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5000);
-    });
-    // The blocked collector is named, and the note explicitly says the rest
-    // keep going.
-    expect(
-      screen.getByText(/Streaming Availability quota exhausted/)
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/2 checks waiting for the reset/)
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/Other sources are still being checked/)
-    ).toBeInTheDocument();
-    // The old wording claimed every title was waiting.
-    expect(screen.queryByText(/Daily API quota used/)).not.toBeInTheDocument();
-
-    // Past the timeout the source-specific note still wins over the generic
-    // "still running" copy.
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
-    });
-    expect(
-      screen.queryByText(/Refresh still running in the background/)
-    ).not.toBeInTheDocument();
-    expect(
-      screen.getByText(/Streaming Availability quota exhausted/)
-    ).toBeInTheDocument();
+    expect(screen.getByText(/Also syncing 2 catalogue sources/)).toBeInTheDocument();
   });
 
-  it("a rate-limited source with pending work is NOT completion", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    const onRefreshed = vi.fn();
-    api.requestWatchlistRefresh.mockResolvedValue(queued());
-    api.getWatchlistRefreshStatus.mockResolvedValue(
-      status(2, 1, 0, ["streaming_availability"])
-    );
-
-    render(<WatchlistRefreshButton onRefreshed={onRefreshed} />);
-    await flush();
-    fireEvent.click(screen.getByRole("button"));
-    await flush();
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5000);
+  it("a quota-blocked source is never worded as 'not available'", async () => {
+    api.getAvailabilityRefreshes.mockResolvedValue({
+      results: [],
+      active: run("running"),
     });
+    api.getAvailabilityRefresh.mockResolvedValue(run("running"));
 
-    // rate_limited is true, but pending > 0: the batch is not done, so the
-    // button must not report success or reload the page.
-    expect(screen.getByRole("button")).toBeDisabled();
-    expect(screen.getByRole("button")).toHaveTextContent("Refreshing…");
-    expect(onRefreshed).not.toHaveBeenCalled();
-  });
-
-  it("reports completion only when nothing is pending", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    const onRefreshed = vi.fn();
-    api.requestWatchlistRefresh.mockResolvedValue(queued());
-    api.getWatchlistRefreshStatus.mockResolvedValue(
-      status(0, 3, 0, ["streaming_availability"])
-    );
-
-    render(<WatchlistRefreshButton onRefreshed={onRefreshed} />);
-    await flush();
-    fireEvent.click(screen.getByRole("button"));
+    const { container } = render(<WatchlistRefreshButton />);
     await flush();
 
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5000);
-    });
-
-    // No pending work left: complete even though the source is still capped.
-    expect(screen.getByRole("button")).not.toBeDisabled();
-    expect(onRefreshed).toHaveBeenCalledTimes(1);
-  });
-
-  it("mentions queued catalogue syncs while polling", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    api.requestWatchlistRefresh.mockResolvedValue(
-      queued(1000, 3, ["cbc_gem"])
-    );
-    api.getWatchlistRefreshStatus.mockResolvedValue(status(1, 2));
-
-    render(<WatchlistRefreshButton />);
-    await flush();
-    fireEvent.click(screen.getByRole("button"));
-    await flush();
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5000);
-    });
-
-    expect(
-      screen.getByText(/Also syncing 1 catalogue source/)
-    ).toBeInTheDocument();
+    expect(container.textContent).not.toMatch(/not available/i);
+    // The run reports 91 unknown, and says why, without ever claiming
+    // absence.
+    expect(container.textContent).not.toMatch(/unavailable \d/i);
   });
 });

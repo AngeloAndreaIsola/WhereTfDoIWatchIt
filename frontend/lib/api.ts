@@ -591,6 +591,14 @@ export interface AvailabilityRefresh {
   failed_titles: number;
   unknown_reasons: Partial<Record<AvailabilityResolutionReason, number>>;
   sources: AvailabilitySourceRow[];
+  /** The run's frozen policy, so the UI never has to guess which ladder
+   *  produced these numbers. */
+  policy?: {
+    roles?: Record<string, string>;
+    groups?: Record<string, string[]>;
+    consult_metered_only_when_unresolved?: boolean;
+    ladder?: string;
+  };
 }
 
 export interface AvailabilityRefreshListResponse {
@@ -620,6 +628,48 @@ export async function getAvailabilityRefresh(
     const body = await res.json().catch(() => ({}));
     throw new Error(
       body.error ?? `Failed to read refresh #${id} (${res.status})`
+    );
+  }
+  return res.json();
+}
+
+/** Response from POSTing a new refresh. */
+export interface AvailabilityRefreshStartResponse {
+  /** The id to poll and to resume from after a reload. */
+  refresh_id: number;
+  batch: string;
+  now: number;
+  /** Requests this run owns. Already policy-filtered — with the metered gate
+   *  on, a resolved title contributes no metered row at all. */
+  queued: number;
+  total_watchlist: number;
+  /** Sources this run may consult, union across its titles. */
+  sources: string[];
+  /** Catalogue sources queued in the same action. */
+  catalogue_queued: string[] | null;
+  refresh: AvailabilityRefresh;
+}
+
+/**
+ * POST a watchlist availability refresh.
+ *
+ * Enqueue-only, like the endpoint it replaces: this never contacts a provider
+ * and returns as soon as the queue is written. The returned `refresh_id` is
+ * the handle for everything after — polling, reload recovery and the terminal
+ * state all key off it, so the client's own "am I refreshing?" state is only
+ * ever a cache of the backend's.
+ *
+ * Note the URL is `availability/refresh/` (singular) while the reads are
+ * `availability/refreshes/` (plural): the singular path is the POST that
+ * *creates* a run, the plural collection is the GET that lists them. Posting
+ * to the plural path answers 405, not 404.
+ */
+export async function startAvailabilityRefresh(): Promise<AvailabilityRefreshStartResponse> {
+  const res = await fetch("/api/availability/refresh/", { method: "POST" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(
+      body.error ?? `Failed to start availability refresh (${res.status})`
     );
   }
   return res.json();
