@@ -90,6 +90,10 @@ from .services.bulk_refresh import (
     title_level_source_slugs,
 )
 from .services.availability_reads import get_local_offers
+from .services.availability_metrics import (
+    WINDOW_DAYS,
+    availability_metrics as collect_availability_metrics,
+)
 from .services.availability_report import (
     active_refresh,
     build_run_summary,
@@ -1740,6 +1744,44 @@ def availability_report(request):
             "resets_at": _next_utc_midnight_ts(),
         },
         status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["GET"])
+def availability_metrics(request):
+    """GET /api/availability/metrics/ — seven-day operational metrics.
+
+    Separate from ``/api/availability/report/`` on purpose. The report answers
+    "what is true about availability right now, per title"; this answers "how
+    has the refresh machinery itself been behaving lately". Mixing them would
+    make the report heavier for every consumer just to serve a dashboard.
+
+    Entirely observational: ``availability_metrics`` reads persisted state and
+    makes no upstream call, so this endpoint is safe to poll and costs no quota.
+
+    Three presentation rules, applied here rather than left to the dashboard,
+    because a client that cannot see the difference will render it wrongly:
+
+    * ``null`` means *no data*, ``0`` means *measured zero*. A window with no
+      runs reports ``completion_rate: null``, not ``0.0``.
+    * Sources that never executed are returned with ``never_executed: true`` and
+      null counters, so "never ran" is never confused with "ran and found
+      nothing".
+    * Refresh failure is read from ``status='failed'`` alone, never inferred
+      from unknown-title counts.
+    """
+    days_param = request.GET.get("days")
+    days = WINDOW_DAYS
+    if days_param:
+        try:
+            days = max(1, min(int(days_param), 90))
+        except (TypeError, ValueError):
+            return Response(
+                {"error": f"days must be an integer; got {days_param!r}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+    return Response(
+        collect_availability_metrics(days=days), status=status.HTTP_200_OK
     )
 
 

@@ -45,6 +45,11 @@ urlpatterns = [
     # reconstruct a long-running refresh instead of losing it.
     path("availability/report/", views.availability_report, name="availability-report"),
     path(
+        "availability/metrics/",
+        views.availability_metrics,
+        name="availability-metrics",
+    ),
+    path(
         "availability/report/<int:tmdb_id>/",
         views.availability_title_report,
         name="availability-title-report",
