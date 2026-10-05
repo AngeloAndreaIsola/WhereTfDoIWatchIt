@@ -403,12 +403,60 @@ def _offered_providers(movie_ids: list[int]) -> dict[int, set[str]]:
     return out
 
 
-def _last_checked_per_source(movie_ids: list[int]) -> dict[tuple[int, str], object]:
-    """``{(movie_id, source): newest Offer.last_seen}``.
+def _last_attempted_per_source(movie_ids: list[int], batch=None) -> dict[tuple[int, str], object]:
+    """``{(movie_id, source): when the source last touched this title}``.
 
-    The "checked 14:32" stamp in the per-source breakdown. Derived from
-    ``Offer.last_seen`` because that is the only observation of "this source
-    looked at this title" that survives a request row being re-stamped.
+    Distinct from :func:`_last_checked_per_source`, which reads
+    ``Offer.last_seen``. The difference is the whole point:
+
+    - ``Offer.last_seen`` only exists when the source **found** something.
+      A source that answered "no offer at any provider" writes no Offer row,
+      so reading offers alone renders a completed, no-offer check as
+      ``checked_at: never`` — which reads as "we never asked", the exact
+      opposite of what happened.
+    - a request row exists for every attempt, answered or not.
+
+    So ``checked_at`` (did we get an answer, and when) and
+    ``last_attempted_at`` (did we even try, and when) are separate facts, and
+    collapsing them is what made the per-title UI misleading during live
+    testing: 24 quota-blocked titles and 4 permanent 404s both displayed
+    ``never`` next to a source that had in fact been consulted.
+
+    Uses the newest row per ``(title, source)`` — the same
+    newest-wins rule as :func:`_terminal_status_evidence` — and stamps
+    ``completed_at`` where the row finished, since that is the moment the
+    answer arrived. A still-pending row falls back to ``requested_at``, which
+    is the honest "we queued this and have not had an answer yet".
+    """
+    by_tmdb: dict[int, list[int]] = defaultdict(list)
+    for movie_id, tmdb_id in _movie_tmdb_map(movie_ids).items():
+        if tmdb_id:
+            by_tmdb[tmdb_id].append(movie_id)
+
+    newest: dict[tuple[int, str], tuple[object, int]] = {}
+    qs = RefreshRequest.objects.filter(movie_id__in=movie_ids)
+    if batch is not None:
+        qs = qs.filter(batch=batch)
+    for movie_id, src, requested_at, completed_at, pk in qs.values_list(
+        "movie_id", "source", "requested_at", "completed_at", "id"
+    ).iterator():
+        key = (movie_id, src or DEFAULT_SOURCE_SLUG)
+        stamp = completed_at or requested_at
+        candidate = (stamp, pk)
+        prev = newest.get(key)
+        if prev is None or candidate[0] is not None and (prev[0] is None or candidate[0] >= prev[0]):
+            newest[key] = candidate
+    return {key: value[0] for key, value in newest.items() if value[0] is not None}
+
+
+def _last_checked_per_source(movie_ids: list[int]) -> dict[tuple[int, str], object]:
+    """``{(movie_id, source): newest Offer.last_seen}`` — an *answer* stamp.
+
+    Only meaningful for a source that produced an offer. For a source that
+    answered "nothing here" there is no Offer row, so this returns nothing and
+    ``checked_at`` is correctly ``None`` while ``last_attempted_at`` carries
+    the real attempt time. See :func:`_last_attempted_per_source` for why
+    these must not be merged.
     """
     by_tmdb: dict[int, list[int]] = defaultdict(list)
     for movie_id, tmdb_id in _movie_tmdb_map(movie_ids).items():
@@ -584,6 +632,7 @@ def title_source_report(movie_ids, batch=None) -> dict[int, dict]:
     offers_by_source, active_offer_movies = _active_offers_by_source(movie_ids)
     providers = _offered_providers(movie_ids)
     last_checked = _last_checked_per_source(movie_ids)
+    last_attempted = _last_attempted_per_source(movie_ids, batch=batch)
     blocked = {s: (source_quota(s) or {}) for s in title_slugs}
     exhausted = {s for s, q in blocked.items() if q.get("exhausted")}
 
@@ -621,7 +670,14 @@ def title_source_report(movie_ids, batch=None) -> dict[int, dict]:
                     "status": status_out,
                     "reason": reason,
                     "available": reason == AvailabilityResolutionReason.RESOLVED,
+                    # Two separate stamps. `checked_at` needs an *answer*
+                    # (Offer.last_seen), `last_attempted_at` only needs an
+                    # attempt (any request row). A completed no-offer check has
+                    # the second and not the first; a quota-blocked source has
+                    # neither, and displaying "never" next to it would imply we
+                    # ignored the title rather than ran out of budget.
                     "checked_at": last_checked.get((movie_id, slug)),
+                    "last_attempted_at": last_attempted.get((movie_id, slug)),
                 }
             )
         for slug in out_of_band:
@@ -639,6 +695,7 @@ def title_source_report(movie_ids, batch=None) -> dict[int, dict]:
                     "reason": AvailabilityResolutionReason.RESOLVED,
                     "available": True,
                     "checked_at": last_checked.get((movie_id, slug)),
+                    "last_attempted_at": last_attempted.get((movie_id, slug)),
                 }
             )
 

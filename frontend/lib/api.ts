@@ -506,7 +506,13 @@ export interface AvailabilitySourceRow {
   offers?: number;
   last_sync?: string | null;
   quota?: { remaining: number; limit: number; exhausted: boolean } | null;
+  /** When the source produced an *answer* (an offer was found). Null when the
+   *  source answered "nothing here" — absence of an offer is not absence of a
+   *  check, which is why this is separate from `last_attempted_at`. */
   checked_at?: string | null;
+  /** When the source was last consulted at all, answered or not. Null only
+   *  when no request row exists, i.e. genuinely never attempted. */
+  last_attempted_at?: string | null;
   available?: boolean;
 }
 

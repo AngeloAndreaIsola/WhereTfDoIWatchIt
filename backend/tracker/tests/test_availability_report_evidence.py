@@ -207,6 +207,133 @@ class CurrentRunScopingTests(TestCase):
         self.assertEqual(row["total"], 1)
 
 
+class AttemptedVersusCheckedStampTests(TestCase):
+    """P3 — "never asked" and "asked, got nothing" are different facts.
+
+    ``checked_at`` used to be derived only from ``Offer.last_seen``, so it was
+    populated **only when a source found an offer**. A source that answered
+    "nothing at any provider" writes no Offer row, and therefore rendered as
+    ``checked_at: never`` — which reads as "we never consulted this source",
+    the opposite of what happened.
+
+    On the live 191-title watchlist this mislabelled 45 completed no-offer
+    checks. Since that number is evidence the UI uses while debugging, the
+    mislabelling would have made the per-title view untrustworthy in exactly
+    the situation it exists to explain.
+    """
+
+    def setUp(self):
+        clear_quota()
+        self.batch = uuid.uuid4()
+        self.movie = make_movie(900, "Stamped")
+
+    def _row(self, source, **kwargs):
+        """The single title-level row for one source."""
+        report = ar.title_source_report([self.movie.pk], batch=self.batch)
+        rows = [r for r in report[self.movie.pk]["sources"] if r["source"] == source]
+        self.assertEqual(len(rows), 1, f"expected one {source} row")
+        return rows[0]
+
+    def _request(self, source, status, *, error="", completed=True):
+        return RefreshRequest.objects.create(
+            movie=self.movie,
+            source=source,
+            status=status,
+            last_error=error,
+            batch=self.batch,
+            completed_at=timezone.now() if completed else None,
+        )
+
+    def test_a_completed_no_offer_check_is_not_reported_as_never(self):
+        """The regression itself: consulted, answered nothing, got a stamp."""
+        self._request("mediaset_infinity", RefreshRequestStatus.DONE)
+
+        row = self._row("mediaset_infinity")
+        self.assertEqual(row["status"], "completed")
+        self.assertEqual(row["reason"], R.NO_OFFER)
+        # No offer exists, so there is no *answer* stamp...
+        self.assertIsNone(row["checked_at"])
+        # ...but it must not read as "never attempted".
+        self.assertIsNotNone(
+            row["last_attempted_at"],
+            "a completed check reported `never` attempted",
+        )
+
+    def test_a_source_that_produced_an_offer_carries_both_stamps(self):
+        self._request("mediaset_infinity", RefreshRequestStatus.DONE)
+        make_offer(self.movie, "mediaset_infinity")
+
+        row = self._row("mediaset_infinity")
+        self.assertIsNotNone(row["checked_at"], "an offer was found, so checked_at")
+        self.assertIsNotNone(row["last_attempted_at"])
+
+    def test_an_unattempted_source_is_genuinely_never(self):
+        """No request row at all — now `never` is the truthful answer."""
+        row = self._row("mediaset_infinity")
+        self.assertIsNone(row["checked_at"])
+        self.assertIsNone(
+            row["last_attempted_at"],
+            "with no request row the source must not look attempted",
+        )
+
+    def test_a_quota_blocked_pending_request_reports_attempted_never_checked(self):
+        """Queued-but-unanswered is not an answer, and not a failure either.
+
+        This is the case the user asked to get right *before* the browser
+        test: a request the worker never got to must not be dressed up as a
+        completed check, and must not claim an answer it never received.
+        """
+        self._request("streaming_availability", RefreshRequestStatus.PENDING, completed=False)
+
+        row = self._row("streaming_availability")
+        self.assertIsNone(row["checked_at"])
+        self.assertIsNotNone(
+            row["last_attempted_at"],
+            "a queued request was made and should be timestamped",
+        )
+        self.assertNotEqual(row["reason"], R.NO_OFFER)
+
+    def test_a_permanent_404_is_attempted_and_not_answered(self):
+        self._request(
+            "watchmode",
+            RefreshRequestStatus.FAILED,
+            error="UpstreamTitleNotFound: no record of the film",
+        )
+
+        row = self._row("watchmode")
+        self.assertEqual(row["reason"], R.TITLE_NOT_FOUND)
+        self.assertIsNone(row["checked_at"])
+        self.assertIsNotNone(row["last_attempted_at"])
+
+    def test_the_newest_row_wins_so_a_recheck_does_not_show_a_stale_stamp(self):
+        """A title refreshed twice shows the latest attempt, not the oldest."""
+        self._request("youtube", RefreshRequestStatus.DONE)
+        older = self._row("youtube")["last_attempted_at"]
+
+        RefreshRequest.objects.filter(movie=self.movie, source="youtube").update(
+            completed_at=None
+        )
+        self._request("youtube", RefreshRequestStatus.DONE)
+
+        self.assertGreater(
+            self._row("youtube")["last_attempted_at"], older,
+            "a later check must not report the earlier attempt's time",
+        )
+
+    def test_the_stamp_is_scoped_to_the_reported_batch(self):
+        """A run's report must not borrow another run's attempt history."""
+        self._request("youtube", RefreshRequestStatus.DONE)
+
+        other_batch = ar.title_source_report([self.movie.pk], batch=uuid.uuid4())
+        other_row = [
+            r for r in other_batch[self.movie.pk]["sources"] if r["source"] == "youtube"
+        ][0]
+        self.assertIsNone(
+            other_row["last_attempted_at"],
+            "history from a different run must not count as this run's attempt",
+        )
+
+
 class RepeatedRequestRowTests(TestCase):
     """Regression: per-source totals counted *rows*, not distinct titles.
 
