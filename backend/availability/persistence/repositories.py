@@ -15,6 +15,14 @@ from ..models import (
     build_offer_identity,
     build_provider_content_identity,
 )
+from ..services.normalize import truncate_field
+
+#: Column width for a provider-native content id, read from the model itself so
+#: a future migration widening the column is picked up automatically instead of
+#: silently leaving this clamp behind at the old width.
+PROVIDER_CONTENT_ID_MAX_LENGTH = ProviderContent._meta.get_field(
+    "provider_content_id"
+).max_length
 
 
 class InactiveSyncError(Exception):
@@ -41,6 +49,12 @@ class OfferRepository:
             raise ValueError(
                 "Season number cannot be negative"
             )
+
+        # Offers carry the same provider-native id on the same-width column, so
+        # they take the same clamp (see truncate_field).
+        provider_content_id = truncate_field(
+            provider_content_id, PROVIDER_CONTENT_ID_MAX_LENGTH
+        )
 
         identity = build_offer_identity(
             provider.slug,
@@ -460,6 +474,14 @@ class ProviderContentRepository:
             raise ValueError("Season number cannot be negative")
 
         now = now or timezone.now()
+        # Clamp to our column width: the provider's own id is unbounded (a
+        # Pluto TV replay slug measured 125 chars vs a 100-char column) and an
+        # over-length value aborts the whole catalogue refresh, not just its own
+        # row. Applied before the identity is built so the key stays consistent
+        # with what is actually stored.
+        provider_content_id = truncate_field(
+            provider_content_id, PROVIDER_CONTENT_ID_MAX_LENGTH
+        )
         identity = build_provider_content_identity(
             provider.slug, provider_content_id, content_type,
             season_number, episode_number,
@@ -525,6 +547,13 @@ class MappingRepository:
         row can never weaken the manual/high-confidence guarantees.
         """
         now = now or timezone.now()
+        # Same column clamp as ProviderContentRepository.upsert — this id is the
+        # same provider string on a same-width column, so it needs the same
+        # guard, and clamping it before the lookup keeps the query and the
+        # stored value in agreement.
+        provider_content_id = truncate_field(
+            provider_content_id, PROVIDER_CONTENT_ID_MAX_LENGTH
+        )
         existing = ContentMapping.objects.filter(
             provider=provider, provider_content_id=provider_content_id
         ).first()

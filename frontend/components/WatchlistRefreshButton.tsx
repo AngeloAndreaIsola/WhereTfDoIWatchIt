@@ -9,6 +9,18 @@ import {
 const WATCHLIST_POLL_INTERVAL_MS = 5000;
 const WATCHLIST_POLL_TIMEOUT_MS = 5 * 60 * 1000;
 
+/**
+ * Display names for the collectors the status endpoint reports as blocked.
+ *
+ * Only presentational: the slug is the identity, so an unregistered source
+ * simply falls back to its slug rather than disappearing from the message.
+ */
+const SOURCE_LABELS: Record<string, string> = {
+  streaming_availability: "Streaming Availability",
+  youtube: "YouTube",
+  mediaset_infinity: "Mediaset Infinity",
+};
+
 type Phase = "idle" | "queueing" | "polling" | "done" | "timeout" | "error";
 
 interface WatchlistRefreshButtonProps {
@@ -19,24 +31,32 @@ interface WatchlistRefreshButtonProps {
 /**
  * "Refresh all availability" for the watchlist page.
  *
- * One click queues an explicit refresh for every watchlisted title (one
- * enqueue request, never one per title) and then polls the status endpoint
- * until the worker drains the queue — rate limits and the daily budget stay
- * authoritative, so a large queue simply keeps draining across ticks, over
- * several days if needed. Progress is scoped to the run's `batch` id, so
- * only this run's backlog counts; when the shared daily quota runs out the
- * note switches to "quota used, resumes tomorrow" instead of a generic
- * timeout. On completion `onRefreshed` lets the page reload the report.
+ * One click queues an explicit refresh for every watchlisted title across
+ * every registered title-level source (one enqueue request, never one per
+ * title per source) and then polls the status endpoint until the worker
+ * drains the queue.
+ *
+ * Progress is counted in **availability checks**, not titles: a run of 29
+ * titles over 3 title-level sources is 87 checks, so the label reports
+ * `refreshed / total` checks. Progress is scoped to the run's `batch` id, so
+ * only this run's backlog counts.
+ *
+ * Rate limits are per source, so a blocked collector never means the run is
+ * stuck: the note names which source is waiting for its quota and says the
+ * others are still being checked. The button only reports completion when the
+ * backend says nothing is pending — a rate-limited source with pending work is
+ * still pending.
  */
 export default function WatchlistRefreshButton({
   onRefreshed,
 }: WatchlistRefreshButtonProps) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [queued, setQueued] = useState(0);
+  const [total, setTotal] = useState(0);
   const [refreshed, setRefreshed] = useState(0);
   const [failed, setFailed] = useState(0);
   const [pendingLeft, setPendingLeft] = useState(0);
-  const [quotaExhausted, setQuotaExhausted] = useState(false);
+  const [blockedSources, setBlockedSources] = useState<string[]>([]);
   const [catalogueCount, setCatalogueCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
@@ -64,7 +84,12 @@ export default function WatchlistRefreshButton({
           setRefreshed(status.refreshed);
           setFailed(status.failed);
           setPendingLeft(status.pending);
-          setQuotaExhausted(status.rate_limited);
+          // Defensive: an older or partial status payload must not blank the
+          // watchlist page — treat a missing list as "nothing blocked".
+          setBlockedSources(status.rate_limited_sources ?? []);
+          // The backend owns the batch total; it is seeded from the enqueue
+          // response and only ever grows as rows settle.
+          setTotal(status.total);
           if (status.pending === 0) {
             setPhase("done");
             onRefreshedRef.current?.();
@@ -93,7 +118,7 @@ export default function WatchlistRefreshButton({
     setRefreshed(0);
     setFailed(0);
     setPendingLeft(0);
-    setQuotaExhausted(false);
+    setBlockedSources([]);
     setPhase("queueing");
     try {
       const result = await requestWatchlistRefresh();
@@ -101,10 +126,12 @@ export default function WatchlistRefreshButton({
       setCatalogueCount(result.catalogue_queued?.length ?? 0);
       if (result.queued === 0) {
         setQueued(0);
+        setTotal(0);
         setPhase("done");
         return;
       }
       setQueued(result.queued);
+      setTotal(result.queued);
       setPhase("polling");
       schedulePoll(result.now, result.batch, Date.now(), runId);
     } catch (err) {
@@ -119,16 +146,27 @@ export default function WatchlistRefreshButton({
     phase === "queueing"
       ? "Queueing…"
       : phase === "polling"
-        ? `Refreshing… ${refreshed}/${queued}`
+        ? `Refreshing… ${refreshed}/${total} checks`
         : phase === "done"
           ? queued === 0
             ? "Nothing to refresh"
-            : `✓ Refreshed ${refreshed} title${refreshed === 1 ? "" : "s"}`
+            : `✓ Checked ${refreshed} of ${total} availability check${total === 1 ? "" : "s"}`
           : "Refresh all availability";
 
-  const quotaNote = quotaExhausted
-    ? `Daily API quota used — ${pendingLeft} title${pendingLeft === 1 ? "" : "s"} resume when it resets at 00:00 UTC. They show 🔵 until checked.`
-    : null;
+  // One exhausted collector is not a stalled run: name it, say the rest are
+  // still moving, and never imply the whole watchlist is waiting.
+  const quotaNote =
+    blockedSources.length > 0
+      ? (() => {
+          const names = blockedSources
+            .map((slug) => SOURCE_LABELS[slug] ?? slug)
+            .join(", ");
+          const waiting = pendingLeft > 0;
+          return waiting
+            ? `${names} quota exhausted — ${pendingLeft} check${pendingLeft === 1 ? "" : "s"} waiting for the reset. Other sources are still being checked.`
+            : `${names} quota exhausted. Other sources are still being checked.`;
+        })()
+      : null;
 
   return (
     <div className="flex flex-col items-start gap-1">

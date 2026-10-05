@@ -354,21 +354,27 @@ export async function requestAvailabilityRefresh(
 /**
  * Queue an explicit availability refresh for every watchlisted title.
  *
- * Enqueue-only: one local pass creates at most one pending refresh request
- * per title (deduplicated against anything already queued, freshness
- * bypassed) and answers immediately — the refresh worker drains the queue
- * under the shared rate limit and daily budget. Progress is read back with
+ * Enqueue-only: one local pass creates one pending refresh request per
+ * (title, source) across every registered title-level source — deduplicated
+ * against anything already queued for that same scope, freshness bypassed —
+ * and answers immediately. The refresh worker drains the queue under each
+ * source's own rate limit. Progress is read back with
  * `getWatchlistRefreshStatus`, using the returned `now` as the `since`
  * anchor and `batch` to scope every count to *this* run's backlog, so
  * requests queued elsewhere never inflate or deflate it.
  */
 export interface WatchlistRefreshQueuedResponse {
+  /** Source-scoped checks this batch now owns (titles x sources). */
   queued: number;
   total_watchlist: number;
   /** Server epoch seconds captured when the run started. */
   now: number;
   /** Id of the batch this run stamped onto every request it touched. */
   batch: string;
+  /** Title-level sources the run fanned out over. */
+  sources: string[];
+  /** How many source checks each watchlisted title received. */
+  checks_per_title: number;
   /** Catalogue-capable sources that were stale and got queued too. */
   catalogue_queued?: string[];
 }
@@ -391,25 +397,42 @@ export async function requestWatchlistRefresh(): Promise<WatchlistRefreshQueuedR
 }
 
 /**
- * Progress of one bulk watchlist refresh run: requests still queued plus
- * those completed — `pending` scoped to `batch` when given (this run's own
- * backlog), `refreshed`/`failed` scoped by `since` (or the batch). Also
- * reports the shared daily API quota: at ~100 calls/day a large watchlist
- * drains over several days, so the UI can say "quota used, resumes
- * tomorrow" instead of implying a failure.
+ * Progress of one bulk watchlist refresh run.
+ *
+ * The unit of work is a **source check**, not a title: Refresh All queues one
+ * request per (title, source) across every registered title-level source, so
+ * `total`/`pending`/`refreshed`/`failed` all count checks — `29` titles over
+ * `3` sources is `87` checks. `titles` and `checks_per_title` let the UI state
+ * both honestly instead of implying one check per title.
+ *
+ * Rate limiting is per source, so `rate_limited_sources` names the blocked
+ * collector(s) and `rate_limited` only means "at least one source is waiting
+ * for its quota" — never "the whole refresh is blocked". `source_quotas`
+ * carries the remaining budget per *metered* source; sources with no declared
+ * daily quota are absent rather than reported with a fabricated number.
  */
 export interface WatchlistRefreshStatusResponse {
+  /** Total source-scoped checks this batch owns. */
+  total: number;
   pending: number;
   refreshed: number;
   failed: number;
+  /** Distinct watchlist titles covered by the batch (0 without a batch). */
+  titles: number;
+  /** Source checks per title for this batch (0 without a batch). */
+  checks_per_title: number;
   since: number;
   batch: string | null;
-  /** True when the shared daily quota is exhausted for now. */
+  /** True when at least one source is waiting for its daily quota. */
   rate_limited: boolean;
-  /** Calls left today (0 when rate_limited). */
-  quota_remaining: number;
-  quota_limit: number;
-  /** Epoch seconds of the next UTC midnight — when the quota resets. */
+  /** Sources whose own daily budget is currently spent. */
+  rate_limited_sources: string[];
+  /** Remaining budget per metered source. Unmetered sources are omitted. */
+  source_quotas: Record<
+    string,
+    { remaining: number; limit: number; exhausted: boolean }
+  >;
+  /** Epoch seconds of the next UTC midnight — when daily quotas reset. */
   resets_at: number;
 }
 

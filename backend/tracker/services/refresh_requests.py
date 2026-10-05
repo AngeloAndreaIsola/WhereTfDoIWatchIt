@@ -20,6 +20,14 @@ Contracts:
 - **Requests are idempotent.** At most one pending request exists per
   (movie, source scope), enforced by a partial unique constraint; repeated
   events collapse into the same row and may only raise its priority.
+- **Source is an execution dimension, not a priority.** A request names the
+  source it must be checked against (``availability.Source.slug``, resolved
+  through :func:`resolve_request_source`), and the drain looks that source's
+  collector *and* that source's own rate limiter up from the registry. The
+  two dimensions stay orthogonal: Refresh All fans one title out over every
+  registered title-level source while every request keeps the *same*
+  ``EXPLICIT`` priority, and a source that has spent its daily budget defers
+  only its own requests instead of blocking the queue.
 - **Draining reuses the existing refresh infrastructure**: the same
   ``RateLimiter``/daily budget, the same per-source freshness policy
   (``availability.freshness``, evaluated for the request's own source scope —
@@ -43,8 +51,10 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import uuid
+from typing import Optional
 
 from django.db import IntegrityError
+from django.db.models import Q
 from django.utils import timezone
 
 from availability.models import Offer
@@ -61,8 +71,15 @@ from ..models import (
     RefreshRun,
     WatchlistItem,
 )
-from .bulk_refresh import BulkRefreshSummary, is_stale
-from .rate_limit import RateLimitExceeded, RateLimiter
+from .bulk_refresh import (
+    BulkRefreshSummary,
+    _is_spent,
+    is_stale,
+    permanently_absent_scopes,
+    title_level_source_slugs,
+)
+from .rate_limit import RateLimitExceeded, RateLimiter, rate_limiter_for
+from .streaming_api import UpstreamTitleNotFound
 from .watchability import RefreshState
 
 logger = logging.getLogger(__name__)
@@ -70,6 +87,26 @@ logger = logging.getLogger(__name__)
 # A request is retried at most this many times before it is marked failed
 # and left alone (a later event may legitimately open a fresh request).
 MAX_ATTEMPTS = 3
+
+# How many *executable* pending requests one drain reads as candidates, in
+# priority order. Bounded on purpose: Refresh All fans out one request per
+# (title, source), so a watchlist run can queue hundreds of rows, and an
+# unbounded read would pull the entire backlog into memory on every worker
+# tick (every 5s).
+#
+# This limit is a memory/scan guard, **not** a fairness boundary: the candidate
+# query already excludes the sources that are out of budget (see
+# ``drain_refresh_requests``), so an exhausted source can never fill the
+# window and hide executable work behind it. That exclusion — not the size of
+# this constant — is what guarantees a rate-limited source cannot starve the
+# queue; the constant only bounds how much of the table one tick materializes.
+CANDIDATE_SCAN_LIMIT = 500
+
+# How many bounded pages one drain may read. The page size already bounds
+# memory; this bounds total work per tick, so even a pathological queue cannot
+# hold a worker tick open. With the worker's per-tick budget (10 by default)
+# this is never the binding constraint — the budget is spent long before.
+MAX_SCAN_PAGES = 4
 
 # After a completed attempt (done or failed), the same (movie, source) scope
 # is left alone for this long even when the title still reads as stale. A
@@ -145,6 +182,31 @@ def request_availability_refresh(
         if not has_canonical_offers(movie):
             effective_priority = min(priority, RefreshPriority.NEW)
 
+        # Adopt a pending legacy default-scope row instead of queueing beside
+        # it. ``""`` and ``streaming_availability`` resolve to the same source
+        # (``resolve_request_source``), so creating a second pending row would
+        # make the worker execute the same scope twice — spending the quota
+        # twice for one logical check and double-counting it in the batch.
+        # Re-stamping the legacy row to its explicit slug is what makes the
+        # migration happen naturally on the next explicit refresh, without a
+        # data backfill.
+        legacy_scope = ""
+        if source == DEFAULT_SOURCE_SLUG:
+            pending_scopes = RefreshRequest.objects.filter(
+                movie=movie, status=RefreshRequestStatus.PENDING
+            ).values_list("source", flat=True)
+            if legacy_scope in pending_scopes and DEFAULT_SOURCE_SLUG not in pending_scopes:
+                legacy = RefreshRequest.objects.get(
+                    movie=movie, source=legacy_scope,
+                    status=RefreshRequestStatus.PENDING,
+                )
+                legacy.source = DEFAULT_SOURCE_SLUG
+                legacy.priority = min(legacy.priority, effective_priority)
+                if batch is not None:
+                    legacy.batch = batch
+                legacy.save(update_fields=["source", "priority", "batch"])
+                return legacy
+
         try:
             request, created = RefreshRequest.objects.get_or_create(
                 movie=movie,
@@ -197,12 +259,22 @@ def refresh_states_for(movie_ids) -> dict[int, str]:
 
     ``DONE``/``FAILED`` rows are this evidence: they must outlive the queue
     (do not prune them) or titles revert to "unknown".
+
+    **Every source scope counts, not just the legacy ``source=""`` one.**
+    Refresh All fans a title out to one request per title-level source, so a
+    title that has been checked is normally carried by an *explicit* slug row
+    (``streaming_availability``, ``youtube``, ``mediaset_infinity``) and never
+    by a ``""`` row at all. Filtering on the literal ``""`` therefore reported
+    ``never_checked`` for almost every real title, so a title that had actually
+    been fetched still rendered ⚪ Unknown. This mirrors what the refresh-status
+    endpoint already does: it aggregates all scopes with no ``source`` filter
+    (``views.watchlist_refresh_status``) precisely because a run owns one row
+    per (title, source).
     """
     movie_ids = list(movie_ids)
     per_movie: dict[int, set[str]] = {}
     for movie_id, state in RefreshRequest.objects.filter(
         movie_id__in=movie_ids,
-        source="",
     ).values_list("movie_id", "status"):
         per_movie.setdefault(movie_id, set()).add(state)
 
@@ -225,18 +297,36 @@ def request_watchlist_refresh(
     *,
     priority: int = RefreshPriority.EXPLICIT,
     if_stale: bool = False,
+    sources: Optional[list[str]] = None,
 ) -> dict:
     """Queue an availability refresh for every title on a user's watchlist.
 
     Bulk counterpart of the detail-page refresh button and the enqueue side
     of the watchlist's "Refresh all availability" action. One local pass over
     the watchlist calls the regular ``request_availability_refresh`` per
-    title, so deduplication (one pending row per title), priority upgrades,
-    the never-fetched bump and the swallow-on-failure contract stay exactly
-    the per-title ones — repeated clicks and titles already queued by an
-    event collapse into the same rows instead of multiplying them. No
-    network I/O happens here; the queue is drained later by the existing
-    ``refresh_worker`` under the shared rate limit and daily budget.
+    (title, source), so deduplication, priority upgrades, the never-fetched
+    bump and the swallow-on-failure contract stay exactly the per-title ones —
+    repeated clicks and titles already queued by an event collapse into the
+    same rows instead of multiplying them. No network I/O happens here; the
+    queue is drained later by the existing ``refresh_worker`` under the
+    per-source rate limits and the shared run budget.
+
+    **Source fan-out.** One title becomes one request *per applicable
+    registered title-level source* (``sources`` defaults to
+    :func:`~tracker.services.bulk_refresh.title_level_source_slugs`), so a
+    watchlist of N titles over S title-level sources queues N x S requests
+    instead of N requests that all funneled into Streaming Availability and
+    inherited its 100/day cap. Every request is explicitly source-scoped:
+    the empty ``source=""`` scope stays reserved for single-title events and
+    for requests written before this change (the drain still resolves them,
+    see :func:`resolve_request_source`).
+
+    ``sources=None`` means "force every applicable title-level source" —
+    the explicit semantics the button wants. Passing ``sources`` explicitly
+    (or ``if_stale=True``) selects only the stale ones, which is the
+    background/selective path. Catalogue-capable sources are never in either
+    list: they have no title-targeted fetch, so they keep going through
+    ``request_catalogue_refresh`` / ``process_catalogue_refresh``.
 
     ``if_stale=False`` by default (mirroring the single-title explicit
     endpoint): a deliberate "refresh everything" must check every title even
@@ -249,27 +339,36 @@ def request_watchlist_refresh(
     *this* run's backlog rather than every pending request in the system.
 
     Returns ``{"queued": <rows this batch now owns>,
-    "total_watchlist": <titles covered>, "batch": <uuid str>}``.
+    "total_watchlist": <titles covered>, "sources": <slugs fanned out over>,
+    "checks_per_title": <title-level sources>, "batch": <uuid str>}``.
     """
     batch = uuid.uuid4()
+    applicable = list(sources) if sources is not None else title_level_source_slugs()
     movie_ids = list(
         WatchlistItem.objects.filter(user_id=user_id)
         .values_list("movie_id", flat=True)
         .distinct()
     )
     for _movie_id, movie in Movie.objects.in_bulk(movie_ids).items():
-        request_availability_refresh(
-            movie, priority=priority, if_stale=if_stale, batch=batch
-        )
+        for source in applicable:
+            request_availability_refresh(
+                movie,
+                priority=priority,
+                if_stale=if_stale,
+                source=source,
+                batch=batch,
+            )
     queued = RefreshRequest.objects.filter(
         movie_id__in=movie_ids,
-        source="",
+        source__in=applicable,
         status=RefreshRequestStatus.PENDING,
         batch=batch,
     ).count()
     return {
         "queued": queued,
         "total_watchlist": len(movie_ids),
+        "sources": applicable,
+        "checks_per_title": len(applicable),
         "batch": str(batch),
     }
 
@@ -325,11 +424,51 @@ def request_catalogue_refresh(sources) -> CatalogueRefreshRequest:
     return marker
 
 
+def resolve_request_source(request) -> str:
+    """The source slug a request must be executed against.
+
+    Every freshly queued request carries an explicit slug (Refresh All fans
+    out per source), so this is normally just ``request.source``. The empty
+    ``source=""`` scope is the legacy/default one and resolves to
+    ``DEFAULT_SOURCE_SLUG`` — the same behavior ``is_stale`` already had,
+    which keeps requests written before this change working unchanged
+    during migration instead of needing a data backfill.
+
+    One function owns this mapping so the drain, the limiter lookup and the
+    collector lookup can never disagree about which source a request is for.
+    """
+    return request.source or DEFAULT_SOURCE_SLUG
+
+
 def _service_for_scope(source: str, default_service: AvailabilityRefreshService):
-    """Resolve the refresh service for a request's source scope."""
+    """Resolve the refresh service for a request's source scope.
+
+    Registry-driven: the slug goes through ``source_registry``, never an
+    ``if source == ...`` branch, so a newly registered collector needs no
+    change here.
+    """
     if not source:
         return default_service
     return AvailabilityRefreshService(source=source_registry.get(source))
+
+
+def _limiter_for_scope(
+    source: str,
+    default_limiter: RateLimiter | None,
+    overrides: dict[str, RateLimiter] | None = None,
+) -> RateLimiter:
+    """The limiter that governs *source*.
+
+    An injected override wins (tests, and the worker passing its own default
+    limiter); otherwise the source's declared budget decides, via
+    :func:`rate_limiter_for`. Only sources that declare a quota are ever
+    metered, so an unmetered collector can never be reported as blocked.
+    """
+    if overrides and source in overrides:
+        return overrides[source]
+    if default_limiter is not None and source == DEFAULT_SOURCE_SLUG:
+        return default_limiter
+    return rate_limiter_for(source)
 
 
 def _finish(request: RefreshRequest, status: RefreshRequestStatus) -> None:
@@ -346,6 +485,7 @@ def _drain_one(
     service: AvailabilityRefreshService,
     limiter,
     rate_limit_hit: bool,
+    limiter_overrides: dict[str, RateLimiter] | None = None,
 ) -> bool:
     """Process one pending request under the run's guards.
 
@@ -354,8 +494,7 @@ def _drain_one(
     source's own window, so a title that became fresh meanwhile is settled as
     ``done`` without spending budget (no external call) while a scope that is
     still stale for its own source still refreshes — then rate-limit capacity
-    (``limiter.acquire()``), which priority never bypasses, then the remaining
-    run budget.
+    for **this request's own source**, then the remaining run budget.
 
     The one guard an ``EXPLICIT`` request does not take: the freshness
     short-circuit. Every other priority settles fresh scopes without
@@ -366,16 +505,25 @@ def _drain_one(
     the run budget are never bypassed.
 
     Outcomes:
-
     - refreshed / already fresh -> ``done``;
     - refresh raised -> ``attempts`` + ``last_error`` recorded, retried on a
       later run up to ``MAX_ATTEMPTS`` times, then ``failed`` permanently;
     - budget or rate limit exhausted -> stays ``pending`` for the next run.
+      A rate-limited request has **not** failed: it is waiting for its
+      source's quota to reset, and it is the only reason that source appears
+      in ``summary.rate_limited_sources``.
 
-    Returns the (possibly updated) ``rate_limit_hit`` flag: once the
-    limiter refuses, every later request of this run skips its acquire.
+    ``rate_limit_hit`` refers to the *default* source's limiter only (the
+    caller's injected limiter): it may short-circuit default-scope requests,
+    but never one belonging to another source.
+
+    Returns the (possibly updated) default-source ``rate_limit_hit`` flag:
+    once that limiter refuses, every later default-scope request of this run
+    skips its acquire.
     """
     movie = request.movie
+    source = resolve_request_source(request)
+    scope_limiter = _limiter_for_scope(source, limiter, limiter_overrides)
 
     # Freshness is free: settle fresh scopes without touching the budget —
     # unless the user explicitly asked for a new check right now.
@@ -388,7 +536,37 @@ def _drain_one(
         summary.requests_drained += 1
         return rate_limit_hit
 
-    if rate_limit_hit:
+    # A scope the upstream is known not to carry costs nothing to skip: the
+    # title answered 404, so re-checking it can only re-earn the same 404 while
+    # spending metered budget. Settled, never retried. An EXPLICIT request
+    # still falls through — the user's manual "check now" may be probing
+    # whether the catalogue has since picked the title up.
+    if (
+        request.priority != RefreshPriority.EXPLICIT
+        and resolve_request_source(request) in permanently_absent_scopes(movie.tmdb_id)
+    ):
+        request.attempts += 1
+        request.last_error = (
+            f"UpstreamTitleNotFound: {request.last_error or 'title absent upstream'}"
+        )
+        request.status = RefreshRequestStatus.FAILED
+        request.completed_at = timezone.now()
+        request.save(
+            update_fields=["attempts", "last_error", "status", "completed_at"]
+        )
+        summary.skipped_upstream_missing += 1
+        summary.requests_drained += 1
+        return rate_limit_hit
+
+    # This source's own budget. A blocked source defers only its own
+    # requests; the caller keeps scanning for sources that can still run.
+    if _is_spent(scope_limiter):
+        summary.note_rate_limited_source(source)
+        summary.skipped_rate_limited += 1
+        return rate_limit_hit
+
+    if source == DEFAULT_SOURCE_SLUG and rate_limit_hit:
+        summary.note_rate_limited_source(source)
         summary.skipped_rate_limited += 1
         return rate_limit_hit
 
@@ -397,12 +575,38 @@ def _drain_one(
         return rate_limit_hit
 
     try:
-        limiter.acquire()
+        scope_limiter.acquire()
         _service_for_scope(request.source, service).refresh_content(movie)
     except RateLimitExceeded:
-        summary.rate_limited = True
+        summary.note_rate_limited_source(source)
         summary.skipped_rate_limited += 1
-        return True
+        return source == DEFAULT_SOURCE_SLUG or rate_limit_hit
+    except UpstreamTitleNotFound as exc:
+        # The upstream catalogue has no such title: a permanent answer, not a
+        # fault. Fail on the first attempt — retrying can only re-earn the same
+        # 404 while spending metered budget, which is exactly the waste this
+        # exception exists to prevent. Marked ``failed`` (never left pending),
+        # so the title reads ⚪ "last check failed" instead of 🔵 forever.
+        #
+        # Counted as ``skipped_upstream_missing``, not ``errors``: the run did
+        # not break, so a healthy run must not look broken in its own summary.
+        # The failed row is also the durable evidence that stops the background
+        # sweep re-fetching this title forever (see
+        # ``bulk_refresh.permanently_absent_scopes``).
+        summary.skipped_upstream_missing += 1
+        request.attempts += 1
+        request.last_error = f"{type(exc).__name__}: {exc}"
+        request.status = RefreshRequestStatus.FAILED
+        request.completed_at = timezone.now()
+        request.save(
+            update_fields=["attempts", "last_error", "status", "completed_at"]
+        )
+        summary.requests_drained += 1
+        logger.warning(
+            "refresh_request_permanent_failure tmdb_id=%s source=%s error=%s",
+            movie.tmdb_id, source, request.last_error,
+        )
+        return rate_limit_hit
     except Exception as exc:  # noqa: BLE001 - one bad title must not stop the run
         summary.errors += 1
         request.attempts += 1
@@ -415,8 +619,8 @@ def _drain_one(
         )
         summary.requests_drained += 1
         logger.error(
-            "refresh_request_failed tmdb_id=%s attempts=%s error=%s",
-            movie.tmdb_id, request.attempts, request.last_error,
+            "refresh_request_failed tmdb_id=%s source=%s attempts=%s error=%s",
+            movie.tmdb_id, source, request.attempts, request.last_error,
             exc_info=True,
         )
         return rate_limit_hit
@@ -425,6 +629,60 @@ def _drain_one(
     summary.remaining_budget -= 1
     summary.requests_drained += 1
     return rate_limit_hit
+
+
+def _candidate_batch(
+    blocked: set[str],
+    default_source: str,
+    cursor: tuple | None = None,
+) -> list[RefreshRequest]:
+    """Next page of pending requests in priority order, minus blocked sources.
+
+    **Keyset pagination.** ``cursor`` is the ``(priority, requested_at, pk)``
+    tuple of the last row inspected; the next page starts strictly after it
+    ("greater than" on that lexicographic triple). A positional ``OFFSET``
+    would not do: the drain settles rows as it goes, so every settlement
+    shifts the remaining rows and a fixed offset would silently re-read or
+    skip rows. The keyset triple is stable under those removals, which is what
+    lets a tick page safely while it mutates the very set it reads.
+
+    ``pk`` is the final tiebreaker because ``priority``/``requested_at`` are
+    not unique — without it, rows sharing a timestamp have no defined order and
+    a page boundary could repeat or drop one.
+
+    **The exclusion is the anti-starvation mechanism, and it lives in SQL on
+    purpose.** A blocked source's requests are filtered out *before* the page
+    window is applied, so however large the Streaming Availability backlog
+    becomes it can never occupy the candidate page and hide an executable
+    request behind it. The page size is therefore only a memory guard, not the
+    thing that prevents starvation.
+
+    ``source=""`` (legacy default-scope rows) is excluded together with
+    ``DEFAULT_SOURCE_SLUG``: both resolve to the same source via
+    :func:`resolve_request_source`, so they must be dropped as one unit or the
+    filter would let one spelling through and defeat itself.
+
+    Bounded by :data:`CANDIDATE_SCAN_LIMIT`; the caller pages at most
+    :data:`MAX_SCAN_PAGES` times, so no tick reads the whole table.
+    """
+    blocked_slugs = set(blocked)
+    if default_source in blocked_slugs:
+        blocked_slugs.add("")  # legacy spelling of the same scope
+
+    queryset = RefreshRequest.objects.filter(status=RefreshRequestStatus.PENDING)
+    if blocked_slugs:
+        queryset = queryset.exclude(source__in=blocked_slugs)
+    if cursor is not None:
+        priority, requested_at, pk = cursor
+        queryset = queryset.filter(
+            Q(priority__gt=priority)
+            | Q(priority=priority, requested_at__gt=requested_at)
+            | Q(priority=priority, requested_at=requested_at, pk__gt=pk)
+        )
+    return list(
+        queryset.select_related("movie")
+        .order_by("priority", "requested_at", "pk")[:CANDIDATE_SCAN_LIMIT]
+    )
 
 
 def drain_refresh_requests(
@@ -455,6 +713,16 @@ def drain_refresh_requests(
     with the run. With ``budget < 2`` nothing is reserved: plain priority
     wins outright.
 
+    **No starvation by blocked sources.** A source whose own daily budget is
+    spent defers only *its own* requests: they stay ``pending`` and the scan
+    moves on. Candidates are read in priority order with the blocked sources
+    excluded in SQL (:func:`_candidate_batch`), so an arbitrarily large
+    exhausted backlog can never fill the candidate window and hide an
+    executable request behind it — that exclusion is what makes the bounded
+    scan safe, rather than the scan being large enough by luck. Priority is
+    fully respected among *executable* requests, and a tick reads at most a
+    few bounded pages, never the whole table.
+
     Returns every ``tmdb_id`` the request queue owns this run — settled
     (``done``/``failed``) **and** still-pending requests — so the caller's
     stale sweep neither re-attempts nor double-counts those titles (a pending
@@ -464,48 +732,94 @@ def drain_refresh_requests(
     excluded: set[int] = set()
     rate_limit_hit = summary.rate_limited
 
-    pending = list(
-        RefreshRequest.objects.filter(status=RefreshRequestStatus.PENDING)
-        .select_related("movie")
-        .order_by("priority", "requested_at")
+    # One limiter per registered source, built once per tick: resolving (and
+    # for metered sources, querying) a source's budget per request would make
+    # a large fan-out pay the same query hundreds of times. The caller's
+    # injected limiter overrides the default source's, as before.
+    limiters = {
+        source: rate_limiter_for(source) for source in source_registry.slugs()
+    }
+    if limiter is not None:
+        limiters[DEFAULT_SOURCE_SLUG] = limiter
+
+    # Sources discovered to be out of budget during this tick. Seeded with the
+    # default source when the caller handed us an already-spent limiter, so
+    # the very first candidate query already excludes it.
+    blocked: set[str] = set()
+    if _is_spent(limiters[DEFAULT_SOURCE_SLUG]):
+        blocked.add(DEFAULT_SOURCE_SLUG)
+
+    # A blocked source only ever *defers* work, so the tick ends once the
+    # budget is spent or nothing executable is left. MAX_SCAN_PAGES keeps the
+    # per-tick work bounded even if a source keeps refusing mid-scan.
+    cursor = None
+    scanned = 0
+    for _page in range(MAX_SCAN_PAGES):
+        pending = _candidate_batch(blocked, DEFAULT_SOURCE_SLUG, cursor=cursor)
+        if not pending:
+            break
+        scanned += len(pending)
+        # Resume strictly after the last row of this page on the next call.
+        cursor = (pending[-1].priority, pending[-1].requested_at, pending[-1].pk)
+
+        # Fairness slot: the globally oldest request in this page, when it sits
+        # below the top tier, gets one budget unit held back for the reserved
+        # pass (see the fairness contract above).
+        oldest = min(pending, key=lambda row: (row.requested_at, row.pk))
+        reserved = None
+        if summary.remaining_budget >= 2 and oldest.priority > pending[0].priority:
+            reserved = oldest
+            summary.remaining_budget -= 1
+
+        strict = (
+            pending if reserved is None
+            else [r for r in pending if r.pk != reserved.pk]
+        )
+
+        def _drain(request):
+            nonlocal rate_limit_hit
+            source = resolve_request_source(request)
+            rate_limit_hit = _drain_one(
+                request,
+                summary=summary,
+                service=service,
+                limiter=limiter,
+                rate_limit_hit=rate_limit_hit,
+                limiter_overrides=limiters,
+            )
+            # A source that just refused stops offering candidates on the next
+            # page; the ones already in hand are drained by name below.
+            if source in summary.rate_limited_sources:
+                blocked.add(source)
+
+        for request in strict:
+            excluded.add(request.movie.tmdb_id)
+            _drain(request)
+
+        if reserved is not None:
+            # Release the held-back unit for the reserved pass: the strict
+            # pass spent from everything except this unit, which now becomes
+            # spendable again — only by this one request, and only under the
+            # same guards.
+            summary.remaining_budget += 1
+            excluded.add(reserved.movie.tmdb_id)
+            _drain(reserved)
+
+        if summary.remaining_budget <= 0:
+            break
+        if len(pending) < CANDIDATE_SCAN_LIMIT:
+            break  # queue exhausted (or fully blocked): no further page
+        # Otherwise page again from this page's last row (keyset cursor), so
+        # the next page starts strictly after everything already examined.
+
+    logger.debug(
+        "refresh_queue_drain_scanned=%s blocked_sources=%s "
+        "rate_limited_sources=%s remaining_budget=%s",
+        scanned,
+        sorted(blocked),
+        summary.rate_limited_sources,
+        summary.remaining_budget,
     )
-    if not pending:
-        return excluded
-
-    # Fairness slot: the globally oldest request, when it sits below the
-    # top tier, gets one budget unit held back for the reserved pass.
-    oldest = min(pending, key=lambda row: (row.requested_at, row.pk))
-    reserved = None
-    if summary.remaining_budget >= 2 and oldest.priority > pending[0].priority:
-        reserved = oldest
-        summary.remaining_budget -= 1
-
-    strict = pending if reserved is None else [r for r in pending if r.pk != reserved.pk]
-
-    for request in strict:
-        excluded.add(request.movie.tmdb_id)
-        rate_limit_hit = _drain_one(
-            request,
-            summary=summary,
-            service=service,
-            limiter=limiter,
-            rate_limit_hit=rate_limit_hit,
-        )
-
-    if reserved is not None:
-        # Release the held-back unit for the reserved pass: the strict pass
-        # spent from everything except this unit, which now becomes spendable
-        # again — only by this one request, and only under the same guards.
-        summary.remaining_budget += 1
-        excluded.add(reserved.movie.tmdb_id)
-        rate_limit_hit = _drain_one(
-            reserved,
-            summary=summary,
-            service=service,
-            limiter=limiter,
-            rate_limit_hit=rate_limit_hit,
-        )
-
     return excluded
 
 
@@ -526,23 +840,27 @@ def process_refresh_queue(
     ``refresh_availability`` run already owns.
 
     Returns the run summary dict, or ``None`` when the queue is empty (the
-    common idle tick: no ``RefreshRun`` row, no work). When the daily quota
-    is already exhausted the queue is left untouched and a summary with
-    ``rate_limited=True`` is returned without creating a ``RefreshRun`` —
-    there is nothing to audit when not a single request can be attempted.
+    common idle tick: no ``RefreshRun`` row, no work). A tick is never
+    short-circuited by one source being out of budget: only when the caller's
+    *default* limiter is already spent does it return early with
+    ``rate_limited=True``, and even then a batch may be recorded so the
+    blocked sources are reported. Requests belonging to other sources are
+    still executable, so they are drained as usual.
     """
     pending = RefreshRequest.objects.filter(status=RefreshRequestStatus.PENDING)
     if not pending.exists():
         return None
 
     service = service or AvailabilityRefreshService()
-    limiter = limiter or RateLimiter(DEFAULT_SOURCE_SLUG)
+    limiter = limiter or rate_limiter_for(DEFAULT_SOURCE_SLUG)
 
     summary = BulkRefreshSummary(budget=budget, remaining_budget=budget)
-    if limiter.remaining() <= 0:
-        summary.rate_limited = True
-        summary.requests_pending = pending.count()
-        return summary.to_dict()
+
+    # The default limiter is the run's own injected/quota-bearing guard: when
+    # it is spent up front we still drain other sources, so this no longer
+    # returns early — it only seeds ``rate_limited`` for the summary.
+    if _is_spent(limiter):
+        summary.note_rate_limited_source(DEFAULT_SOURCE_SLUG)
 
     run = RefreshRun.objects.create(
         service=DEFAULT_SOURCE_SLUG,

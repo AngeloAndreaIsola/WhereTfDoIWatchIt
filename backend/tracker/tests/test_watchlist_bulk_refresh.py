@@ -37,9 +37,10 @@ from django.utils import timezone
 
 from availability.freshness import freshness_for
 from availability.models import Source
-from availability.sources import source_registry
+from availability.sources import DEFAULT_SOURCE_SLUG, source_registry
 from availability.tests.source_stubs import StubSource
 from tracker.models import (
+    ApiCallCounter,
     CatalogueRefreshRequest,
     CatalogueRefreshStatus,
     Movie,
@@ -52,7 +53,9 @@ from tracker.models import (
 from tracker.services.bulk_refresh import (
     process_pending_catalogue_refresh,
     stale_catalogue_sources,
+    title_level_source_slugs,
 )
+from tracker.services.rate_limit import SOURCE_DAILY_LIMITS, RateLimiter
 from tracker.services.refresh_requests import (
     process_refresh_queue,
     refresh_states_for,
@@ -78,7 +81,12 @@ def _watchlist_movie(tmdb_id, title="Title", **kwargs):
 
 
 class BulkEnqueueServiceTests(TestCase):
-    """request_watchlist_refresh: one local pass, per-title contracts intact."""
+    """request_watchlist_refresh: one local pass, per-title contracts intact.
+
+    The unit of work is now one request per (title, source) across every
+    registered title-level source, so the expected counts are
+    ``titles x len(title_level_source_slugs())`` — never a bare title count.
+    """
 
     def test_queues_every_watchlisted_title_at_explicit_priority(self):
         movie_a = _watchlist_movie(101)
@@ -90,13 +98,35 @@ class BulkEnqueueServiceTests(TestCase):
             result = request_watchlist_refresh(user_id=1)
 
         refresh_content.assert_not_called()
-        self.assertEqual(result["queued"], 2)
+        sources = title_level_source_slugs()
+        expected = 2 * len(sources)
+        self.assertEqual(result["queued"], expected)
         self.assertEqual(result["total_watchlist"], 2)
+        self.assertEqual(result["checks_per_title"], len(sources))
+        self.assertEqual(sorted(result["sources"]), sorted(sources))
         uuid.UUID(result["batch"])
-        self.assertEqual(RefreshRequest.objects.count(), 2)
+        self.assertEqual(RefreshRequest.objects.count(), expected)
         for request in RefreshRequest.objects.all():
             self.assertEqual(request.status, RefreshRequestStatus.PENDING)
             self.assertEqual(request.priority, RefreshPriority.EXPLICIT)
+            # Every explicitly queued request names its source: no request
+            # may be born in the legacy empty-scope bucket.
+            self.assertIn(request.source, sources)
+
+    def test_one_request_per_title_per_source(self):
+        _watchlist_movie(111)
+        _watchlist_movie(112)
+
+        result = request_watchlist_refresh(user_id=1)
+
+        pairs = set(
+            RefreshRequest.objects.values_list("movie_id", "source")
+        )
+        self.assertEqual(len(pairs), result["queued"])
+        for source in title_level_source_slugs():
+            self.assertEqual(
+                sum(1 for _movie_id, slug in pairs if slug == source), 2
+            )
 
     def test_titles_outside_the_watchlist_are_untouched(self):
         Movie.objects.create(tmdb_id=999, title="Not watched", year=1999)
@@ -110,20 +140,46 @@ class BulkEnqueueServiceTests(TestCase):
     def test_repeated_bulk_calls_stay_deduplicated_and_upgrade(self):
         movie = _watchlist_movie(103)
         local_offer(movie)
+        # A pre-existing default-scope row: this is the legacy spelling of the
+        # streaming_availability scope, so the fan-out must *adopt* it rather
+        # than queue a second row for the same source.
         request_availability_refresh(movie, priority=RefreshPriority.WATCHLIST)
 
         first = request_watchlist_refresh(user_id=1)
         second = request_watchlist_refresh(user_id=1)
 
-        self.assertEqual(first["queued"], 1)
-        self.assertEqual(second["queued"], 1)
+        sources = title_level_source_slugs()
+        # One pending row per (movie, source): the adopted legacy row now
+        # counts as the streaming_availability check, so the total is exactly
+        # the number of title-level sources — not that plus one.
+        expected = len(sources)
+        self.assertEqual(first["queued"], expected)
+        self.assertEqual(second["queued"], expected)
         self.assertEqual(second["total_watchlist"], 1)
         self.assertNotEqual(first["batch"], second["batch"])
-        self.assertEqual(RefreshRequest.objects.count(), 1)
-        request = RefreshRequest.objects.get()
-        self.assertEqual(request.priority, RefreshPriority.EXPLICIT)
-        # Last click wins: the pending row now belongs to the newest run.
-        self.assertEqual(request.batch, uuid.UUID(second["batch"]))
+        self.assertEqual(RefreshRequest.objects.count(), expected)
+
+        scopes = sorted(
+            RefreshRequest.objects.values_list("source", flat=True)
+        )
+        self.assertEqual(scopes, sorted(sources))
+        for request in RefreshRequest.objects.all():
+            request.refresh_from_db()
+            self.assertEqual(request.priority, RefreshPriority.EXPLICIT)
+            # Last click wins: the pending row now belongs to the newest run.
+            self.assertEqual(request.batch, uuid.UUID(second["batch"]))
+
+    def test_repeated_refresh_all_never_duplicates_a_pending_pair(self):
+        """Repeated clicks must not multiply pending (movie, source) work."""
+        movie = _watchlist_movie(114)
+        for _ in range(3):
+            request_watchlist_refresh(user_id=1)
+
+        pairs = list(RefreshRequest.objects.values_list("movie_id", "source"))
+        self.assertEqual(len(pairs), len(set(pairs)))
+        self.assertEqual(
+            len(pairs), len(title_level_source_slugs())
+        )
 
     def test_empty_watchlist_reports_zero(self):
         result = request_watchlist_refresh(user_id=1)
@@ -152,8 +208,9 @@ class BulkEnqueueEndpointTests(TestCase):
             resp = self._post()
 
         refresh_content.assert_not_called()
+        expected = 2 * len(title_level_source_slugs())
         self.assertEqual(resp.status_code, 202, resp.content)
-        self.assertEqual(resp.data["queued"], 2)
+        self.assertEqual(resp.data["queued"], expected)
         self.assertEqual(resp.data["total_watchlist"], 2)
         self.assertIsInstance(resp.data["now"], float)
         self.assertEqual(
@@ -161,7 +218,7 @@ class BulkEnqueueEndpointTests(TestCase):
                 status=RefreshRequestStatus.PENDING,
                 priority=RefreshPriority.EXPLICIT,
             ).count(),
-            2,
+            expected,
         )
 
     def test_endpoint_upgrades_a_lower_priority_pending_request(self):
@@ -172,13 +229,19 @@ class BulkEnqueueEndpointTests(TestCase):
         )
         self.assertIsNotNone(existing)
         self.assertEqual(existing.priority, RefreshPriority.WATCHLIST)
+        existing_pk = existing.pk
 
         resp = self._post()
 
         self.assertEqual(resp.status_code, 202, resp.content)
-        self.assertEqual(RefreshRequest.objects.count(), 1)
-        request = RefreshRequest.objects.get()
-        self.assertEqual(request.pk, existing.pk)
+        # The legacy default-scope row is adopted into the explicit
+        # streaming_availability scope and upgraded in place, never
+        # duplicated: one pending row per (movie, source).
+        self.assertEqual(
+            RefreshRequest.objects.count(), len(title_level_source_slugs())
+        )
+        request = RefreshRequest.objects.get(pk=existing_pk)
+        self.assertEqual(request.source, DEFAULT_SOURCE_SLUG)
         self.assertEqual(request.priority, RefreshPriority.EXPLICIT)
 
     def test_empty_watchlist_returns_202_with_zero_counts(self):
@@ -200,6 +263,43 @@ class BulkEnqueueEndpointTests(TestCase):
         self.assertEqual(resp.status_code, 500)
         self.assertIn("error", resp.data)
 
+    def test_checks_per_title_stays_exact_as_rows_settle(self):
+        """Fan-out width must not drift downward mid-run.
+
+        Dividing total by titles would report 2.98 once a couple of rows
+        settle, implying the run had fewer sources per title than it does.
+        """
+        _watchlist_movie(511)
+        _watchlist_movie(512)
+        resp = self._post()
+        batch = resp.data["batch"]
+        sources = len(title_level_source_slugs())
+
+        before = self.client.get(
+            "/api/watchlist/refresh-status/",
+            {"since": resp.data["now"], "batch": batch},
+        )
+        self.assertEqual(before.data["checks_per_title"], sources)
+
+        # Settle some rows and delete others, as a real run does over time.
+        # (Slicing a queryset forbids ``.update()``, so take PKs first.)
+        pks = list(
+            RefreshRequest.objects.filter(batch=batch)
+            .order_by("source")
+            .values_list("pk", flat=True)
+        )
+        RefreshRequest.objects.filter(pk__in=pks[:2]).update(
+            status=RefreshRequestStatus.DONE
+        )
+        RefreshRequest.objects.filter(pk__in=pks[2:3]).delete()
+
+        after = self.client.get(
+            "/api/watchlist/refresh-status/",
+            {"since": resp.data["now"], "batch": batch},
+        )
+        self.assertEqual(after.data["checks_per_title"], sources)
+        self.assertEqual(after.data["titles"], 2)
+
 
 class RefreshStatusEndpointTests(TestCase):
     """GET /api/watchlist/refresh-status/ — progress scoped to one run."""
@@ -207,11 +307,11 @@ class RefreshStatusEndpointTests(TestCase):
     def setUp(self):
         self.since = (timezone.now() - dt.timedelta(seconds=60)).timestamp()
 
-    def _get(self, since=None):
-        value = self.since if since is None else since
-        return self.client.get(
-            "/api/watchlist/refresh-status/", {"since": value}
-        )
+    def _get(self, since=None, batch=None):
+        params = {"since": self.since if since is None else since}
+        if batch is not None:
+            params["batch"] = batch
+        return self.client.get("/api/watchlist/refresh-status/", params)
 
     def test_counts_pending_refreshed_failed_only_for_this_run(self):
         pending_movie = _watchlist_movie(301)
@@ -252,18 +352,43 @@ class RefreshStatusEndpointTests(TestCase):
         self.assertEqual(resp.data["refreshed"], 1)
         self.assertEqual(resp.data["failed"], 1)
 
-    def test_other_source_scopes_are_not_counted(self):
+    def test_other_source_scopes_are_counted_in_their_own_batch(self):
+        """A source-scoped row is now real work, not something to hide.
+
+        The old endpoint filtered to ``source=""``, which would make a
+        source-fanned-out batch report zero progress while the worker drained
+        it. Unbatched reads still report it (there is no batch to scope to).
+        """
         movie = _watchlist_movie(306)
+        batch = uuid.uuid4()
         RefreshRequest.objects.create(
             movie=movie,
             source="youtube",
             status=RefreshRequestStatus.PENDING,
+            batch=batch,
         )
 
-        resp = self._get()
+        resp = self._get(batch=str(batch))
 
         self.assertEqual(resp.status_code, 200, resp.content)
-        self.assertEqual(resp.data["pending"], 0)
+        self.assertEqual(resp.data["pending"], 1)
+        self.assertEqual(resp.data["total"], 1)
+
+    def test_a_legacy_default_scope_batch_still_reports_progress(self):
+        """Pre-fan-out rows (source="") keep counting instead of vanishing."""
+        movie = _watchlist_movie(307)
+        batch = uuid.uuid4()
+        RefreshRequest.objects.create(
+            movie=movie,
+            source="",
+            status=RefreshRequestStatus.PENDING,
+            batch=batch,
+        )
+
+        resp = self._get(batch=str(batch))
+
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.data["pending"], 1)
 
     def test_missing_or_malformed_since_is_rejected(self):
         self.assertEqual(
@@ -278,7 +403,12 @@ class RefreshStatusEndpointTests(TestCase):
 
 
 class BulkDrainEndToEndTests(TestCase):
-    """Bulk enqueue -> worker drain -> status endpoint reads the progress back."""
+    """Bulk enqueue -> worker drain -> status endpoint reads the progress back.
+
+    The drained unit is a (title, source) check, so both titles are checked
+    against every title-level source — ``2 x sources`` refreshes — and the
+    status endpoint reports the same aggregate.
+    """
 
     def test_worker_drains_bulk_queue_and_status_reports_it(self):
         movie_a = _watchlist_movie(401)
@@ -292,25 +422,44 @@ class BulkDrainEndToEndTests(TestCase):
         )
         self.assertEqual(resp.status_code, 202, resp.content)
         since = resp.data["now"]
+        expected = 2 * len(title_level_source_slugs())
 
         before = self.client.get(
-            "/api/watchlist/refresh-status/", {"since": since}
+            "/api/watchlist/refresh-status/",
+            {"since": since, "batch": resp.data["batch"]},
         )
-        self.assertEqual(before.data["pending"], 2)
+        self.assertEqual(before.data["pending"], expected)
         self.assertEqual(before.data["refreshed"], 0)
 
-        service = MagicMock()
-        summary = process_refresh_queue(budget=5, service=service)
+        # Every request, whatever its source, must resolve to a mock: a
+        # source-scoped request builds its own refresh service from the
+        # registry, and the default-scope one uses the injected service, so
+        # patching only the injected service would let streaming_availability
+        # reach the real API.
+        default_service = MagicMock()
+        with patch(
+            "tracker.services.refresh_requests.AvailabilityRefreshService"
+        ) as service_cls:
+            service_cls.return_value = MagicMock()
+            summary = process_refresh_queue(budget=99, service=default_service)
 
-        self.assertEqual(summary["refreshed"], 2)
-        refreshed_movies = {call.args[0] for call in service.refresh_content.call_args_list}
-        self.assertEqual(refreshed_movies, {movie_a, movie_b})
+        self.assertEqual(summary["refreshed"], expected)
+        # Every source-scoped request — including the explicit
+        # streaming_availability one, which is no longer the legacy ``""`` row
+        # — resolves its collector through the registry rather than through the
+        # injected default service.
+        sources_used = {
+            call.kwargs["source"].slug for call in service_cls.call_args_list
+        }
+        self.assertEqual(sources_used, set(title_level_source_slugs()))
+        default_service.refresh_content.assert_not_called()
 
         after = self.client.get(
-            "/api/watchlist/refresh-status/", {"since": since}
+            "/api/watchlist/refresh-status/",
+            {"since": since, "batch": resp.data["batch"]},
         )
         self.assertEqual(after.data["pending"], 0)
-        self.assertEqual(after.data["refreshed"], 2)
+        self.assertEqual(after.data["refreshed"], expected)
         self.assertEqual(after.data["failed"], 0)
 
 
@@ -348,15 +497,20 @@ class BatchStampingTests(TestCase):
     def test_a_row_opened_by_another_event_joins_the_run(self):
         movie = _watchlist_movie(414)
         local_offer(movie)
-        request_availability_refresh(
+        existing = request_availability_refresh(
             movie, priority=RefreshPriority.WATCHLIST, if_stale=False
         )
-        self.assertEqual(RefreshRequest.objects.get().batch, None)
+        existing_pk = existing.pk
+        self.assertIsNone(existing.batch)
 
-        result = request_watchlist_refresh(user_id=1)
+        request_watchlist_refresh(user_id=1)
 
+        batch = RefreshRequest.objects.get(pk=existing_pk).batch
+        self.assertIsNotNone(batch)
+        # Every row the run owns carries that one batch id — including the
+        # fan-out rows and the legacy row it adopted.
         self.assertEqual(
-            RefreshRequest.objects.get().batch, uuid.UUID(result["batch"])
+            set(RefreshRequest.objects.values_list("batch", flat=True)), {batch}
         )
 
     def test_batch_scoped_status_reads_this_runs_progress_end_to_end(self):
@@ -369,23 +523,36 @@ class BatchStampingTests(TestCase):
             content_type="application/json",
         )
         batch = resp.data["batch"]
+        expected = 2 * len(title_level_source_slugs())
 
         before = self.client.get(
             "/api/watchlist/refresh-status/",
             {"since": resp.data["now"], "batch": batch},
         )
-        self.assertEqual(before.data["pending"], 2)
+        self.assertEqual(before.data["pending"], expected)
+        self.assertEqual(before.data["total"], expected)
         self.assertEqual(before.data["refreshed"], 0)
 
-        process_refresh_queue(budget=5, service=MagicMock())
+        # Patch the registry resolution too: without it, source-scoped
+        # requests build their own service and hit the real API.
+        with patch(
+            "tracker.services.refresh_requests.AvailabilityRefreshService"
+        ) as service_cls:
+            service_cls.return_value = MagicMock()
+            # The drain must actually execute here, so give the metered
+            # source today's budget back: a developer machine can have it
+            # spent, which would correctly defer those requests instead.
+            ApiCallCounter.objects.filter(service=DEFAULT_SOURCE_SLUG).delete()
+            process_refresh_queue(budget=99, service=MagicMock())
 
         after = self.client.get(
             "/api/watchlist/refresh-status/",
             {"since": resp.data["now"], "batch": batch},
         )
         self.assertEqual(after.data["pending"], 0)
-        self.assertEqual(after.data["refreshed"], 2)
-
+        self.assertEqual(after.data["refreshed"], expected)
+        self.assertEqual(after.data["total"], expected)
+        self.assertEqual(after.data["titles"], 2)
 
 class RefreshStatusBatchTests(TestCase):
     """batch= scopes every count to the run's own stamped backlog."""
@@ -441,7 +608,12 @@ class RefreshStatusBatchTests(TestCase):
 
 
 class RefreshStatusQuotaTests(TestCase):
-    """The status endpoint carries the shared daily quota for the UI."""
+    """The status endpoint reports per-source quota, not one shared one.
+
+    Only sources that declare a quota appear: unmetered collectors get no
+    fabricated numbers, and one exhausted source is named rather than
+    presented as the whole watchlist being blocked.
+    """
 
     def setUp(self):
         self.since = (timezone.now() - dt.timedelta(seconds=60)).timestamp()
@@ -455,25 +627,50 @@ class RefreshStatusQuotaTests(TestCase):
         resp = self._get()
 
         self.assertEqual(resp.status_code, 200, resp.content)
-        self.assertEqual(resp.data["quota_limit"], 100)
-        # Fresh day, no calls recorded: quota untouched, not rate-limited.
-        self.assertEqual(resp.data["quota_remaining"], 100)
-        self.assertFalse(resp.data["rate_limited"])
         self.assertGreater(resp.data["resets_at"], timezone.now().timestamp())
-        # Rate-limited is exactly "nothing left today".
-        self.assertEqual(
-            resp.data["rate_limited"], resp.data["quota_remaining"] <= 0
-        )
+        # Fresh day, no calls recorded: quota untouched, nothing blocked.
+        self.assertFalse(resp.data["rate_limited"])
+        self.assertEqual(resp.data["rate_limited_sources"], [])
+        quotas = resp.data["source_quotas"]
+        self.assertEqual(quotas[DEFAULT_SOURCE_SLUG]["limit"], 100)
+        self.assertEqual(quotas[DEFAULT_SOURCE_SLUG]["remaining"], 100)
+        self.assertFalse(quotas[DEFAULT_SOURCE_SLUG]["exhausted"])
 
-    def test_exhausted_quota_reports_rate_limited(self):
-        with patch("tracker.views.RateLimiter") as limiter_cls:
-            limiter_cls.return_value.remaining.return_value = 0
-            limiter_cls.return_value.daily_limit = 100
+    def test_unmetered_sources_get_no_quota_invented(self):
+        resp = self._get()
+
+        quotas = resp.data["source_quotas"]
+        for slug in title_level_source_slugs():
+            if slug not in SOURCE_DAILY_LIMITS:
+                self.assertNotIn(
+                    slug, quotas, f"{slug} has no declared quota to report"
+                )
+
+    def test_exhausted_quota_names_only_that_source(self):
+        """Only the metered source is reported blocked.
+
+        Unmetered sources answer ``remaining() is None``; mocking a flat 0
+        for every source would falsely report unmetered collectors as
+        quota-limited, so the fake mirrors the real per-source contract.
+        """
+        real_remaining = RateLimiter.remaining
+
+        def fake_remaining(self):
+            if self.daily_limit is None:
+                return None  # unmetered source: no declared quota
+            return 0  # the metered source has spent today's budget
+
+        with patch.object(RateLimiter, "remaining", fake_remaining):
             resp = self._get()
 
         self.assertEqual(resp.status_code, 200, resp.content)
         self.assertTrue(resp.data["rate_limited"])
-        self.assertEqual(resp.data["quota_remaining"], 0)
+        self.assertEqual(
+            resp.data["rate_limited_sources"], [DEFAULT_SOURCE_SLUG]
+        )
+        self.assertEqual(
+            list(resp.data["source_quotas"]), [DEFAULT_SOURCE_SLUG]
+        )
 
 
 class StaleCatalogueSourcesTests(TestCase):
@@ -660,7 +857,17 @@ class RefreshStateEvidenceTests(TestCase):
 
         self.assertEqual(states[movie.id], RefreshState.PENDING)
 
-    def test_other_source_scopes_are_ignored(self):
+    def test_done_in_any_source_scope_counts_as_checked(self):
+        # A title checked through ANY source scope is checked. Refresh All
+        # fans each title out over every title-level source, so a ``youtube``
+        # (or mediaset_infinity) DONE row is just as much proof that the title
+        # was looked at as a streaming_availability one — the read path must
+        # not report ⚪ Unknown for a title a collector already answered.
+        #
+        # This assertion previously inverted the contract (it demanded
+        # NEVER_CHECKED for a DONE row in a non-default scope), which is what
+        # made almost every real watchlist title read "Unknown" despite having
+        # been fetched. See ``refresh_states_for``'s docstring.
         movie = _watchlist_movie(436)
         RefreshRequest.objects.create(
             movie=movie,
@@ -670,7 +877,36 @@ class RefreshStateEvidenceTests(TestCase):
 
         states = refresh_states_for({movie.id})
 
-        self.assertEqual(states[movie.id], RefreshState.NEVER_CHECKED)
+        self.assertEqual(states[movie.id], RefreshState.CHECKED)
+
+    def test_pending_in_any_scope_beats_a_done_row(self):
+        # Precedence is evaluated across scopes too: a queued check anywhere
+        # still reads 🔵, so a title being re-checked never flickers to ⚫.
+        movie = _watchlist_movie(4361)
+        RefreshRequest.objects.create(
+            movie=movie, source="youtube", status=RefreshRequestStatus.DONE,
+        )
+        RefreshRequest.objects.create(
+            movie=movie,
+            source="streaming_availability",
+            status=RefreshRequestStatus.PENDING,
+        )
+
+        states = refresh_states_for({movie.id})
+
+        self.assertEqual(states[movie.id], RefreshState.PENDING)
+
+    def test_failed_in_any_scope_counts_as_failed(self):
+        movie = _watchlist_movie(4362)
+        RefreshRequest.objects.create(
+            movie=movie,
+            source="mediaset_infinity",
+            status=RefreshRequestStatus.FAILED,
+        )
+
+        states = refresh_states_for({movie.id})
+
+        self.assertEqual(states[movie.id], RefreshState.FAILED)
 
     def test_report_payload_carries_the_refresh_state(self):
         queued = _watchlist_movie(437)

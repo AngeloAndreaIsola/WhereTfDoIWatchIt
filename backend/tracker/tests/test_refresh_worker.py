@@ -24,20 +24,28 @@ provider.
 """
 from __future__ import annotations
 
+import datetime as dt
 import io
 import json
 from unittest.mock import MagicMock, patch
 
 from django.core.management import call_command
 from django.test import TestCase
+from django.utils import timezone
+
+from availability.sources import DEFAULT_SOURCE_SLUG
 
 from tracker.models import (
+    ApiCallCounter,
     CatalogueRefreshRequest,
     CatalogueRefreshStatus,
     Movie,
+    RefreshPriority,
+    RefreshRequest,
     RefreshRequestStatus,
     RefreshRun,
 )
+from tracker.services.rate_limit import SOURCE_DAILY_LIMITS, RateLimiter
 from tracker.services.refresh_requests import (
     has_pending_request,
     process_refresh_queue,
@@ -95,7 +103,13 @@ class ProcessRefreshQueueTests(TestCase):
         self.assertEqual(summary["skipped_cached"], 1)
         self.assertEqual(summary["requests_drained"], 1)
 
-    def test_daily_rate_limit_leaves_queue_untouched(self):
+    def test_daily_rate_limit_leaves_the_default_scope_request_pending(self):
+        """A spent default-source budget defers that request, not the queue.
+
+        The old behavior returned early and audited nothing, which read as
+        "the whole queue is blocked". Now the run is still audited (so the
+        blocked source is observable) and only the default-scope request waits.
+        """
         movie = Movie.objects.create(tmdb_id=904, title="Capped", year=2020)
         request_availability_refresh(movie)
         limiter = MagicMock()
@@ -107,13 +121,255 @@ class ProcessRefreshQueueTests(TestCase):
         service.refresh_content.assert_not_called()
         self.assertTrue(summary["rate_limited"])
         self.assertEqual(summary["requests_pending"], 1)
-        # Nothing was attempted, so nothing to audit.
-        self.assertEqual(RefreshRun.objects.count(), 0)
 
         from tracker.models import RefreshRequest
 
         self.assertEqual(
             RefreshRequest.objects.get().status, RefreshRequestStatus.PENDING
+        )
+
+    def test_an_exhausted_default_source_does_not_block_other_sources(self):
+        """The core source-aware guarantee, at the worker-tick boundary.
+
+        Streaming Availability is out of budget; YouTube declares none. The
+        YouTube request must drain while the Streaming Availability one waits.
+        """
+        from tracker.models import RefreshPriority, RefreshRequest
+
+        movie = Movie.objects.create(tmdb_id=915, title="Mixed", year=2020)
+        RefreshRequest.objects.create(
+            movie=movie, source="youtube", priority=RefreshPriority.EXPLICIT
+        )
+        RefreshRequest.objects.create(
+            movie=movie,
+            source=DEFAULT_SOURCE_SLUG,
+            priority=RefreshPriority.EXPLICIT,
+        )
+        limiter = MagicMock()
+        limiter.remaining.return_value = 0  # Streaming Availability is spent
+
+        with patch(
+            "tracker.services.refresh_requests.AvailabilityRefreshService"
+        ) as service_cls:
+            summary = process_refresh_queue(
+                budget=5, service=MagicMock(), limiter=limiter
+            )
+
+        # The unmetered YouTube request ran against its own registry source;
+        # the exhausted one stayed pending for tomorrow's reset.
+        self.assertIn(
+            "youtube",
+            {call.kwargs["source"].slug for call in service_cls.call_args_list},
+        )
+        youtube = RefreshRequest.objects.get(source="youtube")
+        streaming = RefreshRequest.objects.get(source=DEFAULT_SOURCE_SLUG)
+        self.assertEqual(youtube.status, RefreshRequestStatus.DONE)
+        self.assertEqual(streaming.status, RefreshRequestStatus.PENDING)
+        self.assertEqual(summary["rate_limited_sources"], [DEFAULT_SOURCE_SLUG])
+
+
+class StarvationResistanceTests(TestCase):
+    """A huge blocked backlog must not hide executable work.
+
+    The regression this pins: with one shared limiter, a refused request
+    latched a flag that skipped every later request in the tick, so an
+    exhausted source looked like a dead queue. The candidate query now
+    excludes out-of-budget sources in SQL, which has to hold even when the
+    blocked backlog is far larger than one candidate page.
+    """
+
+    BLOCKED_BACKLOG = 520  # deliberately above CANDIDATE_SCAN_LIMIT
+
+    def setUp(self):
+        # A genuinely exhausted streaming_availability counter: no mock, so
+        # the test proves real limiter behavior.
+        ApiCallCounter.objects.create(
+            service=DEFAULT_SOURCE_SLUG,
+            call_date=dt.datetime.utcnow().date(),
+            count=SOURCE_DAILY_LIMITS[DEFAULT_SOURCE_SLUG],
+        )
+        self.blocked_movies = []
+        for index in range(self.BLOCKED_BACKLOG):
+            movie = Movie.objects.create(
+                tmdb_id=50_000 + index, title=f"Blocked {index}", year=2020
+            )
+            RefreshRequest.objects.create(
+                movie=movie,
+                source=DEFAULT_SOURCE_SLUG,
+                priority=RefreshPriority.EXPLICIT,
+            )
+            self.blocked_movies.append(movie)
+
+    def test_a_large_blocked_backlog_never_hides_an_executable_request(self):
+        from tracker.services.refresh_requests import CANDIDATE_SCAN_LIMIT
+
+        self.assertGreater(
+            self.BLOCKED_BACKLOG, CANDIDATE_SCAN_LIMIT,
+            "the backlog must exceed one page for this test to mean anything",
+        )
+        # Queued *after* the whole blocked backlog, as the worst case.
+        for source in ("youtube", "mediaset_infinity"):
+            movie = Movie.objects.create(
+                tmdb_id=90_000 + len(source), title=f"Executable {source}", year=2021
+            )
+            RefreshRequest.objects.create(
+                movie=movie, source=source, priority=RefreshPriority.EXPLICIT
+            )
+
+        with patch(
+            "tracker.services.refresh_requests.AvailabilityRefreshService"
+        ) as service_cls:
+            service_cls.return_value = MagicMock()
+            process_refresh_queue(budget=20, service=MagicMock())
+
+        executed = {
+            call.kwargs["source"].slug for call in service_cls.call_args_list
+        }
+        self.assertEqual(executed, {"youtube", "mediaset_infinity"})
+
+        # Every blocked request is still PENDING (waiting, not failed) and
+        # both executable ones are DONE.
+        self.assertEqual(
+            RefreshRequest.objects.filter(
+                source=DEFAULT_SOURCE_SLUG, status=RefreshRequestStatus.PENDING
+            ).count(),
+            self.BLOCKED_BACKLOG,
+        )
+        self.assertEqual(
+            RefreshRequest.objects.filter(
+                source__in=["youtube", "mediaset_infinity"],
+                status=RefreshRequestStatus.DONE,
+            ).count(),
+            2,
+        )
+
+    def test_the_exhausted_source_is_reported_but_the_run_is_not_empty(self):
+        with patch(
+            "tracker.services.refresh_requests.AvailabilityRefreshService"
+        ) as service_cls:
+            service_cls.return_value = MagicMock()
+            summary = process_refresh_queue(budget=20, service=MagicMock())
+
+        self.assertEqual(summary["rate_limited_sources"], [DEFAULT_SOURCE_SLUG])
+        # Blocked requests are waiting, never counted as drained.
+        self.assertEqual(summary["requests_drained"], 0)
+        self.assertEqual(summary["requests_pending"], self.BLOCKED_BACKLOG)
+
+
+class PrioritySemanticsTests(TestCase):
+    """Fan-out must not invent a priority system."""
+
+    def setUp(self):
+        # These tests are about ordering, not quota, so give the metered
+        # source a clean budget: a developer's machine can legitimately have
+        # today's calls spent, and a spent budget would (correctly) defer
+        # every default-scope request and mask the ordering.
+        ApiCallCounter.objects.filter(service=DEFAULT_SOURCE_SLUG).delete()
+
+    def test_requests_of_equal_priority_drain_oldest_first(self):
+        watched = Movie.objects.create(tmdb_id=61_001, title="Watched", year=2019)
+        explicit = Movie.objects.create(tmdb_id=61_002, title="Explicit", year=2020)
+        # Explicitly stamp distinct wait times: ``requested_at`` defaults to
+        # "now", which would tie at microsecond resolution and make the order
+        # arbitrary. Enqueue ``watched`` first, so it is the older request.
+        first = RefreshRequest.objects.create(
+            movie=watched, source=DEFAULT_SOURCE_SLUG, priority=RefreshPriority.EXPLICIT
+        )
+        second = RefreshRequest.objects.create(
+            movie=explicit, source=DEFAULT_SOURCE_SLUG, priority=RefreshPriority.EXPLICIT
+        )
+        base = timezone.now()
+        RefreshRequest.objects.filter(pk=first.pk).update(
+            requested_at=base - dt.timedelta(minutes=10)
+        )
+        RefreshRequest.objects.filter(pk=second.pk).update(requested_at=base)
+        service = MagicMock()
+
+        # An explicitly scoped request resolves its own service through the
+        # registry, so the default injected service is not enough here: patch
+        # the resolution or the second request would call the real API.
+        with patch(
+            "tracker.services.refresh_requests.AvailabilityRefreshService"
+        ) as service_cls:
+            registry_service = MagicMock()
+            service_cls.return_value = registry_service
+            summary = process_refresh_queue(budget=10, service=service)
+
+        order = [
+            call.args[0].tmdb_id
+            for call in registry_service.refresh_content.call_args_list
+        ]
+        self.assertEqual(order, [watched.tmdb_id, explicit.tmdb_id])
+        self.assertEqual(summary["refreshed"], 2)
+        self.assertEqual(summary["errors"], 0)
+
+    def test_a_higher_intent_source_scoped_request_drains_before_a_lower_one(self):
+        """Priority ordering holds across source-scoped requests."""
+        from tracker.tests.test_event_driven_refresh import _backdate_offers
+
+        stale = Movie.objects.create(tmdb_id=61_003, title="Stale", year=2018)
+        fresh_intent = Movie.objects.create(tmdb_id=61_004, title="Viewed", year=2020)
+        local_offer(stale)
+        _backdate_offers(stale)
+        local_offer(fresh_intent)
+        _backdate_offers(fresh_intent)
+        RefreshRequest.objects.create(
+            movie=stale, source="youtube", priority=RefreshPriority.WATCHED
+        )
+        RefreshRequest.objects.create(
+            movie=fresh_intent,
+            source=DEFAULT_SOURCE_SLUG,
+            priority=RefreshPriority.RECENTLY_VIEWED,
+        )
+
+        with patch(
+            "tracker.services.refresh_requests.AvailabilityRefreshService"
+        ) as service_cls:
+            service_cls.return_value = MagicMock()
+            summary = process_refresh_queue(budget=10, service=MagicMock())
+
+        self.assertEqual(summary["refreshed"], 2)
+
+    def test_the_priority_ladder_is_unchanged(self):
+        self.assertEqual(
+            [
+                RefreshPriority.EXPLICIT,
+                RefreshPriority.NEW,
+                RefreshPriority.RECENTLY_VIEWED,
+                RefreshPriority.VISIBLE,
+                RefreshPriority.WATCHLIST,
+                RefreshPriority.WATCHED,
+                RefreshPriority.STALE,
+                RefreshPriority.BACKGROUND,
+            ],
+            [10, 20, 30, 40, 50, 60, 70, 80],
+        )
+
+
+class LegacyScopeTests(TestCase):
+    """``source=""`` keeps working and is migrated, not duplicated."""
+
+    def test_a_legacy_request_resolves_to_the_default_source(self):
+        from tracker.services.refresh_requests import resolve_request_source
+
+        movie = Movie.objects.create(tmdb_id=62_001, title="Legacy", year=2020)
+        request = RefreshRequest.objects.create(movie=movie, source="")
+
+        self.assertEqual(resolve_request_source(request), DEFAULT_SOURCE_SLUG)
+
+    def test_a_legacy_request_still_executes(self):
+        movie = Movie.objects.create(tmdb_id=62_002, title="LegacyRun", year=2020)
+        RefreshRequest.objects.create(
+            movie=movie, source="", priority=RefreshPriority.EXPLICIT
+        )
+        service = MagicMock()
+
+        summary = process_refresh_queue(budget=5, service=service)
+
+        service.refresh_content.assert_called_once_with(movie)
+        self.assertEqual(summary["refreshed"], 1)
+        self.assertEqual(
+            RefreshRequest.objects.get().status, RefreshRequestStatus.DONE
         )
 
 

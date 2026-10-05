@@ -60,7 +60,8 @@ from ..models import (
     RefreshRun,
     WatchlistItem,
 )
-from .rate_limit import RateLimitExceeded, RateLimiter
+from .rate_limit import RateLimitExceeded, RateLimiter, rate_limiter_for
+from .streaming_api import UpstreamTitleNotFound
 
 logger = logging.getLogger(__name__)
 
@@ -89,20 +90,47 @@ def is_stale(
     return source_is_stale(movie.tmdb_id, source or DEFAULT_SOURCE_SLUG, now=now)
 
 
-def refreshable_source_slugs() -> list[str]:
-    """Sources the per-title sweep may refresh.
+def title_level_source_slugs() -> list[str]:
+    """Registered sources that answer one title with one fetch.
 
-    Capability-driven, never slug-driven: a source that syncs its own
-    catalogue is refreshed by ``process_catalogue_refresh`` (a whole-catalogue
-    fetch, no budget), while everything else needs a per-title fetch here —
-    today that is the default title-targeted scope. Unknown slugs are not
-    refreshable by construction (they are not registered).
+    The single definition of "title-level", capability-driven and never
+    slug-driven:
+
+        registered source
+        AND supports a title-targeted fetch
+        AND NOT supports_catalogue_sync
+
+    ``supports_catalogue_sync`` is the discriminator because it is the one
+    capability that is mutually exclusive with per-title work: a
+    catalogue-driven source has no title-targeted path at all — its
+    ``fetch(content)`` rejects a title request outright (``"prime_video is
+    catalogue-driven: ... no title-targeted lookup exists"``) — so it must be
+    refreshed whole (``process_catalogue_refresh``) and can never contribute a
+    per-title ``RefreshRequest``. Every registered source that is not
+    catalogue-driven is title-addressable, and joins Refresh All
+    automatically: a newly registered title-level collector fans out with no
+    further change here.
+
+    Unknown slugs are excluded by construction (they are not registered).
     """
     return [
         slug
         for slug in source_registry.slugs()
         if not source_registry.get(slug).capabilities.supports_catalogue_sync
     ]
+
+
+def refreshable_source_slugs() -> list[str]:
+    """Sources the per-title sweep may refresh.
+
+    Kept as the sweep's name for :func:`title_level_source_slugs`: a source
+    that syncs its own catalogue is refreshed by ``process_catalogue_refresh``
+    (a whole-catalogue fetch, no budget), while everything else needs a
+    per-title fetch here. Explicit Refresh All fans out over the very same
+    set, so the button and the background sweep can never disagree about
+    which sources are per-title work.
+    """
+    return title_level_source_slugs()
 
 
 def stale_refresh_scopes(tmdb_id, *, now=None) -> list[str]:
@@ -134,6 +162,63 @@ def _latest_checks(tmdb_ids) -> dict:
         .annotate(latest=Max("last_seen"))
     )
     return {row["tmdb_id"]: row["latest"] for row in rows}
+
+
+def permanently_absent_scopes(tmdb_id) -> set[str]:
+    """Source scopes the upstream catalogues are known not to carry this title.
+
+    A title that answered **404** to a source has produced a *permanent*
+    negative answer, not a stale one: the provider does not carry it, and no
+    amount of waiting will change that. Those ``RefreshRequest`` rows are
+    ``failed`` with an :class:`~tracker.services.streaming_api.UpstreamTitleNotFound`
+    error, so they are the durable evidence — and that is exactly the point:
+
+    an absent title writes **no** ``Offer`` row, so ``stale_sources`` keeps
+    reporting its scope as stale forever. Without this exclusion the background
+    sweep re-selects such a title on *every* run (hundreds of times a day for a
+    watched title), spending one metered call each time to relearn a fact that
+    cannot change. Excluding them here is what makes the 404 never-retry
+    behaviour real for the sweep, not just for the queue drain.
+
+    Only requests that exhausted their attempts *and* failed with the
+    permanent signal count. A transient failure (5xx/timeout/429) leaves the
+    request ``pending`` or retryable, so the title stays refreshable.
+
+    **The legacy ``source=""`` spelling is normalized to the default slug
+    here.** ``""`` and ``"streaming_availability"`` are the same logical scope
+    (see ``resolve_request_source``) but different literal strings, so a
+    title-level request created before the fan-out would store ``""`` while the
+    sweep compares ``streaming_availability`` — and the exclusion would
+    silently never match, reintroducing the very retry loop it exists to stop.
+    """
+    slugs = set(
+        RefreshRequest.objects.filter(
+            movie__tmdb_id=tmdb_id,
+            status=RefreshRequestStatus.FAILED,
+            last_error__startswith="UpstreamTitleNotFound",
+        ).values_list("source", flat=True)
+    )
+    return {slug or DEFAULT_SOURCE_SLUG for slug in slugs}
+
+
+def _is_spent(limiter) -> bool:
+    """True when *limiter* has no capacity left for today.
+
+    ``remaining()`` is the primary answer: ``None`` means the source declares
+    no quota (unmetered), which is never spent. An injected test double that
+    does not answer a real number falls back to the explicit ``is_exhausted()``
+    predicate, and only trusts it when it is an actual ``bool`` — a mock's
+    truthiness must never decide that a queue is blocked.
+    """
+    remaining = limiter.remaining()
+    if remaining is None:
+        return False
+    if isinstance(remaining, int):
+        return remaining <= 0
+    is_exhausted = getattr(limiter, "is_exhausted", None)
+    if callable(is_exhausted):
+        return is_exhausted() is True
+    return False
 
 
 def _candidate_pairs(user_id: int, content_types) -> list[tuple[int, int]]:
@@ -182,15 +267,35 @@ class BulkRefreshSummary:
     skipped_cached: int = 0
     skipped_budget_exhausted: int = 0
     skipped_rate_limited: int = 0
+    # Titles the upstream catalogue does not carry at all (a permanent 404).
+    # Not an error and not a cache hit: the title is simply absent upstream, so
+    # it is reported on its own counter instead of inflating ``errors`` and
+    # making a healthy run look broken.
+    skipped_upstream_missing: int = 0
     errors: int = 0
     budget: int = 0
     remaining_budget: int = 0
+    # "Quota/rate limiting stopped the run" is no longer a single boolean's
+    # job once each source carries its own budget: it stays True for the
+    # legacy single-source callers, and the source-specific truth lives in
+    # ``rate_limited_sources``.
     rate_limited: bool = False
+    # Sources whose own daily budget is spent, so their requests are waiting
+    # (not failing). Empty means nothing is quota-blocked, which is the
+    # normal case for every unmetered source.
+    rate_limited_sources: list = field(default_factory=list)
     # Event-driven refresh requests (Phase B): how many pending
     # RefreshRequest rows were settled (done or failed) by this run, and how
     # many are still queued for a later run.
     requests_drained: int = 0
     requests_pending: int = 0
+
+    def note_rate_limited_source(self, source: str) -> None:
+        """Record that *source* is budget-blocked (deduplicated, sorted)."""
+        if source and source not in self.rate_limited_sources:
+            self.rate_limited_sources.append(source)
+            self.rate_limited_sources.sort()
+        self.rate_limited = True
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -231,20 +336,30 @@ def process_watchlist_refresh(
     - skipped_cached: number skipped because existing cache was fresh
     - skipped_budget_exhausted: number skipped because no refresh budget remained
     - skipped_rate_limited: number skipped because rate limit/quota prevented further refreshes
+    - skipped_upstream_missing: number skipped because the upstream catalogue has no
+      record of the title at all (a permanent 404) — not an error, and never retried
     - errors: number of unexpected per-title errors
     - budget: input budget for the run
     - remaining_budget: unused live-refresh budget after the run
     - rate_limited: boolean indicating whether quota/rate limiting stopped the run
+    - rate_limited_sources: sources whose own daily budget is spent (their
+      titles are *waiting*, not failed); empty when nothing is blocked
     - requests_drained: pending RefreshRequest rows settled (done/failed) this run
     - requests_pending: RefreshRequest rows still queued after the run
+
+    Quota is per source, so an exhausted budget on one source never stops the
+    others: a stale Prime scope still refreshes while Streaming Availability
+    is capped out. ``rate_limited`` therefore means "at least one source is
+    blocked", never "the run stopped" — read ``rate_limited_sources`` for
+    which.
     """
     service = refresh_service or AvailabilityRefreshService()
-    limiter = limiter or RateLimiter(DEFAULT_SOURCE_SLUG)
+    limiter = limiter or rate_limiter_for(DEFAULT_SOURCE_SLUG)
 
     summary = BulkRefreshSummary(budget=budget, remaining_budget=budget)
 
     # Check upfront if rate limit is already exhausted
-    if limiter.remaining() <= 0:
+    if limiter.remaining() is not None and limiter.remaining() <= 0:
         summary.rate_limited = True
 
     run = RefreshRun.objects.create(
@@ -273,6 +388,7 @@ def process_watchlist_refresh(
     }
 
     rate_limit_hit = summary.rate_limited
+    default_limiter_spent = _is_spent(limiter)
     for movie_id, tmdb_id in pairs:
         if tmdb_id in queue_owned:
             # The request drain owns this title this run (settled, or still
@@ -283,7 +399,11 @@ def process_watchlist_refresh(
         if not movie:
             continue
 
-        if rate_limit_hit:
+        # The only run-wide bail-out left is the caller's *default* limiter
+        # being spent upfront. Per-scope quota is handled below, source by
+        # source, so an exhausted Streaming Availability budget never
+        # short-circuits the titles other sources can still refresh.
+        if rate_limit_hit and default_limiter_spent:
             summary.skipped_rate_limited += 1
             continue
 
@@ -293,33 +413,62 @@ def process_watchlist_refresh(
 
         # Per-source staleness: each source's own window decides, so a fresh
         # source neither triggers nor suppresses another scope's refresh.
-        scopes = stale_refresh_scopes(tmdb_id)
+        #
+        # Scopes the upstream is known not to carry (a permanent 404) are
+        # dropped here: they write no Offer row, so they would otherwise read
+        # as stale forever and cost one metered call per sweep run, every run.
+        absent = permanently_absent_scopes(tmdb_id)
+        scopes = [
+            slug
+            for slug in stale_refresh_scopes(tmdb_id)
+            if slug not in absent
+        ]
         if not scopes:
             summary.skipped_cached += 1
             continue
 
         # The stale scopes we may refresh, with budget and rate capacity.
+        #
+        # Quota is per source, so one exhausted scope only defers *its own*
+        # titles: the loop continues with the remaining scopes of this title
+        # and the next titles, instead of the run-wide bail-out the single
+        # shared limiter used to force here.
         for slug in scopes:
-            if rate_limit_hit:
-                summary.skipped_rate_limited += 1
-                break
             if summary.remaining_budget <= 0:
                 summary.skipped_budget_exhausted += 1
-                break
+                continue
+            scope_limiter = (
+                limiter if slug == DEFAULT_SOURCE_SLUG
+                else rate_limiter_for(slug)
+            )
+            if _is_spent(scope_limiter):
+                summary.note_rate_limited_source(slug)
+                summary.skipped_rate_limited += 1
+                continue
             scope_service = (
                 service
                 if slug == DEFAULT_SOURCE_SLUG
                 else AvailabilityRefreshService(source=source_registry.get(slug))
             )
             try:
-                limiter.acquire()
+                scope_limiter.acquire()
                 scope_service.refresh_content(movie)
                 summary.refreshed += 1
                 summary.remaining_budget -= 1
             except RateLimitExceeded:
-                rate_limit_hit = True
-                summary.rate_limited = True
+                summary.note_rate_limited_source(slug)
                 summary.skipped_rate_limited += 1
+            except UpstreamTitleNotFound as exc:
+                # Not a fault: the upstream catalogue simply does not carry this
+                # title. Counted separately from real errors so a permanently
+                # absent title never looks like a broken refresh in the run
+                # summary. It stays stale, so the sweep will re-attempt it on a
+                # later run — see the report note on residual sweep retries.
+                summary.skipped_upstream_missing += 1
+                logger.info(
+                    "Upstream has no record of tmdb_id=%s source=%s: %s",
+                    movie.tmdb_id, slug, exc,
+                )
             except Exception as exc:
                 logger.exception(
                     "Unexpected error refreshing movie tmdb_id=%s source=%s: %s",

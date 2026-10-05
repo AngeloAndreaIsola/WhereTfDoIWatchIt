@@ -420,6 +420,52 @@ class ProviderContentRepositoryTests(TestCase):
         self.assertIsNone(content.season_number)
         self.assertIsNone(content.episode_number)
 
+    def test_over_length_provider_content_id_is_truncated_not_fatal(self):
+        # Regression: a real Pluto TV sports replay slug measured 125 chars
+        # against a varchar(100) column. Postgres raised
+        # "value too long for type character varying(100)" mid-catalogue and
+        # took down the whole source's refresh (~1,987 items) because of ONE
+        # row. The id must be clamped, and the row must still persist.
+        long_id = (
+            "replay-2021-professional-bull-riders-unleash-the-beast-tour-pbr-"
+            "monster-energy-invitational-presented-by-cooper-tires-round-1"
+        )
+        self.assertGreater(len(long_id), 100)
+
+        row, created = self.repo.upsert(
+            **self._payload(provider_content_id=long_id), now=timezone.now()
+        )
+
+        self.assertTrue(created)
+        row.refresh_from_db()
+        self.assertEqual(len(row.provider_content_id), 100)
+        self.assertEqual(row.provider_content_id, long_id[:100])
+        # The identity is built from the CLAMPED id, so the key still matches
+        # what is stored (a key carrying the untruncated value would orphan the
+        # row from every later refresh).
+        self.assertEqual(
+            row.identity,
+            build_provider_content_identity(
+                "cbc_gem", long_id[:100], ContentType.MOVIE
+            ),
+        )
+
+    def test_truncated_id_converges_on_one_row_across_refreshes(self):
+        # Two ids sharing a 100-char prefix collapse onto one row — the
+        # documented, accepted trade-off of plain truncation over a hash.
+        prefix = "x" * 100
+        first, _ = self.repo.upsert(
+            **self._payload(provider_content_id=prefix + "-one"),
+            now=timezone.now(),
+        )
+        second, created = self.repo.upsert(
+            **self._payload(provider_content_id=prefix + "-two"),
+            now=timezone.now() + timedelta(minutes=1),
+        )
+        self.assertFalse(created)
+        self.assertEqual(first.pk, second.pk)
+        self.assertEqual(ProviderContent.objects.count(), 1)
+
     def test_upsert_converges_on_one_row_and_keeps_first_seen(self):
         first = timezone.now() - timedelta(hours=5)
         second = timezone.now()

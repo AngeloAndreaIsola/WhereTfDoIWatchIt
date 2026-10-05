@@ -8,7 +8,7 @@ from typing import Any
 
 from django.conf import settings
 from django.db import connection, transaction
-from django.db.models import Count, Subquery
+from django.db.models import Count, Max, Subquery
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.views.decorators.http import require_GET
@@ -80,7 +80,11 @@ def paginate_list(items: list, page: int, page_size: int) -> tuple[list, dict]:
         "has_previous": page > 1,
     }
     return page_items, pagination
-from .services.bulk_refresh import process_watchlist_refresh, stale_catalogue_sources
+from .services.bulk_refresh import (
+    process_watchlist_refresh,
+    stale_catalogue_sources,
+    title_level_source_slugs,
+)
 from .services.availability_reads import get_local_offers
 from .services.provider_status import (
     CATALOGUE,
@@ -88,7 +92,7 @@ from .services.provider_status import (
     provider_card_status,
     refresh_target,
 )
-from .services.rate_limit import RateLimiter
+from .services.rate_limit import rate_limiter_for
 from .services.refresh_requests import (
     refresh_states_for,
     request_availability_refresh,
@@ -1460,23 +1464,31 @@ def _next_utc_midnight_ts() -> float:
 def watchlist_refresh_status(request):
     """GET /api/watchlist/refresh-status/?since=<epoch>[&batch=<uuid>] — bulk progress.
 
-    Counts the watchlist titles' default-scope refresh requests, split into
-    ``pending`` (still queued for the worker) plus ``refreshed`` (done) and
-    ``failed``. ``since`` should be the ``now`` value the enqueue endpoint
-    returned — both sides are server clock, so progress cannot leak across
-    runs.
+    Counts the watchlist titles' refresh requests, split into ``pending``
+    (still queued for the worker) plus ``refreshed`` (done) and ``failed``.
 
-    With ``batch`` (the enqueue response's ``batch`` uuid) every count is
-    scoped to that run's stamped rows: ``pending`` then means "this button's
+    **Source fan-out.** Refresh All now queues one request per (title, source)
+    across every registered title-level source, so a run's unit of work is a
+    *source check*, not a title — ``total`` and the three counts are all in
+    checks, and ``titles``/``checks_per_title`` let the UI say so honestly
+    instead of implying one check per title. With ``batch`` (the enqueue
+    response's ``batch`` uuid) every count is scoped to that run's stamped
+    rows across **all** sources: ``pending`` then means "this button's
     backlog", never unrelated requests queued elsewhere — repeated clicks
     re-stamp rows, so the newest batch always sees the full queue it owns.
     Without ``batch`` the legacy unscoped behavior stands.
 
-    Also reports the shared daily quota (``rate_limited``,
-    ``quota_remaining``, ``quota_limit``, ``resets_at``): at ~100 calls/day
-    a large watchlist drains over several days, and the UI needs to say
-    "quota used, resumes tomorrow" instead of implying a failure. Non-
-    watchlist titles and other source scopes are never counted.
+    Legacy ``source=""`` batches keep working: those rows are counted like any
+    other source-scoped row, so an in-flight batch queued before source
+    fan-out still reports real progress rather than zero.
+
+    **Rate limiting is per source**, so the response names the blocked sources
+    (``rate_limited_sources``) instead of claiming the whole watchlist is
+    blocked. ``rate_limited`` stays for backwards compatibility and means
+    "at least one source is waiting for its quota" — it is never used to claim
+    nothing else is progressing. ``source_quotas`` reports the remaining
+    budget per source and omits unmetered sources entirely (there is no quota
+    to report for them, so none is invented).
     """
     since_raw = request.GET.get("since")
     try:
@@ -1500,15 +1512,18 @@ def watchlist_refresh_status(request):
             )
 
     watchlist_movie_ids = WatchlistItem.objects.filter(user_id=1).values("movie_id")
+    # No ``source`` filter: a run owns one row per (title, source), and this
+    # endpoint must aggregate all of them — the legacy ``source=""`` rows and
+    # every explicit slug alike.
     scope = RefreshRequest.objects.filter(
         movie_id__in=Subquery(watchlist_movie_ids),
-        source="",
     )
     if batch_id is not None:
         batch_scope = scope.filter(batch=batch_id)
         pending = batch_scope.filter(status=RefreshRequestStatus.PENDING).count()
         refreshed = batch_scope.filter(status=RefreshRequestStatus.DONE).count()
         failed = batch_scope.filter(status=RefreshRequestStatus.FAILED).count()
+        total = batch_scope.count()
     else:
         pending = scope.filter(status=RefreshRequestStatus.PENDING).count()
         refreshed = scope.filter(
@@ -1517,20 +1532,63 @@ def watchlist_refresh_status(request):
         failed = scope.filter(
             status=RefreshRequestStatus.FAILED, completed_at__gte=since
         ).count()
+        # Without a batch there is no run boundary, so the comparable total is
+        # everything still outstanding plus what completed since ``since``.
+        total = pending + refreshed + failed
 
-    limiter = RateLimiter(DEFAULT_SOURCE_SLUG)
-    quota_remaining = limiter.remaining()
+    # Which sources are out of budget, and what is left for each. Computed
+    # from the limiters themselves so this endpoint can never disagree with
+    # the worker about what is blocked.
+    source_quotas = {}
+    for slug in title_level_source_slugs():
+        limiter = rate_limiter_for(slug)
+        remaining = limiter.remaining()
+        if remaining is None:
+            continue  # unmetered: no quota to report, none invented
+        source_quotas[slug] = {
+            "remaining": remaining,
+            "limit": limiter.daily_limit,
+            "exhausted": remaining <= 0,
+        }
+    rate_limited_sources = sorted(
+        slug for slug, quota in source_quotas.items() if quota["exhausted"]
+    )
+
+    # How many titles this run covers, so the UI can distinguish "3 of 29
+    # titles" from "60 of 87 checks". Only meaningful for a batched run.
+    #
+    # ``checks_per_title`` counts the distinct sources actually queued per
+    # title rather than dividing total by titles: rows settle over time, so a
+    # mean would drift mid-run (571/191 = 2.98) even though nothing about the
+    # fan-out changed. The distinct-source count is the actual fan-out width
+    # and stays exact.
+    titles = 0
+    checks_per_title = 0
+    if batch_id is not None:
+        batched = scope.filter(batch=batch_id)
+        titles = batched.values("movie_id").distinct().count()
+        per_title_sources = (
+            batched.values("movie_id")
+            .annotate(n=Count("source", distinct=True))
+            .aggregate(m=Max("n"))["m"]
+        )
+        checks_per_title = per_title_sources or 0
 
     return Response(
         {
+            "total": total,
             "pending": pending,
             "refreshed": refreshed,
             "failed": failed,
+            "titles": titles,
+            "checks_per_title": checks_per_title,
             "since": since_ts,
             "batch": str(batch_id) if batch_id else None,
-            "rate_limited": quota_remaining <= 0,
-            "quota_remaining": quota_remaining,
-            "quota_limit": limiter.daily_limit,
+            # "at least one source is waiting for its quota" — never "the whole
+            # refresh is blocked".
+            "rate_limited": bool(rate_limited_sources),
+            "rate_limited_sources": rate_limited_sources,
+            "source_quotas": source_quotas,
             "resets_at": _next_utc_midnight_ts(),
         },
         status=status.HTTP_200_OK,

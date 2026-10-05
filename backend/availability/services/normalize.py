@@ -46,6 +46,32 @@ def normalize_country(value: str) -> str:
     return code
 
 
+def truncate_field(value: str, max_length: int) -> str:
+    """Clamp a provider-supplied identifier to a column's ``max_length``.
+
+    Provider-native ids are the provider's own strings — a Pluto TV sports
+    replay slug, a BBC programme path — and nothing bounds them to our schema.
+    ``ProviderContent.provider_content_id``, ``Offer`` and ``ContentMapping``
+    all declare ``max_length=100``, so one long slug (a real Pluto item measured
+    125 chars) aborted an entire catalogue refresh with a Postgres
+    ``value too long for type character varying(100)``: a single row took down
+    ~1,987 items.
+
+    Truncation is applied **here, at the shared normalize boundary**, rather
+    than in the individual source, because every collector funnels through this
+    module and the constraint is a property of our columns — not of Pluto. A
+    source that hits it tomorrow is then covered by construction instead of
+    needing its own patch.
+
+    Plain truncation (not a hash) keeps the value human-readable and stable, and
+    the result stays unique in practice: these ids are unique per provider to
+    begin with, so collisions would require two ids sharing a 100-char prefix.
+    """
+
+    text = str(value or "")
+    return text if len(text) <= max_length else text[:max_length]
+
+
 def normalize_title(value) -> str:
     """Casefolded, accent-stripped, punctuation-insensitive title key.
 

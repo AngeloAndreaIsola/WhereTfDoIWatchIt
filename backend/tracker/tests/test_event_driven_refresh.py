@@ -31,6 +31,7 @@ from tracker.models import (
 )
 from tracker.services.bulk_refresh import process_watchlist_refresh
 from tracker.services.rate_limit import RateLimitExceeded, RateLimiter
+from tracker.services.streaming_api import UpstreamTitleNotFound
 from tracker.services.refresh_requests import (
     MAX_ATTEMPTS,
     process_refresh_queue,
@@ -863,6 +864,59 @@ class DrainTests(TestCase):
         self.assertEqual(
             self.refresh_service.refresh_content.call_count, calls_so_far + 1
         )
+
+    def test_upstream_404_is_permanent_and_never_retried(self):
+        # A 404 means the upstream catalogue does not carry the title at all —
+        # a fact that cannot change on a retry. It must fail on the FIRST
+        # attempt instead of consuming MAX_ATTEMPTS metered calls to relearn
+        # the same 404.
+        movie = Movie.objects.create(tmdb_id=942, title="Absent", year=2020)
+        self._request(movie, RefreshPriority.NEW)
+        self.refresh_service.refresh_content.side_effect = UpstreamTitleNotFound(
+            "Streaming Availability has no record of movie 942 (404)"
+        )
+
+        first = self._run()
+        # A permanently absent title is not a run failure: it lands on its own
+        # counter so a healthy run's ``errors`` stays meaningful.
+        self.assertEqual(first["errors"], 0)
+        self.assertEqual(first["skipped_upstream_missing"], 1)
+        self.assertEqual(first["requests_drained"], 1)
+        request = RefreshRequest.objects.get()
+        # Failed immediately, having attempted exactly once — not MAX_ATTEMPTS.
+        self.assertEqual(request.attempts, 1)
+        self.assertEqual(request.status, RefreshRequestStatus.FAILED)
+        self.assertIn("UpstreamTitleNotFound", request.last_error)
+
+        calls_so_far = self.refresh_service.refresh_content.call_count
+        second = self._run()
+        # Dead on arrival: the request is never picked up again...
+        self.assertEqual(second["requests_drained"], 0)
+        self.assertEqual(
+            RefreshRequest.objects.get().status, RefreshRequestStatus.FAILED
+        )
+        # ...and the title costs no further metered calls. The permanent 404 is
+        # remembered as evidence (a failed UpstreamTitleNotFound request), so
+        # neither the queue drain nor the background sweep re-fetches it — an
+        # absent title writes no Offer row and would otherwise read as stale
+        # forever, burning one call per sweep run, every run.
+        self.assertLessEqual(
+            self.refresh_service.refresh_content.call_count,
+            calls_so_far,
+        )
+
+    def test_transient_error_still_retries(self):
+        # The counterpart guard: only a 404 is permanent. A 5xx/timeout/429 must
+        # keep the normal retry ladder, or a temporary upstream blip would
+        # permanently mark a perfectly good title as failed.
+        movie = Movie.objects.create(tmdb_id=943, title="Blip", year=2020)
+        self._request(movie, RefreshPriority.NEW)
+        self.refresh_service.refresh_content.side_effect = RuntimeError("503")
+
+        self._run()
+        request = RefreshRequest.objects.get()
+        self.assertEqual(request.attempts, 1)
+        self.assertEqual(request.status, RefreshRequestStatus.PENDING)
 
     def test_drained_titles_are_not_refreshed_again_by_the_sweep(self):
         movie = Movie.objects.create(tmdb_id=951, title="WatchedOnce", year=2020)

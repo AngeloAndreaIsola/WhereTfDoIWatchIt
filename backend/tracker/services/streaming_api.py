@@ -31,6 +31,25 @@ from tracker.languages import normalize_language_code
 
 logger = logging.getLogger(__name__)
 
+
+class UpstreamTitleNotFound(Exception):
+    """The upstream catalogue has no record of this title at all (HTTP 404).
+
+    Distinct from a transport failure on purpose. A 404 means *this provider
+    does not carry this title* — a statement about the world that will still be
+    true on the next attempt, an hour later or a month later. Retrying it can
+    never succeed, and every retry spends metered API budget to relearn the
+    same fact, so callers treat it as a **permanent** outcome: fail the request
+    immediately instead of burning ``MAX_ATTEMPTS`` calls on a guaranteed no.
+
+    Anything else (429, 5xx, timeouts, connection resets) stays a plain
+    exception, because those *are* transient and worth retrying.
+    """
+
+    def __init__(self, message: str, *, status_code: int = 404):
+        super().__init__(message)
+        self.status_code = status_code
+
 RAPIDAPI_HOST = "streaming-availability.p.rapidapi.com"
 DEFAULT_TIMEOUT = 15
 ALLOWED_OFFER_TYPES = {"subscription", "free"}
@@ -225,6 +244,16 @@ class StreamingAvailabilityClient:
             "x-rapidapi-host": RAPIDAPI_HOST,
         }
         resp = requests.get(url, headers=headers, timeout=self.timeout)
+        # A 404 is the one upstream answer that is a permanent fact about the
+        # title rather than a transient fault, so it is translated into the
+        # dedicated signal here — at the boundary where the status code is
+        # still visible — instead of surfacing as a generic HTTPError that
+        # every caller would have to re-classify.
+        if resp.status_code == 404:
+            raise UpstreamTitleNotFound(
+                f"Streaming Availability has no record of {show_type} {tmdb_id} "
+                f"(404 from {url})"
+            )
         resp.raise_for_status()
         data = resp.json()
         offers = self._parse_offers(data)

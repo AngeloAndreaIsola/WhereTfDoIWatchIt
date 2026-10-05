@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import patch
 
+import requests
 from django.test import SimpleTestCase
 
 from tracker.services.streaming_api import (
     StreamingAvailabilityClient,
+    UpstreamTitleNotFound,
     service_display_name,
 )
 
@@ -114,6 +117,57 @@ class PrimeOfferTypeTests(SimpleTestCase):
 
         self.assertNotIn("CA", surviving_countries)  # Prime Video Channel
         self.assertNotIn("AT", surviving_countries)  # purchase offer
+
+
+class UpstreamNotFoundTests(SimpleTestCase):
+    """A 404 must be signalled as a PERMANENT miss, not a transient fault.
+
+    The distinction decides whether the caller retries. Every retry of an absent
+    title re-earns the same 404 while spending metered API budget, so the client
+    translates 404 at the HTTP boundary into ``UpstreamTitleNotFound`` — and
+    leaves every other failure as an ordinary exception, so transient faults
+    (5xx, 429, timeouts) keep their retry ladder.
+    """
+
+    class _Resp:
+        def __init__(self, status_code):
+            self.status_code = status_code
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise requests.HTTPError(f"{self.status_code} error")
+
+        def json(self):
+            return {"streamingOptions": {}}
+
+    def _client_get(self, status_code):
+        client = StreamingAvailabilityClient(api_key="test-key")
+        with patch(
+            "tracker.services.streaming_api.requests.get",
+            return_value=self._Resp(status_code),
+        ):
+            return client.get_availability(1234, content_type="movie")
+
+    def test_404_raises_upstream_title_not_found(self):
+        with self.assertRaises(UpstreamTitleNotFound) as ctx:
+            self._client_get(404)
+        self.assertEqual(ctx.exception.status_code, 404)
+        self.assertIn("1234", str(ctx.exception))
+
+    def test_5xx_stays_a_plain_transient_exception(self):
+        with self.assertRaises(requests.HTTPError):
+            self._client_get(503)
+
+    def test_429_stays_a_plain_transient_exception(self):
+        # A rate-limit response is worth retrying, so it must NOT be
+        # misclassified as "title absent" and skipped.
+        with self.assertRaises(requests.HTTPError):
+            self._client_get(429)
+
+    def test_upstream_not_found_is_not_an_http_error(self):
+        # Deliberately not a requests.HTTPError subclass: callers must be able
+        # to tell "provider has no such title" from "the request went wrong".
+        self.assertFalse(issubclass(UpstreamTitleNotFound, requests.HTTPError))
 
 
 class ServiceDisplayNameTests(SimpleTestCase):

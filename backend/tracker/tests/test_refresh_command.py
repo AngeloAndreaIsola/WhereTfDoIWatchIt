@@ -12,7 +12,9 @@ from tracker.services.rate_limit import RateLimitExceeded, RateLimiter
 from tracker.tests.availability_factories import local_offer
 
 REFRESH_CLS = "tracker.services.bulk_refresh.AvailabilityRefreshService"
-LIMITER_CLS = "tracker.services.bulk_refresh.RateLimiter"
+# The sweep resolves the default source's budget through
+# ``rate_limiter_for``, so that is the factory a caller must stand in for.
+LIMITER_CLS = "tracker.services.bulk_refresh.rate_limiter_for"
 
 
 class RefreshCommandTests(TestCase):
