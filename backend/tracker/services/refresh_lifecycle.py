@@ -78,8 +78,9 @@ from ..models import (
 )
 from .availability_report import (
     NON_TERMINAL_SOURCE_STATUSES,
-    TERMINAL_SOURCE_STATUSES,
     TitleAvailabilityState,
+    title_source_report,
+    TERMINAL_SOURCE_STATUSES,
     build_run_summary,
     sync_run_progress,
 )
@@ -233,51 +234,9 @@ class AvailabilityRefreshLifecycle:
         summary = build_run_summary(ids, batch=refresh.batch)
         sync_run_progress(refresh, ids, batch=refresh.batch)
 
-        outstanding = _outstanding_request_count(refresh)
-        blocked = summary["totals"]["unknown"] > 0
-        source_rows = list(refresh.sources.all())
-        every_source_failed = bool(source_rows) and all(
-            r.status == "failed" for r in source_rows
-        )
-
-        # Hard invariant, enforced rather than assumed. A terminal run that
-        # still owns outstanding requests or unsettled source rows is a bug in
-        # whatever tried to finalise it, and the correct response is to raise:
-        # recording a terminal status over a non-empty queue produces a report
-        # that claims work finished which did not, and that is worse than a
-        # failed run because it is believed.
-        if outstanding:
-            raise UnsettledWorkError(
-                f"refresh {refresh.pk} has {outstanding} unsettled request(s); "
-                f"settle them before finalising"
-            )
-        unsettled_sources = [
-            r for r in source_rows if r.status in NON_TERMINAL_SOURCE_STATUSES
-        ]
-        if unsettled_sources:
-            raise UnsettledWorkError(
-                f"refresh {refresh.pk} has unsettled source row(s): "
-                + ", ".join(f"{r.source}={r.status}" for r in unsettled_sources)
-            )
-
-        # From here on the run owns nothing outstanding, so the status describes
-        # the *result* rather than the interruption:
-        #
-        #   FAILED    — every source failed outright, so the run produced no
-        #               evidence at all. Reserved and rare, so that it still
-        #               means something when it appears.
-        #   PARTIAL   — the run settled all its work, but titles remain
-        #               unresolved (blocked, failed, or never in any catalogue).
-        #               A worker running out of budget lands here too, and that
-        #               is now honest: the remaining rows are `blocked`, not
-        #               quietly pending.
-        #   COMPLETED — every applicable title resolved.
-        if every_source_failed:
-            status = AvailabilityRefreshStatus.FAILED
-        elif blocked:
-            status = AvailabilityRefreshStatus.PARTIAL
-        else:
-            status = AvailabilityRefreshStatus.COMPLETED
+        # The result is a pure function of already-settled evidence, so it is
+        # derived in one place rather than threaded through the worker.
+        status = derive_refresh_result(refresh, summary)
 
         refresh.status = status
         refresh.finished_at = timezone.now()
@@ -399,6 +358,186 @@ class UnsettledWorkError(RuntimeError):
     is indistinguishable from "the worker gave up". Failing loudly costs one
     reconcile pass; recording a lie costs every future reader of the data.
     """
+
+
+def derive_refresh_result(
+    refresh: AvailabilityRefresh,
+    summary: dict | None = None,
+) -> str:
+    """Reduce settled evidence to a refresh-level result. The final layer.
+
+    The layers above this one are unchanged and stay separate:
+
+        request state → source evidence → title classification → **result**
+
+    This function reads only what those layers already persisted. It does not
+    classify titles, consult upstreams, or decide whether a source should run.
+
+    Precedence, in order:
+
+    ``FAILED``
+        A genuine refresh-level lifecycle/orchestration failure. Reaching it
+        means calling :meth:`AvailabilityRefreshLifecycle.fail` — the worker's
+        tick raised, finalisation could not complete, the run could not be
+        established. It is deliberately *not* derived from evidence, because a
+        status that appears from ordinary evidence teaches readers to ignore it.
+        This mirrors the precedence you specified: run-level failure wins.
+
+    ``PARTIAL``
+        The lifecycle completed, but the settled evidence cannot support a
+        complete determination. Any of: a title still unresolved; a request
+        blocked for a reason that leaves a gap (``quota_exhausted``, but *not*
+        ``policy_not_needed``); or an applicable source that failed.
+
+    ``COMPLETED``
+        Every applicable title has sufficient evidence. That includes *negative*
+        answers — a source that ran and found nothing is successful work, not a
+        failure — and a ``policy_not_needed`` skip where a cheaper source already
+        resolved the title. A ``not_run``/``skipped`` source row is likewise
+        free: a collector that held no applicable work cannot be evidence of
+        failure merely by existing.
+
+    Raises :class:`UnsettledWorkError` if the run still owns queued or running
+    work. The terminal invariant is enforced here rather than assumed, so a run
+    can never be recorded terminal over a non-empty queue. `PARTIAL` is
+    therefore only ever reachable *after* everything is settled.
+    """
+    outstanding = _outstanding_request_count(refresh)
+    if outstanding:
+        raise UnsettledWorkError(
+            f"refresh {refresh.pk} has {outstanding} unsettled request(s); "
+            f"settle them before deriving a result"
+        )
+
+    source_rows = list(refresh.sources.all())
+    unsettled = [
+        f"{r.source}={r.status}"
+        for r in source_rows
+        if r.status in NON_TERMINAL_SOURCE_STATUSES
+    ]
+    if unsettled:
+        raise UnsettledWorkError(
+            f"refresh {refresh.pk} has unsettled source row(s): "
+            + ", ".join(unsettled)
+        )
+
+    ids = _scope_movie_ids(refresh, None)
+    if summary is None:
+        summary = build_run_summary(ids, batch=refresh.batch)
+
+    if _has_unresolved_in_scope_title(ids, refresh):
+        return AvailabilityRefreshStatus.PARTIAL
+
+    # An applicable source that was tried and failed is incomplete evidence
+    # even if every title happens to resolve elsewhere, because that source's
+    # scope is unaccounted for. A source that never ran is not.
+    if _has_applicable_source_failure(refresh):
+        return AvailabilityRefreshStatus.PARTIAL
+
+    # Blocked work is only a gap when it left something undetermined. A
+    # `policy_not_needed` skip means a cheaper source already resolved the
+    # title, which is exactly the ladder working.
+    if _has_informative_blocked_work(refresh):
+        return AvailabilityRefreshStatus.PARTIAL
+
+    return AvailabilityRefreshStatus.COMPLETED
+
+
+def _has_unresolved_in_scope_title(movie_ids, refresh: AvailabilityRefresh) -> bool:
+    """Whether a title in this run's scope was left without a determination.
+
+    Scope matters here, and it is the whole point. The report classifies a title
+    against *every* source in the registry, including sources this refresh never
+    asked about, so an untouched source reads ``not_checked`` and would hold the
+    whole run at ``PARTIAL`` forever. Measured: three sources answering
+    ``no_offer`` cleanly still reported ``unknown``, purely because
+    Streaming Availability had no request row in that run.
+
+    So this asks a narrower question — did any source **this run** was
+    responsible for leave the title undetermined? A source outside the run's
+    scope is not evidence about this run either way.
+
+    Definitive answers count as determined, including negatives:
+    ``resolved``, ``no_offer`` and ``title_not_found`` all mean the source
+    answered. Only absence of information — ``source_unavailable`` (a transient
+    failure), ``quota_exhausted``, ``not_checked`` from a source the run did
+    engage, ``queued`` — leaves the title unresolved.
+    """
+    if not movie_ids:
+        return False
+
+    report = title_source_report(movie_ids, batch=refresh.batch)
+
+    # What this refresh actually asked about. A source with no request row in
+    # this batch was not this run's responsibility, whatever the global
+    # report says about it.
+    engaged = {
+        (row["movie_id"], row["source"])
+        for row in RefreshRequest.objects.filter(batch=refresh.batch).values(
+            "movie_id", "source"
+        )
+    }
+
+    for movie_id, entry in report.items():
+        if entry["state"] == TitleAvailabilityState.AVAILABLE:
+            # A positive answer settles the title regardless of what other
+            # sources did or did not say.
+            continue
+        for src in entry["sources"]:
+            if src["reason"] in _DEFINITIVE_NEGATIVE_OR_POSITIVE:
+                continue
+            if (movie_id, src["source"]) not in engaged:
+                # Outside this run's scope: not this run's evidence gap.
+                continue
+            return True
+    return False
+
+
+# Per-source verdicts that mean the source *answered*. `resolved` is a positive
+# answer; `no_offer` and `title_not_found` are definitive negatives. All three
+# are completed work — a source that ran and found nothing has succeeded.
+_DEFINITIVE_NEGATIVE_OR_POSITIVE = frozenset(
+    {
+        AvailabilityResolutionReason.RESOLVED,
+        AvailabilityResolutionReason.NO_OFFER,
+        AvailabilityResolutionReason.TITLE_NOT_FOUND,
+    }
+)
+
+
+# Blocked reasons that mean "we may not run this yet", as opposed to the ladder
+# correctly deciding the work was unnecessary. Mirrors BlockedReason but is
+# stated here so the result layer reads without cross-referencing the request
+# layer's vocabulary.
+_UNINFORMATIVE_BLOCK_REASONS = frozenset(
+    {
+        "policy_not_needed",
+        "superseded",
+    }
+)
+
+
+def _has_informative_blocked_work(refresh: AvailabilityRefresh) -> bool:
+    """Whether any settled row is blocked for a reason that leaves a gap.
+
+    Only `blocked`/``quota_exhausted`` and ``source_disabled`` count: those mean
+    a legitimate request could not be executed, so its evidence is missing.
+    ``policy_not_needed`` and ``superseded`` do not — they record work another
+    source or a newer request legitimately replaced.
+    """
+    return RefreshRequest.objects.filter(
+        batch=refresh.batch, status=RefreshRequestStatus.BLOCKED
+    ).exclude(blocked_reason__in=_UNINFORMATIVE_BLOCK_REASONS).exists()
+
+
+def _has_applicable_source_failure(refresh: AvailabilityRefresh) -> bool:
+    """Whether an applicable source failed, leaving its scope unaccounted for.
+
+    A `failed` source row means it was tried and did not answer. A `skipped`,
+    `not_applicable` or `not_run` row means it was never applicable, which is
+    not a failure and must not make the run partial.
+    """
+    return any(row.status == "failed" for row in refresh.sources.all())
 
 
 def settle_unexecutable_source_rows(refresh: AvailabilityRefresh) -> dict[str, int]:
