@@ -87,7 +87,7 @@ def _repoint(queryset, canonical, rebuild_identity: bool) -> None:
             row.delete()
 
 
-def _merge_provider(canonical, duplicate) -> None:
+def _merge_provider(canonical, duplicate, apps=None) -> None:
     from availability.models import (
         ContentMapping,
         Offer,
@@ -113,13 +113,33 @@ def _merge_provider(canonical, duplicate) -> None:
             sub.provider = canonical
             sub.save()
 
-    for mapping in ExternalProviderMapping.objects.filter(provider=duplicate):
-        if ExternalProviderMapping.objects.filter(
-            provider=canonical, integration_name=mapping.integration_name
+    # Both sides are resolved as *historical* models when available. This
+    # migration runs before tracker.0035 adds the country-aware ``country``
+    # column, so a live-class query would SELECT a column that does not exist
+    # yet and every fresh database would fail at this step. Passing a live
+    # ``Provider`` instance into a historical query also raises
+    # ("Must be \"Provider\" instance"), so the provider side is re-read as a
+    # historical row too. Merge semantics are unchanged — at this point in
+    # history every mapping row is unscoped, so (provider, integration_name)
+    # is still the full key.
+    MappingModel = (
+        apps.get_model("tracker", "ExternalProviderMapping")
+        if apps is not None else ExternalProviderMapping
+    )
+    ProviderModel = (
+        apps.get_model("tracker", "Provider")
+        if apps is not None else None
+    )
+    canonical_ref = (
+        ProviderModel.objects.get(pk=canonical.pk) if ProviderModel else canonical
+    )
+    for mapping in list(MappingModel.objects.filter(provider_id=duplicate.pk)):
+        if MappingModel.objects.filter(
+            provider_id=canonical_ref.pk, integration_name=mapping.integration_name
         ).exists():
             mapping.delete()
         else:
-            mapping.provider = canonical
+            mapping.provider_id = canonical_ref.pk
             mapping.save()
 
     # Legacy scraper rows: fold into the canonical twin (same title/year) or,
@@ -196,7 +216,7 @@ def merge_duplicate_providers(apps, schema_editor):
             continue
         canonical, duplicates = members[0], members[1:]
         for duplicate in duplicates:
-            _merge_provider(canonical, duplicate)
+            _merge_provider(canonical, duplicate, apps=apps)
 
 
 class Migration(migrations.Migration):
@@ -209,6 +229,15 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ("tracker", "0032_seed_youtube_provider"),
+        # The merge repoints availability projections (Offer/ProviderContent/
+        # ContentMapping) whose FKs point at tracker.Provider, and re-ingests
+        # through the legacy bridge. Declaring the availability dependency is
+        # what makes those tables exist first: without it Django is free to
+        # apply this migration before availability.0001, and a brand-new
+        # database fails here with 'relation "availability_contentmapping"
+        # does not exist'. tracker.0003 in turn depends on availability.0001,
+        # so this edge introduces no cycle.
+        ("availability", "0003_providercontent_contentmapping_content_and_more"),
     ]
 
     operations = [

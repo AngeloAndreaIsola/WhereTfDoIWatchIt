@@ -61,15 +61,15 @@ class CountryTests(TestCase):
 
 class SourceTests(TestCase):
     def test_create_source(self):
-        source = Source.objects.create(slug="justwatch", name="JustWatch", type="aggregator")
-        self.assertEqual(str(source), "JustWatch")
+        source = Source.objects.create(slug="stub_aggregator", name="Stub Aggregator", type="aggregator")
+        self.assertEqual(str(source), "Stub Aggregator")
         self.assertTrue(source.enabled)
         self.assertEqual(source.configuration, {})
 
     def test_slug_unique(self):
-        Source.objects.create(slug="justwatch", name="JustWatch")
+        Source.objects.create(slug="stub_aggregator", name="Stub Aggregator")
         with self.assertRaises(IntegrityError):
-            Source.objects.create(slug="justwatch", name="Duplicate")
+            Source.objects.create(slug="stub_aggregator", name="Duplicate")
 
 
 class OfferModelTests(TestCase):
@@ -78,7 +78,7 @@ class OfferModelTests(TestCase):
         self.country, _ = Country.objects.get_or_create(
             code="NL", defaults={"name": "Netherlands"}
         )
-        self.source = Source.objects.create(slug="justwatch", name="JustWatch", type="aggregator")
+        self.source = Source.objects.create(slug="stub_aggregator", name="Stub Aggregator", type="aggregator")
 
     def _offer_kwargs(self, **overrides):
         kwargs = {

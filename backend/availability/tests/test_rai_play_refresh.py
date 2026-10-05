@@ -366,10 +366,11 @@ class MultiSourceTests(RaiPlayRefreshTestCase):
         self._refresh_streaming_availability("sa-88213")
         self.service.refresh_catalogue()
 
-        self.assertEqual(
-            set(Source.objects.values_list("slug", flat=True)),
-            {"streaming_availability", "rai_play"},
-        )
+        # Membership, not equality: the aggregator sources are seeded by
+        # migration 0006 and are not part of what this test writes.
+        written = set(Source.objects.values_list("slug", flat=True))
+        self.assertTrue(
+            {"streaming_availability", "rai_play"}.issubset(written))
         self.assertEqual(
             {run.source.slug for run in SyncRun.objects.select_related("source")},
             {"streaming_availability", "rai_play"},

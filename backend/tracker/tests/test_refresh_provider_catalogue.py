@@ -198,7 +198,11 @@ class SchedulerDiscoveryTests(TestCase):
         mock_cls.return_value = make_service()
         slugs = catalogue_slugs()
         for slug in slugs:
-            Source.objects.create(slug=slug, name=slug, enabled=False)
+            # update_or_create, not create: the aggregator sources are seeded by
+            # migration 0006, so their rows already exist and a plain create()
+            # would collide on the slug unique constraint.
+            Source.objects.update_or_create(
+                slug=slug, defaults={"name": slug, "enabled": False})
 
         out = io.StringIO()
         call_command("refresh_provider_catalogue", stdout=out)
@@ -231,9 +235,13 @@ class SchedulerDiscoveryTests(TestCase):
     def test_source_without_a_database_row_counts_as_enabled(self, mock_cls):
         mock_cls.return_value = make_service()
         slugs = catalogue_slugs()
-        # Never refreshed before -> no Source row -> default enabled=True.
+        # Never refreshed before -> no RefreshRun. A seeded Source row (the
+        # aggregator sources are seeded by migration 0006) counts as enabled,
+        # while a slug with no row falls back to enabled=True too, so both
+        # cases must still be scheduled.
         for slug in slugs:
-            self.assertFalse(Source.objects.filter(slug=slug).exists(), slug)
+            self.assertFalse(
+                RefreshRun.objects.filter(service=slug).exists(), slug)
 
         out = io.StringIO()
         call_command("refresh_provider_catalogue", stdout=out)
@@ -244,7 +252,11 @@ class SchedulerDiscoveryTests(TestCase):
     @patch(REFRESH_CLS)
     def test_nothing_to_do_is_a_success(self, mock_cls):
         for slug in catalogue_slugs():
-            Source.objects.create(slug=slug, name=slug, enabled=False)
+            # update_or_create, not create: the aggregator sources are seeded by
+            # migration 0006, so their rows already exist and a plain create()
+            # would collide on the slug unique constraint.
+            Source.objects.update_or_create(
+                slug=slug, defaults={"name": slug, "enabled": False})
 
         out = io.StringIO()
         call_command("refresh_provider_catalogue", stdout=out)

@@ -35,6 +35,13 @@ class SyncStatus(models.TextChoices):
     PENDING = "pending", "Pending"
     RUNNING = "running", "Running"
     SUCCEEDED = "succeeded", "Succeeded"
+    #: Some partitions succeeded and others failed (page 0 ok, page 2 error).
+    #: Explicitly *not* ``SUCCEEDED``: downstream code must be able to tell
+    #: "this source saw everything it was asked to see" from "this source saw
+    #: part of it". Deactivation is refused for both ``PARTIAL`` and
+    #: ``FAILED`` — ``OfferRepository.deactivate_unseen`` only accepts
+    #: ``SUCCEEDED`` — so an incomplete observation can never erase evidence.
+    PARTIAL = "partial", "Partial"
     FAILED = "failed", "Failed"
 
 

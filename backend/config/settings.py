@@ -131,6 +131,10 @@ APPEND_SLASH = False
 # External API keys (set via env or docker-compose env_file).
 TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "")
 RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "")
+# Watchmode aggregator API key. Read from the environment like the other
+# provider keys and never hard-coded; an empty value makes the source raise
+# an explicit auth error rather than silently report no availability.
+WATCHMODE_API_KEY = os.environ.get("WATCHMODE_API_KEY", "")
 
 # Hardcoded default preferences (v0): server-side source of truth until the
 # frontend preferences UI is enabled. These are returned by

@@ -42,7 +42,7 @@ class MultiSourceProvenanceTests(TestCase):
         return AvailabilityRefreshService(source=source).refresh_content(self.movie)
 
     def test_two_sources_for_one_provider_stay_distinguishable_by_source(self):
-        first = self._refresh("justwatch", "jw-81651789")
+        first = self._refresh("stub_aggregator", "jw-81651789")
         second = self._refresh("prime_video", "prime-catalog-42")
 
         self.assertEqual(first.created, 1)
@@ -53,7 +53,7 @@ class MultiSourceProvenanceTests(TestCase):
             offer.source.slug: offer
             for offer in Offer.objects.select_related("source", "provider", "country")
         }
-        self.assertEqual(set(by_source), {"justwatch", "prime_video"})
+        self.assertEqual(set(by_source), {"stub_aggregator", "prime_video"})
         for offer in by_source.values():
             self.assertEqual(offer.provider, self.provider)
             self.assertEqual(offer.country, self.country)
@@ -61,16 +61,16 @@ class MultiSourceProvenanceTests(TestCase):
             self.assertEqual(offer.offer_type, OfferType.SUBSCRIPTION)
             self.assertTrue(offer.currently_available)
         self.assertNotEqual(
-            by_source["justwatch"].provider_content_id,
+            by_source["stub_aggregator"].provider_content_id,
             by_source["prime_video"].provider_content_id,
         )
         self.assertEqual(
             {run.source.slug for run in SyncRun.objects.select_related("source")},
-            {"justwatch", "prime_video"},
+            {"stub_aggregator", "prime_video"},
         )
 
     def test_one_provider_row_is_shared_across_sources(self):
-        self._refresh("justwatch", "jw-1")
+        self._refresh("stub_aggregator", "jw-1")
         self._refresh("prime_video", "pw-1")
 
         # §7: do not create duplicate Provider records for every source.
@@ -81,18 +81,19 @@ class MultiSourceProvenanceTests(TestCase):
         )
 
     def test_each_source_gets_its_own_source_row_and_sync_run(self):
-        self._refresh("justwatch", "jw-1")
+        self._refresh("stub_aggregator", "jw-1")
         self._refresh("prime_video", "pw-1")
 
-        self.assertEqual(
-            set(Source.objects.values_list("slug", flat=True)),
-            {"justwatch", "prime_video"},
-        )
+        # Membership, not equality: the aggregator sources are seeded by
+        # migration 0006, so the table legitimately contains more than the
+        # two rows this test writes.
+        written = set(Source.objects.values_list("slug", flat=True))
+        self.assertTrue({"stub_aggregator", "prime_video"}.issubset(written))
         runs = SyncRun.objects.select_related("source")
         self.assertEqual(runs.count(), 2)
         self.assertEqual({run.status for run in runs}, {SyncStatus.SUCCEEDED})
         self.assertEqual(
-            {run.source.slug for run in runs}, {"justwatch", "prime_video"}
+            {run.source.slug for run in runs}, {"stub_aggregator", "prime_video"}
         )
 
     def test_identical_provider_content_ids_converge_on_one_canonical_row(self):
@@ -101,7 +102,7 @@ class MultiSourceProvenanceTests(TestCase):
         # refreshes upsert one canonical row and its provenance follows the
         # last writer. Sources using their own id namespaces (above) stay
         # fully distinguishable — this is the deliberate boundary.
-        self._refresh("justwatch", "same-id")
+        self._refresh("stub_aggregator", "same-id")
         self._refresh("prime_video", "same-id")
 
         self.assertEqual(Offer.objects.count(), 1)

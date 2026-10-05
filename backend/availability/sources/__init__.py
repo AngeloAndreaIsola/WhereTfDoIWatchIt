@@ -15,6 +15,7 @@ from .registry import (
 from .abc_iview import AbcIviewSource
 from .bbc_iplayer import BBCIPlayerSource
 from .cbc_gem import CBCGemSource
+from .justwatch import JustWatchSource
 from .mediaset_infinity import MediasetInfinitySource
 from .pbs import PbsSource
 from .pluto_tv import PlutoTvSource
@@ -22,6 +23,7 @@ from .prime_video import PrimeVideoSource
 from .rai_play import RaiPlaySource
 from .streaming_availability import StreamingAvailabilitySource
 from .tubi import TubiSource
+from .watchmode import WatchmodeSource
 from .youtube import YouTubeSource
 
 # Built-in implementations live here; the DB Source.slug only *identifies* a
@@ -37,6 +39,11 @@ source_registry.register(PlutoTvSource.slug, PlutoTvSource)
 source_registry.register(MediasetInfinitySource.slug, MediasetInfinitySource)
 source_registry.register(PbsSource.slug, PbsSource)
 source_registry.register(AbcIviewSource.slug, AbcIviewSource)
+# Aggregators: broad cross-country fallback/discovery coverage. They are
+# additional sources, never replacements for the collectors above — and
+# both are permanently non-authoritative (see each module docstring).
+source_registry.register(JustWatchSource.slug, JustWatchSource)
+source_registry.register(WatchmodeSource.slug, WatchmodeSource)
 
 __all__ = [
     "AvailabilitySource",
@@ -44,6 +51,7 @@ __all__ = [
     "CBCGemSource",
     "ContentRequest",
     "DEFAULT_SOURCE_SLUG",
+    "JustWatchSource",
     "MediasetInfinitySource",
     "PlutoTvSource",
     "PbsSource",
@@ -57,6 +65,7 @@ __all__ = [
     "StreamingAvailabilitySource",
     "TubiSource",
     "UnknownSourceError",
+    "WatchmodeSource",
     "YouTubeSource",
     "source_registry",
 ]

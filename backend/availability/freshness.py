@@ -68,6 +68,13 @@ SOURCE_FRESHNESS: dict[str, timedelta] = {
     "pbs": timedelta(hours=24),
     "abc_iview": timedelta(hours=24),
     "legacy_scraper": timedelta(hours=12),
+    # Aggregators: unofficial/fragile upstream, so their windows are longer
+    # than a first-party collector's. JustWatch is walked by
+    # ``refresh_provider_catalogue`` (12h) and Watchmode by a targeted sweep
+    # (24h, its quota is monthly). Neither is on the metered
+    # ``streaming_availability`` budget.
+    "justwatch": timedelta(hours=12),
+    "watchmode": timedelta(hours=24),
 }
 
 

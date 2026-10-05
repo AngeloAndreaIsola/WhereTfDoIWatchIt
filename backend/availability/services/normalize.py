@@ -28,6 +28,44 @@ OFFER_TYPES = {
 }
 
 
+#: JustWatch reports monetization as an upper-snake enum that is *not* the
+#: same vocabulary as ours: ``FLATRATE`` is a subscription, ``ADS`` is
+#: free-with-ads. They are mapped explicitly rather than guessed, because
+#: guessing "any FLATRATE-ish value is a subscription" is exactly how an
+#: aggregator's rental store would end up ranked as a subscription.
+JUSTWATCH_MONETIZATION_TYPES = {
+    "flatrate": OfferType.SUBSCRIPTION,
+    "subscription": OfferType.SUBSCRIPTION,
+    "svod": OfferType.SUBSCRIPTION,
+    "ads": OfferType.FREE_WITH_ADS,
+    "avod": OfferType.FREE_WITH_ADS,
+    "free": OfferType.FREE,
+    "freemium": OfferType.FREE,
+    "rent": OfferType.RENT,
+    "rental": OfferType.RENT,
+    "tvod": OfferType.BUY,
+    "buy": OfferType.BUY,
+    "purchase": OfferType.BUY,
+    "addon": OfferType.ADDON,
+    "add_on": OfferType.ADDON,
+}
+
+#: JustWatch quality tokens -> the shared ``tracker.services.score.QUALITY_RANK``
+#: vocabulary the ranking/filtering code already reads (4k/hdr/hd/sd). The
+#: source sends ``_4K`` (underscore-prefixed, measured), which is *not* a key
+#: ``QUALITY_RANK`` knows, so it is translated here instead of being stored
+#: raw.
+JUSTWATCH_QUALITIES = {
+    "_4k": "4k",
+    "4k": "4k",
+    "uhd": "4k",
+    "hdr": "hdr",
+    "qhd": "qhd",
+    "hd": "hd",
+    "sd": "sd",
+}
+
+
 def normalize_content_type(value: str) -> str:
     try:
         return CONTENT_TYPES[str(value).strip().lower()]
@@ -37,6 +75,30 @@ def normalize_content_type(value: str) -> str:
 
 def normalize_offer_type(value: str) -> str:
     return OFFER_TYPES.get(str(value or "").strip().lower(), OfferType.UNKNOWN)
+
+
+def normalize_justwatch_offer_type(value: str) -> str:
+    """JustWatch ``monetizationType`` -> canonical ``OfferType``.
+
+    Unrecognised values map to ``UNKNOWN`` rather than raising: an aggregator
+    that invents a new monetization enum must not take down a whole catalogue
+    page. ``UNKNOWN`` still persists as a real offer row, so the evidence
+    survives and is visible instead of being dropped.
+    """
+    return JUSTWATCH_MONETIZATION_TYPES.get(
+        str(value or "").strip().lower(), OfferType.UNKNOWN
+    )
+
+
+def normalize_justwatch_quality(value: str) -> str:
+    """JustWatch ``presentationType`` -> the shared quality vocabulary.
+
+    Returns ``""`` for anything unrecognised (rather than the raw token), so
+    an unknown rendition reads as "quality not stated" — which the ranking
+    code already handles — instead of polluting the filterable vocabulary
+    with a value nothing else in the app can interpret.
+    """
+    return JUSTWATCH_QUALITIES.get(str(value or "").strip().lower(), "")
 
 
 def normalize_country(value: str) -> str:

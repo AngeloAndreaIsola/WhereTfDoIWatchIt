@@ -38,7 +38,7 @@ class OfferRepositoryTests(TestCase):
             code="NL", defaults={"name": "Netherlands"}
         )
         self.it, _ = Country.objects.get_or_create(code="IT", defaults={"name": "Italy"})
-        self.source = Source.objects.create(slug="justwatch", name="JustWatch", type="aggregator")
+        self.source = Source.objects.create(slug="stub_aggregator", name="Stub Aggregator", type="aggregator")
         self.repo = OfferRepository()
 
     def _payload(self, **overrides):
@@ -144,7 +144,7 @@ class OfferDeactivateTests(TestCase):
             code="NL", defaults={"name": "Netherlands"}
         )
         self.it, _ = Country.objects.get_or_create(code="IT", defaults={"name": "Italy"})
-        self.source = Source.objects.create(slug="justwatch", name="JustWatch", type="aggregator")
+        self.source = Source.objects.create(slug="stub_aggregator", name="Stub Aggregator", type="aggregator")
         self.repo = OfferRepository()
         self.runs = SyncRunRepository()
 

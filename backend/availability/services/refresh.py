@@ -103,7 +103,7 @@ from django.db import transaction
 
 from tracker.models import ExternalProviderMapping, Provider
 
-from ..domain.enums import SyncMode
+from ..domain.enums import MatchMethod, SyncMode
 from ..models import ContentMapping, Country, Source
 from ..persistence.repositories import (
     CursorRepository,
@@ -117,6 +117,13 @@ from .matching import match_local_catalog
 from .normalize import normalize_content_type
 
 logger = logging.getLogger(__name__)
+
+#: Confidence for a mapping a source stated outright (it reported the TMDb id
+#: itself). Below a title/year match on purpose: an exact external id is the
+#: strongest *automated* evidence available, but it is still a source's claim,
+#: whereas a manual mapping outranks everything (``MappingRepository.record``
+#: enforces manual > confidence > never-overwrite-fuzzy).
+EXTERNAL_ID_CONFIDENCE = 0.95
 
 
 @dataclass(frozen=True)
@@ -188,9 +195,21 @@ class AvailabilityRefreshService:
         self.mappings = mapping_repository or MappingRepository()
         self.contents = content_repository or ProviderContentRepository()
 
-    def refresh_content(self, movie) -> RefreshResult:
+    def refresh_content(self, movie, *, country=None) -> RefreshResult:
+        """Title-targeted refresh, optionally scoped to an explicit *country*.
+
+        ``country`` is forwarded as a scope hint only. A source that ignores
+        scope hints (Streaming Availability answers for every country in one
+        call) is unaffected, while one that cannot answer without an explicit
+        market (JustWatch) raises rather than guessing a country. Callers that
+        omit it keep the previous behaviour exactly.
+        """
         try:
-            result = self.source.fetch(ContentRequest.from_content(movie))
+            request = ContentRequest.from_content(movie)
+            if country:
+                result = self.source.fetch(request, country=country)
+            else:
+                result = self.source.fetch(request)
         except Exception as exc:
             logger.exception(
                 "availability_refresh_fetch_failed source=%s tmdb_id=%s error=%s",
@@ -314,23 +333,94 @@ class AvailabilityRefreshService:
             raise
         return rows
 
-    def _attach_tmdb_ids(self, result, source, contents):
-        """Resolve provider content -> tmdb id for offers that carry none.
+    @staticmethod
+    def _exact_tmdb_id(content) -> Optional[int]:
+        """TMDb id the source stated for this content, or ``None``.
 
-        Sources that already know their tmdb ids produce no unresolved offers
-        and pay no mapping queries at all. Per content, resolution order is:
-        an existing ``ContentMapping`` row (manual mappings are never
-        overwritten — ``MappingRepository.record`` enforces precedence),
-        otherwise a local title/year match against the tracker catalog.
-        Content that resolves neither way yields no offers and is logged as
-        unresolved instead of being guessed at — its provider-native row is
-        already persisted and stays that way.
+        Read from the boundary value's ``external_ids`` — the field a source
+        adapter fills when the upstream payload carries a real id. Anything
+        non-numeric or falsy (``""``, ``"0"``) answers ``None``: a source that
+        reports no id must not be recorded as TMDb 0, which would otherwise
+        become a permanent mapping to a nonexistent movie.
+        """
+        raw = (content.external_ids or {}).get("tmdb")
+        if raw in (None, ""):
+            return None
+        try:
+            value = int(str(raw).strip())
+        except (TypeError, ValueError):
+            return None
+        return value or None
+
+    def _attach_tmdb_ids(self, result, source, contents):
+        """Resolve provider content -> tmdb id and persist what we learn.
+
+        Two independent jobs run here, and conflating them is what previously
+        made the persistence model inconsistent between sources:
+
+        1. **Persist an exact external-id mapping** for any discovered content
+           that carries a TMDb id itself (JustWatch, Watchmode). Such a mapping
+           is not a guess — the source stated the id — so it is recorded with
+           ``EXTERNAL_ID`` confidence through the same
+           ``MappingRepository.record`` seam as every other mapping. It buys
+           real provenance: ``ProviderContent -> ContentMapping -> Offer``
+           becomes true for *every* source rather than only the ones that
+           happen to lack ids, and later reconciliation/debugging can answer
+           "which source said this was TMDb 12345, and when" from the database
+           instead of from ``Offer.source`` alone.
+
+        2. **Resolve ids we do not have.** Only offers with ``tmdb_id is None``
+           need lookup: an existing ``ContentMapping`` row (manual mappings are
+           never overwritten — ``MappingRepository.record`` enforces
+           precedence), otherwise a local title/year match against the tracker
+           catalog. Content that resolves neither way yields no offers and is
+           logged as unresolved instead of being guessed at — its
+           provider-native row is already persisted and stays that way.
+
+        A season/episode node inherits the series' TMDb id, and is therefore
+        mapped too: its provider-native id is JustWatch's season id, which is
+        exactly the provider-native identity a mapping should key on.
 
         ``contents`` maps every discovered entry to the ``ProviderContent``
         row just written by the discovery step, so mappings link to it
         without a second lookup; an entry discovery skipped simply links
         nothing.
         """
+        exact: dict[tuple[str, str], int] = {}
+        for content in result.contents:
+            tmdb_id = self._exact_tmdb_id(content)
+            if tmdb_id is not None:
+                exact[(content.provider_id, content.provider_content_id)] = tmdb_id
+
+        if exact and result.contents:
+            try:
+                for content in result.contents:
+                    key = (content.provider_id, content.provider_content_id)
+                    tmdb_id = exact.get(key)
+                    if tmdb_id is None:
+                        continue
+                    provider = self._provider(content.provider_id)
+                    if provider is None:
+                        continue
+                    content_type = normalize_content_type(content.content_type)
+                    row = contents.get(_content_row_key(provider, content, content_type))
+                    self.mappings.record(
+                        provider=provider,
+                        source=source,
+                        provider_content_id=content.provider_content_id,
+                        content_type=content_type,
+                        tmdb_id=tmdb_id,
+                        confidence=EXTERNAL_ID_CONFIDENCE,
+                        match_method=MatchMethod.EXTERNAL_ID,
+                        content=row,
+                    )
+            except Exception as exc:
+                logger.exception(
+                    "availability_mapping_failed source=%s error=%s",
+                    self.source.slug, exc,
+                )
+                raise
+
         unresolved = {
             (offer.provider_id, offer.provider_content_id)
             for offer in result.offers
@@ -475,7 +565,9 @@ class AvailabilityRefreshService:
                 )
                 skipped += 1
                 continue
-            provider = self._provider(normalized.provider_id)
+            # Country-scoped: an aggregator's provider ids differ per market,
+            # so the observed offer's own country drives the resolution.
+            provider = self._provider(normalized.provider_id, country=normalized.country)
             country = Country.objects.filter(
                 code=normalized.country.upper(), enabled=True
             ).first()
@@ -594,11 +686,40 @@ class AvailabilityRefreshService:
             unresolved=unresolved,
         )
 
-    def _provider(self, external_id):
+    def _provider(self, external_id, country=None):
+        """Resolve a source-reported provider id to a canonical ``Provider``.
+
+        Country-aware by design: ``ExternalProviderMapping`` is keyed on
+        ``(provider, integration_name, country)`` because aggregators rename
+        providers per market — JustWatch reports Amazon Prime Video as
+        ``amazonprimevideo`` in NL but ``amazonprime`` in US/GB. Resolution
+        therefore tries, in order:
+
+        1. the row for *this* market (``country=<cc>``) — the precise match;
+        2. an unscoped row (``country=""``) — the backward-compatible path
+           every pre-existing integration still uses;
+        3. the provider slug itself — the seeded Streaming Availability id.
+
+        A market-specific miss falling through to an unscoped row is the
+        intended behavior, not a bug: an integration whose ids are
+        country-independent keeps resolving from its single global row, and
+        one that *is* country-specific simply has no row for a market it was
+        never measured in. It never resolves to a *different* provider's
+        market-specific id.
+        """
         external_id = str(external_id).strip().lower()
-        mapping = ExternalProviderMapping.objects.filter(
-            integration_name=self.source.slug, external_id=external_id
-        ).select_related("provider").first()
+        integration = self.source.slug
+        mapping_qs = ExternalProviderMapping.objects.filter(
+            integration_name=integration, external_id=external_id
+        ).select_related("provider")
+        country_code = str(country or "").strip().upper()
+        if country_code:
+            mapping = (
+                mapping_qs.filter(country=country_code).first()
+                or mapping_qs.filter(country="").first()
+            )
+        else:
+            mapping = mapping_qs.filter(country="").first()
         if mapping:
             return mapping.provider
         # Existing seeded providers use their Streaming Availability id as slug.

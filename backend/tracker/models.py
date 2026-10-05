@@ -205,22 +205,71 @@ class Provider(models.Model):
 
 
 class ExternalProviderMapping(models.Model):
+    """How one integration names one canonical provider — **per country**.
+
+    Country-awareness is not cosmetic: aggregator integrations identify a
+    provider differently in each market. JustWatch, for example, exposes
+    Amazon Prime Video as ``amazonprimevideo`` (``prv``) in NL, IT, CA and AU
+    but as ``amazonprime`` (``amp``) in US, GB and DE, so a single global
+    external id per provider is simply *wrong* for it.
+
+    ``country`` follows the existing tracker convention for a market — the
+    same 2-letter uppercase code ``Provider.country_code`` and
+    ``ScrapedContentMapping.country_code`` already use — rather than a new
+    country model. It is deliberately a plain field and not a foreign key:
+    ``availability.Country`` FKs *into* this app, so pointing back at it would
+    make ``tracker`` depend on ``availability``.
+
+    Empty ``country`` ("") means "unscoped/global", which is how every
+    pre-existing integration row is interpreted. That keeps backward
+    compatibility: an integration whose ids are country-independent (the
+    Streaming Availability mapping) keeps working unchanged, and lookups fall
+    back from a country-specific row to an unscoped one.
+    """
+
     provider = models.ForeignKey(
         Provider, on_delete=models.CASCADE, related_name="external_mappings"
     )
-    integration_name = models.CharField(max_length=50)  # e.g. "streaming_availability", "tmdb"
+    integration_name = models.CharField(max_length=50)  # e.g. "streaming_availability", "justwatch"
     external_id = models.CharField(max_length=100)
+    country = models.CharField(
+        max_length=2,
+        blank=True,
+        default="",
+        help_text='ISO 3166-1 alpha-2 market this external id belongs to. '
+                  'Empty = global/unscoped.',
+    )
 
     class Meta:
         constraints = [
+            # One external id per (provider, integration, market). The country
+            # slot is what makes the row country-aware: an unscoped row
+            # ("") and a per-country row are distinct entries for the same
+            # provider+integration, which is exactly what an aggregator that
+            # renames providers per market needs.
             models.UniqueConstraint(
-                fields=["provider", "integration_name"],
+                fields=["provider", "integration_name", "country"],
                 name="uniq_external_provider_mapping",
-            )
+            ),
+        ]
+        indexes = [
+            # Reverse resolution: "which provider does integration X call
+            # provider Y in market Z?" — the lookup the availability refresh
+            # service performs for every observed offer, so it is indexed in
+            # the order it is queried.
+            models.Index(
+                fields=["integration_name", "country", "external_id"],
+                name="idx_extprov_integration_lookup",
+            ),
         ]
 
+    def save(self, *args, **kwargs):
+        self.country = str(self.country or "").strip().upper()
+        super().save(*args, **kwargs)
+
     def __str__(self):
-        return f"{self.provider.slug} -> {self.integration_name}:{self.external_id}"
+        scope = self.country or "*"
+        return f"{self.provider.slug} -> {self.integration_name}:{scope}:{self.external_id}"
 
 
 class ScrapedContentMapping(models.Model):

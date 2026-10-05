@@ -95,7 +95,15 @@ class ProviderSystemTests(TestCase):
         disney_item = next(p for p in data if p["slug"] == "disney")
         self.assertEqual(disney_item["name"], "Disney+")
         self.assertFalse(disney_item["is_subscribed"])
-        self.assertEqual(len(disney_item["external_mappings"]), 1)
+        # One unscoped Streaming Availability id, plus the per-country
+        # JustWatch package ids seeded by availability.0006. The invariant
+        # under test is that the country-independent mapping still resolves
+        # exactly once -- not that the total is 1.
+        sa_mappings = [
+            m for m in disney_item["external_mappings"]
+            if m["integration_name"] == "streaming_availability"
+        ]
+        self.assertEqual(len(sa_mappings), 1)
 
     def test_provider_toggle_endpoint_and_persistence(self):
         # Active toggle

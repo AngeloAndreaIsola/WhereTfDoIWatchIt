@@ -673,6 +673,28 @@ class SyncRunRepository:
             started_at=timezone.now(),
         )
 
+    def mark_partial(self, sync_run, *, items_discovered=None, items_processed=None,
+                     offers_created=None, offers_updated=None):
+        """Record a run that completed some partitions and failed others.
+
+        Deliberately a distinct status from ``SUCCEEDED``: the run wrote real
+        rows, but its observation is incomplete, so it must never be read as a
+        complete snapshot. Deactivation is refused automatically because
+        :meth:`OfferRepository.deactivate_unseen` accepts ``SUCCEEDED`` only.
+        """
+        sync_run.status = SyncStatus.PARTIAL
+        if items_discovered is not None:
+            sync_run.items_discovered = items_discovered
+        if items_processed is not None:
+            sync_run.items_processed = items_processed
+        if offers_created is not None:
+            sync_run.offers_created = offers_created
+        if offers_updated is not None:
+            sync_run.offers_updated = offers_updated
+        sync_run.completed_at = timezone.now()
+        sync_run.save()
+        return sync_run
+
     def mark_succeeded(self, sync_run, *, items_discovered=None, items_processed=None,
                        offers_created=None, offers_updated=None, offers_deactivated=None):
         if items_discovered is not None:
