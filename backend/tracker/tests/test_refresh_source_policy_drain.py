@@ -40,6 +40,7 @@ from django.utils import timezone
 
 from availability.models import ContentType, Country, Offer, Source
 from tracker.models import (
+    BlockedReason,
     Movie,
     Provider,
     RefreshPriority,
@@ -280,7 +281,14 @@ class DrainGateTests(TestCase):
 
     def test_a_resolved_title_settles_without_an_upstream_call(self):
         """The core contract: a free source answered, so the metered request
-        must not execute."""
+        must not execute.
+
+        Settles as ``blocked``/``policy_not_needed``, which is the important
+        half of the contract. This previously asserted ``done``, which claimed
+        the metered source had been consulted and had produced an answer — it
+        had not been consulted at all, so the row recorded a source answering
+        when the whole point of the ladder is that it never asked.
+        """
         offer_for(self.movie, WM, available=True)
         request = self._request()
 
@@ -290,9 +298,31 @@ class DrainGateTests(TestCase):
             self._drain(request, policy_on=True)
 
         refresh.assert_not_called()
-        self.assertEqual(request.status, RefreshRequestStatus.DONE)
+        request.refresh_from_db()
+        self.assertEqual(request.status, RefreshRequestStatus.BLOCKED)
+        self.assertEqual(request.blocked_reason, BlockedReason.POLICY_NOT_NEEDED)
+        self.assertIsNotNone(request.completed_at)
         self.assertEqual(self.summary.skipped_policy_gated, 1)
         self.assertEqual(self.summary.refreshed, 0)
+
+    def test_a_policy_blocked_title_is_still_reported_available(self):
+        """The layers stay separate: a blocked *request* is not an unknown title.
+
+        This is the interaction P6a had to preserve. The ladder blocks the
+        metered request precisely *because* a free source already answered, so
+        treating the block as missing information would demote a resolved title
+        to unknown — undoing the resolution-aware work in the other direction.
+        """
+        offer_for(self.movie, WM, available=True)
+        request = self._request()
+
+        with patch.object(rr.AvailabilityRefreshService, "refresh_content"):
+            self._drain(request, policy_on=True)
+
+        from tracker.services.availability_report import title_source_report
+
+        entry = title_source_report([self.movie.pk])[self.movie.pk]
+        self.assertEqual(entry["state"], "available")
 
     def test_an_unresolved_title_still_runs_the_metered_source(self):
         """The gate must not simply disable the metered source.

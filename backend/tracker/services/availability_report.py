@@ -517,6 +517,18 @@ def classify_source(
         return "completed", AvailabilityResolutionReason.NO_OFFER
     if request_status == RefreshRequestStatus.FAILED:
         return "failed", AvailabilityResolutionReason.SOURCE_UNAVAILABLE
+    if request_status == RefreshRequestStatus.BLOCKED:
+        # Deliberately not attempted, and deliberately **not** a failure and
+        # **not** a negative answer. `policy_not_needed` in particular says
+        # nothing about whether the title exists: a cheaper source already
+        # answered, so this source being silent is the *intended* outcome and
+        # the title's own state is decided by that other source's evidence.
+        #
+        # It is reported as `skipped` rather than `unknown` because "no
+        # information" would wrongly demote a resolved title. The classifier
+        # reads offers and definitive answers, never request statuses, so a
+        # title blocked here still reports AVAILABLE from its collector.
+        return "skipped", AvailabilityResolutionReason.NOT_APPLICABLE
     if request_status == RefreshRequestStatus.PENDING:
         if quota_exhausted:
             return "queued", AvailabilityResolutionReason.QUOTA_EXHAUSTED
@@ -767,6 +779,15 @@ def source_progress(movie_ids, batch=None) -> list[dict]:
         pending = sum(
             1 for s in by_status.values() if s == RefreshRequestStatus.PENDING
         )
+        # Blocked rows were deliberately not attempted, so they are not
+        # outstanding work. Without counting them here a source whose requests
+        # were all settled by the ladder or by quota still computed `pending`
+        # from the *blocked* rows being invisible to this function, and
+        # therefore reported itself as `queued` forever — which is the source-row
+        # half of the very defect this status split was added to fix.
+        blocked = sum(
+            1 for s in by_status.values() if s == RefreshRequestStatus.BLOCKED
+        )
         quota = source_quota(slug)
         produced = Offer.objects.filter(
             tmdb_id__in=Movie.objects.filter(id__in=movie_ids).values("tmdb_id"),
@@ -785,6 +806,12 @@ def source_progress(movie_ids, batch=None) -> list[dict]:
         elif failed and not done:
             status = "failed"
             reason = AvailabilityResolutionReason.SOURCE_UNAVAILABLE
+        elif blocked:
+            # Everything this source was asked to do was declined, not failed.
+            # `skipped` is terminal, so the run can finalise over it — and the
+            # row stays distinguishable from a source that answered.
+            status = "skipped"
+            reason = AvailabilityResolutionReason.NOT_APPLICABLE
         else:
             status = "completed"
             reason = ""
@@ -804,6 +831,10 @@ def source_progress(movie_ids, batch=None) -> list[dict]:
                 "failed": failed,
                 "unknown": 0,
                 "queued": pending,
+                # Deliberately not folded into `completed`: `done + failed` means
+                # "the source was consulted", and a blocked row is precisely
+                # not that. The panel will show the two separately.
+                "blocked": blocked,
                 "offers": produced,
                 "quota": quota,
             }
@@ -830,6 +861,20 @@ def catalogue_progress() -> list[dict]:
     failure, so "attempted and failed" and "never attempted" become
     distinguishable — which is the entire difference between a collector you
     should retry and one you should stop asking about.
+
+    **A collector's status is about the collector, not about this run.** These
+    rows are created for every configured catalogue source on every sync, whether
+    or not this refresh asked for any of it, so a ``queued`` status here means
+    "this collector has never run" — a fact about its history — and not "this
+    refresh still has work outstanding on it".
+
+    That distinction is load-bearing. An earlier version reported a never-run
+    collector as ``queued``, and the run-level terminal invariant in
+    ``refresh_lifecycle`` then refused to finalise: it read those rows as work
+    outstanding for a run that had never intended to touch them. The invariant is
+    correct and must not be weakened to accommodate reporting rows, so the status
+    gives way instead — a never-run collector is reported as ``not_run``, a
+    distinct terminal state meaning "no work of this run's here".
     """
     rows: list[dict] = []
     for slug in _catalogue_slugs():
@@ -848,7 +893,9 @@ def catalogue_progress() -> list[dict]:
         contents = ProviderContent.objects.filter(source__slug=slug).count()
 
         if last_run is None:
-            status, reason = "queued", AvailabilityResolutionReason.COLLECTOR_NOT_RUN
+            # `not_run`, not `queued`: this collector simply has no history yet.
+            # Nothing about this refresh is outstanding on it.
+            status, reason = "not_run", AvailabilityResolutionReason.COLLECTOR_NOT_RUN
         elif last_run.error:
             status, reason = "failed", AvailabilityResolutionReason.SOURCE_UNAVAILABLE
         else:
@@ -1003,6 +1050,63 @@ def record_run(
     return refresh
 
 
+NON_TERMINAL_SOURCE_STATUSES = frozenset(
+    {
+        "queued",
+        "running",
+    }
+)
+"""Source-row statuses that mean the source row still has work in it.
+
+Defined as the *non*-terminal set rather than the terminal one, deliberately.
+The module emits nine distinct source statuses, and an earlier version of this
+constant enumerated the terminal four by hand — then a new status
+(``not_applicable``) was added by a change in a different part of the file and
+the terminal invariant immediately started rejecting runs that were perfectly
+consistent. An allowlist of the small set of in-progress statuses cannot drift
+that way: a newly added terminal status is terminal by default, and a newly
+added *in-progress* one is a deliberate omission rather than an accident.
+
+A source row left at one of these under a terminal refresh means the run
+stopped before its own work finished — the same defect as an outstanding
+request, and caught by the same check.
+"""
+
+TERMINAL_SOURCE_STATUSES = frozenset(
+    {
+        # Every status this module emits that is not in progress.
+        "completed",
+        "failed",
+        "skipped",
+        "quota_exhausted",
+        "not_applicable",
+        "not_checked",
+        # A collector with no run history. Terminal for a *run* even though it
+        # is emphatically not terminal for the collector, which is exactly the
+        # distinction the status name carries.
+        "not_run",
+    }
+)
+
+
+def _assert_source_status_partition() -> None:
+    """Guard: every emitted status is classified as in-progress or terminal.
+
+    Called once at import. The point is that the two sets are maintained in one
+    place and must partition the vocabulary between them — a status that is in
+    neither set would silently pass the terminal invariant, which is precisely
+    the ambiguity this work exists to remove.
+    """
+    overlap = NON_TERMINAL_SOURCE_STATUSES & TERMINAL_SOURCE_STATUSES
+    if overlap:
+        raise AssertionError(
+            f"source statuses cannot be both terminal and in-progress: {sorted(overlap)}"
+        )
+
+
+_assert_source_status_partition()
+
+
 def sync_run_progress(refresh: AvailabilityRefresh, movie_ids, batch=None) -> AvailabilityRefresh:
     """Recompute a run's per-source rows and title counters from live state.
 
@@ -1031,7 +1135,7 @@ def sync_run_progress(refresh: AvailabilityRefresh, movie_ids, batch=None) -> Av
                 "reason": row.get("reason", ""),
                 "error": row.get("error", ""),
                 "finished_at": timezone.now() if row["status"] in (
-                    "completed", "failed", "skipped", "quota_exhausted",
+                    TERMINAL_SOURCE_STATUSES
                 ) else None,
             },
         )

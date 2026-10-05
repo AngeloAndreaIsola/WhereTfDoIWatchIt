@@ -438,6 +438,63 @@ class RefreshRequestStatus(models.TextChoices):
     PENDING = "pending", "Pending"
     DONE = "done", "Done"
     FAILED = "failed", "Failed"
+    #: Deliberately **not attempted**. Terminal, and deliberately distinct from
+    #: ``done`` — ``done`` asserts the source was consulted and produced a
+    #: terminal answer, which is exactly what a blocked row cannot claim.
+    #:
+    #: The distinction is what makes a terminal run auditable. Before this
+    #: existed, work the worker declined to do (out of quota, or no longer
+    #: needed) was either left ``pending`` forever — so a run could go terminal
+    #: with 553 rows still queued — or marked ``done``, which claimed the
+    #: source had answered when it had never been asked.
+    BLOCKED = "blocked", "Blocked"
+
+
+class BlockedReason(models.TextChoices):
+    """Why a request was settled without being attempted.
+
+    Closed vocabulary on purpose. These are *scheduling* facts about our own
+    pipeline, kept separate from ``RefreshRequest.last_error`` (which records
+    what the upstream said) and from
+    :class:`~tracker.models.AvailabilityResolutionReason` (which describes a
+    title's world). Keeping them apart is what stops a blocked row from being
+    mistaken for a failed lookup.
+
+    A closed set also means an unknown value cannot silently enter the
+    database and then be rendered as nothing.
+    """
+
+    #: A source with no remaining daily budget. The request was legal when
+    #: queued and will become runnable after the reset.
+    QUOTA_EXHAUSTED = "quota_exhausted", "Source quota exhausted"
+    #: The source ladder decided this source is unnecessary: a cheaper
+    #: applicable source already resolved the title, so paying for this one
+    #: would re-derive a known answer.
+    #:
+    #: Deliberately **not** a statement about the title. The title may well be
+    #: available and resolved by a collector; only this request was declined.
+    POLICY_NOT_NEEDED = "policy_not_needed", "Not needed — another source resolved it"
+    #: The source is switched off or unusable by configuration.
+    SOURCE_DISABLED = "source_disabled", "Source disabled"
+    #: The refresh run owning this request was cancelled.
+    CANCELLED = "cancelled", "Run cancelled"
+    #: A newer request for the same (title, source) replaced this one.
+    SUPERSEDED = "superseded", "Superseded by a newer request"
+
+
+#: Request statuses that mean "this row will never change again". The
+#: lifecycle invariant is stated in terms of this set, so adding a terminal
+#: status means re-examining every place that enumerates terminal states.
+TERMINAL_REQUEST_STATUSES = frozenset(
+    {
+        RefreshRequestStatus.DONE,
+        RefreshRequestStatus.FAILED,
+        RefreshRequestStatus.BLOCKED,
+    }
+)
+
+#: Request statuses that mean "work is still outstanding".
+NON_TERMINAL_REQUEST_STATUSES = frozenset({RefreshRequestStatus.PENDING})
 
 
 class RefreshRequest(models.Model):
@@ -475,6 +532,25 @@ class RefreshRequest(models.Model):
     )
     attempts = models.IntegerField(default=0)
     last_error = models.TextField(blank=True, default="")
+    #: Why this row was settled without being attempted. Only meaningful when
+    #: ``status`` is ``blocked``, and constrained at the database level so the
+    #: two cannot drift:
+    #:
+    #:   blocked  -> blocked_reason must be set
+    #:   anything else -> blocked_reason must be empty
+    #:
+    #: A blocked row without a reason is unauditable (it says only that nothing
+    #: happened), and a reason on a non-blocked row is a lie about a source
+    #: that was actually consulted. Encoding the vocabulary in a separate
+    #: column rather than in the status (``blocked_quota_exhausted``) means new
+    #: reasons need no migration.
+    blocked_reason = models.CharField(
+        max_length=32,
+        choices=BlockedReason.choices,
+        blank=True,
+        default="",
+        db_index=True,
+    )
     requested_at = models.DateTimeField(default=timezone.now)
     completed_at = models.DateTimeField(null=True, blank=True)
     # Bulk-run stamp: the watchlist's "Refresh all" assigns one uuid per
@@ -492,6 +568,17 @@ class RefreshRequest(models.Model):
                 condition=models.Q(status="pending"),
                 name="uniq_refreshrequest_pending_movie_source",
             ),
+            # `blocked` and its reason are one fact stated twice; the database
+            # is the right place to keep them consistent because every code
+            # path that writes one of them is a place that could forget the
+            # other.
+            models.CheckConstraint(
+                condition=(
+                    models.Q(status="blocked", blocked_reason__in=BlockedReason.values)
+                    | models.Q(~models.Q(status="blocked"), blocked_reason="")
+                ),
+                name="refreshrequest_blocked_reason_matches_status",
+            ),
         ]
         indexes = [
             models.Index(
@@ -505,6 +592,45 @@ class RefreshRequest(models.Model):
         return (
             f"RefreshRequest {self.movie_id} scope={scope} "
             f"{self.get_status_display()} priority={self.priority}"
+        )
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.status in TERMINAL_REQUEST_STATUSES
+
+    def settle(
+        self,
+        status: str,
+        *,
+        blocked_reason: str = "",
+        error: str = "",
+    ) -> None:
+        """Write a terminal outcome and stamp the moment it happened.
+
+        One entry point for every terminal transition, so ``completed_at`` and
+        ``blocked_reason`` cannot be forgotten on one code path and set on
+        another. ``blocked_reason`` is cleared on non-blocked outcomes on
+        purpose: reusing a row must never leave a stale reason describing work
+        that was actually done.
+        """
+        if status not in TERMINAL_REQUEST_STATUSES:
+            raise ValueError(f"{status!r} is not a terminal request status")
+        if status == RefreshRequestStatus.BLOCKED:
+            if not blocked_reason:
+                raise ValueError("a blocked request must say why it was blocked")
+            if blocked_reason not in BlockedReason.values:
+                raise ValueError(f"unknown blocked reason {blocked_reason!r}")
+        elif blocked_reason:
+            raise ValueError(
+                f"blocked_reason only applies to blocked rows, not {status!r}"
+            )
+
+        self.status = status
+        self.blocked_reason = blocked_reason if status == RefreshRequestStatus.BLOCKED else ""
+        self.last_error = error
+        self.completed_at = timezone.now()
+        self.save(
+            update_fields=["status", "blocked_reason", "last_error", "completed_at"]
         )
 
 

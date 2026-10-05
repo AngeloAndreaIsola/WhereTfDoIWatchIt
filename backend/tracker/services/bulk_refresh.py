@@ -282,6 +282,13 @@ class BulkRefreshSummary:
     # field — a cached hit still counted a request this run would otherwise
     # have repeated.
     skipped_policy_gated: int = 0
+    #: ``{blocked_reason: count}`` for this drain. Kept separate from
+    #: ``skipped_policy_gated`` because that is a single counter for one
+    #: reason, and the seven-day view will need to tell "declined by policy"
+    #: apart from "out of quota" — two very different facts that a single
+    #: "skipped" number hides. Not persisted on the run; recomputed from the
+    #: request rows when it is needed.
+    blocked_by_reason: dict = field(default_factory=dict)
     errors: int = 0
     budget: int = 0
     remaining_budget: int = 0

@@ -24,6 +24,7 @@ which status comes out.
 """
 import datetime as dt
 import uuid
+from unittest.mock import patch
 
 from django.test import TestCase
 from django.utils import timezone
@@ -33,20 +34,24 @@ from tracker.models import (
     AvailabilityRefresh,
     AvailabilityRefreshStatus,
     AvailabilityRefreshType,
+    BlockedReason,
     Movie,
     Provider,
     RefreshRequest,
     RefreshRequestStatus,
     WatchlistItem,
 )
+from tracker.services import source_policy
 from tracker.services.availability_report import TitleAvailabilityState
 from tracker.services.rate_limit import SOURCE_DAILY_LIMITS
 from tracker.services.refresh_lifecycle import (
     STALE_RUNNING_AFTER,
     AvailabilityRefreshLifecycle,
+    UnsettledWorkError,
     claim_active_run,
     finalise_run,
     reconcile_stale_runs,
+    settle_unexecutable_requests,
 )
 
 SA = "streaming_availability"
@@ -209,15 +214,60 @@ class TerminalStatusTests(TestCase):
         self.assertEqual(run.total_titles, 1)
         self.assertEqual(run.available_titles, 0)
 
-    def test_outstanding_requests_make_it_partial(self):
+    def test_outstanding_requests_can_no_longer_produce_a_terminal_run(self):
+        """A pending request no longer means PARTIAL — it means *refusal*.
+
+        This test previously asserted ``PARTIAL`` for a run holding one
+        outstanding request. That single assertion encoded the defect P6a
+        removes: ``PARTIAL`` was reachable both by "titles remain unresolved"
+        and by "the worker ran out of budget mid-queue", so a report could not
+        tell a legitimate partial result from an interrupted one.
+
+        Now a runnable outstanding request is not a status at all — it is an
+        error, because finalising over it would record a terminal status over a
+        non-empty queue. Settling it first is what makes PARTIAL legitimate.
+        """
         batch = uuid.uuid4()
         run = make_run(batch=batch, movie_ids=[self.movie])
         offer_for(self.movie, WM)
         add_request(self.movie, WM, RefreshRequestStatus.DONE, batch)
         add_request(self.movie, SA, RefreshRequestStatus.PENDING, batch)
-        finalise_run(run, [self.movie.pk])
+
+        # Ladder off for this half on purpose. With it on, settlement would
+        # legitimately block the metered request (a free source answered), and
+        # there would be nothing left to refuse — which is the *other* half of
+        # this test. Here the request must be genuinely runnable so that only
+        # the terminal invariant stands between it and a false PARTIAL.
+        with patch.object(
+            source_policy,
+            "consult_metered_only_when_unresolved",
+            return_value=False,
+        ):
+            with self.assertRaises(UnsettledWorkError):
+                finalise_run(run, [self.movie.pk])
+
         run.refresh_from_db()
-        self.assertEqual(run.status, AvailabilityRefreshStatus.PARTIAL)
+        self.assertIsNone(run.finished_at)
+
+        # And once it is settled, the run finalises honestly. The metered
+        # source declines it here because the ladder is on and a free source
+        # already answered the title — so the title is available *and* the run
+        # is COMPLETED, which is the point: blocking a request does not demote
+        # a resolved title.
+        with patch.object(
+            source_policy,
+            "consult_metered_only_when_unresolved",
+            return_value=True,
+        ):
+            settle_unexecutable_requests(run)
+            finalise_run(run, [self.movie.pk])
+
+        run.refresh_from_db()
+        self.assertEqual(run.status, AvailabilityRefreshStatus.COMPLETED)
+        self.assertIsNotNone(run.finished_at)
+        blocked = RefreshRequest.objects.get(movie=self.movie, source=SA, batch=batch)
+        self.assertEqual(blocked.status, RefreshRequestStatus.BLOCKED)
+        self.assertEqual(blocked.blocked_reason, BlockedReason.POLICY_NOT_NEEDED)
 
     def test_a_pending_request_from_another_run_does_not_hold_this_one_open(self):
         """Ownership is the batch. An unrelated pending request must not keep
@@ -234,15 +284,26 @@ class TerminalStatusTests(TestCase):
 
     def test_a_legacy_empty_source_row_still_counts_as_outstanding(self):
         """Pre-fan-out rows carry ``source=""`` but the same batch, so they
-        must be counted — the batch defines ownership, not the spelling."""
+        must be counted — the batch defines ownership, not the spelling.
+
+        The consequence changed with P6a: being counted no longer means
+        ``PARTIAL``, it means finalising is refused. Ownership is what decides
+        whether a row blocks terminalisation, and a legacy empty-scope row is
+        owned by the run, so it blocks it. Asserting the refusal rather than a
+        status is the honest form of this test now — the old assertion
+        (`PARTIAL`) was really asserting the very ambiguity P6a removes.
+        """
         batch = uuid.uuid4()
         run = make_run(batch=batch, movie_ids=[self.movie])
         offer_for(self.movie, WM)
         add_request(self.movie, WM, RefreshRequestStatus.DONE, batch)
         add_request(self.movie, "", RefreshRequestStatus.PENDING, batch)
-        finalise_run(run, [self.movie.pk])
+
+        with self.assertRaises(UnsettledWorkError):
+            finalise_run(run, [self.movie.pk])
+
         run.refresh_from_db()
-        self.assertEqual(run.status, AvailabilityRefreshStatus.PARTIAL)
+        self.assertIsNone(run.finished_at)
 
 
 class PersistedStateTests(TestCase):

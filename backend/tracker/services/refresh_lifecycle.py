@@ -71,10 +71,13 @@ from ..models import (
     AvailabilityRefresh,
     AvailabilityRefreshStatus,
     AvailabilityRefreshType,
+    BlockedReason,
     RefreshRequest,
     RefreshRequestStatus,
 )
 from .availability_report import (
+    NON_TERMINAL_SOURCE_STATUSES,
+    TERMINAL_SOURCE_STATUSES,
     TitleAvailabilityState,
     build_run_summary,
     sync_run_progress,
@@ -170,6 +173,13 @@ class AvailabilityRefreshLifecycle:
             return refresh
 
         ids = _scope_movie_ids(refresh, movie_ids)
+
+        # The settlement boundary. Anything this run can no longer execute is
+        # settled *before* the status is derived, so the status is computed from
+        # rows that are all terminal. Deriving it first and settling afterwards
+        # is what let a run report `PARTIAL` with 553 requests still queued.
+        settled = settle_unexecutable_requests(refresh)
+
         summary = build_run_summary(ids, batch=refresh.batch)
         sync_run_progress(refresh, ids, batch=refresh.batch)
 
@@ -180,13 +190,41 @@ class AvailabilityRefreshLifecycle:
             r.status == "failed" for r in source_rows
         )
 
-        # A source that failed is never on its own a reason for FAILED: the
-        # run did its job and one provider was down. FAILED is reserved for
-        # "this run produced no evidence at all" plus an explicit run-level
-        # error, so it stays rare enough to mean something when it appears.
+        # Hard invariant, enforced rather than assumed. A terminal run that
+        # still owns outstanding requests or unsettled source rows is a bug in
+        # whatever tried to finalise it, and the correct response is to raise:
+        # recording a terminal status over a non-empty queue produces a report
+        # that claims work finished which did not, and that is worse than a
+        # failed run because it is believed.
+        if outstanding:
+            raise UnsettledWorkError(
+                f"refresh {refresh.pk} has {outstanding} unsettled request(s); "
+                f"settle them before finalising"
+            )
+        unsettled_sources = [
+            r for r in source_rows if r.status in NON_TERMINAL_SOURCE_STATUSES
+        ]
+        if unsettled_sources:
+            raise UnsettledWorkError(
+                f"refresh {refresh.pk} has unsettled source row(s): "
+                + ", ".join(f"{r.source}={r.status}" for r in unsettled_sources)
+            )
+
+        # From here on the run owns nothing outstanding, so the status describes
+        # the *result* rather than the interruption:
+        #
+        #   FAILED    — every source failed outright, so the run produced no
+        #               evidence at all. Reserved and rare, so that it still
+        #               means something when it appears.
+        #   PARTIAL   — the run settled all its work, but titles remain
+        #               unresolved (blocked, failed, or never in any catalogue).
+        #               A worker running out of budget lands here too, and that
+        #               is now honest: the remaining rows are `blocked`, not
+        #               quietly pending.
+        #   COMPLETED — every applicable title resolved.
         if every_source_failed:
             status = AvailabilityRefreshStatus.FAILED
-        elif outstanding or blocked:
+        elif blocked:
             status = AvailabilityRefreshStatus.PARTIAL
         else:
             status = AvailabilityRefreshStatus.COMPLETED
@@ -196,8 +234,8 @@ class AvailabilityRefreshLifecycle:
         refresh.save(update_fields=["status", "finished_at"])
         logger.info(
             "availability_refresh_finalised refresh_id=%s status=%s "
-            "outstanding=%s unknown=%s",
-            refresh.pk, status, outstanding, summary["totals"]["unknown"],
+            "settled=%s unknown=%s",
+            refresh.pk, status, settled or "{}", summary["totals"]["unknown"],
         )
         return refresh
 
@@ -300,6 +338,107 @@ def _scope_movie_ids(refresh: AvailabilityRefresh, movie_ids=None) -> list[int]:
             .distinct()
         )
     return []
+
+
+class UnsettledWorkError(RuntimeError):
+    """A run tried to go terminal while it still owned unsettled work.
+
+    Raised instead of quietly recording a terminal status. The alternative —
+    finalising anyway — produces a report that claims more than happened: a
+    ``COMPLETED`` run whose queue is still full, or a ``PARTIAL`` whose reason
+    is indistinguishable from "the worker gave up". Failing loudly costs one
+    reconcile pass; recording a lie costs every future reader of the data.
+    """
+
+
+def settle_unexecutable_requests(refresh: AvailabilityRefresh) -> dict[str, int]:
+    """Settle the requests this run can no longer execute, before finalising.
+
+    The settlement boundary. Before this existed, the worker processed what it
+    could, decided the run was finished, and left the rest ``pending`` — which
+    is how a run reached a terminal status with 553 request rows still queued.
+    ``PARTIAL`` then had two incompatible meanings: "some titles are genuinely
+    unresolved" and "the worker ran out of budget mid-queue", and nothing in the
+    data could tell them apart.
+
+    A pending request is settled as ``blocked`` when it *cannot* run, with the
+    reason recorded:
+
+    - the source has no remaining daily budget. The request was legitimate
+      when queued and becomes runnable at the next reset, so it is blocked
+      rather than failed — nothing went wrong, we simply may not spend it yet;
+    - the source ladder decided it is unnecessary, because a cheaper source
+      resolved the title first.
+
+    Neither is ``done``: ``done`` claims a source was consulted, and neither of
+    these was. A request that *could* run is left alone, because leaving it
+    pending is the correct signal that the run is not finished yet.
+
+    Returns per-reason counts for logging and tests.
+    """
+    if refresh.batch is None:
+        return {}
+
+    settled: dict[str, int] = {}
+    pending = RefreshRequest.objects.filter(
+        batch=refresh.batch, status=RefreshRequestStatus.PENDING
+    )
+
+    # Budget is decided per source, not per request, so a spent source is
+    # settled in one statement rather than row by row.
+    exhausted = {
+        slug
+        for slug in pending.values_list("source", flat=True).distinct()
+        if _is_out_of_budget(slug)
+    }
+    if exhausted:
+        count = pending.filter(source__in=exhausted).update(
+            status=RefreshRequestStatus.BLOCKED,
+            blocked_reason=BlockedReason.QUOTA_EXHAUSTED,
+            completed_at=timezone.now(),
+        )
+        settled[BlockedReason.QUOTA_EXHAUSTED] = count
+
+    from . import source_policy
+    from .refresh_requests import _metered_source_is_unnecessary
+
+    if source_policy.consult_metered_only_when_unresolved():
+        for request in pending.exclude(source__in=exhausted):
+            source = request.source
+            if not source or not source_policy.is_policy_metered(source):
+                continue
+            if not _metered_source_is_unnecessary(
+                request.movie, source, request.priority, explicitly_named_source=True
+            ):
+                continue
+            request.settle(
+                RefreshRequestStatus.BLOCKED,
+                blocked_reason=BlockedReason.POLICY_NOT_NEEDED,
+            )
+            settled[BlockedReason.POLICY_NOT_NEEDED] = (
+                settled.get(BlockedReason.POLICY_NOT_NEEDED, 0) + 1
+            )
+
+    return settled
+
+
+def _is_out_of_budget(source_slug: str) -> bool:
+    """Whether this source has no daily budget left today.
+
+    Delegates to the same limiter the drain consults, so "out of budget" means
+    one thing in the two places that act on it.
+
+    ``remaining()`` returns ``None`` for a source that declares no quota, which
+    means unlimited rather than exhausted — treating ``None`` as zero would
+    block every request from every unmetered source.
+    """
+    from .rate_limit import rate_limiter_for
+
+    limiter = rate_limiter_for(source_slug or "")
+    if limiter is None or limiter.daily_limit is None:
+        return False
+    remaining = limiter.remaining()
+    return remaining is not None and remaining <= 0
 
 
 def _outstanding_request_count(refresh: AvailabilityRefresh) -> int:

@@ -65,6 +65,7 @@ from ..models import (
     CatalogueRefreshRequest,
     CatalogueRefreshStatus,
     Movie,
+    BlockedReason,
     RefreshPriority,
     RefreshRequest,
     RefreshRequestStatus,
@@ -657,14 +658,30 @@ def _drain_one(
     # scarce budget on answers nobody needs — the exact failure the hierarchy
     # exists to prevent.
     #
-    # The gate is checked here, immediately before the upstream call, so a
-    # row that became unnecessary while queued settles as ``done`` without
-    # spending a single request. Non-metered sources are never gated.
+    # The gate is checked here, immediately before the upstream call, so a row
+    # that became unnecessary while queued settles without spending a single
+    # request. Non-metered sources are never gated.
+    #
+    # Settled as ``blocked``/``policy_not_needed``, not ``done``: the source was
+    # never consulted, and ``done`` asserts that it was. This was previously
+    # recorded as ``done``, which made the ladder's savings indistinguishable
+    # from real upstream answers in the run's own accounting.
+    #
+    # Note this says nothing about the *title*. A title blocked here may well
+    # be available — that is the entire point of the ladder — and the
+    # title-level classifier reads evidence, not request statuses, so it still
+    # reports such a title as resolved.
     if _metered_source_is_unnecessary(
         movie, source, request.priority, explicitly_named_source=bool(request.source)
     ):
-        _finish(request, RefreshRequestStatus.DONE)
+        request.settle(
+            RefreshRequestStatus.BLOCKED,
+            blocked_reason=BlockedReason.POLICY_NOT_NEEDED,
+        )
         summary.skipped_policy_gated += 1
+        summary.blocked_by_reason[BlockedReason.POLICY_NOT_NEEDED] = (
+            summary.blocked_by_reason.get(BlockedReason.POLICY_NOT_NEEDED, 0) + 1
+        )
         summary.requests_drained += 1
         return rate_limit_hit
 
