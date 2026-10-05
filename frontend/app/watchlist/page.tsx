@@ -9,6 +9,7 @@ import { VpnWatchModal } from "@/components/VpnWatchModal";
 import { WhyCantIWatchModal, ExcludedOffer } from "@/components/WhyCantIWatchModal";
 import { Pagination } from "@/components/Pagination";
 import WatchlistRefreshButton from "@/components/WatchlistRefreshButton";
+import AvailabilityStatusPanel from "@/components/AvailabilityStatusPanel";
 import {
   addToWatchlist,
   markMovieWatched,
@@ -348,6 +349,10 @@ export default function WatchlistPage() {
           </div>
           <WatchlistRefreshButton onRefreshed={refreshWatchlistData} />
         </div>
+        {/* Source-first breakdown. This owns no state a reload could lose: it
+            re-reads the persisted run state on mount, so a refresh survives a
+            browser reload instead of vanishing with the component. */}
+        <AvailabilityStatusPanel onCompleted={refreshWatchlistData} />
       </section>
 
       <FilterBar

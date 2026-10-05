@@ -454,6 +454,177 @@ export async function getWatchlistRefreshStatus(
   return res.json();
 }
 
+// --- Source-first availability observability -------------------------------
+//
+// These replace the button's component state as the source of truth for "what
+// is running". The backend persists every run, so the UI can be reloaded at
+// any moment and ask the same question the button was answering from memory.
+
+/**
+ * Why one (title, source) pair has not produced an answer.
+ *
+ * The load-bearing distinction is between the two groups:
+ *
+ * - absence reasons (`no_offer`, `title_not_found`) mean a source *was asked
+ *   and answered* — the title is genuinely unavailable;
+ * - information-gap reasons (`queued`, `quota_exhausted`, `not_checked`, …)
+ *   mean nobody got to ask — the title is unknown.
+ *
+ * A title is `available` if ANY source resolved it, no matter how many others
+ * are still silent, which is why one blocked source can never turn a real
+ * answer into "unknown".
+ */
+export type AvailabilityResolutionReason =
+  | "not_checked"
+  | "queued"
+  | "resolved"
+  | "no_offer"
+  | "not_supported"
+  | "not_applicable"
+  | "title_not_found"
+  | "quota_exhausted"
+  | "source_unavailable"
+  | "collector_not_run"
+  | "unknown_reason";
+
+export type AvailabilityTitleState = "available" | "unavailable" | "unknown";
+
+export interface AvailabilitySourceRow {
+  source: string;
+  label: string;
+  tier: number;
+  role?: string;
+  kind: "title" | "catalogue";
+  status: string;
+  reason: AvailabilityResolutionReason | "";
+  total: number;
+  completed: number;
+  successful: number;
+  failed: number;
+  unknown: number;
+  queued: number;
+  offers?: number;
+  last_sync?: string | null;
+  quota?: { remaining: number; limit: number; exhausted: boolean } | null;
+  checked_at?: string | null;
+  available?: boolean;
+}
+
+export interface AvailabilityReportResponse {
+  sources: AvailabilitySourceRow[];
+  collectors: AvailabilitySourceRow[];
+  totals: {
+    titles: number;
+    available: number;
+    unavailable: number;
+    unknown: number;
+    checks: number;
+  };
+  /** `{reason: count}` over the titles that are genuinely unknown. */
+  unknown_reasons: Partial<Record<AvailabilityResolutionReason, number>>;
+  policy: {
+    budget_order: string[];
+    demote_metered_aggregators: boolean;
+    tiers: Record<string, string>;
+  };
+  counterfactual: {
+    policy: string;
+    current: boolean;
+    titles_still_resolved: number;
+    titles_losing_their_answer: number;
+    metered_sources: string[];
+    note: string;
+  };
+  resets_at: number;
+}
+
+export async function getAvailabilityReport(): Promise<AvailabilityReportResponse> {
+  const res = await fetch("/api/availability/report/");
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(
+      body.error ?? `Failed to read availability report (${res.status})`
+    );
+  }
+  return res.json();
+}
+
+export interface AvailabilityTitleReport {
+  tmdb_id: number;
+  title: string;
+  state: AvailabilityTitleState;
+  reason: AvailabilityResolutionReason | "";
+  available_on: string[];
+  sources: AvailabilitySourceRow[];
+  collectors: AvailabilitySourceRow[];
+  resolved_sources: string[];
+  unresolved_sources: string[];
+}
+
+export async function getAvailabilityTitleReport(
+  tmdbId: number
+): Promise<AvailabilityTitleReport> {
+  const res = await fetch(`/api/availability/report/${tmdbId}/`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(
+      body.error ?? `Failed to read title availability (${res.status})`
+    );
+  }
+  return res.json();
+}
+
+export interface AvailabilityRefresh {
+  id: number;
+  type: string;
+  status: "queued" | "running" | "completed" | "partial" | "failed";
+  batch: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  is_active: boolean;
+  total_titles: number;
+  completed_titles: number;
+  available_titles: number;
+  unavailable_titles: number;
+  unknown_titles: number;
+  failed_titles: number;
+  unknown_reasons: Partial<Record<AvailabilityResolutionReason, number>>;
+  sources: AvailabilitySourceRow[];
+}
+
+export interface AvailabilityRefreshListResponse {
+  /** Recent runs, newest first — including finished ones, so the outcome
+   *  of a completed refresh survives a reload. */
+  results: AvailabilityRefresh[];
+  /** The newest non-terminal run, or null. This is what a page load polls. */
+  active: AvailabilityRefresh | null;
+}
+
+export async function getAvailabilityRefreshes(): Promise<AvailabilityRefreshListResponse> {
+  const res = await fetch("/api/availability/refreshes/");
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(
+      body.error ?? `Failed to read refresh runs (${res.status})`
+    );
+  }
+  return res.json();
+}
+
+export async function getAvailabilityRefresh(
+  id: number
+): Promise<AvailabilityRefresh> {
+  const res = await fetch(`/api/availability/refreshes/${id}/`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(
+      body.error ?? `Failed to read refresh #${id} (${res.status})`
+    );
+  }
+  return res.json();
+}
+
 /**
  * Search TMDb. `type` defaults to "movie" (existing behavior); pass "series"
  * or "all" to widen the search.
