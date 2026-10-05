@@ -313,6 +313,6 @@ class SkippedIsNotUnavailableTests(TestCase):
         reason would drift and stop being queryable."""
         from tracker.services.source_policy import PolicySkipReason
 
-        self.assertGreaterEqual(len(PolicySkipReason.all()), 2)
+        self.assertEqual(set(PolicySkipReason.all()), {"not_needed"})
         for value in PolicySkipReason.all():
             self.assertIsInstance(value, str)

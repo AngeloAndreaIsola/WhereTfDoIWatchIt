@@ -186,11 +186,11 @@ class CurrentRunScopingTests(TestCase):
         self.batch = uuid.uuid4()
 
     def test_per_source_totals_are_scoped_to_the_batch(self):
-        """Regression: 987 Mediaset rows reported for a 191-title watchlist.
+        """A row from an earlier run must not inflate this run's total.
 
-        The unscoped read counted every request the title had ever had;
-        scoping to the run's batch is what makes "191 titles / 764 checks"
-        mean one run.
+        Scoping to the run's batch is what makes "191 titles / 764 checks"
+        mean one run rather than the sum of every check the titles have ever
+        had.
         """
         RefreshRequest.objects.create(
             movie=self.movie, source="mediaset_infinity",
@@ -203,11 +203,97 @@ class CurrentRunScopingTests(TestCase):
         )
         ids = [self.movie.pk]
         scoped = ar.source_progress(ids, batch=self.batch)
-        unscoped = ar.source_progress(ids, batch=None)
-        scoped_row = next(r for r in scoped if r["source"] == "mediaset_infinity")
-        unscoped_row = next(r for r in unscoped if r["source"] == "mediaset_infinity")
-        self.assertEqual(scoped_row["total"], 1)
-        self.assertEqual(unscoped_row["total"], 2)
+        row = next(r for r in scoped if r["source"] == "mediaset_infinity")
+        self.assertEqual(row["total"], 1)
+
+
+class RepeatedRequestRowTests(TestCase):
+    """Regression: per-source totals counted *rows*, not distinct titles.
+
+    The queue dedupes only *pending* requests (a partial unique constraint on
+    ``(movie, source) WHERE status='pending'``), so terminal rows accumulate
+    freely: one title refreshed five times holds five ``DONE`` rows. Counting
+    rows therefore reported 987 Mediaset and 985 YouTube "checks" against a
+    191-title watchlist — 2,740 total, against the 764 the old button quoted.
+
+    Both denominators are user-facing ("843 / 1,120", "312 / 312"), so a
+    source that looks five times busier than it is is not cosmetic: it makes
+    progress read as stalled.
+    """
+
+    def setUp(self):
+        clear_quota()
+        self.batch = uuid.uuid4()
+
+    def _titles_with_repeat_history(self, source, repeats=5, titles=3):
+        movies = []
+        for i in range(titles):
+            movie = make_movie(100 + i, f"Repeat {i}")
+            movies.append(movie)
+            for _ in range(repeats):
+                RefreshRequest.objects.create(
+                    movie=movie, source=source,
+                    status=RefreshRequestStatus.DONE, batch=self.batch,
+                )
+        return movies
+
+    def test_repeated_rows_for_one_title_count_once(self):
+        movies = self._titles_with_repeat_history("mediaset_infinity")
+        row = next(
+            r for r in ar.source_progress([m.pk for m in movies], batch=self.batch)
+            if r["source"] == "mediaset_infinity"
+        )
+        # 3 titles x 5 rows = 15 rows, but only 3 distinct titles were checked.
+        self.assertEqual(row["total"], 3)
+        self.assertEqual(row["successful"], 3)
+
+    def test_the_checks_total_is_titles_times_sources_not_rows(self):
+        """`checks` is the denominator of "N / M checks", so it must not
+        count attempts — 5,000 historical retries would dwarf the real run."""
+        movies = self._titles_with_repeat_history("youtube", repeats=8, titles=2)
+        summary = ar.build_run_summary(
+            [m.pk for m in movies], batch=self.batch
+        )
+        title_sources = [s for s in summary["sources"] if s["kind"] == "title"]
+        by_source = {s["source"]: s for s in title_sources}
+        self.assertEqual(by_source["youtube"]["total"], 2)
+        self.assertEqual(
+            summary["totals"]["checks"],
+            sum(s["total"] for s in title_sources),
+        )
+        # 2 titles x 4 registered title-level sources, NOT 2 x (4 + 30 retries).
+        self.assertLessEqual(summary["totals"]["checks"], 2 * len(title_sources) + 1)
+
+    def test_a_mixed_history_reports_the_newest_status_per_title(self):
+        """A title checked twice — once done, once still pending — reads as
+        pending, because that is what the user is still waiting on."""
+        movie = make_movie(200, "Mixed")
+        RefreshRequest.objects.create(
+            movie=movie, source=SA,
+            status=RefreshRequestStatus.DONE, batch=self.batch,
+            requested_at=timezone.now() - dt.timedelta(hours=2),
+        )
+        RefreshRequest.objects.create(
+            movie=movie, source=SA,
+            status=RefreshRequestStatus.PENDING, batch=self.batch,
+            requested_at=timezone.now(),
+        )
+        row = next(
+            r for r in ar.source_progress([movie.pk], batch=self.batch)
+            if r["source"] == SA
+        )
+        self.assertEqual(row["total"], 1)
+        self.assertEqual(row["queued"], 1)
+        self.assertEqual(row["successful"], 0)
+
+
+class StaleRunCannotDecideTests(TestCase):
+    """A previous run's terminal row must not decide the current verdict."""
+
+    def setUp(self):
+        clear_quota()
+        self.movie = make_movie(1, "Scoping")
+        self.batch = uuid.uuid4()
 
     def test_a_previous_run_cannot_decide_the_current_verdict(self):
         """A stale DONE from an old run must not resolve a title whose

@@ -561,7 +561,7 @@ def _metered_source_is_unnecessary(movie, source: str, priority) -> bool:
         return False
     if not source_policy.CONSULT_METERED_ONLY_WHEN_UNRESOLVED:
         return False
-    if not source_policy.is_metered_role(source):
+    if not source_policy.is_policy_metered(source):
         return False
 
     from .availability_report import title_source_report

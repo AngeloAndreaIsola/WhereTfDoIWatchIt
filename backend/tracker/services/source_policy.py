@@ -115,15 +115,22 @@ class PolicySkipReason(str, enum.Enum):
     an auditable one has to be queryable: a free-text reason would drift into
     a dozen near-synonyms and stop answering "why is this source idle?".
 
-    None of these is an availability verdict. ``NOT_NEEDED`` in particular
-    must never be rendered as "unavailable" — it means *we chose not to ask*,
-    which is a statement about the scheduler, not about the world. Merging the
-    two is precisely the bug the reason split in
+    It holds exactly one member, and that is deliberate rather than
+    incomplete. ``not_applicable`` is a genuine member of
+    :class:`tracker.models.AvailabilityResolutionReason` — it means a source
+    cannot serve this title's scope — and duplicating the *string* here would
+    put one value in both vocabularies. That is precisely the ambiguity this
+    enum exists to prevent: a UI keying off the string could render a
+    scheduling skip as an availability verdict. A test asserts the two sets
+    are disjoint, and it caught exactly this when the duplicate was written.
+
+    None of these is an availability verdict. ``NOT_NEEDED`` means *we chose
+    not to ask*, which is a statement about the scheduler, not about the
+    world. Merging the two is the bug the reason split in
     :mod:`tracker.services.availability_report` exists to prevent.
     """
 
     NOT_NEEDED = "not_needed"
-    NOT_APPLICABLE = "not_applicable"
 
     def __str__(self) -> str:  # pragma: no cover - display convenience
         return self.value
@@ -179,7 +186,22 @@ def role_of(slug: str) -> AvailabilityRole | None:
     return SOURCE_ROLES.get(slug)
 
 
-def is_metered_role(slug: str) -> bool:
+def is_policy_metered(slug: str) -> bool:
+    """Whether the **architecture** treats this source as scarce.
+
+    **Policy, not configuration.** This is the flag the scheduler gates on: it
+    reads :data:`SOURCE_ROLES`, a deliberate statement about how much a source's
+    answer is worth and how expensive it is to obtain.
+
+    It is intentionally *not* the same question as
+    :func:`tracker.services.availability_report.has_configured_rate_limit`
+    ("does a technical quota exist?"). Gating on the configuration question
+    instead would tie scheduling to whichever rate limits happen to be set
+    today, so adding a quota to a free source — or removing one from a scarce
+    one — would silently change the hierarchy with no policy change at all.
+    Naming them differently is what makes that substitution hard to do by
+    accident.
+    """
     return SOURCE_ROLES.get(slug) is AvailabilityRole.METERED_AGGREGATOR
 
 

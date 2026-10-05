@@ -117,6 +117,98 @@ def unlimited() -> _UnlimitedLimiter:
     return _UnlimitedLimiter()
 
 
+class MeteredTerminologyTests(TestCase):
+    """The two "is this metered?" questions must stay separate.
+
+    There were two functions answering the same-sounding question:
+
+    - ``availability_report.has_configured_rate_limit`` — *does a technical
+      quota exist?* A deployment fact.
+    - ``source_policy.is_policy_metered`` — *should the architecture treat this
+      source as scarce?* A deliberate policy statement.
+
+    They currently agree for all 13 registered sources, which is precisely why
+    the duplication was dangerous: with no disagreement to notice, swapping
+    one for the other would pass every existing test and only surface later as
+    scheduling that changes when someone adds or removes a rate limit. So the
+    tests below pin the *questions*, not today's answers.
+    """
+
+    def test_the_two_functions_are_independent_predicates(self):
+        """Distinct callables reading distinct sources of truth.
+
+        Asserted behaviourally by moving each source's own input and
+        checking the *other* function does not react — comparing docstrings
+        would only prove the two prose blocks differ, which is not the
+        property that matters.
+        """
+        from tracker.services import availability_report as ar
+        from tracker.services import rate_limit as rate
+
+        # Move the policy input: the configuration question must not notice.
+        saved_role = source_policy.SOURCE_ROLES["youtube"]
+        try:
+            source_policy.SOURCE_ROLES["youtube"] = (
+                source_policy.AvailabilityRole.METERED_AGGREGATOR
+            )
+            self.assertTrue(source_policy.is_policy_metered("youtube"))
+            self.assertFalse(ar.has_configured_rate_limit("youtube"))
+        finally:
+            source_policy.SOURCE_ROLES["youtube"] = saved_role
+
+        # Move the configuration input: the policy question must not notice.
+        saved_limits = dict(getattr(rate, "SOURCE_DAILY_LIMITS", {}) or {})
+        try:
+            if hasattr(rate, "SOURCE_DAILY_LIMITS"):
+                rate.SOURCE_DAILY_LIMITS["mediaset_infinity"] = 5
+                self.assertTrue(ar.has_configured_rate_limit("mediaset_infinity"))
+            self.assertFalse(source_policy.is_policy_metered("mediaset_infinity"))
+        finally:
+            if hasattr(rate, "SOURCE_DAILY_LIMITS"):
+                rate.SOURCE_DAILY_LIMITS.clear()
+                rate.SOURCE_DAILY_LIMITS.update(saved_limits)
+
+    def test_policy_metered_reads_roles_not_rate_limits(self):
+        """A source declared metered in policy is metered even if no rate
+        limit is configured — the policy is the authority, so a deployment
+        that forgets to set a quota cannot silently un-gate the hierarchy."""
+        saved = source_policy.SOURCE_ROLES["watchmode"]
+        try:
+            source_policy.SOURCE_ROLES["watchmode"] = (
+                source_policy.AvailabilityRole.METERED_AGGREGATOR
+            )
+            self.assertTrue(source_policy.is_policy_metered("watchmode"))
+            from tracker.services import availability_report as ar
+
+            self.assertFalse(ar.has_configured_rate_limit("watchmode"))
+        finally:
+            source_policy.SOURCE_ROLES["watchmode"] = saved
+
+    def test_a_configured_rate_limit_does_not_make_a_source_policy_metered(self):
+        """The converse: a quota on a free source must not make the scheduler
+        treat it as scarce. Gating on configuration would mean a rate limit —
+        a reliability measure — silently became a scheduling priority."""
+        self.assertTrue(source_policy.is_policy_metered("streaming_availability"))
+        self.assertNotIn(
+            "mediaset_infinity",
+            {
+                slug
+                for slug in source_policy.SOURCE_ROLES
+                if source_policy.is_policy_metered(slug)
+            },
+        )
+
+    def test_the_old_ambiguous_names_are_gone(self):
+        """Guard the rename itself, so the ambiguity cannot be reintroduced by
+        a well-meaning alias."""
+        for module in (source_policy,):
+            self.assertFalse(hasattr(module, "is_metered_role"))
+            self.assertFalse(hasattr(module, "is_metered"))
+        from tracker.services import availability_report as ar
+
+        self.assertFalse(hasattr(ar, "is_metered"))
+
+
 class DrainGateTests(TestCase):
     """The gate, exercised through the real `_drain_one` code path."""
 
@@ -287,7 +379,7 @@ class DrainGateRespectsPolicySwitchTests(TestCase):
         metered = [
             slug
             for slug in source_policy.SOURCE_ROLES
-            if source_policy.is_metered_role(slug)
+            if source_policy.is_policy_metered(slug)
         ]
         self.assertEqual(metered, [SA])
 

@@ -1756,26 +1756,26 @@ def availability_refresh_list(request):
 
     This is the endpoint that makes a browser reload harmless. The frontend
     does not own the state of a long-running refresh: it asks for the active
-    run, redraws it, and keeps polling. A finished run stays queryable, so
-    "what happened" survives a reload too.
+    run, redraws it, and keeps polling.
+
+    ``results`` is always the recent history, newest first, and ``active`` is
+    the newest non-terminal run (or ``null``). The two are deliberately
+    independent: the frontend's *job* is "attach to whatever is running", and
+    a page load that also wants to show the last finished run must not have
+    to make a second request. Filtering ``results`` down to active-only would
+    mean a reload after the run finished shows an empty list and no outcome
+    at all — losing exactly the information the panel exists to surface.
+
+    Reading this endpoint never changes a run's status. The worker owns the
+    lifecycle; see ``refresh_lifecycle.AvailabilityRefreshLifecycle``.
     """
     runs = AvailabilityRefresh.objects.all()[:20]
-    if request.GET.get("active") in ("1", "true", "True"):
-        runs = AvailabilityRefresh.objects.filter(
-            status__in=[
-                AvailabilityRefreshStatus.QUEUED,
-                AvailabilityRefreshStatus.RUNNING,
-            ]
-        )[:20]
     movie_ids = _watchlist_movie_ids()
+    current = active_refresh()
     return Response(
         {
             "results": [_serialize_refresh(run, movie_ids) for run in runs],
-            "active": (
-                _serialize_refresh(active_refresh(), movie_ids)
-                if active_refresh()
-                else None
-            ),
+            "active": _serialize_refresh(current, movie_ids) if current else None,
         },
         status=status.HTTP_200_OK,
     )
@@ -1819,13 +1819,16 @@ def availability_refresh_start(request):
         request_catalogue_refresh(stale_catalogue)
 
     movie_ids = _watchlist_movie_ids()
+    # The run's frozen policy is the union of sources it may consult across
+    # its titles — the same set the enqueue just decided from. Note this is
+    # `title_level_source_slugs()`, not the role set: a catalogue-driven
+    # source has no per-title request row, so recording it as run scope would
+    # be a claim about scheduling the queue cannot honour.
     refresh = record_run(
         AvailabilityRefreshType.WATCHLIST,
         batch=result.get("batch"),
         movie_ids=movie_ids,
-        source_policy=source_policy.allowed_sources(
-            title_level_source_slugs()
-        ),
+        source_policy=title_level_source_slugs(),
     )
     sync_run_progress(refresh, movie_ids, batch=refresh.batch)
     return Response(

@@ -44,6 +44,7 @@ from ..models import (
     AvailabilityResolutionReason,
     AvailabilityRefresh,
     AvailabilityRefreshSource,
+    AvailabilityRefreshStatus,
     Movie,
     RefreshRequest,
     RefreshRequestStatus,
@@ -173,8 +174,21 @@ def source_tier(slug: str) -> int:
     return 3
 
 
-def is_metered(slug: str) -> bool:
-    """Whether the source declares a daily budget (see ``rate_limit``)."""
+def has_configured_rate_limit(slug: str) -> bool:
+    """Whether the source declares a daily budget (see ``rate_limit``).
+
+    **Configuration, not policy.** This answers "does a technical quota exist
+    for this source?" — a fact about the deployment. The architectural
+    question ("should this source be treated as scarce?") is a separate
+    function with a deliberately different name:
+    :func:`source_policy.is_policy_metered`.
+
+    They are kept apart because collapsing them is a silent, expensive bug:
+    writing ``if is_metered(slug)`` against *this* function would gate on
+    whichever sources happen to have a quota configured today, so adding or
+    removing a rate limit would change scheduling behaviour with no code
+    change to the policy at all.
+    """
     return rate_limiter_for(slug).daily_limit is not None
 
 
@@ -256,6 +270,37 @@ def _terminal_status_evidence(movie_ids: list[int], batch=None) -> dict[int, dic
         mid: {src: value[0] for src, value in per.items()}
         for mid, per in newest.items()
     }
+
+
+def _terminal_status_by_source(
+    movie_ids: list[int], batch=None
+) -> dict[str, dict[int, str]]:
+    """``{source: {movie_id: newest status}}`` — the transpose of
+    :func:`_terminal_status_evidence`.
+
+    Deliberately the *same* read, transposed, rather than a second
+    aggregation with its own filters. Two independent queries over the same
+    rows is how the per-source totals and the per-title verdicts end up
+    disagreeing — and they did: the report counted ``status`` rows (including
+    every historical retry) while the per-title view counted newest-per-pair,
+    so a 191-title watchlist reported 2,740 "checks" against 764 actual ones.
+
+    Note this returns *all* statuses including ``PENDING``, despite the name:
+    what is terminal is each pair's **newest** status, which for an
+    outstanding request is ``pending``. "No information yet" is a state the
+    source-first report has to be able to count, not omit.
+
+    ``batch`` narrows to one run's stamped rows. It is forwarded to the
+    shared read so both views honour a run scope identically — an accepted
+    argument that is silently ignored is worse than no argument, because it
+    reads as "this view is run-scoped" when it is not.
+    """
+    per_movie = _terminal_status_evidence(movie_ids, batch=batch)
+    by_source: dict[str, dict[int, str]] = defaultdict(dict)
+    for movie_id, per_src in per_movie.items():
+        for src, status in per_src.items():
+            by_source[src][movie_id] = status
+    return by_source
 
 
 def _permanent_miss_sources(movie_ids: list[int]) -> dict[int, set[str]]:
@@ -630,31 +675,41 @@ def unknown_breakdown(movie_ids) -> dict[str, int]:
 
 
 def source_progress(movie_ids, batch=None) -> list[dict]:
-    """Per-source roll-up: how many checks each source owes, owes, is blocked on.
+    """Per-source roll-up: how much work each source owes, owes, is blocked on.
 
     The "source-first" report from the plan. Each entry answers three
     questions a user has during a refresh: how much work this source has,
     how much is done, and *why* it is not moving.
+
+    **Counts are distinct titles, never request rows.** The queue's
+    deduplication invariant is a *partial* unique constraint on
+    ``(movie, source)`` while ``status="pending"``, so terminal rows are
+    free to accumulate: a 191-title watchlist held 385 ``DONE`` rows for
+    ``watchmode``, 987 for ``mediaset_infinity`` and 985 for ``youtube``,
+    all covering the same 191 distinct titles. Counting rows made every
+    source look five times busier than the run actually was, and inflated
+    ``checks`` from 764 to 2,740 — the exact "764 checks waiting" figure
+    this feature exists to replace, wrong in the other direction.
+
+    ``terminal_state_per_movie`` is therefore the source of truth here, and
+    counting is scoped to distinct titles so a re-run of the same title is
+    counted once rather than once per attempt.
     """
     movie_ids = list(movie_ids)
     if not movie_ids:
         return []
     title_slugs = _title_level_slugs()
-    scope = RefreshRequest.objects.filter(movie_id__in=movie_ids)
-    if batch is not None:
-        scope = scope.filter(batch=batch)
+    terminal = _terminal_status_by_source(movie_ids, batch=batch)
 
     rows: list[dict] = []
     for slug in title_slugs:
-        src_scope = scope.filter(source=slug)
-        counts = {
-            r["status"]: r["n"]
-            for r in src_scope.values("status").annotate(n=Count("id"))
-        }
-        total = sum(counts.values())
-        done = counts.get(RefreshRequestStatus.DONE, 0)
-        failed = counts.get(RefreshRequestStatus.FAILED, 0)
-        pending = counts.get(RefreshRequestStatus.PENDING, 0)
+        by_status = terminal.get(slug, {})
+        total = len(by_status)
+        done = sum(1 for s in by_status.values() if s == RefreshRequestStatus.DONE)
+        failed = sum(1 for s in by_status.values() if s == RefreshRequestStatus.FAILED)
+        pending = sum(
+            1 for s in by_status.values() if s == RefreshRequestStatus.PENDING
+        )
         quota = source_quota(slug)
         produced = Offer.objects.filter(
             tmdb_id__in=Movie.objects.filter(id__in=movie_ids).values("tmdb_id"),
