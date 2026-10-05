@@ -60,6 +60,7 @@ from ..models import (
     RefreshRun,
     WatchlistItem,
 )
+from .preferences import resolve_source_country
 from .rate_limit import RateLimitExceeded, RateLimiter, rate_limiter_for
 from .streaming_api import UpstreamTitleNotFound
 
@@ -469,7 +470,11 @@ def process_watchlist_refresh(
             )
             try:
                 scope_limiter.acquire()
-                scope_service.refresh_content(movie)
+                # Same as the request-drain path: the selected market is
+                # explicit, never inferred.
+                scope_service.refresh_content(
+                    movie, country=resolve_source_country()
+                )
                 summary.refreshed += 1
                 summary.remaining_budget -= 1
             except RateLimitExceeded:

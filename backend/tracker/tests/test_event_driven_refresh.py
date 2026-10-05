@@ -450,7 +450,7 @@ class ExplicitRefreshEndpointTests(TestCase):
         service = MagicMock()
         summary = process_refresh_queue(budget=5, service=service)
 
-        service.refresh_content.assert_called_once_with(movie)
+        service.refresh_content.assert_called_once_with(movie, country=None)
         self.assertEqual(summary["refreshed"], 1)
         request = RefreshRequest.objects.get()
         self.assertEqual(request.status, RefreshRequestStatus.DONE)
@@ -1014,6 +1014,6 @@ class DrainTests(TestCase):
         self.assertEqual(
             service_cls.call_args.kwargs["source"].slug, "tubi"
         )  # provider-vs-source scope intact
-        scoped_service.refresh_content.assert_called_once_with(scoped_movie)
-        self.refresh_service.refresh_content.assert_called_once_with(default_movie)
+        scoped_service.refresh_content.assert_called_once_with(scoped_movie, country=None)
+        self.refresh_service.refresh_content.assert_called_once_with(default_movie, country=None)
         self.assertEqual(summary["requests_drained"], 2)

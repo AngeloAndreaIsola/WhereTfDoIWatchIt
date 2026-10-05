@@ -230,7 +230,7 @@ class DrainScopeTests(TestCase):
         self.assertEqual(summary["refreshed"], 1)
         self.assertEqual(summary["skipped_cached"], 0)
         self.assertEqual(summary["requests_drained"], 1)
-        self.refresh_service.refresh_content.assert_called_once_with(self.movie)
+        self.refresh_service.refresh_content.assert_called_once_with(self.movie, country=None)
 
     def test_a_stale_other_source_does_not_block_settling_a_fresh_scope(self):
         local_offer(self.movie)  # default scope fresh -> settle for free

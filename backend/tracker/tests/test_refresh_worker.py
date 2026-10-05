@@ -70,7 +70,7 @@ class ProcessRefreshQueueTests(TestCase):
 
         summary = process_refresh_queue(budget=5, service=service)
 
-        service.refresh_content.assert_called_once_with(movie)
+        service.refresh_content.assert_called_once_with(movie, country=None)
         self.assertEqual(summary["refreshed"], 1)
         self.assertEqual(summary["requests_drained"], 1)
         self.assertEqual(summary["requests_pending"], 0)
@@ -383,7 +383,7 @@ class LegacyScopeTests(TestCase):
 
         summary = process_refresh_queue(budget=5, service=service)
 
-        service.refresh_content.assert_called_once_with(movie)
+        service.refresh_content.assert_called_once_with(movie, country=None)
         self.assertEqual(summary["refreshed"], 1)
         self.assertEqual(
             RefreshRequest.objects.get().status, RefreshRequestStatus.DONE
@@ -578,7 +578,9 @@ class PrimeDetailPendingFlagTests(TestCase):
         # worker: the queue settles and the now-fresh title is not re-queued
         # by the next detail view.
         service = MagicMock()
-        service.refresh_content.side_effect = lambda m: local_offer(m)
+        # Accepts the country scope hint the caller now passes; the mock
+        # service has no use for it, exactly like the real default service.
+        service.refresh_content.side_effect = lambda m, country=None: local_offer(m)
         process_refresh_queue(budget=5, service=service)
 
         resp = self.client.get(f"/api/prime/movie/{movie.tmdb_id}/")

@@ -79,6 +79,7 @@ from .bulk_refresh import (
     permanently_absent_scopes,
     title_level_source_slugs,
 )
+from .preferences import resolve_source_country
 from .rate_limit import RateLimitExceeded, RateLimiter, rate_limiter_for
 from .streaming_api import UpstreamTitleNotFound
 from .watchability import RefreshState
@@ -779,7 +780,12 @@ def _drain_one(
 
     try:
         scope_limiter.acquire()
-        _service_for_scope(request.source, service).refresh_content(movie)
+        # The user's selected market travels with the request. Sources that
+        # answer per country (JustWatch) cannot be called without it, and ones
+        # that answer globally (Streaming Availability) ignore it.
+        _service_for_scope(request.source, service).refresh_content(
+            movie, country=resolve_source_country()
+        )
     except RateLimitExceeded:
         summary.note_rate_limited_source(source)
         summary.skipped_rate_limited += 1
