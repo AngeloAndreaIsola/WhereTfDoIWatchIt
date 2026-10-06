@@ -571,7 +571,7 @@ def _catalogue_lock_key(slug: str) -> int:
     return int.from_bytes(digest[:8], "big", signed=True)
 
 
-def _try_source_lock(slug: str) -> bool:
+def try_source_lock(slug: str) -> bool:
     """Try to take the per-source refresh lock; True when this run owns it.
 
     Uses a Postgres session advisory lock keyed by the source slug, so two
@@ -590,11 +590,17 @@ def _try_source_lock(slug: str) -> bool:
     return bool(row and row[0])
 
 
-def _release_source_lock(slug: str) -> None:
+def release_source_lock(slug: str) -> None:
     if connection.vendor != "postgresql":
         return
     with connection.cursor() as cursor:
         cursor.execute("SELECT pg_advisory_unlock(%s)", [_catalogue_lock_key(slug)])
+
+
+#: Backwards-compatible private aliases. The public names are canonical; these
+#: exist so older callers and tests keep working unchanged.
+_try_source_lock = try_source_lock
+_release_source_lock = release_source_lock
 
 
 def _ensure_declared_countries(slug: str, capabilities) -> None:

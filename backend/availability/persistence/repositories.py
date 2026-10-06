@@ -759,3 +759,15 @@ class CursorRepository:
             defaults={"cursor": cursor, "last_successful_sync": now},
         )
         return obj
+
+    def delete(self, provider, source, country):
+        """Drop a cursor row entirely.
+
+        Used only to undo a write made by a fetch that then failed: a partition
+        that had no cursor before must not leave one behind, or the next run
+        would resume from an offset that was never real.
+        """
+        deleted, _ = SyncCursor.objects.filter(
+            provider=provider, source=source, country=country
+        ).delete()
+        return deleted

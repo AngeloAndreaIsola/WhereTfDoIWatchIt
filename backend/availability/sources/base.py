@@ -30,11 +30,38 @@ Rules this module encodes:
 """
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass, field
 from typing import Optional, Protocol, runtime_checkable
 
 from ..domain.enums import SourceType, SyncMode
 from ..domain.models import DiscoveredContent, ProviderOffer
+
+
+def accepts_kwarg(func, name):
+    """Whether *func* declares a keyword argument called *name*.
+
+    Catalogue sources gain optional knobs at different times, and a keyword a
+    source never declared is a hard ``TypeError`` rather than a silent default.
+    This lets a caller pass a newer keyword only to the sources that actually
+    declare it, so adding an optional parameter to one source never breaks the
+    others.
+
+    Deliberately conservative: anything not provably able to take the keyword
+    is called without it. The worst case is then a source ignoring the knob, not
+    a refresh failing in production.
+    """
+    try:
+        signature = inspect.signature(func)
+    except (TypeError, ValueError):
+        return False
+    parameter = signature.parameters.get(name)
+    if parameter is None:
+        return False
+    return parameter.kind in (
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        inspect.Parameter.KEYWORD_ONLY,
+    )
 
 
 class SourceFetchError(Exception):

@@ -113,6 +113,7 @@ from ..persistence.repositories import (
     SyncRunRepository,
 )
 from ..sources import DEFAULT_SOURCE_SLUG, ContentRequest, source_registry
+from ..sources.base import accepts_kwarg
 from .matching import match_local_catalog
 from .normalize import normalize_content_type
 
@@ -218,7 +219,8 @@ class AvailabilityRefreshService:
             raise
         return self._persist(result, tmdb_id=movie.tmdb_id)
 
-    def refresh_catalogue(self, *, provider=None, country=None, cursor=None) -> RefreshResult:
+    def refresh_catalogue(self, *, provider=None, country=None, cursor=None,
+                          pages: int = 1) -> RefreshResult:
         """Refresh a catalogue-capable source's whole catalogue.
 
         Scope comes from the source's declared capabilities: a single supported
@@ -228,6 +230,16 @@ class AvailabilityRefreshService:
         + one transactional canonical write. There is no budget accounting here
         — API budgets belong to title-targeted refreshes; a catalogue source
         reports its full configured scope per fetch.
+
+        ``pages`` bounds how many upstream pages one call walks. It is a
+        throughput knob only: the source stops early on an empty page, so a
+        partition can never be walked unbounded by raising it.
+
+        It is passed on **only** to sources whose ``fetch`` accepts it. Every
+        other catalogue source has the pre-P8 signature, and a keyword they do
+        not declare is a hard ``TypeError`` — which would break all of them.
+        Declared-ness is checked rather than assumed, so adding the parameter to
+        another source later needs no change here.
         """
         capabilities = self.source.capabilities
         if not capabilities.supports_catalogue_sync:
@@ -240,10 +252,15 @@ class AvailabilityRefreshService:
         resolved_country = self._resolve_scope(
             "country", country, capabilities.supported_countries
         )
+        fetch_kwargs = {
+            "provider": resolved_provider,
+            "country": resolved_country,
+            "cursor": cursor,
+        }
+        if pages is not None and accepts_kwarg(self.source.fetch, "pages"):
+            fetch_kwargs["pages"] = pages
         try:
-            result = self.source.fetch(
-                None, provider=resolved_provider, country=resolved_country, cursor=cursor
-            )
+            result = self.source.fetch(None, **fetch_kwargs)
         except Exception as exc:
             logger.exception(
                 "availability_refresh_fetch_failed source=%s tmdb_id=%s error=%s",
@@ -658,6 +675,12 @@ class AvailabilityRefreshService:
                 if result.cursor:
                     # Cursor persistence is this layer's job; it commits with the
                     # same transaction and only when a run scope exists to own it.
+                    #
+                    # A catalogue cursor may be a partition-namespaced map rather
+                    # than a bare offset. It is written verbatim so this layer
+                    # stays unaware of how a source encodes its own partitions,
+                    # and so the sibling partitions a map holds are preserved
+                    # instead of being overwritten by one partition's progress.
                     for _run, provider, country, _group in runs:
                         self.cursors.set(
                             provider=provider, source=source, country=country,

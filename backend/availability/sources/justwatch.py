@@ -152,22 +152,33 @@ class JustWatchSource:
         self.max_offset = max(0, int(max_offset))
 
     # -- interface --------------------------------------------------------
-    def fetch(self, content=None, *, provider=None, country=None, cursor=None
-              ) -> SourceFetchResult:
+    def fetch(self, content=None, *, provider=None, country=None, cursor=None,
+              pages: int = 1) -> SourceFetchResult:
         """Fetch offers/content for one title, or a catalogue page.
 
         ``content`` -> title-targeted: resolve the title, then read offers for
         ``country`` (or the countries encoded in the cursor). ``content=None``
-        -> catalogue/discovery: one page of a provider+country+type partition.
+        -> catalogue/discovery: a page of a provider+country+type partition.
+
+        ``pages`` walks more than one page per call. A partition visit used to
+        advance exactly one page, so exhausting the 2000-offset ceiling needed
+        twenty separate runs; walking a bounded number of pages per visit is
+        what actually closes the coverage gap. Bounded by the caller, and the
+        walk stops the moment a page comes back empty.
         """
         country = self._require_country(country)
         if content is not None:
             return self._fetch_title(content, country=country)
+        partition = cursor if isinstance(cursor, dict) else {}
         return self._fetch_catalogue(
             country=country,
             provider=provider,
-            content_type=(cursor or {}).get("content_type") if isinstance(cursor, dict) else None,
+            content_type=partition.get("content_type"),
             offset=self._cursor_offset(cursor),
+            pages=pages,
+            min_year=partition.get("min_year"),
+            max_year=partition.get("max_year"),
+            partition_id=partition.get("partition"),
         )
 
     # -- title-targeted ---------------------------------------------------
@@ -254,12 +265,19 @@ class JustWatchSource:
             return []
 
     # -- catalogue --------------------------------------------------------
-    def _fetch_catalogue(self, *, country, provider, content_type, offset
-                         ) -> SourceFetchResult:
-        """One page of a provider/country/content-type catalogue partition.
+    def _fetch_catalogue(self, *, country, provider, content_type, offset,
+                         pages: int = 1, min_year=None, max_year=None,
+                         partition_id=None) -> SourceFetchResult:
+        """One bounded walk of a provider/country/type catalogue partition.
 
         Paging state travels on the ``cursor`` (an offset string) so a
         scheduled walk can resume instead of re-downloading the catalogue.
+
+        The optional ``pages`` bound walks several pages per call and returns
+        their combined contents/offers as one result, advancing the cursor once
+        per completed page. It stops early — correctly and deliberately — when a
+        page returns no titles, which is how the endpoint signals its depth
+        wall.
         """
         object_types = [self._object_type(content_type)] if content_type else None
         packages = country_package_map([provider] if provider else [], country)
@@ -274,67 +292,125 @@ class JustWatchSource:
             )
             return SourceFetchResult(sync_mode=SyncMode.INCREMENTAL, cursor=str(offset))
 
-        if offset >= self.max_offset:
-            logger.info("justwatch_catalogue_boundary_reached country=%s offset=%s "
-                        "provider=%s", country, offset, provider)
-            return SourceFetchResult(sync_mode=SyncMode.INCREMENTAL)
+        # A walk is bounded by the requested page count *and* the offset
+        # ceiling, so neither an over-eager caller nor the depth wall can turn
+        # this into an unbounded loop.
+        remaining_pages = max(1, int(pages))
+        all_contents, all_offers = [], []
+        next_offset = offset
+        exhausted = False
 
-        try:
-            page = self.client.catalogue_titles(
-                country=country,
-                language=self.language,
-                count=self.page_size,
-                offset=offset,
-                packages=packages or None,
-                object_types=object_types,
-                best_only=self.best_only,
-            )
-        except JustWatchGraphQLError as exc:
-            if exc.page_too_large and self.page_size > 1:
-                # Measured: the page ceiling is a server-side complexity budget
-                # (~800/title, limit 350000). Halving and retrying once keeps a
-                # catalogue walk working if the endpoint tightens it.
-                self.page_size = max(1, self.page_size // 2)
-                logger.warning("justwatch_page_clamped country=%s offset=%s "
-                               "new_page_size=%s", country, offset, self.page_size)
-                return self._fetch_catalogue(
-                    country=country, provider=provider,
-                    content_type=content_type, offset=offset,
+        while remaining_pages > 0:
+            if next_offset >= self.max_offset:
+                logger.info(
+                    "justwatch_catalogue_boundary_reached country=%s offset=%s "
+                    "provider=%s", country, next_offset, provider)
+                exhausted = True
+                break
+
+            try:
+                page = self.client.catalogue_titles(
+                    country=country,
+                    language=self.language,
+                    count=self.page_size,
+                    offset=next_offset,
+                    packages=packages or None,
+                    object_types=object_types,
+                    min_year=min_year,
+                    max_year=max_year,
+                    best_only=self.best_only,
                 )
-            # A GraphQL rejection is a failed fetch, never an empty page.
-            raise self._as_fetch_error("catalogue", exc) from exc
-        except JustWatchError as exc:
-            raise self._as_fetch_error("catalogue", exc) from exc
+            except JustWatchGraphQLError as exc:
+                if exc.page_too_large and self.page_size > 1:
+                    # Measured: the page ceiling is a server-side complexity
+                    # budget (~800/title, limit 350000). Halving and retrying
+                    # once keeps a catalogue walk working if the endpoint
+                    # tightens it.
+                    self.page_size = max(1, self.page_size // 2)
+                    logger.warning("justwatch_page_clamped country=%s offset=%s "
+                                   "new_page_size=%s", country, next_offset,
+                                   self.page_size)
+                    return self._fetch_catalogue(
+                        country=country, provider=provider,
+                        content_type=content_type, offset=next_offset,
+                        pages=1, min_year=min_year, max_year=max_year,
+                    )
+                # A GraphQL rejection is a failed fetch, never an empty page.
+                raise self._as_fetch_error("catalogue", exc) from exc
+            except JustWatchError as exc:
+                raise self._as_fetch_error("catalogue", exc) from exc
 
-        contents, offers = [], []
-        for title in page.titles:
-            resolved_type = self._content_type(title)
-            if resolved_type is None:
-                continue
-            contents.append(self._content(title, resolved_type, country))
-            # Client-side offer filtering: the `packages` filter selects
-            # *titles*, so the offers inside each node still span every
-            # provider carrying that title. Filtering to the requested provider
-            # here is what makes a provider partition mean "this provider's
-            # catalogue" instead of "titles this provider happens to carry".
-            offers.extend(self._offers_for(
-                title, country=country, content_type=resolved_type,
-                tmdb_id=title.tmdb_id_int, content=title,
-                only_provider=provider,
-            ))
+            if not page.titles:
+                # The endpoint answers past its depth wall with an empty page.
+                # That is the signal to stop rather than to keep walking an
+                # empty partition.
+                logger.info(
+                    "justwatch_catalogue_exhausted country=%s offset=%s "
+                    "provider=%s", country, next_offset, provider)
+                exhausted = True
+                break
 
-        next_offset = offset + self.page_size
-        # The endpoint answers past its depth wall with an empty page, which is
-        # the signal to stop rather than to keep walking an empty partition.
-        exhausted = not page.titles or next_offset >= self.max_offset
+            for title in page.titles:
+                resolved_type = self._content_type(title)
+                if resolved_type is None:
+                    continue
+                all_contents.append(self._content(title, resolved_type, country))
+                # Client-side offer filtering: the `packages` filter selects
+                # *titles*, so the offers inside each node still span every
+                # provider carrying that title. Filtering to the requested
+                # provider here is what makes a provider partition mean "this
+                # provider's catalogue" instead of "titles this provider
+                # happens to carry".
+                all_offers.extend(self._offers_for(
+                    title, country=country, content_type=resolved_type,
+                    tmdb_id=title.tmdb_id_int, content=title,
+                    only_provider=provider,
+                ))
+
+            next_offset += self.page_size
+            remaining_pages -= 1
+            if next_offset >= self.max_offset:
+                exhausted = True
+                break
+
         return SourceFetchResult(
-            contents=contents,
-            offers=offers,
+            contents=all_contents,
+            offers=all_offers,
             # Incremental: a catalogue page is never a complete snapshot, so
             # it must not be able to deactivate anything.
             sync_mode=SyncMode.INCREMENTAL,
-            cursor=None if exhausted else str(next_offset),
+            cursor=self._next_cursor(
+                partition_id=partition_id,
+                offset=next_offset,
+                exhausted=exhausted,
+            ),
         )
+
+    @staticmethod
+    def _next_cursor(*, partition_id, offset, exhausted):
+        """The cursor this partition hands back, preserving its siblings'.
+
+        ``SyncCursor`` is unique on ``(provider, source, country)``, so every
+        partition of one provider/country shares a single row. Writing a bare
+        offset here would erase the offsets of the sibling partitions — the
+        MOVIE walk silently resetting the SERIES walk — so the row carries a
+        small ``partition_id=offset`` map and only this partition's entry moves.
+
+        Without a partition id (a direct ``fetch()`` caller, or a title-targeted
+        refresh) the cursor stays a bare offset, exactly as before.
+        """
+        if not partition_id:
+            return None if exhausted else str(offset)
+        # Escaped with the same rules the coordinator decodes with, so a
+        # partition id containing the map's separators cannot split its own
+        # entry. See ``tracker.services.justwatch_sync._encode_cursor``.
+        key = partition_id.replace("%", "%25").replace("=", "%3D").replace("&", "%26")
+        if exhausted:
+            # Recorded as an empty value so the partition reads as complete and
+            # a later run can start it over, matching the pre-P8 behaviour for
+            # a partition that hit the depth wall.
+            return f"{key}="
+        return f"{key}={offset}"
 
     # -- translation ------------------------------------------------------
     def _offers_for(self, title, *, country, content_type, tmdb_id, content,
