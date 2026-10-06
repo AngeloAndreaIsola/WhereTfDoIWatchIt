@@ -879,13 +879,17 @@ def catalogue_progress() -> list[dict]:
     rows: list[dict] = []
     for slug in _catalogue_slugs():
         source = Source.objects.filter(slug=slug).first()
+        # Reconciled runs are skipped: they record a dead worker, not a failed
+        # source, and these rows exist for every source on every refresh.
         last_run = (
-            RefreshRun.objects.filter(service=slug)
+            RefreshRun.objects.filter(service=slug, abandoned_at__isnull=True)
             .order_by("-started_at")
             .first()
         )
         last_success = (
-            RefreshRun.objects.filter(service=slug, error="")
+            RefreshRun.objects.filter(
+                service=slug, error="", abandoned_at__isnull=True
+            )
             .exclude(finished_at=None)
             .order_by("-finished_at")
             .first()

@@ -196,7 +196,11 @@ class Command(BaseCommand):
             ]
             changed = RefreshRun.objects.filter(
                 id__in=stale_ids, finished_at__isnull=True
-            ).update(finished_at=timezone.now(), error=ABANDONED_ERROR)
+            ).update(
+                finished_at=timezone.now(),
+                error=ABANDONED_ERROR,
+                abandoned_at=timezone.now(),
+            )
 
         self.stdout.write(
             self.style.SUCCESS(f"\nReconciled {changed} abandoned RefreshRun(s).")

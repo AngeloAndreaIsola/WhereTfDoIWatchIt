@@ -15,6 +15,7 @@ here:
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import timedelta
 from io import StringIO
 from unittest.mock import patch
@@ -37,6 +38,20 @@ import importlib
 
 MODULE = "tracker.management.commands.cleanup_availability_history"
 ABANDONED_ERROR = importlib.import_module(MODULE).ABANDONED_ERROR
+
+
+@contextmanager
+def no_locks():
+    """Isolate the "no live work in progress" precondition.
+
+    The command refuses to reconcile while any advisory lock is held, because a
+    live catalogue walk may own an unfinished run. On the dev stack a stalled
+    collector can hold one for many minutes, which would make these tests assert
+    on ambient environment rather than on the command's logic. The guard itself is
+    covered by ``test_active_lock_blocks_reconciliation``.
+    """
+    with patch(f"{MODULE}.held_advisory_locks", return_value=0):
+        yield
 
 
 def _run(service="abc_iview", *, age_minutes=600, finished=True, error=""):
@@ -98,7 +113,8 @@ class SelectionTests(TestCase):
     def test_proven_stale_run_is_reconciled(self):
         stale = _run(age_minutes=600, finished=False)
 
-        call_command("cleanup_availability_history", "--apply", stdout=StringIO())
+        with no_locks():
+            call_command("cleanup_availability_history", "--apply", stdout=StringIO())
 
         stale.refresh_from_db()
         self.assertIsNotNone(stale.finished_at)
@@ -156,10 +172,11 @@ class SelectionTests(TestCase):
     def test_custom_threshold_is_honoured(self):
         recent = _run(age_minutes=45, finished=False)
 
-        call_command(
-            "cleanup_availability_history", "--apply", "--min-age-minutes", "30",
-            stdout=StringIO(),
-        )
+        with no_locks():
+            call_command(
+                "cleanup_availability_history", "--apply", "--min-age-minutes", "30",
+                stdout=StringIO(),
+            )
 
         recent.refresh_from_db()
         self.assertIsNotNone(recent.finished_at)

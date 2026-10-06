@@ -158,8 +158,11 @@ def _catalogue_run_status(source_slugs: set[str]) -> dict[str, dict]:
     if not source_slugs:
         return status
 
+    # Reconciled runs say a worker died, not that the source failed.
     rows = (
-        RefreshRun.objects.filter(service__in=source_slugs)
+        RefreshRun.objects.filter(
+            service__in=source_slugs, abandoned_at__isnull=True
+        )
         .order_by("-started_at")
         .values_list("service", "finished_at", "error")
     )

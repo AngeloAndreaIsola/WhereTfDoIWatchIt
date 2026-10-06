@@ -385,6 +385,13 @@ class RefreshRun(models.Model):
     # is a genuine success (including a genuine empty result), so a failed
     # catalogue fetch can never masquerade as a successful refresh.
     error = models.TextField(blank=True, default="")
+    # Set by ``cleanup_availability_history`` when it reconciles a run whose
+    # worker died. Such a run says nothing about the source's health, and because
+    # catalogue status reads the *newest* finished run per source, reconciling one
+    # would otherwise report that source as failed - even to a refresh that never
+    # asked for it. Null (the default) means an ordinary run, leaving the
+    # ``finished_at`` + empty-``error`` success meaning untouched.
+    abandoned_at = models.DateTimeField(null=True, blank=True, db_index=True)
 
     def __str__(self):
         return f"RefreshRun {self.service} @ {self.started_at}"
