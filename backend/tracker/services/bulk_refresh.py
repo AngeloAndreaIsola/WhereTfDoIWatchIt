@@ -46,10 +46,15 @@ from django.db import connection
 from django.db.models import Max
 from django.utils import timezone
 
+from availability.domain.enums import ContentType
 from availability.freshness import freshness_for, source_is_stale, stale_sources
 from availability.models import Country, Offer, Source
-from availability.services.refresh import AvailabilityRefreshService
+from availability.services.refresh import (
+    AvailabilityRefreshService,
+    RefreshResult,
+)
 from availability.sources import DEFAULT_SOURCE_SLUG, source_registry
+from availability.sources.base import SourceFetchError
 
 from ..models import (
     CatalogueRefreshRequest,
@@ -711,6 +716,136 @@ def stale_catalogue_sources(now=None) -> list[str]:
     )
 
 
+def _default_catalogue_runner(slug, source, refresh_service):
+    """The generic catalogue fetch: one scope-less call, budget-free.
+
+    Correct for the first-party collectors: each owns exactly one
+    provider/country and reports its whole configured scope per fetch.
+
+    Returns a :class:`~availability.services.refresh.RefreshResult` so the
+    caller has one uniform contract regardless of which runner ran.
+    """
+    service = refresh_service or AvailabilityRefreshService(source=source)
+    return service.refresh_catalogue()
+
+
+def _justwatch_catalogue_runner(slug, source, refresh_service):
+    """JustWatch's catalogue work goes through its P8 partition coordinator.
+
+    JustWatch is an aggregator over many providers *and* many countries, so the
+    generic single unscoped fetch cannot express it — and it refuses one, because
+    country is an explicit application decision (never inferred from IP, VPN or
+    locale). Driving it directly from here raised
+    ``SourceFetchError: justwatch requires an explicit country code`` on every
+    single attempt, i.e. 11/11 historical ``RefreshRun`` rows.
+
+    So the worker delegates to :func:`refresh_justwatch_partitions`, the one
+    place that owns JustWatch partition identity, cursors and locking:
+
+        resolve_source_country()
+            -> (country, provider, content type, year window) partitions
+            -> bounded JustWatch catalogue walks
+            -> cursor persistence
+            -> ProviderContent / ContentMapping / Offer
+
+    This adds no second JustWatch implementation: it is the same coordinator the
+    ``refresh_justwatch_catalogue`` operator command drives, so the worker and
+    the command can never disagree about what a JustWatch refresh is. The
+    country is read from ``Preference.current_country`` through the single
+    existing resolver.
+    """
+    # Imported lazily: ``justwatch_sync`` imports this module's lock helpers at
+    # import time, so a module-level import here would be circular.
+    from .justwatch_sync import (
+        DEFAULT_MAX_PARTITIONS,
+        STATUS_FAILED,
+        available_partitions,
+        refresh_justwatch_partitions,
+    )
+
+    country = resolve_source_country()
+    if not country:
+        # Loud, not a silent unscoped fetch: an aggregator asked about the
+        # wrong market returns confidently wrong offers.
+        raise SourceFetchError(
+            "justwatch requires an explicit country code; none is selected in "
+            "preferences. It is never inferred from IP, VPN or browser locale."
+        )
+    country = country.upper()
+
+    # The user's selected market is the *only* market walked.
+    #
+    # Filtering the shared plan (rather than planning anything new here) is the
+    # mechanism ``refresh_justwatch_catalogue --country XX`` already uses, so the
+    # worker and the operator command cannot disagree about which partitions
+    # exist. Order matters: filter FIRST, cap SECOND — capping first would
+    # truncate to an alphabetically-earlier country and silently walk nothing.
+    plan = [
+        partition for partition in available_partitions(max_partitions=None)
+        if partition[0] == country
+    ][:DEFAULT_MAX_PARTITIONS]
+
+    if not plan:
+        # No enabled country x mapped provider pair for this market. Loud, because
+        # an empty plan would otherwise be indistinguishable from "JustWatch
+        # currently offers nothing here", which is a different and wrong claim.
+        raise SourceFetchError(
+            f"justwatch has no available partition for the selected country "
+            f"{country!r}: it needs an enabled country x an enabled provider "
+            f"that JustWatch exposes in that market."
+        )
+
+    logger.info(
+        "justwatch_catalogue_runner country=%s partitions=%d providers=%s",
+        country, len(plan), ",".join(sorted({p[1] for p in plan})),
+    )
+
+    # Explicit plan, executed verbatim by the coordinator.
+    summary = refresh_justwatch_partitions(
+        partitions=plan,
+        max_partitions=None,
+        content_type=ContentType.MOVIE,
+    )
+    if summary.get("locked"):
+        return RefreshResult(
+            discovered=0, processed=0, created=0, updated=0, skipped=0,
+            unresolved=0,
+        )
+    results = summary.get("results") or []
+    failed = [r for r in results if r.get("status") == STATUS_FAILED]
+    if failed:
+        return _raise_justwatch_failure(failed)
+    return RefreshResult(
+        discovered=sum(r.get("discovered", 0) for r in results),
+        processed=sum(r.get("discovered", 0) for r in results),
+        created=sum(r.get("created", 0) for r in results),
+        updated=sum(r.get("updated", 0) for r in results),
+        skipped=0,
+        unresolved=0,
+    )
+
+
+def _raise_justwatch_failure(failed):
+    """Surface a partial/failed JustWatch run as a real failure.
+
+    The coordinator's PARTIAL status means some partitions failed; collapsing
+    that into "succeeded" would make the ``RefreshRun`` audit row claim a
+    complete observation the run never made.
+    """
+    errors = "; ".join(
+        str(r.get("error")) for r in failed if r.get("error")
+    ) or "one or more JustWatch partitions failed"
+    raise SourceFetchError(f"JustWatch catalogue run failed: {errors}")
+
+
+#: Per-source catalogue runner. A source absent from this map uses the generic
+#: single-fetch path, so adding an aggregator that needs real planning registers
+#: one entry here instead of teaching the generic worker about it.
+CATALOGUE_RUNNERS = {
+    "justwatch": _justwatch_catalogue_runner,
+}
+
+
 def _refresh_one_source(
     slug: str,
     source,
@@ -722,6 +857,10 @@ def _refresh_one_source(
     mapping, persistence) is recorded on its own ``RefreshRun`` and returned
     as ``failed`` — the caller keeps going with the remaining sources, and
     no offer is ever deactivated because a refresh failed.
+
+    Which runner executes is a per-source choice
+    (:data:`CATALOGUE_RUNNERS`), because "one catalogue = one fetch" is only
+    true of the first-party collectors.
     """
     started_at = timezone.now()
     result = CatalogueSourceSummary(source=slug, started_at=started_at.isoformat())
@@ -747,8 +886,8 @@ def _refresh_one_source(
             ",".join(sorted(source.capabilities.supported_countries or ())) or "any",
             result.started_at,
         )
-        service = refresh_service or AvailabilityRefreshService(source=source)
-        refresh_result = service.refresh_catalogue()
+        runner = CATALOGUE_RUNNERS.get(slug, _default_catalogue_runner)
+        refresh_result = runner(slug, source, refresh_service)
     except Exception as exc:
         duration = round(time.monotonic() - t0, 3)
         logger.exception(

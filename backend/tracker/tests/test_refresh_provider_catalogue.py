@@ -69,6 +69,29 @@ def make_service(**result_kwargs):
     return service
 
 
+#: JustWatch no longer runs through ``AvailabilityRefreshService`` (it refuses an
+#: unscoped fetch), so a test that stubs that class must also stub the P8
+#: coordinator. Without this the run reaches the real coordinator, finds no
+#: ``Preference.current_country`` in a bare test database, and fails — which says
+#: nothing about the dispatch behaviour these tests actually assert.
+JW_COORDINATOR = "tracker.services.justwatch_sync.refresh_justwatch_partitions"
+
+
+def stub_justwatch_coordinator(**summary):
+    """Patch the P8 coordinator to a no-network stub.
+
+    Returns the patcher so it can be used as a decorator, a context manager, or
+    started manually. The country resolver is stubbed too, because the runner
+    reads the user's persisted preference and a test database has none.
+    """
+    payload = {"status": "succeeded", "results": []}
+    payload.update(summary)
+    return patch.multiple(
+        "tracker.services.bulk_refresh",
+        resolve_source_country=MagicMock(return_value="NL"),
+    ), patch(JW_COORDINATOR, MagicMock(return_value=payload))
+
+
 def summary_from(output: str) -> dict:
     """Parse the JSON summary out of the command's stdout."""
     return json.loads(output[output.index("{"):])
@@ -144,12 +167,19 @@ class RefreshProviderCatalogueCommandTests(TestCase):
     def test_default_runs_every_catalogue_capable_source(self, mock_cls):
         mock_cls.return_value = self._service()
 
-        call_command("refresh_provider_catalogue", stdout=io.StringIO())
+        country_patch, coordinator_patch = stub_justwatch_coordinator()
+        with country_patch, coordinator_patch:
+            call_command("refresh_provider_catalogue", stdout=io.StringIO())
 
+        # Every catalogue-capable source is dispatched. JustWatch reaches its P8
+        # coordinator rather than AvailabilityRefreshService, so it is asserted
+        # through the run rows instead of the stub's call list.
         slugs = [call.kwargs["source"].slug for call in mock_cls.call_args_list]
+        if "justwatch" in catalogue_slugs():
+            slugs = slugs + ["justwatch"]
         # streaming_availability is title-targeted and must not run here.
-        self.assertEqual(slugs, catalogue_slugs())
-        self.assertEqual(RefreshRun.objects.count(), len(slugs))
+        self.assertEqual(sorted(slugs), sorted(catalogue_slugs()))
+        self.assertEqual(RefreshRun.objects.count(), len(catalogue_slugs()))
 
     def test_unknown_source_fails_before_any_run_is_recorded(self):
         with self.assertRaises(UnknownSourceError):
@@ -244,10 +274,17 @@ class SchedulerDiscoveryTests(TestCase):
                 RefreshRun.objects.filter(service=slug).exists(), slug)
 
         out = io.StringIO()
-        call_command("refresh_provider_catalogue", stdout=out)
+        country_patch, coordinator_patch = stub_justwatch_coordinator()
+        with country_patch, coordinator_patch:
+            call_command("refresh_provider_catalogue", stdout=out)
 
-        self.assertEqual(len(mock_cls.call_args_list), len(slugs))
+        # Every catalogue-capable source is still attempted. The stub is built
+        # once per source that uses AvailabilityRefreshService; JustWatch routes
+        # through its P8 coordinator, so it contributes a RefreshRun but no stub
+        # call.
         self.assertEqual(summary_from(out.getvalue())["attempted"], len(slugs))
+        generic = [s for s in slugs if s != "justwatch"]
+        self.assertEqual(len(mock_cls.call_args_list), len(generic))
 
     @patch(REFRESH_CLS)
     def test_nothing_to_do_is_a_success(self, mock_cls):
