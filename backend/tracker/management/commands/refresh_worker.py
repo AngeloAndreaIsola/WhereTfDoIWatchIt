@@ -17,6 +17,41 @@ a pending ``CatalogueRefreshRequest`` marker, if any: whole-catalogue syncs
 pressed by the watchlist's "Refresh all" (no API budget of their own).
 
 Typical deployment: the ``worker`` service in docker-compose.
+
+Two lanes, and why
+------------------
+This command does two structurally different kinds of work in one tick:
+
+* **title lane** — settle ``RefreshRequest`` rows, one bounded network call each;
+* **catalogue lane** — walk one source's *entire* catalogue.
+
+The catalogue lane is unbounded by nature: ABC iview fetches ~1613 series detail
+pages with a politeness delay, measured at 29-30 minutes per run, and CBC Gem
+walks up to 500 pages per category. When both ran in the same tick on one thread,
+a single slow catalogue source blocked every already-queued ``RefreshRequest``
+for half an hour — observed as 601 pending requests that never executed.
+
+``--lane`` makes the split explicit so the two can run in separate processes:
+
+    python manage.py refresh_worker --lane title       # title requests only
+    python manage.py refresh_worker --lane catalogue   # catalogue markers only
+
+The default ``--lane both`` preserves the original single-process behaviour
+exactly, so an existing deployment is unaffected until it opts in.
+
+Concurrency safety
+------------------
+* **Title lane**: safe to run in several processes once claiming is atomic. A
+  request is claimed with a conditional ``UPDATE ... WHERE status = PENDING``
+  so two workers can never settle the same row; that single change is the only
+  lifecycle edit this work requires.
+* **Catalogue lane**: the pre-existing per-source Postgres session advisory lock
+  already guarantees only one catalogue walk per source, so several catalogue
+  workers are safe, and a catalogue worker cannot collide with the JustWatch P8
+  coordinator's lock (it is the same lock, taken by the same code path).
+* **Terminalisation** reads only persisted rows (``sync_run_progress`` is
+  read-only and idempotent, ``finalise`` derives from settled evidence), so it is
+  identical no matter which process did the work.
 """
 from __future__ import annotations
 
@@ -42,6 +77,12 @@ logger = logging.getLogger(__name__)
 # back off instead of re-checking the queue every normal tick.
 RATE_LIMITED_SLEEP = 60.0
 
+#: Execution lanes. ``BOTH`` is the historical single-process behaviour.
+LANE_TITLE = "title"
+LANE_CATALOGUE = "catalogue"
+LANE_BOTH = "both"
+LANE_CHOICES = (LANE_BOTH, LANE_TITLE, LANE_CATALOGUE)
+
 
 class Command(BaseCommand):
     help = "Continuously drain pending RefreshRequest rows (refresh worker)."
@@ -60,6 +101,18 @@ class Command(BaseCommand):
             help="Maximum refreshes per tick (default 10).",
         )
         parser.add_argument(
+            "--lane",
+            choices=LANE_CHOICES,
+            default=LANE_BOTH,
+            help=(
+                "Which work this worker performs. 'both' (default) preserves the "
+                "original single-process behaviour. 'title' drains RefreshRequest "
+                "rows only; 'catalogue' processes CatalogueRefreshRequest markers "
+                "only. Run them as separate processes so a slow catalogue "
+                "source cannot block title-level refreshes."
+            ),
+        )
+        parser.add_argument(
             "--once",
             action="store_true",
             help="Run a single tick and exit (tests / one-shot runs).",
@@ -68,6 +121,16 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         interval = max(options["interval"], 0.1)
         budget = options["budget"]
+        # ``both`` keeps the historical single-process behaviour; the two
+        # explicit lanes exist so a deployment can run them as separate
+        # processes. Nothing else about the tick changes.
+        lane = options.get("lane", LANE_BOTH)
+        runs_title = lane in (LANE_BOTH, LANE_TITLE)
+        runs_catalogue = lane in (LANE_BOTH, LANE_CATALOGUE)
+        logger.info(
+            "refresh_worker_lane lane=%s interval=%s budget=%s",
+            lane, interval, budget,
+        )
         # No limiter is injected: each request carries its own source and the
         # drain resolves that source's budget from the registry, so a single
         # limiter here would re-impose one shared quota on all sources.
@@ -98,7 +161,7 @@ class Command(BaseCommand):
                         )
                     run = claim_active_run()
 
-                summary = process_refresh_queue(budget=budget)
+                summary = process_refresh_queue(budget=budget) if runs_title else None
                 if summary:
                     # Rate-limited ticks are printed too: they are the
                     # *interesting* ones (queue stuck until the quota
@@ -134,7 +197,13 @@ class Command(BaseCommand):
                 # Catalogue marker after the title queue: whole-catalogue
                 # syncs spend no API budget, but the title queue always
                 # gets its budgeted drain first.
-                catalogue = process_pending_catalogue_refresh()
+                #
+                # Gated by lane so a dedicated catalogue worker can own it.
+                # In its own process this can no longer delay a title drain:
+                # that is the entire point of the split.
+                catalogue = (
+                    process_pending_catalogue_refresh() if runs_catalogue else None
+                )
                 if catalogue:
                     self.stdout.write(json.dumps({"catalogue": catalogue}))
 

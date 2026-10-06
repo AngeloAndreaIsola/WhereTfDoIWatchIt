@@ -58,9 +58,24 @@ services:
         condition: service_started
     restart: unless-stopped
 
-  worker:
+  # Both lanes share one image, one environment and one entrypoint, so the
+  # shared parts are an anchor: a divergence between the two workers'
+  # configuration would be a silent bug (the ladder switch below, for instance,
+  # must be identical in both or a request could be queued under one policy and
+  # settled under another).
+  #
+  # `worker` owns the title lane and `catalogue-worker` owns whole-catalogue
+  # syncs. They are separate processes because the two kinds of work have
+  # completely different durations: a title check is one bounded upstream call,
+  # while ABC iview's catalogue walk fetches ~1613 series detail pages and
+  # measurably takes ~30 minutes. In one thread a single catalogue walk blocked
+  # every already-queued title request for half an hour.
+  #
+  # `--lane both` remains the default for a single-process deployment; this
+  # split is opt-in and only changes *who* does the work, never what is
+  # computed from persisted state afterwards.
+  worker: &worker-base
     build: ./backend
-    command: python manage.py refresh_worker
     entrypoint: ["/worker-entrypoint.sh"]
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
@@ -80,12 +95,20 @@ services:
       # queued is settled without being attempted — which only works if this
       # process is configured with the same policy as the one that queued it.
       AVAILABILITY_CONSULT_METERED_ONLY_WHEN_UNRESOLVED: ${AVAILABILITY_CONSULT_METERED_ONLY_WHEN_UNRESOLVED:-0}
+    command: python manage.py refresh_worker --lane title
     depends_on:
       db:
         condition: service_healthy
       backend:
         condition: service_started
     restart: unless-stopped
+
+  catalogue-worker:
+    # Inherits image, environment, dependencies and restart policy from `worker`
+    # above. The two must not diverge: a worker configured with a different source
+    # ladder would settle requests under a policy the queueing process never used.
+    <<: *worker-base
+    command: python manage.py refresh_worker --lane catalogue
 
 volumes:
   pgdata:

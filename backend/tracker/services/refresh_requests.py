@@ -53,7 +53,7 @@ import logging
 import uuid
 from typing import Optional
 
-from django.db import IntegrityError
+from django.db import IntegrityError, connection
 from django.db.models import Q
 from django.utils import timezone
 
@@ -1032,6 +1032,49 @@ def drain_refresh_requests(
     return excluded
 
 
+#: Advisory-lock key serialising the title-queue drain. Fixed constant (not
+#: hashed from a slug) because it guards the queue as a whole, not one source.
+_TITLE_DRAIN_LOCK_KEY = 0x7A9E_D41C
+
+
+def try_title_drain_lock() -> bool:
+    """Take the advisory lock that serialises title-queue drains.
+
+    ``RefreshRequest`` is deliberately a four-state model (``PENDING`` plus three
+    terminal outcomes) with no ``RUNNING``, so a row cannot be "claimed" by
+    writing a status: that would need a migration and would change what every
+    consumer of request semantics reads. The whole drain is therefore serialised
+    with a Postgres session advisory lock — the same mechanism already used to
+    keep one catalogue walk per source
+    (:func:`tracker.services.bulk_refresh.try_source_lock`).
+
+    Two title workers never interleave: one takes the lock and drains, the other
+    skips the tick cleanly and picks up whatever is still pending next tick.
+    Strictly more conservative than per-row claiming, and needs no schema change.
+
+    Degrades to "always acquired" on backends without advisory locks, so local
+    sqlite testing is unaffected — exactly like the catalogue lock.
+    """
+    if connection.vendor != "postgresql":
+        return True
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT pg_try_advisory_lock(%s)", [_TITLE_DRAIN_LOCK_KEY]
+        )
+        row = cursor.fetchone()
+    return bool(row and row[0])
+
+
+def release_title_drain_lock() -> None:
+    """Release the drain lock. Safe to call even if it was never taken."""
+    if connection.vendor != "postgresql":
+        return
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT pg_advisory_unlock(%s)", [_TITLE_DRAIN_LOCK_KEY]
+        )
+
+
 def process_refresh_queue(
     *,
     budget: int = 10,
@@ -1071,11 +1114,28 @@ def process_refresh_queue(
     if _is_spent(limiter):
         summary.note_rate_limited_source(DEFAULT_SOURCE_SLUG)
 
-    run = RefreshRun.objects.create(
-        service=DEFAULT_SOURCE_SLUG,
-        started_at=timezone.now(),
-    )
-    drain_refresh_requests(summary=summary, service=service, limiter=limiter)
+    # Serialise the drain itself. Two title workers must never interleave: the
+    # queue is read-then-settle with no per-row claim, so without this both would
+    # see the same candidates and call the same sources for the same titles.
+    if not try_title_drain_lock():
+        # Another title worker owns the queue this tick. Report it as
+        # rate-limited rather than inventing a new status: the work is neither
+        # failed nor done, it simply has an owner, and the caller's existing
+        # rate-limit branch already treats that as "back off and retry".
+        summary.note_rate_limited_source(DEFAULT_SOURCE_SLUG)
+        summary.skipped_rate_limited += 1
+        summary.rate_limited = True
+        summary.requests_pending = pending.count()
+        return summary.to_dict()
+
+    try:
+        run = RefreshRun.objects.create(
+            service=DEFAULT_SOURCE_SLUG,
+            started_at=timezone.now(),
+        )
+        drain_refresh_requests(summary=summary, service=service, limiter=limiter)
+    finally:
+        release_title_drain_lock()
     run.rows_refreshed = summary.refreshed
     run.rows_skipped = (
         summary.skipped_cached
