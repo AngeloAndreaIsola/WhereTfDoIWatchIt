@@ -213,9 +213,14 @@ describe("Series season selector", () => {
 
     await user.selectOptions(select, "3");
 
-    expect(
-      await screen.findByText("Not currently available on your subscribed streaming services.")
-    ).toBeInTheDocument();
+    // The offer list is genuinely empty for this season. P9: with no verdict
+    // the page must say the season's availability is unknown, not unavailable.
+    await waitFor(() =>
+      expect(screen.getByTestId("availability-state")).toHaveAttribute(
+        "data-state",
+        "unknown",
+      ),
+    );
     expect(screen.queryByText("Prime Video")).not.toBeInTheDocument();
   });
 

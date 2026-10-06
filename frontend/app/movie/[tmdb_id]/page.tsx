@@ -8,6 +8,7 @@ import OfferRow from "@/components/OfferRow";
 import { useCurrentLocation } from "@/components/CurrentLocationProvider";
 import MovieEditModal from "@/components/MovieEditModal";
 import RefreshAvailabilityButton from "@/components/RefreshAvailabilityButton";
+import AvailabilityState from "@/components/AvailabilityState";
 import type { PrimeOffer, PrimeMovieResponse } from "@/lib/api";
 import { fetchPrimeMovieOffers, addToWatchlist, markMovieWatched, unmarkMovieWatched, removeWatchlistItem, requestAvailabilityRefresh } from "@/lib/api";
 import type { LinkTmdbResponse } from "@/lib/api";
@@ -555,10 +556,15 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
                   </p>
                 </div>
               ) : (
-                <div className="rounded-xl border border-gray-200 bg-white p-6 text-center text-sm text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400">
-                  Not currently available on your subscribed streaming services.
+                // The empty-offers state is driven by the backend verdict, not
+                // assumed: an unchecked title must not read as "unavailable".
+                <>
+                  <AvailabilityState
+                    availability={data.availability}
+                    refreshing={false}
+                  />
                   {data.refresh_pending && (
-                    <p className="mt-2 text-xs">
+                    <p className="mt-2 text-center text-xs text-gray-500 dark:text-gray-500">
                       An availability refresh is still queued.
                       <button
                         type="button"
@@ -569,7 +575,7 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
                       </button>
                     </p>
                   )}
-                </div>
+                </>
               )
             ) : (
               <div className="space-y-3">

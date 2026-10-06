@@ -80,8 +80,21 @@ export interface PrimeMovieResponse {
   refresh_pending?: boolean;
   /** Status of the newest refresh request: `"pending"` / `"done"` / `"failed"`, null when never requested. */
   refresh_status?: "pending" | "done" | "failed" | null;
+  /**
+   * The backend's own verdict on this title. Present so an empty `offers`
+   * list is not ambiguous: `unavailable` means checked-and-nothing,
+   * `unknown` means the evidence never resolved. Optional because an older
+   * backend omits it — callers must treat absence as unknown, never as
+   * unavailable.
+   */
+  availability?: TitleAvailabilityVerdict;
 }
 
+
+/**
+ * Shared by movie and series detail pages. Both render availability from the
+ * same backend verdict, so they must not drift apart.
+ */
 export interface SeriesDetail {
   id: number;
   tmdb_id: number;
@@ -118,7 +131,16 @@ export interface PrimeSeriesResponse {
   refresh_pending?: boolean;
   /** Status of the newest refresh request: `"pending"` / `"done"` / `"failed"`, null when never requested. */
   refresh_status?: "pending" | "done" | "failed" | null;
+  /**
+   * The backend's own verdict on this title. Present so an empty `offers`
+   * list is not ambiguous: `unavailable` means checked-and-nothing,
+   * `unknown` means the evidence never resolved. Optional because an older
+   * backend omits it — callers must treat absence as unknown, never as
+   * unavailable.
+   */
+  availability?: TitleAvailabilityVerdict;
 }
+
 
 export interface WatchResult {
   found: boolean;
@@ -486,6 +508,48 @@ export type AvailabilityResolutionReason =
   | "source_unavailable"
   | "collector_not_run"
   | "unknown_reason";
+
+/**
+ * One title's availability verdict, as returned by the detail endpoints.
+ *
+ * This is a *presentation* of the backend classifier, not a second one: the
+ * same three states and the same reasons the availability report already uses.
+ * Declared here once and referenced by both the movie and series detail
+ * responses so the two pages cannot drift apart.
+ *
+ * `reason` reuses the report's `AvailabilityResolutionReason` union, so a new
+ * backend reason is a type error in one place rather than a silent `string`.
+ */
+export interface TitleAvailabilityVerdict {
+  state: AvailabilityTitleState;
+  reason: AvailabilityResolutionReason | null;
+  resolved_sources: string[];
+  unresolved_sources: string[];
+  sources: TitleAvailabilitySource[];
+}
+
+/**
+ * One source's contribution to a *single title's* verdict.
+ *
+ * Deliberately not `AvailabilitySourceRow`: that is the report's per-source
+ * aggregate (`tier`, `total`, `completed`, `kind`, quota, counters) and forces
+ * every title-level row to carry roll-up fields it never has. This type holds
+ * exactly what the detail endpoint emits, so a backend field that is missing
+ * here is a compile error rather than an `undefined` read at runtime.
+ */
+export interface TitleAvailabilitySource {
+  source: string;
+  label: string;
+  status: string;
+  reason: AvailabilityResolutionReason | null;
+  /** Whether *this source* produced an answer. Null when it produced none. */
+  available: boolean | null;
+  /**
+   * When this source actually answered. Null when it was never consulted —
+   * which is precisely why absence of an offer is not absence of a check.
+   */
+  checked_at: string | null;
+}
 
 export type AvailabilityTitleState = "available" | "unavailable" | "unknown";
 

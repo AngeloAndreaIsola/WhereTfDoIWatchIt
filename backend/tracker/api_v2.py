@@ -19,6 +19,11 @@ from rest_framework.decorators import api_view, parser_classes
 from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 
+from tracker.services.availability_report import (
+    TitleAvailabilityState,
+    title_source_report,
+)
+
 from tracker.models import (
     Movie,
     Preference,
@@ -330,6 +335,56 @@ def unofficial_scrape(request):
     }, status=status.HTTP_201_CREATED)
 
 
+def _title_availability(movie_id):
+    """The classifier's verdict for one title, as plain JSON.
+
+    Both detail pages render availability from this endpoint, and an empty
+    ``offers`` list is ambiguous on its own: it looks the same whether the title
+    was checked and is genuinely unavailable, or whether nothing ever checked it.
+
+    Measured over 400 tracked titles with no scraper offers, every one was
+    ``unknown`` (not_checked / not_applicable / title_not_found) and none were
+    ``unavailable`` — so a UI that renders that empty list as "not currently
+    available" states something false.
+
+    The verdict is *presented*, not recomputed: it comes from
+    ``availability_report.title_source_report``, the same classifier the report
+    and metrics endpoints use, so this endpoint cannot disagree with them.
+    Absent data is UNKNOWN, never UNAVAILABLE.
+    """
+    verdict = title_source_report([movie_id]).get(movie_id, {})
+    state = verdict.get("state") or TitleAvailabilityState.UNKNOWN
+    return {
+        "state": state,
+        "reason": _reason_value(verdict.get("reason")),
+        "resolved_sources": verdict.get("resolved_sources", []),
+        "unresolved_sources": verdict.get("unresolved_sources", []),
+        "sources": [
+            {
+                "source": row.get("source"),
+                "label": row.get("label"),
+                "status": row.get("status"),
+                "reason": _reason_value(row.get("reason")),
+                "available": row.get("available"),
+                "checked_at": row.get("checked_at"),
+            }
+            for row in verdict.get("sources", [])
+        ],
+    }
+
+
+def _reason_value(reason):
+    """Reasons are enum members in the classifier; the API sends plain strings.
+
+    A string (not the enum name) keeps the frontend contract stable if the enum
+    is renamed, and lets an unregistered reason degrade to the slug rather than
+    disappearing.
+    """
+    if reason is None:
+        return None
+    return getattr(reason, "value", None) or str(reason)
+
+
 @api_view(["GET"])
 def unofficial_movie_offers(request, tmdb_id: int):
     """GET /api/v2/unofficial/movie/<tmdb_id>/offers/
@@ -372,6 +427,7 @@ def unofficial_movie_offers(request, tmdb_id: int):
             "movie": movie_payload,
             "offers": [],
             "selected_season": season,
+            "availability": _title_availability(movie.id),
         })
 
     pref_dict = resolve_preferences(user_id=1)
@@ -411,6 +467,7 @@ def unofficial_movie_offers(request, tmdb_id: int):
         "movie": movie_payload,
         "offers": offers_out,
         "selected_season": None,
+        "availability": _title_availability(movie.id),
     })
 
 

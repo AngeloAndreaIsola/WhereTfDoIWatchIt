@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, waitFor } from "@testing-library/react";
 import MovieDetailPage from "@/app/movie/[tmdb_id]/page";
 import SeriesDetailPage from "@/app/tv/[tmdb_id]/page";
 
@@ -88,6 +88,122 @@ function primeCalls(fetchMock: ReturnType<typeof vi.fn>, kind: "movie" | "series
   );
 }
 
+describe("Reload reconstruction (P9)", () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+    nav.push.mockReset();
+    nav.replace.mockReset();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /**
+   * A browser reload destroys every piece of React state. Whatever the page
+   * shows must therefore be derivable from the backend response alone —
+   * `refresh_pending` and `refresh_status` — not from an in-memory flag that a
+   * reload would silently clear.
+   *
+   * Each test mounts the page fresh, which is exactly what a reload does.
+   */
+  it("shows a queued refresh after a reload without any prior client state", async () => {
+    // Routed by URL rather than by call order: the page fetches preferences,
+    // the prime offers and the unofficial list, and the order is not the
+    // subject of this test.
+    const fetchMock = vi.fn((url: string) => {
+      if (url.includes("/api/preferences/")) return Promise.resolve(response({ body: preferencesBody }));
+      if (url.includes("/api/v2/unofficial/")) return Promise.resolve(response({ body: { movie: {}, offers: [] } }));
+      if (url.includes("/api/prime/movie/")) {
+        // First paint already says "pending" — as it would after a reload
+        // during an active refresh.
+        return Promise.resolve(response({ body: pendingMovieBody }));
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(React.createElement(MovieDetailPage, { params: { tmdb_id: "550" } }));
+
+    // Reconstructed purely from the backend's refresh_pending flag: a fresh
+    // mount that reads pending=true must show the checking affordance without
+    // any client-side memory of a click.
+    expect(
+      await screen.findByText("Checking availability…"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Not currently available on your subscribed streaming services."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("settles to resolved after a reload without an in-flight marker", async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url.includes("/api/preferences/")) return Promise.resolve(response({ body: preferencesBody }));
+      if (url.includes("/api/v2/unofficial/")) return Promise.resolve(response({ body: { movie: {}, offers: [] } }));
+      if (url.includes("/api/prime/movie/")) {
+        return Promise.resolve(response({ body: resolvedMovieBody }));
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(React.createElement(MovieDetailPage, { params: { tmdb_id: "550" } }));
+
+    // Offers exist and refresh_pending is false: nothing is pending, so no
+    // "checking" affordance may be shown. getAllByText because the ranked card
+    // and the unofficial section both render offer rows.
+    await waitFor(() =>
+      expect(screen.getAllByText("Best Match").length).toBeGreaterThan(0),
+    );
+    expect(screen.queryByText("Checking availability…")).not.toBeInTheDocument();
+  });
+
+  it("does not claim unavailable for a pending title after a reload", async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url.includes("/api/preferences/")) return Promise.resolve(response({ body: preferencesBody }));
+      if (url.includes("/api/v2/unofficial/")) return Promise.resolve(response({ body: { movie: {}, offers: [] } }));
+      if (url.includes("/api/prime/movie/")) {
+        return Promise.resolve(response({ body: pendingMovieBody }));
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(React.createElement(MovieDetailPage, { params: { tmdb_id: "550" } }));
+
+    await flush();
+    expect(
+      screen.queryByText(
+        "Not currently available on your subscribed streaming services.",
+      ),
+    ).not.toBeInTheDocument();
+  });
+
+  it("reads a server-side failure from refresh_status", async () => {
+    const failedBody = { ...pendingMovieBody, refresh_pending: false, refresh_status: "failed" };
+    const fetchMock = vi.fn((url: string) => {
+      if (url.includes("/api/preferences/")) return Promise.resolve(response({ body: preferencesBody }));
+      if (url.includes("/api/v2/unofficial/")) return Promise.resolve(response({ body: { movie: {}, offers: [] } }));
+      if (url.includes("/api/prime/movie/")) {
+        return Promise.resolve(response({ body: failedBody }));
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(React.createElement(MovieDetailPage, { params: { tmdb_id: "550" } }));
+
+    // The failure is a backend fact surfaced after the fact; the page must not
+    // have needed client state to know it, and must not show a pending spinner.
+    await flush();
+    expect(screen.queryByText("Checking availability…")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Not currently available on your subscribed streaming services."),
+    ).not.toBeInTheDocument();
+  });
+});
+
+
 describe("Availability refresh pending flow", () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
@@ -149,9 +265,17 @@ describe("Availability refresh pending flow", () => {
     });
     await flush();
 
+    // P9: an empty offer list with no verdict is UNKNOWN, not "unavailable".
+    // The fixture has no `availability` field, so the conservative default
+    // applies — and it must not claim the title was checked and found absent.
     expect(
-      screen.getByText("Not currently available on your subscribed streaming services.")
-    ).toBeInTheDocument();
+      screen.queryByText("Not currently available on your subscribed streaming services.")
+    ).not.toBeInTheDocument();
+    expect(screen.getByTestId("availability-state")).toHaveAttribute(
+      "data-state",
+      "unknown",
+    );
+    expect(screen.getByText(/not known yet/i)).toBeInTheDocument();
     expect(screen.getByText(/still queued/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Check again" })).toBeInTheDocument();
     expect(screen.queryByText("Checking availability…")).not.toBeInTheDocument();
@@ -167,9 +291,16 @@ describe("Availability refresh pending flow", () => {
 
     render(React.createElement(MovieDetailPage, { params: { tmdb_id: "550" } }));
 
+    // Nothing queued and no verdict: still unknown rather than unavailable.
+    await waitFor(() =>
+      expect(screen.getByTestId("availability-state")).toHaveAttribute(
+        "data-state",
+        "unknown",
+      ),
+    );
     expect(
-      await screen.findByText("Not currently available on your subscribed streaming services.")
-    ).toBeInTheDocument();
+      screen.queryByText("Not currently available on your subscribed streaming services.")
+    ).not.toBeInTheDocument();
     expect(screen.queryByText(/still queued/)).not.toBeInTheDocument();
     expect(screen.queryByText("Checking availability…")).not.toBeInTheDocument();
   });

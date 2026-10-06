@@ -253,7 +253,14 @@ class UnofficialOffersContractTests(TestCase):
 
         data = self._offers()
 
-        self.assertEqual(set(data.keys()), {"movie", "offers", "selected_season"})
+        # P9: `availability` is additive. The rest of this test still pins the
+        # legacy keys exactly, so nothing was dropped — the verdict is presented
+        # alongside, and its contents are covered in
+        # tracker.tests.test_detail_availability_state.
+        self.assertEqual(
+            set(data.keys()),
+            {"movie", "offers", "selected_season", "availability"},
+        )
         self.assertIsNone(data["selected_season"])
         self.assertEqual(
             set(data["movie"].keys()),
