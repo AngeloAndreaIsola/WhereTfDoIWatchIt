@@ -108,6 +108,7 @@ from availability.sources import source_registry
 from availability.sources.base import accepts_kwarg
 from availability.sources.justwatch_providers import PACKAGE_SHORT_NAMES
 from tracker.models import Provider
+from tracker.services.refresh_attribution import attribute_sync_runs
 
 # Reused verbatim from the generic catalogue scheduler: same lock, same key, so
 # the two entry points cannot run concurrently for the same source.
@@ -335,7 +336,7 @@ def refresh_justwatch_partitions(*, partitions=None,
                                 source=None, refresh_service=None,
                                 pages_per_partition=1,
                                 year_start=None, year_end=None,
-                                year_window=None):
+                                year_window=None, availability_refreshes=()):
     """Walk JustWatch catalogue partitions, resuming each from its cursor.
 
     ``max_partitions=None`` means "no further cap": the caller has already
@@ -390,6 +391,7 @@ def refresh_justwatch_partitions(*, partitions=None,
             content_type=content_type, source=source,
             refresh_service=refresh_service, pages_per_partition=pages_per_partition,
             year_start=year_start, year_end=year_end, year_window=year_window,
+            availability_refreshes=availability_refreshes,
         )
     finally:
         release_source_lock(source.slug)
@@ -397,7 +399,7 @@ def refresh_justwatch_partitions(*, partitions=None,
 
 def _run_partitions(*, partitions, max_partitions, content_type, source,
                     refresh_service, pages_per_partition, year_start, year_end,
-                    year_window):
+                    year_window, availability_refreshes=()):
     """The walk itself, under the caller's per-source lock."""
     service = refresh_service or AvailabilityRefreshService(source=source)
     cursors = CursorRepository()
@@ -535,6 +537,13 @@ def _run_partitions(*, partitions, max_partitions, content_type, source,
             if accepts_kwarg(service.refresh_catalogue, "pages"):
                 catalogue_kwargs["pages"] = pages_per_partition
             outcome = service.refresh_catalogue(**catalogue_kwargs)
+            if availability_refreshes:
+                # Every partition this walk emitted belongs to the same set of
+                # refreshes that asked for the coalesced marker - which is why
+                # this takes a set rather than one parent. Diagnostic only.
+                attribute_sync_runs(
+                    getattr(outcome, "sync_runs", ()) or (), availability_refreshes
+                )
         except Exception as exc:  # noqa: BLE001 - one partition must not stop the rest
             logger.exception(
                 "justwatch_partition_failed country=%s provider=%s error=%s",

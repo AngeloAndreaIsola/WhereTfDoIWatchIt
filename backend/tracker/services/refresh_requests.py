@@ -62,6 +62,7 @@ from availability.services.refresh import AvailabilityRefreshService
 from availability.sources import DEFAULT_SOURCE_SLUG, source_registry
 
 from ..models import (
+    AvailabilityRefresh,
     CatalogueRefreshRequest,
     CatalogueRefreshStatus,
     Movie,
@@ -80,6 +81,8 @@ from .bulk_refresh import (
     title_level_source_slugs,
 )
 from .preferences import resolve_source_country
+from .refresh_attribution import (attribute_catalogue_marker,
+                                  attribute_refresh_run)
 from .rate_limit import RateLimitExceeded, RateLimiter, rate_limiter_for
 from .streaming_api import UpstreamTitleNotFound
 from .watchability import RefreshState
@@ -451,7 +454,9 @@ def request_import_refresh(
     return request_availability_refresh(movie, priority=priority, if_stale=True)
 
 
-def request_catalogue_refresh(sources) -> CatalogueRefreshRequest:
+def request_catalogue_refresh(
+    sources, *, availability_refresh=None
+) -> CatalogueRefreshRequest:
     """Queue the worker's catalogue-sync job (enqueue side, local-only).
 
     Counterpart of the per-title queue for sources that sync their *whole*
@@ -464,6 +469,12 @@ def request_catalogue_refresh(sources) -> CatalogueRefreshRequest:
     Idempotent: repeated clicks collapse into the one pending marker (partial
     unique constraint), merging newly stale slugs into it instead of
     stacking jobs.
+
+    ``availability_refresh`` records who asked. Because the marker coalesces,
+    that is a set rather than one owner: a second refresh requesting the same
+    source while the marker is still pending *adds* a link and the marker then
+    legitimately represents both. Omitting it (an operator command, scheduled
+    staleness) leaves the marker unattributed, which is the honest outcome.
     """
     wanted = sorted(set(sources))
     marker, created = CatalogueRefreshRequest.objects.get_or_create(
@@ -475,6 +486,8 @@ def request_catalogue_refresh(sources) -> CatalogueRefreshRequest:
         if merged != marker.sources:
             marker.sources = merged
             marker.save(update_fields=["sources"])
+    if availability_refresh is not None:
+        attribute_catalogue_marker(marker, [availability_refresh])
     return marker
 
 
@@ -899,6 +912,7 @@ def drain_refresh_requests(
     summary,
     service: AvailabilityRefreshService,
     limiter,
+    represented_batches=None,
 ) -> set[int]:
     """Process pending refresh requests in priority order, budget permitting.
 
@@ -940,6 +954,16 @@ def drain_refresh_requests(
     """
     excluded: set[int] = set()
     rate_limit_hit = summary.rate_limited
+    # Batches actually *processed* by this tick. Attribution must reflect the
+    # requests this execution really drained - not every batch that happened to
+    # be pending - so the set is recorded as each request is settled rather than
+    # read from "the active refresh" (several may be queued at once).
+    #
+    # ``represented_batches`` is an optional out-parameter (a set the caller
+    # supplies) rather than a changed return type: existing callers unpack the
+    # ``excluded`` result positionally, and diagnostic plumbing should not
+    # silently re-shape every one of them.
+    drained_batches: set = represented_batches if represented_batches is not None else set()
 
     # One limiter per registered source, built once per tick: resolving (and
     # for metered sources, querying) a source's budget per request would make
@@ -987,6 +1011,10 @@ def drain_refresh_requests(
 
         def _drain(request):
             nonlocal rate_limit_hit
+            # Recorded before the call: a request that fails or defers is still
+            # work this execution handled, and its refresh asked for it.
+            if request.batch is not None:
+                drained_batches.add(request.batch)
             source = resolve_request_source(request)
             rate_limit_hit = _drain_one(
                 request,
@@ -1128,14 +1156,31 @@ def process_refresh_queue(
         summary.requests_pending = pending.count()
         return summary.to_dict()
 
+    # Batches this tick actually drains. One tick may span several batches
+    # (queued refreshes accumulate), and the resulting RefreshRun legitimately
+    # belongs to all of them - so attribution is a set, never a single parent.
+    drained_batches: set = set()
     try:
         run = RefreshRun.objects.create(
             service=DEFAULT_SOURCE_SLUG,
             started_at=timezone.now(),
         )
-        drain_refresh_requests(summary=summary, service=service, limiter=limiter)
+        drain_refresh_requests(
+            summary=summary,
+            service=service,
+            limiter=limiter,
+            represented_batches=drained_batches,
+        )
     finally:
         release_title_drain_lock()
+    # Diagnostic only: read by nothing that decides behaviour. A batch with no
+    # AvailabilityRefresh row (requests queued directly, or by an older
+    # version) simply produces no link.
+    if drained_batches:
+        attribute_refresh_run(
+            run,
+            AvailabilityRefresh.objects.filter(batch__in=drained_batches),
+        )
     run.rows_refreshed = summary.refreshed
     run.rows_skipped = (
         summary.skipped_cached

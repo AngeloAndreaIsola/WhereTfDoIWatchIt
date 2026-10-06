@@ -1456,13 +1456,26 @@ def watchlist_refresh_explicit(request):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
+    # Record the run before the catalogue marker so the marker can be
+    # attributed to it. ``/api/availability/refreshes/`` already does this; the
+    # explicit watchlist path did not, which is why an explicit "Refresh all"
+    # left 601 RefreshRequests whose batch had no AvailabilityRefresh row.
+    movie_ids = _watchlist_movie_ids()
+    refresh = record_run(
+        AvailabilityRefreshType.WATCHLIST,
+        batch=result.get("batch"),
+        movie_ids=movie_ids,
+        source_policy=title_level_source_slugs(),
+    )
+
     stale_catalogue = stale_catalogue_sources()
     if stale_catalogue:
-        request_catalogue_refresh(stale_catalogue)
+        request_catalogue_refresh(stale_catalogue, availability_refresh=refresh)
 
     return Response(
         {
             **result,
+            "refresh_id": refresh.pk,
             "now": started_at.timestamp(),
             "catalogue_queued": stale_catalogue,
         },
@@ -1888,8 +1901,6 @@ def availability_refresh_start(request):
         )
 
     stale_catalogue = stale_catalogue_sources()
-    if stale_catalogue:
-        request_catalogue_refresh(stale_catalogue)
 
     movie_ids = _watchlist_movie_ids()
     # The run's frozen policy is the union of sources it may consult across
@@ -1903,6 +1914,15 @@ def availability_refresh_start(request):
         movie_ids=movie_ids,
         source_policy=title_level_source_slugs(),
     )
+    # The marker is queued first here (the run is recorded just above), so it is
+    # associated afterwards. A marker already pending from an earlier refresh
+    # keeps its existing links and simply gains this one: coalescing means one
+    # marker can legitimately represent several refreshes.
+    if stale_catalogue:
+        request_catalogue_refresh(
+            stale_catalogue, availability_refresh=refresh
+        )
+
     sync_run_progress(refresh, movie_ids, batch=refresh.batch)
     return Response(
         {

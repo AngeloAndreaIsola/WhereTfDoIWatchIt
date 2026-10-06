@@ -67,6 +67,8 @@ from ..models import (
 )
 from .preferences import resolve_source_country
 from .rate_limit import RateLimitExceeded, RateLimiter, rate_limiter_for
+from .refresh_attribution import (attribute_refresh_run, attribute_sync_runs,
+                                  refreshes_for_marker)
 from .streaming_api import UpstreamTitleNotFound
 
 logger = logging.getLogger(__name__)
@@ -716,7 +718,9 @@ def stale_catalogue_sources(now=None) -> list[str]:
     )
 
 
-def _default_catalogue_runner(slug, source, refresh_service):
+def _default_catalogue_runner(
+    slug, source, refresh_service, availability_refreshes=()
+):
     """The generic catalogue fetch: one scope-less call, budget-free.
 
     Correct for the first-party collectors: each owns exactly one
@@ -729,7 +733,9 @@ def _default_catalogue_runner(slug, source, refresh_service):
     return service.refresh_catalogue()
 
 
-def _justwatch_catalogue_runner(slug, source, refresh_service):
+def _justwatch_catalogue_runner(
+    slug, source, refresh_service, availability_refreshes=()
+):
     """JustWatch's catalogue work goes through its P8 partition coordinator.
 
     JustWatch is an aggregator over many providers *and* many countries, so the
@@ -805,6 +811,7 @@ def _justwatch_catalogue_runner(slug, source, refresh_service):
         partitions=plan,
         max_partitions=None,
         content_type=ContentType.MOVIE,
+        availability_refreshes=availability_refreshes,
     )
     if summary.get("locked"):
         return RefreshResult(
@@ -850,6 +857,7 @@ def _refresh_one_source(
     slug: str,
     source,
     refresh_service: Optional[AvailabilityRefreshService] = None,
+    availability_refreshes=(),
 ) -> CatalogueSourceSummary:
     """Refresh one source's catalogue, isolated from every other source.
 
@@ -876,6 +884,11 @@ def _refresh_one_source(
         return result
 
     run = RefreshRun.objects.create(service=slug, started_at=started_at)
+    # Diagnostic only. ``availability_refreshes`` is the set the claimed marker
+    # represents (it coalesces, so there is no single parent), and is empty for
+    # standalone work - an operator command or a scheduled sync.
+    if availability_refreshes:
+        attribute_refresh_run(run, availability_refreshes)
     try:
         _ensure_declared_countries(slug, source.capabilities)
         logger.info(
@@ -887,7 +900,19 @@ def _refresh_one_source(
             result.started_at,
         )
         runner = CATALOGUE_RUNNERS.get(slug, _default_catalogue_runner)
-        refresh_result = runner(slug, source, refresh_service)
+        refresh_result = runner(
+            slug, source, refresh_service, availability_refreshes
+        )
+        if availability_refreshes:
+            # The first-party collectors' SyncRuns are produced inside the
+            # service call above, so they are linked here from the result the
+            # call already returned - no second execution, no re-derivation of
+            # scope. JustWatch does the same per partition inside its
+            # coordinator. Diagnostic only: nothing reads these links.
+            attribute_sync_runs(
+                getattr(refresh_result, "sync_runs", ()) or (),
+                availability_refreshes,
+            )
     except Exception as exc:
         duration = round(time.monotonic() - t0, 3)
         logger.exception(
@@ -940,6 +965,7 @@ def _refresh_one_source(
 def process_catalogue_refresh(
     source_slug: Optional[str] = None,
     refresh_service: Optional[AvailabilityRefreshService] = None,
+    availability_refreshes=(),
 ) -> dict:
     """Refresh whole catalogues for catalogue-capable sources.
 
@@ -984,7 +1010,11 @@ def process_catalogue_refresh(
         logger.warning("catalogue_refresh_skipped source=%s reason=disabled", slug)
         results.append(CatalogueSourceSummary(source=slug, status="disabled"))
     for slug in slugs:
-        results.append(_refresh_one_source(slug, sources[slug], refresh_service))
+        results.append(
+            _refresh_one_source(
+                slug, sources[slug], refresh_service, availability_refreshes
+            )
+        )
 
     summary = CatalogueRefreshSummary(
         attempted=sum(1 for item in results if item.attempted),
@@ -1039,11 +1069,23 @@ def process_pending_catalogue_refresh() -> Optional[dict]:
     if marker is None:
         return None
 
+    # Read the marker's requesters at claim time. They were recorded when the
+    # work was enqueued, so this is exact rather than inferred - and because the
+    # marker coalesces, the set can legitimately hold several refreshes.
+    marker_refreshes = refreshes_for_marker(marker)
     sources = list(marker.sources)
     failed: list[str] = []
     for slug in sources:
         try:
-            result = process_catalogue_refresh(source_slug=slug)
+            if marker_refreshes:
+                result = process_catalogue_refresh(
+                    source_slug=slug,
+                    availability_refreshes=marker_refreshes,
+                )
+            else:
+                # Standalone work (operator command, scheduled staleness) keeps
+                # the original call exactly: no parent, no extra keyword.
+                result = process_catalogue_refresh(source_slug=slug)
             if result.get("errors"):
                 failed.append(slug)
         except Exception:  # noqa: BLE001 - one broken source must not stop the rest

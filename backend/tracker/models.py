@@ -936,3 +936,107 @@ class MovieWatchEvent(models.Model):
 
     def __str__(self):
         return f"User {self.user_id} watched {self.movie} on {self.watched_date}"
+
+
+# --------------------------------------------------------------------------
+# Attribution: which refresh requested which execution
+# --------------------------------------------------------------------------
+#
+# An association means "this execution produced work that was requested by this
+# refresh". It deliberately does NOT mean "this refresh owns this execution",
+# because the queues coalesce:
+#
+#   * one CatalogueRefreshRequest merges repeat requests, so two refreshes
+#     routinely share a single marker (and therefore a single RefreshRun);
+#   * one title-drain tick may process RefreshRequests from several batches and
+#     still write exactly one RefreshRun.
+#
+# A single nullable `refresh_id` column on either table would have to pick one
+# arbitrary parent, which is either a false claim or a cross-attribution - the
+# 2026-10 audits could only attribute catalogue work by scraping worker logs and
+# comparing clocks. Explicit many-to-many records express what is actually true:
+# an execution may legitimately belong to refreshes A, B and C at once.
+#
+# Nothing here is read when deciding behaviour. Availability verdicts, source
+# policy, quota, freshness and country resolution are unchanged; these rows are
+# diagnostic only.
+
+
+class RefreshRunAvailabilityRefresh(models.Model):
+    """Which refreshes requested the work recorded by one ``RefreshRun``."""
+
+    refresh_run = models.ForeignKey(
+        RefreshRun, on_delete=models.CASCADE, related_name="availability_refresh_links"
+    )
+    availability_refresh = models.ForeignKey(
+        AvailabilityRefresh, on_delete=models.CASCADE, related_name="refresh_run_links"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["refresh_run", "availability_refresh"],
+                name="uniq_refreshrun_availability_refresh",
+            )
+        ]
+
+    def __str__(self):
+        return f"RefreshRun {self.refresh_run_id} <- refresh {self.availability_refresh_id}"
+
+
+class SyncRunAvailabilityRefresh(models.Model):
+    """Which refreshes requested the work recorded by one ``SyncRun``.
+
+    A JustWatch catalogue walk writes one SyncRun per provider/country partition,
+    so a single coalesced marker can produce several SyncRuns that all belong to
+    the same set of refreshes.
+    """
+
+    sync_run = models.ForeignKey(
+        "availability.SyncRun", on_delete=models.CASCADE, related_name="refresh_links"
+    )
+    availability_refresh = models.ForeignKey(
+        AvailabilityRefresh, on_delete=models.CASCADE, related_name="sync_run_links"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["sync_run", "availability_refresh"],
+                name="uniq_syncrun_availability_refresh",
+            )
+        ]
+
+    def __str__(self):
+        return f"SyncRun {self.sync_run_id} <- refresh {self.availability_refresh_id}"
+
+
+class CatalogueRefreshAvailabilityRefresh(models.Model):
+    """Which refreshes asked for a coalesced catalogue marker.
+
+    Recording the requester at enqueue time is what makes attribution exact
+    later: when the worker claims the marker, the set of refreshes it represents
+    is already known, so it need not be inferred from timing or from "the
+    currently active refresh" (several may be in flight at once).
+    """
+
+    marker = models.ForeignKey(
+        CatalogueRefreshRequest, on_delete=models.CASCADE, related_name="refresh_links"
+    )
+    availability_refresh = models.ForeignKey(
+        AvailabilityRefresh, on_delete=models.CASCADE, related_name="catalogue_marker_links"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["marker", "availability_refresh"],
+                name="uniq_catalogue_marker_availability_refresh",
+            )
+        ]
+
+    def __str__(self):
+        return f"marker {self.marker_id} <- refresh {self.availability_refresh_id}"
