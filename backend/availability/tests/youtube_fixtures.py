@@ -30,6 +30,9 @@ QUERIES: dict[str, str] = {
     "The Longest Yard 2005": "search_longest_yard_free.json",
     "Broken Payload 2020": "search_malformed.json",
     "Upstream Error 2021": "search_error.json",
+    # Observed live 2026-10-06: the item section now sits one level deeper,
+    # under primaryContents.sectionListRenderer.
+    "Deadline 2008": "search_section_list_free.json",
 }
 
 

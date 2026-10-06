@@ -24,10 +24,12 @@ from availability.sources.youtube import (
     FREE_PROGRAM_COUNTRIES,
     YouTubeClient,
     YouTubeSource,
+    _search_items,
+    _ypc_label,
 )
 from tracker.models import Movie, Provider
 
-from .youtube_fixtures import FakeYouTubeApi
+from .youtube_fixtures import FakeYouTubeApi, load_search
 
 MATILDA_VIDEO_ID = "_F8kU1vb_rk"
 
@@ -314,3 +316,122 @@ class RefreshPathTests(TestCase):
         self.assertEqual(result.created, 0)
         self.assertEqual(result.skipped, 1)
         self.assertEqual(Offer.objects.count(), 0)
+
+
+class SectionListNestingTests(SimpleTestCase):
+    """The live search payload nests the item section one level deeper.
+
+    Measured on 2026-10-06 against the real endpoint, YouTube moved
+    ``itemSectionRenderer`` from directly under
+    ``twoColumnSearchResultsRenderer`` to under
+    ``primaryContents.sectionListRenderer.contents[]``. Because the parser read
+    the old path with ``[...]``, *every* title raised
+    ``KeyError: itemSectionRenderer`` -> ``SourceFetchError`` — a total source
+    outage that looked like "no free titles anywhere".
+
+    These pin both shapes and, just as importantly, that a genuinely
+    unrecognised payload still fails loudly instead of becoming an empty result.
+    """
+
+    def setUp(self):
+        self.api = FakeYouTubeApi()
+        self.source = make_source(self.api)
+
+    def _request(self, **overrides):
+        return movie_request(title="Deadline", year=2008, **overrides)
+
+    def test_the_live_nested_shape_produces_the_free_offer(self):
+        """The payload that used to raise now resolves an offer."""
+        result = self.source.fetch(self._request())
+        self.assertEqual(len(result.offers), 1)
+        offer = result.offers[0]
+        self.assertEqual(offer.provider_id, "youtube")
+        self.assertEqual(offer.provider_content_id, "sFJtCgnFBg0")
+        self.assertEqual(offer.offer_type, OfferType.FREE_WITH_ADS)
+        self.assertEqual(offer.content_type, ContentType.MOVIE)
+
+    def test_the_legacy_flat_shape_still_works(self):
+        """The originally supported shape must not regress.
+
+        ``search_matilda_free.json`` carries the section directly under
+        ``twoColumnSearchResultsRenderer``, which is the shape every pre-existing
+        fixture uses.
+        """
+        result = self.source.fetch(movie_request())
+        self.assertEqual(len(result.offers), 1)
+        self.assertEqual(result.offers[0].provider_content_id, MATILDA_VIDEO_ID)
+
+    def test_a_paid_listing_in_the_nested_shape_is_still_excluded(self):
+        """Rent/buy stays excluded by design, in either shape."""
+        payload = _search_items(load_search("search_section_list_free.json"))
+        labels = [
+            _ypc_label(item[key])
+            for item in payload
+            for key in ("movieRenderer", "videoRenderer")
+            if isinstance(item.get(key), dict)
+        ]
+        self.assertIn("buy or rent", labels)
+        self.assertIn("free with ads", labels)
+
+    def test_a_section_with_no_free_match_is_empty_not_an_error(self):
+        """A valid response that simply offers nothing is a success."""
+        result = self.source.fetch(
+            movie_request(title="The Shawshank Redemption", year=1994)
+        )
+        self.assertEqual(result.offers, [])
+        self.assertEqual(result.contents, [])
+
+    def test_a_missing_section_still_raises(self):
+        """An unsupported shape must fail loudly, never look like 'no results'."""
+        payload = {
+            "contents": {
+                "twoColumnSearchResultsRenderer": {
+                    "somethingElseEntirely": {"contents": []}
+                }
+            }
+        }
+        with self.assertRaises(SourceFetchError) as ctx:
+            _search_items(payload)
+        self.assertIn("itemSectionRenderer", str(ctx.exception))
+
+    def test_an_api_error_response_still_raises(self):
+        """Upstream ``error`` is not an empty catalogue."""
+        with self.assertRaises(SourceFetchError):
+            self.source.fetch(movie_request(title="Upstream Error", year=2021))
+
+    def test_a_non_dict_payload_is_rejected(self):
+        for payload in (None, [], "text", 7):
+            with self.subTest(payload=payload):
+                with self.assertRaises(SourceFetchError):
+                    _search_items(payload)
+
+    def test_a_section_list_with_only_a_continuation_yields_nothing(self):
+        """No item section at all is still a shape we do not understand."""
+        payload = {
+            "contents": {
+                "twoColumnSearchResultsRenderer": {
+                    "primaryContents": {
+                        "sectionListRenderer": {
+                            "contents": [
+                                {"continuationItemRenderer": {"trigger": "X"}}
+                            ]
+                        }
+                    }
+                }
+            }
+        }
+        with self.assertRaises(SourceFetchError):
+            _search_items(payload)
+
+    def test_a_parser_failure_never_becomes_a_verdict(self):
+        """A broken parse must not reach the availability classifier.
+
+        The collector returns no offer and no content on a shape it does not
+        understand only when the *upstream* said there is nothing; a shape it
+        cannot read must raise so the request is recorded as a source failure
+        rather than the title looking definitively negative.
+        """
+        with self.assertRaises(SourceFetchError):
+            self.source.fetch(
+                movie_request(title="Broken Payload", year=2020)
+            )

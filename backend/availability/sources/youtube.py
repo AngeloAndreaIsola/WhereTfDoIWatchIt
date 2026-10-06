@@ -353,18 +353,67 @@ class YouTubeSource:
 def _search_items(payload: dict) -> list[dict]:
     """``itemSectionRenderer.contents`` of a well-formed search response.
 
-    The shell exists even when nothing matches (the section then carries
-    didYouMean/message renderers), so a payload *without* it is an upstream
-    shape change — loud failure, never a silent empty catalogue.
+    Measured against the live endpoint on 2026-10-06, the section is nested one
+    level deeper than when this collector was written::
+
+        contents.twoColumnSearchResultsRenderer
+            .primaryContents.sectionListRenderer.contents[]
+                -> itemSectionRenderer.contents[]   <- where the rows are
+
+    YouTube moved the section under ``primaryContents/sectionListRenderer``
+    while leaving the leaf ``itemSectionRenderer`` untouched, so reading the
+    section directly off ``twoColumnSearchResultsRenderer`` raised
+    ``KeyError: itemSectionRenderer`` for **every** title — a total, silent
+    source outage rather than a partial drift.
+
+    Both nestings are accepted: the observed live one is tried first, the older
+    one second. This is not speculative multi-shape parsing — each branch is a
+    shape this endpoint has actually returned, and anything else is still a loud
+    failure rather than an empty catalogue.
+
+    The section exists even when nothing matches (it then carries
+    didYouMean/message renderers), so its absence means the response is not a
+    search result we understand, and that is raised rather than swallowed.
     """
-    try:
-        items = payload["contents"]["twoColumnSearchResultsRenderer"][
-            "itemSectionRenderer"
-        ]["contents"]
-    except (KeyError, TypeError) as exc:
-        raise SourceFetchError("Unexpected YouTube search payload shape") from exc
-    if not isinstance(items, list):
-        raise SourceFetchError("Unexpected YouTube search item section type")
+    if not isinstance(payload, dict):
+        raise SourceFetchError("Unexpected YouTube search payload shape")
+
+    columns = payload.get("contents")
+    columns = columns.get("twoColumnSearchResultsRenderer") if isinstance(
+        columns, dict) else None
+    if not isinstance(columns, dict):
+        raise SourceFetchError(
+            "Unexpected YouTube search payload shape: no "
+            "twoColumnSearchResultsRenderer"
+        )
+
+    items = None
+    # Observed live since 2026-10: one section list deep.
+    primary = columns.get("primaryContents")
+    section_list = primary.get("sectionListRenderer") if isinstance(
+        primary, dict) else None
+    if isinstance(section_list, dict):
+        for entry in section_list.get("contents") or []:
+            if not isinstance(entry, dict):
+                continue
+            section = entry.get("itemSectionRenderer")
+            if isinstance(section, dict) and isinstance(
+                section.get("contents"), list
+            ):
+                items = section["contents"]
+                break
+    # The shape this collector originally supported.
+    if items is None:
+        section = columns.get("itemSectionRenderer")
+        if isinstance(section, dict) and isinstance(section.get("contents"), list):
+            items = section["contents"]
+
+    if items is None:
+        raise SourceFetchError(
+            "Unexpected YouTube search payload shape: no itemSectionRenderer "
+            "under primaryContents.sectionListRenderer or "
+            "twoColumnSearchResultsRenderer"
+        )
     return [item for item in items if isinstance(item, dict)]
 
 
