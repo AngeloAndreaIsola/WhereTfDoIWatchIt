@@ -215,30 +215,37 @@ class QuotaSettlesRemainingWorkTests(RefreshLifecycleTerminalityBase):
 
 
 class PartialCannotMeanUnfinishedQueueTests(RefreshLifecycleTerminalityBase):
-    def test_finalising_with_unsettled_work_raises_rather_than_recording_partial(self):
+    def test_finalising_with_unsettled_work_defers_rather_than_recording_partial(self):
         """Test 4 — reproduce the observed failure mode and make it impossible.
 
         A request that *could* run (its source has budget) is left pending, and
         finalisation is attempted anyway. The old code recorded `PARTIAL` here,
         which made "the worker stopped" indistinguishable from "titles are
-        unresolved". It now raises: a misleading terminal record is worse than
-        a loud failure, because it is believed.
+        unresolved". It now *defers*: the run stays ``RUNNING`` so the next tick
+        resumes it, rather than recording a misleading terminal status. A run
+        budget limits work performed, not future eligibility.
         """
         # The source has budget, so this request is genuinely runnable and must
         # not be settled by the settlement pass.
         SOURCE_DAILY_LIMITS[SA] = 100
         self.request(SA, RefreshRequestStatus.PENDING)
 
-        with self.assertRaises(rl.UnsettledWorkError):
-            rl.AvailabilityRefreshLifecycle.finalise(self.refresh)
+        rl.AvailabilityRefreshLifecycle.finalise(self.refresh)
 
         self.refresh.refresh_from_db()
-        self.assertNotEqual(
+        self.assertEqual(
             self.refresh.status,
-            AvailabilityRefreshStatus.PARTIAL,
-            "no terminal status may be recorded over an unsettled queue",
+            AvailabilityRefreshStatus.RUNNING,
+            "a run with runnable work must stay RUNNING, not record a terminal status",
         )
         self.assertIsNone(self.refresh.finished_at)
+        self.assertEqual(
+            RefreshRequest.objects.filter(
+                batch=self.batch, status=RefreshRequestStatus.PENDING
+            ).count(),
+            1,
+            "the deferred request must remain queued for the next tick",
+        )
 
     def test_an_unrunnable_source_is_settled_so_finalise_can_succeed(self):
         """The counterpart: blocked-by-quota is settled, so the run is free to

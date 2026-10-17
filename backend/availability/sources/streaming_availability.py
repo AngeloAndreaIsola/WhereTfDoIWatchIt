@@ -33,6 +33,7 @@ class StreamingAvailabilitySource:
             {ContentType.MOVIE, ContentType.SERIES, ContentType.SEASON}
         ),
         supports_incremental_sync=False,
+        supports_title_fetch=True,
         supports_catalogue_sync=False,
         # ``authoritative`` must mean: these offers are the COMPLETE snapshot of
         # the provider+country scope a SyncRun covers, so unseen offers there may

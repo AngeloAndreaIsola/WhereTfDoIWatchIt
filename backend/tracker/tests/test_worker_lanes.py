@@ -371,21 +371,37 @@ class SourceRoutingTests(TestCase):
     """The lane split must not reroute sources through the wrong runner."""
 
     def test_catalogue_and_title_sources_are_distinguished_by_capability(self):
+        """The two capabilities are independent, so a source may be in both.
+
+        ``supports_catalogue_sync`` and ``supports_title_fetch`` answer
+        different questions and neither implies the other. Catalogue-only
+        collectors appear only in ``catalogue``; title-only sources appear
+        only in ``title``; and JustWatch — which implements both a title
+        lookup and a catalogue walk — appears in **both**. The old assertion
+        that JustWatch was absent from ``title`` encoded the conflation of the
+        two capabilities that kept it out of per-title scheduling.
+        """
         catalogue = [
             slug for slug in source_registry.slugs()
             if source_registry.get(slug).capabilities.supports_catalogue_sync
         ]
         title = [
             slug for slug in source_registry.slugs()
-            if not source_registry.get(slug).capabilities.supports_catalogue_sync
+            if source_registry.get(slug).capabilities.supports_title_fetch
         ]
         for slug in ("abc_iview", "cbc_gem", "justwatch", "pbs", "rai_play",
-                     "tubi"):
+                     "tubi", "prime_video", "bbc_iplayer", "pluto_tv"):
             self.assertIn(slug, catalogue)
         for slug in ("watchmode", "youtube", "streaming_availability",
-                     "mediaset_infinity"):
+                     "mediaset_infinity", "justwatch"):
             self.assertIn(slug, title)
-        self.assertNotIn("justwatch", title)
+        # Catalogue-only collectors have no title path.
+        for slug in ("abc_iview", "cbc_gem", "pbs", "rai_play", "tubi",
+                     "prime_video", "bbc_iplayer", "pluto_tv"):
+            self.assertNotIn(slug, title)
+        # JustWatch is the source that legitimately sits in both sets.
+        self.assertIn("justwatch", catalogue)
+        self.assertIn("justwatch", title)
 
     def test_only_justwatch_has_a_dedicated_catalogue_runner(self):
         from tracker.services.bulk_refresh import CATALOGUE_RUNNERS

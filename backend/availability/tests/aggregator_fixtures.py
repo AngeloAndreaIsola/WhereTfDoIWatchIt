@@ -162,6 +162,24 @@ JW_CATALOGUE_UNMAPPED_ONLY = envelope({
 
 JW_CATALOGUE_EMPTY = envelope({"popularTitles": {"edges": []}})
 
+#: Rakuten TV's JustWatch id is still the pre-rebrand ``wuaki``. This is the
+#: measured NL shape for a title carried free-with-ads: an ``ADS`` offer on
+#: Rakuten TV plus a ``BUY`` offer on the Apple store (excluded by design).
+WUAKI_PKG = package("wuaki", "Rakuten TV", "rkt", "rakuten-tv", ("ADS", "BUY"))
+
+JW_SEARCH_RAKUTEN_NL = envelope({
+    "popularTitles": {
+        "edges": edges(
+            title("tm116488", "Natural Born Killers", year=1994, tmdb_id="241",
+                  imdb_id="tt0110632", full_path="/nl/movie/natural-born-killers",
+                  offers=[
+                      offer("r1", "wuaki", "Rakuten TV", "rkt", "ADS", "HD"),
+                      offer("r2", "itunes", "Apple TV Store", "itu", "BUY", "HD"),
+                  ]),
+        )
+    }
+})
+
 JW_SEARCH_MOVIE = envelope({
     "popularTitles": {
         "edges": edges(

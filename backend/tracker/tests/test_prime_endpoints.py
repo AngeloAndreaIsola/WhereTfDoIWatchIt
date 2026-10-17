@@ -399,6 +399,63 @@ class PrimeMovieEndpointTests(TestCase):
         self.assertEqual(len(data["offers"]), 1)
         self.assertEqual(data["offers"][0]["offer_type"], "subscription")
 
+    def test_free_with_ads_offer_is_displayed(self):
+        """A ``free_with_ads`` (AVOD) offer is a free stream and must show.
+
+        Regression (Natural Born Killers, NL): the only offer was
+        ``rakuten_tv | free_with_ads``. The pipeline kept only
+        ``("subscription", "free")``, so the detail page rendered nothing even
+        though the offer was persisted and canonical.
+        """
+        movie = Movie.objects.create(tmdb_id=241, title="Natural Born Killers", year=1994)
+        local_offer(movie, country="NL", service="rakuten_tv", offer_type="free_with_ads",
+                    quality="hd", audio_languages=["EN"], subtitle_languages=["EN"])
+
+        from django.test import Client
+        response = Client().get("/api/prime/movie/241/?current_country=NL")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(len(data["offers"]), 1)
+        self.assertEqual(data["offers"][0]["offer_type"], "free_with_ads")
+        self.assertEqual(data["offers"][0]["country"], "NL")
+
+    def test_detail_includes_canonical_availability_verdict(self):
+        """The detail payload carries the canonical verdict, never just offers.
+
+        The frontend reads ``availability`` to tell "checked and unavailable"
+        apart from "the evidence never resolved"; without it an empty ``offers``
+        list always rendered "Availability not known yet."
+        """
+        movie = Movie.objects.create(tmdb_id=241, title="Natural Born Killers", year=1994)
+        local_offer(movie, country="NL", service="rakuten_tv", offer_type="free_with_ads",
+                    quality="hd", audio_languages=["EN"], subtitle_languages=["EN"])
+
+        from django.test import Client
+        response = Client().get("/api/prime/movie/241/")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("availability", data)
+        verdict = data["availability"]
+        self.assertEqual(verdict["state"], "available")
+        self.assertIn("rakuten_tv", verdict["available_on"])
+        self.assertIn("resolved_sources", verdict)
+        self.assertIn("sources", verdict)
+
+    def test_detail_verdict_is_unknown_when_no_source_has_answered(self):
+        """No offers and no request evidence ⇒ ``unknown``, never ``unavailable``."""
+        Movie.objects.create(tmdb_id=242, title="Never Checked", year=2020)
+
+        from django.test import Client
+        response = Client().get("/api/prime/movie/242/")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["offers"], [])
+        self.assertEqual(data["availability"]["state"], "unknown")
+        self.assertNotEqual(data["availability"]["state"], "unavailable")
+
     def test_offers_sorted_by_priority(self):
         """Offers are sorted: JA audio > EN audio > quality."""
         movie = Movie.objects.create(tmdb_id=888, title="Sort Test", year=2024)

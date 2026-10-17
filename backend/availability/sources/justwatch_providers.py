@@ -57,6 +57,10 @@ PACKAGE_TO_PROVIDER_SLUG: dict[str, str] = {
     "raiplay": "raiplay",
     "mediasetplay": "mediaset_infinity",
     "bbc": "bbc_iplayer",
+    # Rakuten TV was Wuaki.tv; JustWatch still uses the pre-rebrand id. Its
+    # NL offers are ad-supported (``ADS`` -> ``free_with_ads``), so mapping it
+    # is what lets a free-with-ads title surface instead of disappearing.
+    "wuaki": "rakuten_tv",
 }
 
 #: JustWatch 3-letter ``shortName`` per (canonical slug, country), as measured.

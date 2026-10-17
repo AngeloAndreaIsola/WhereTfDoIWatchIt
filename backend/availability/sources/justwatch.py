@@ -128,6 +128,12 @@ class JustWatchSource:
             ContentType.SEASON, ContentType.EPISODE,
         }),
         supports_incremental_sync=True,
+        # BOTH capabilities, and that is the point: JustWatch answers one
+        # title by name/year (``_fetch_title``) *and* walks whole provider
+        # catalogues (``_fetch_catalogue``). Marking only
+        # ``supports_catalogue_sync`` was the abstraction error that kept it
+        # out of per-title scheduling; the two capabilities are independent.
+        supports_title_fetch=True,
         supports_catalogue_sync=True,
         # Permanently non-authoritative: an aggregator's silence is not
         # evidence, so this source can never deactivate an unseen offer. This
@@ -421,12 +427,17 @@ class JustWatchSource:
             provider_slug = provider_slug_for_package(offer.package)
             if not provider_slug:
                 # Unmapped JustWatch package (hundreds exist per country; we
-                # map the brands we track). Skipped with a log so the coverage
-                # gap is observable instead of silent.
-                logger.debug(
-                    "justwatch_provider_unmapped title=%s package=%s clear=%s",
-                    title.id, getattr(offer.package, "technical_name", None),
+                # map the brands we track). Skipped, but logged at WARNING so
+                # the coverage gap is observable in production logs rather
+                # than silently swallowed: an unmapped package is why a title
+                # can look unavailable when JustWatch in fact lists it.
+                logger.warning(
+                    "justwatch_provider_unmapped title=%s country=%s "
+                    "package=%s clear=%s monetization=%s",
+                    title.id, country,
+                    getattr(offer.package, "technical_name", None),
                     getattr(offer.package, "clear_name", None),
+                    getattr(offer, "monetization_type", None),
                 )
                 continue
             if only_provider and provider_slug != only_provider:

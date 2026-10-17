@@ -5,6 +5,8 @@ Replays the canonical provider inserts from migrations/commands:
 - migration 0011 (FREE_PROVIDERS: European public broadcasters & global free)
 - migration 0014 (move bbc_iplayer -> free)
 - migration 0018 (NHK -> free)
+- migration 0032 (youtube -> free)
+- migration 0040 (rakuten_tv -> avod, JustWatch ``wuaki``)
 - seed_unofficial_providers command (kisskh, hydrahd, animeworld)
 
 The alias providers from migration 0012 (rai-play, bbc, nhk) are deliberately
@@ -71,6 +73,10 @@ UNOFFICIAL_PROVIDERS = [
     {"slug": "animeworld", "name": "AnimeWorld", "domain": "animeworld.to"},
 ]
 
+AVOD_PROVIDERS = [
+    {"slug": "rakuten_tv", "name": "Rakuten TV", "icon": "rakuten_tv", "domain": "rakuten.tv", "country": ""},
+]
+
 
 def upsert(slug, defaults):
     obj, _ = Provider.objects.get_or_create(slug=slug, defaults=defaults)
@@ -107,6 +113,17 @@ for s in UNOFFICIAL_PROVIDERS:
         "is_major": False,
         "is_enabled": True,
         "domain": s["domain"],
+    })
+
+for a in AVOD_PROVIDERS:
+    upsert(a["slug"], {
+        "name": a["name"],
+        "category": ProviderCategory.AVOD,
+        "is_major": False,
+        "is_enabled": True,
+        "icon_name": a["icon"],
+        "domain": a["domain"],
+        "country_code": a["country"],
     })
 
 print("total_providers", Provider.objects.count())

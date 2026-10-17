@@ -38,6 +38,7 @@ from availability.sources import DEFAULT_SOURCE_SLUG
 
 from tracker.models import (
     ApiCallCounter,
+    BlockedReason,
     CatalogueRefreshRequest,
     CatalogueRefreshStatus,
     Movie,
@@ -410,16 +411,32 @@ class RecentAttemptCooldownTests(TestCase):
     attempt — and every drain would spend an external API call.
     """
 
-    def test_completed_attempt_blocks_requeue_while_window_is_open(self):
-        movie = Movie.objects.create(tmdb_id=909, title="Nothing", year=2020)
-        request_availability_refresh(movie)
+    @patch(
+        "tracker.services.source_policy.consult_metered_only_when_unresolved",
+        return_value=False,
+    )
+    @patch("availability.services.refresh.AvailabilityRefreshService.refresh_content")
+    def test_completed_attempt_blocks_requeue_while_window_is_open(
+        self, refresh_content, _gate
+    ):
+        """A drained fan-out settles the read side, so the next detail view
+        reports nothing pending instead of reopening every scope.
 
-        # Worker drained it, but the provider has nothing for this title.
-        process_refresh_queue(budget=5, service=MagicMock())
+        ``refresh_content`` is patched to succeed without writing offers —
+        exactly the "provider has nothing for this title" case that leaves the
+        title stale forever, which is what the cooldown exists to stop from
+        re-queuing on every read.
+        """
+        refresh_content.return_value = MagicMock()
+        movie = Movie.objects.create(tmdb_id=909, title="Nothing", year=2020)
+
+        # Opening the detail view fans out; the worker drains the whole lot.
+        self.client.get(f"/api/prime/movie/{movie.tmdb_id}/")
+        process_refresh_queue(budget=99, service=MagicMock())
 
         from tracker.services.refresh_requests import recently_attempted
 
-        self.assertTrue(recently_attempted(movie))
+        self.assertTrue(recently_attempted(movie, DEFAULT_SOURCE_SLUG))
         self.assertIsNone(request_availability_refresh(movie))
 
         # The detail response therefore reports nothing pending: the
@@ -434,6 +451,38 @@ class RecentAttemptCooldownTests(TestCase):
 
         forced = request_availability_refresh(movie, if_stale=False)
         self.assertIsNotNone(forced)
+
+    def test_a_blocked_row_does_not_suppress_requeue(self):
+        """Historical quota-blocked rows must not lock a title out of the queue.
+
+        The ~10.5k rows the old run-budget defect settled as
+        ``blocked``/``quota_exhausted`` are terminal history. The cooldown
+        counts only ``done``/``failed`` attempts and the pending-dedup index
+        ignores settled rows, so the very next enqueue opens a fresh pending
+        row alongside them. That is what makes those rows self-healing rather
+        than a permanent lockout — and why no destructive data migration is
+        needed to recover the affected titles.
+        """
+        movie = Movie.objects.create(tmdb_id=913, title="WasBlocked", year=2020)
+        RefreshRequest.objects.create(
+            movie=movie,
+            source=DEFAULT_SOURCE_SLUG,
+            status=RefreshRequestStatus.BLOCKED,
+            blocked_reason=BlockedReason.QUOTA_EXHAUSTED,
+            completed_at=timezone.now(),
+        )
+
+        from tracker.services.refresh_requests import recently_attempted
+
+        self.assertFalse(recently_attempted(movie, DEFAULT_SOURCE_SLUG))
+        opened = request_availability_refresh(movie, if_stale=False)
+        self.assertIsNotNone(opened)
+        self.assertEqual(opened.status, RefreshRequestStatus.PENDING)
+        # It coexists with the historical row: settled rows never collide with
+        # the pending-only dedup constraint.
+        self.assertEqual(
+            RefreshRequest.objects.filter(movie=movie).count(), 2
+        )
 
 
 class RefreshWorkerCommandTests(TestCase):
@@ -559,29 +608,45 @@ class PrimeDetailPendingFlagTests(TestCase):
         self.assertTrue(resp.data["refresh_pending"])
 
     def test_fresh_title_reports_nothing_pending(self):
+        from tracker.tests.test_event_driven_refresh import (
+            _fresh_every_title_level_scope,
+        )
+
         movie = Movie.objects.create(tmdb_id=907, title="Fresh", year=2020)
-        local_offer(movie)
+        # Fresh in *every* title-level scope, so the fan-out has nothing to
+        # queue — a single fresh default-scope offer is no longer enough.
+        _fresh_every_title_level_scope(movie)
 
         resp = self.client.get(f"/api/prime/movie/{movie.tmdb_id}/")
 
         self.assertEqual(resp.status_code, 200, resp.content)
         self.assertFalse(resp.data["refresh_pending"])
 
-    def test_flag_clears_once_the_queue_is_drained(self):
+    @patch(
+        "tracker.services.source_policy.consult_metered_only_when_unresolved",
+        return_value=False,
+    )
+    @patch("availability.services.refresh.AvailabilityRefreshService.refresh_content")
+    def test_flag_clears_once_the_queue_is_drained(self, refresh_content, _gate):
+        """After the worker drains the fan-out and writes offers, the flag
+        clears and the now-fresh title is not re-queued by the next read."""
+        # Each drained request writes a canonical offer, like the real worker.
+        # The provider_content_id is made unique per call so the offer-identity
+        # constraint is satisfied when several scopes settle in one drain.
+        calls = {"n": 0}
+
+        def _settle(m, country=None):
+            calls["n"] += 1
+            return local_offer(m, provider_content_id=f"settled-{calls['n']}")
+
+        refresh_content.side_effect = _settle
+
         movie = Movie.objects.create(tmdb_id=908, title="Drained", year=2020)
-        request_availability_refresh(movie)
 
         resp = self.client.get(f"/api/prime/movie/{movie.tmdb_id}/")
         self.assertTrue(resp.data["refresh_pending"])
 
-        # Drain with a service that writes canonical offers, like the real
-        # worker: the queue settles and the now-fresh title is not re-queued
-        # by the next detail view.
-        service = MagicMock()
-        # Accepts the country scope hint the caller now passes; the mock
-        # service has no use for it, exactly like the real default service.
-        service.refresh_content.side_effect = lambda m, country=None: local_offer(m)
-        process_refresh_queue(budget=5, service=service)
+        process_refresh_queue(budget=99, service=MagicMock())
 
         resp = self.client.get(f"/api/prime/movie/{movie.tmdb_id}/")
         self.assertFalse(resp.data["refresh_pending"])

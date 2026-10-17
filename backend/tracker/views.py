@@ -59,7 +59,11 @@ from .serializers import (
 from tracker.scrapers import SCRAPER_REGISTRY, ContentMatcher, ScrapedItem, resolve_scraper_class
 from tracker.services.filtering import apply_composable_filters
 from tracker.services.unified_catalogue import resolve_catalogue_scope, unofficial_catalogue_items
-from tracker.services.watchability import evaluate_watchability, get_user_subscriptions
+from tracker.services.watchability import (
+    QUALIFYING_OFFER_TYPES,
+    evaluate_watchability,
+    get_user_subscriptions,
+)
 from availability.services.legacy_ingest import ingest_scraped_mapping
 from availability.sources import DEFAULT_SOURCE_SLUG
 import math
@@ -115,6 +119,7 @@ from .services.refresh_requests import (
     refresh_states_for,
     request_availability_refresh,
     request_catalogue_refresh,
+    request_title_refresh,
     request_watchlist_refresh,
 )
 from .services.scraper_runner import run_provider_scraper
@@ -2225,7 +2230,13 @@ def _prime_detail_response(request, item: Movie, key: str) -> Response:
     # Refresh-on-view (Phase B): this is the title detail page the frontend
     # opens. Local offers are returned immediately; a stale/missing title
     # gets an asynchronous refresh request, never a synchronous fetch.
-    request_availability_refresh(item, priority=RefreshPriority.RECENTLY_VIEWED)
+    #
+    # Fan out to every eligible title-level source, exactly as ``movie_detail``
+    # does, so both detail entry points schedule the same targeted lookups
+    # (capability-driven — catalogue-only collectors are structurally excluded
+    # and no catalogue crawl can happen). Reusing ``request_title_refresh``
+    # keeps the dedup, cooldown and metered-source policy identical here.
+    request_title_refresh(item, priority=RefreshPriority.RECENTLY_VIEWED)
 
     user_data = UserMovieData.objects.filter(user_id=1, movie=item).first()
     is_in_watchlist = WatchlistItem.objects.filter(user_id=1, movie=item).exists()
@@ -2245,6 +2256,13 @@ def _prime_detail_response(request, item: Movie, key: str) -> Response:
         "is_in_watchlist": is_in_watchlist,
         "watch_events": MovieWatchEventSerializer(watch_events, many=True).data,
         "offers": _build_prime_offers(request, item, season=season),
+        # The canonical availability verdict for this title, exactly as the
+        # availability report computes it. Present so an empty ``offers`` list
+        # is never ambiguous: the detail page can tell "checked and genuinely
+        # unavailable" apart from "the evidence never resolved" without
+        # inventing a second classifier. Absence of this field is read by the
+        # frontend as unknown, never as unavailable.
+        "availability": title_source_report([item.pk]).get(item.pk),
         # True while this title still waits in the refresh queue — the
         # frontend polls on it ("Checking availability…") until the worker
         # drains the request and canonical offers land.
@@ -2371,7 +2389,7 @@ def watch_redirect(request, tmdb_id: int):
     offers = get_local_offers(movie)
     qualifying = [
         o for o in offers
-        if (o.offer_type or "").lower() in ("subscription", "free")
+        if (o.offer_type or "").lower() in QUALIFYING_OFFER_TYPES
     ]
 
     if subscribed_slugs:
@@ -2435,7 +2453,12 @@ def movie_detail(request, pk: int):
     # Refresh-on-view (Phase B): opening a title is meaningful user intent.
     # The local availability is served above; a stale/missing title only
     # *requests* an asynchronous refresh here — the response never waits.
-    request_availability_refresh(movie, priority=RefreshPriority.RECENTLY_VIEWED)
+    #
+    # Fan out to every eligible title-level source (capability-driven, so
+    # catalogue-only collectors are structurally excluded and no catalogue
+    # crawl is triggered). One default-scope check cannot answer a market only
+    # JustWatch covers, which is why an opened title used to stay unknown.
+    request_title_refresh(movie, priority=RefreshPriority.RECENTLY_VIEWED)
 
     user_data = UserMovieData.objects.filter(user_id=1, movie=movie).first()
     watch_events = MovieWatchEvent.objects.filter(user_id=1, movie=movie).order_by("-watched_date", "-created_at")

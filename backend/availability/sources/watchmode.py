@@ -139,6 +139,8 @@ class WatchmodeSource:
         supported_countries=frozenset(DEFAULT_REGIONS),
         supported_content_types=frozenset({ContentType.MOVIE, ContentType.SERIES}),
         supports_incremental_sync=False,
+        # Title-targeted only: ``fetch(content=...)`` searches one title.
+        supports_title_fetch=True,
         # No catalogue/discovery operation exists in the API.
         supports_catalogue_sync=False,
         supports_authoritative_snapshots=False,

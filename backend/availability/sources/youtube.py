@@ -258,6 +258,7 @@ class YouTubeSource:
         # series requests short-circuit to an empty result (no network).
         supported_content_types=frozenset({ContentType.MOVIE}),
         supports_incremental_sync=False,
+        supports_title_fetch=True,
         supports_catalogue_sync=False,
         # One query's matches are a subset of the program's catalogue:
         # absence must never deactivate offers.

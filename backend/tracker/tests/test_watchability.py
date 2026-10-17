@@ -92,8 +92,11 @@ class WatchabilityEvaluationTests(TestCase):
             self.pref,
             current_country="US",
         )
-        self.assertEqual(res.status, WatchabilityStatus.NOT_WATCHABLE)
-        self.assertEqual(res.status_symbol, "⚫")
+        # Offers exist, so the title is available somewhere — just not in a
+        # region this user can reach. That is 🟠, never ⚫ (reserved for
+        # canonical unavailability).
+        self.assertEqual(res.status, WatchabilityStatus.AVAILABLE_ELSEWHERE)
+        self.assertEqual(res.status_symbol, "🟠")
         self.assertIsNone(res.best_offer)
         self.assertTrue(any("not in your configured VPN regions" in exp for exp in res.explanation))
 
@@ -111,10 +114,68 @@ class WatchabilityEvaluationTests(TestCase):
             self.pref,
             current_country="US",
         )
-        self.assertEqual(res.status, WatchabilityStatus.NOT_WATCHABLE)
-        self.assertEqual(res.status_symbol, "⚫")
+        # Rent/buy do not qualify for the user, but the offer still resolves
+        # canonical availability, so the badge stays non-negative.
+        self.assertEqual(res.status, WatchabilityStatus.AVAILABLE_ELSEWHERE)
+        self.assertEqual(res.status_symbol, "🟠")
         self.assertEqual(len(res.excluded_offers), 1)
         self.assertIn("Only available to rent", res.excluded_offers[0].rejection_reasons[0])
+
+    def test_free_with_ads_counts_as_a_free_offer(self):
+        """``free_with_ads`` (AVOD) is a free stream, not a rent/buy.
+
+        Tubi, Pluto TV, YouTube, Mediaset AVOD, ABC iview, PBS and JustWatch
+        ``ADS`` all persist ``free_with_ads``; excluding it silently dropped
+        every one of their offers from watchability and the detail pipeline.
+        """
+        offers = [Offer(
+            country="US",
+            service="tubi",
+            offer_type="free_with_ads",
+            quality="hd",
+            url="https://tubitv.com/watch/1",
+            audio_languages=["EN"],
+            subtitle_languages=["EN"],
+        )]
+        res = evaluate_watchability(
+            self.movie,
+            offers,
+            self.pref,
+            current_country="US",
+            user_subscriptions={"tubi"},
+        )
+        self.assertEqual(res.status, WatchabilityStatus.WATCHABLE_HERE)
+        self.assertEqual(res.status_symbol, "🟢")
+        self.assertEqual(len(res.watchable_offers), 1)
+        self.assertTrue(res.watchable_offers[0].is_qualifying_offer_type)
+
+    def test_positive_canonical_availability_never_reads_unavailable(self):
+        """Regression: a title with offers must never show ⚫ "Not available".
+
+        Platoon (NL): the only local offer is a *rent* one and every
+        subscription sits in an unconfigured region, so nothing qualifies for
+        the user — but the title is demonstrably available. The watchlist badge
+        contradicted the canonical verdict (and the report's own
+        ``available_countries``) by rendering ⚫.
+        """
+        offers = [Offer(
+            country="NL",
+            service="rakuten_tv",
+            offer_type="rent",
+            quality="hd",
+            url="https://rakuten.tv/nl/platoon",
+        )]
+        res = evaluate_watchability(
+            self.movie,
+            offers,
+            self.pref,
+            current_country="NL",
+            user_subscriptions=set(),
+        )
+        self.assertNotEqual(res.status, WatchabilityStatus.NOT_WATCHABLE)
+        self.assertEqual(res.status, WatchabilityStatus.AVAILABLE_ELSEWHERE)
+        self.assertEqual(res.status_symbol, "🟠")
+        self.assertEqual(res.status_label, "Available — not with your subscriptions")
 
     def test_scraped_source_bypasses_vpn_but_respects_language_match(self):
         offers = [Offer(
@@ -156,8 +217,9 @@ class WatchabilityEvaluationTests(TestCase):
             current_country="US",
             user_subscriptions={"scraped_site"},
         )
-        self.assertEqual(res.status, WatchabilityStatus.NOT_WATCHABLE)
-        self.assertEqual(res.status_label, "Not matching language filter")
+        self.assertEqual(res.status, WatchabilityStatus.AVAILABLE_ELSEWHERE)
+        self.assertEqual(res.status_symbol, "🟠")
+        self.assertEqual(res.status_label, "Available — not matching language filter")
         self.assertEqual(len(res.excluded_offers), 1)
         self.assertFalse(res.excluded_offers[0].is_language_match)
         self.assertIn("Does not satisfy language rules", res.excluded_offers[0].rejection_reasons)
@@ -211,8 +273,9 @@ class WatchabilityEvaluationTests(TestCase):
             current_country="US",
             user_subscriptions={"scraped_site"},
         )
-        self.assertEqual(res.status, WatchabilityStatus.NOT_WATCHABLE)
-        self.assertEqual(res.status_label, "Not matching language filter (language data unknown)")
+        self.assertEqual(res.status, WatchabilityStatus.AVAILABLE_ELSEWHERE)
+        self.assertEqual(res.status_symbol, "🟠")
+        self.assertEqual(res.status_label, "Available — language data unknown")
         self.assertEqual(len(res.excluded_offers), 1)
         self.assertFalse(res.excluded_offers[0].is_language_match)
         self.assertIn("Language information unknown", res.excluded_offers[0].rejection_reasons)

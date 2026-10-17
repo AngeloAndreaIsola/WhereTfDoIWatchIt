@@ -24,13 +24,17 @@ from django.utils import timezone
 
 from tracker.models import (
     BlockedReason,
+    CatalogueRefreshRequest,
     Movie,
     RefreshPriority,
     RefreshRequest,
     RefreshRequestStatus,
     WatchlistItem,
 )
-from tracker.services.bulk_refresh import process_watchlist_refresh
+from tracker.services.bulk_refresh import (
+    process_watchlist_refresh,
+    title_level_source_slugs,
+)
 from tracker.services.rate_limit import RateLimitExceeded, RateLimiter
 from tracker.services.streaming_api import UpstreamTitleNotFound
 from tracker.services.refresh_requests import (
@@ -51,6 +55,37 @@ def _backdate_offers(movie, days=2):
     Offer.objects.filter(tmdb_id=movie.tmdb_id).update(
         last_seen=timezone.now() - dt.timedelta(days=days)
     )
+
+
+def _fresh_every_title_level_scope(movie):
+    """Give *movie* a fresh observation in **every** title-level source scope.
+
+    Per-source freshness means a title can be fresh in one scope and stale in
+    another, so "fresh title" now has to mean fresh everywhere — otherwise a
+    source that has never observed the title is (correctly) still stale for its
+    own scope and gets queued.
+    """
+    from availability.domain.enums import SourceType
+    from availability.models import Country, Offer, Source
+    from tracker.models import Provider
+
+    provider, _ = Provider.objects.get_or_create(
+        slug="netflix", defaults={"name": "Netflix"}
+    )
+    country, _ = Country.objects.get_or_create(code="US", defaults={"name": "US"})
+    for slug in title_level_source_slugs():
+        source, _ = Source.objects.get_or_create(
+            slug=slug, defaults={"name": slug, "type": SourceType.API}
+        )
+        Offer.objects.create(
+            provider=provider,
+            country=country,
+            source=source,
+            content_type=movie.content_type,
+            tmdb_id=movie.tmdb_id,
+            offer_type="subscription",
+            provider_content_id=f"{slug}-fresh",
+        )
 
 
 class EnqueueServiceTests(TestCase):
@@ -344,10 +379,26 @@ class MarkWatchedEndpointTests(TestCase):
 
 
 class RefreshOnViewTests(TestCase):
-    """Detail views queue an async refresh but never fetch inline."""
+    """Detail views fan out an async refresh but never fetch inline.
+
+    Opening a title asks **every** eligible title-level source (capability-
+    driven), not just the default scope: one check cannot answer a market only
+    an aggregator like JustWatch covers. Every request is still the regular
+    per-(title, source) row — idempotent, priority-upgraded, never an inline
+    fetch.
+    """
 
     @patch("tracker.views.enrich_movie_from_tmdb")
-    def test_movie_detail_stale_title_queues_recently_viewed_refresh(self, enrich):
+    @patch(
+        "tracker.services.source_policy.consult_metered_only_when_unresolved",
+        return_value=False,
+    )
+    def test_movie_detail_stale_title_queues_recently_viewed_refresh(
+        self, _gate, enrich
+    ):
+        """With the ladder off, every title-level source — including the
+        default scope — is queued for a stale title. This is the pre-existing
+        default-scope behaviour, preserved."""
         movie = Movie.objects.create(tmdb_id=301, title="Stale", year=2020)
         local_offer(movie)
         _backdate_offers(movie)
@@ -358,9 +409,43 @@ class RefreshOnViewTests(TestCase):
 
         self.assertEqual(resp.status_code, 200, resp.content)
         refresh_content.assert_not_called()
-        request = RefreshRequest.objects.get()
-        self.assertEqual(request.status, RefreshRequestStatus.PENDING)
-        self.assertEqual(request.priority, RefreshPriority.RECENTLY_VIEWED)
+        requests = RefreshRequest.objects.filter(movie=movie)
+        self.assertEqual(
+            set(requests.values_list("source", flat=True)),
+            set(title_level_source_slugs()),
+        )
+        self.assertTrue(
+            all(r.status == RefreshRequestStatus.PENDING for r in requests)
+        )
+        self.assertTrue(
+            all(r.priority == RefreshPriority.RECENTLY_VIEWED for r in requests)
+        )
+
+    @patch("tracker.views.enrich_movie_from_tmdb")
+    @patch(
+        "tracker.services.source_policy.consult_metered_only_when_unresolved",
+        return_value=True,
+    )
+    def test_movie_detail_resolved_title_skips_the_metered_scope_on_the_ladder(
+        self, _gate, enrich
+    ):
+        """With the ladder on, an already-resolved title does not spend the
+        metered scope — but the free title-level sources still run."""
+        movie = Movie.objects.create(tmdb_id=306, title="Resolved", year=2020)
+        local_offer(movie)
+        _backdate_offers(movie)
+
+        resp = self.client.get(f"/api/movie/{movie.pk}/")
+
+        self.assertEqual(resp.status_code, 200, resp.content)
+        queued = set(
+            RefreshRequest.objects.filter(movie=movie).values_list(
+                "source", flat=True
+            )
+        )
+        self.assertNotIn("streaming_availability", queued)
+        self.assertIn("justwatch", queued)
+        self.assertIn("watchmode", queued)
 
     @patch("tracker.views.enrich_movie_from_tmdb")
     def test_movie_detail_never_fetched_title_queues_new_priority(self, enrich):
@@ -369,21 +454,55 @@ class RefreshOnViewTests(TestCase):
         resp = self.client.get(f"/api/movie/{movie.pk}/")
 
         self.assertEqual(resp.status_code, 200, resp.content)
-        request = RefreshRequest.objects.get()
-        self.assertEqual(request.priority, RefreshPriority.NEW)
+        requests = RefreshRequest.objects.filter(movie=movie)
+        self.assertEqual(
+            set(requests.values_list("source", flat=True)),
+            set(title_level_source_slugs()),
+        )
+        self.assertTrue(
+            all(r.priority == RefreshPriority.NEW for r in requests)
+        )
 
     @patch("tracker.views.enrich_movie_from_tmdb")
     def test_movie_detail_fresh_title_queues_nothing(self, enrich):
         movie = Movie.objects.create(tmdb_id=303, title="Fresh", year=2020)
-        local_offer(movie)
+        _fresh_every_title_level_scope(movie)
 
         resp = self.client.get(f"/api/movie/{movie.pk}/")
 
         self.assertEqual(resp.status_code, 200, resp.content)
         self.assertEqual(RefreshRequest.objects.count(), 0)
 
+    @patch("tracker.views.enrich_movie_from_tmdb")
+    def test_repeated_opens_do_not_multiply_requests(self, enrich):
+        """The fan-out is idempotent: opening twice must not duplicate rows."""
+        movie = Movie.objects.create(tmdb_id=305, title="Reopened", year=2020)
+
+        self.client.get(f"/api/movie/{movie.pk}/")
+        first = set(
+            RefreshRequest.objects.filter(movie=movie).values_list(
+                "source", flat=True
+            )
+        )
+        self.client.get(f"/api/movie/{movie.pk}/")
+
+        self.assertEqual(
+            set(
+                RefreshRequest.objects.filter(movie=movie).values_list(
+                    "source", flat=True
+                )
+            ),
+            first,
+        )
+        self.assertEqual(
+            RefreshRequest.objects.filter(movie=movie).count(), len(first)
+        )
+
     @patch("tracker.services.offer_pipeline.enrich_movie_from_tmdb")
     def test_prime_detail_stale_title_queues_without_fetching(self, enrich):
+        """Superseded by :class:`PrimeDetailFanOutTests`, kept as a light
+        guard that the real offer pipeline path still enqueues and never
+        fetches inline."""
         movie = Movie.objects.create(tmdb_id=304, title="PrimeStale", year=2020)
         local_offer(movie)
         _backdate_offers(movie)
@@ -394,9 +513,182 @@ class RefreshOnViewTests(TestCase):
 
         self.assertEqual(resp.status_code, 200, resp.content)
         refresh_content.assert_not_called()
-        request = RefreshRequest.objects.get()
-        self.assertEqual(request.status, RefreshRequestStatus.PENDING)
-        self.assertEqual(request.priority, RefreshPriority.RECENTLY_VIEWED)
+        requests = RefreshRequest.objects.filter(movie=movie)
+        self.assertTrue(requests.exists())
+        self.assertTrue(
+            all(r.status == RefreshRequestStatus.PENDING for r in requests)
+        )
+        self.assertTrue(
+            all(r.priority == RefreshPriority.RECENTLY_VIEWED for r in requests)
+        )
+
+
+class PrimeDetailFanOutTests(TestCase):
+    """Both Prime detail routes fan out exactly like ``movie_detail``.
+
+    ``prime_movie`` and ``prime_series`` share ``_prime_detail_response``, so a
+    single change there covers both entry points. The point of the tests is
+    parity: reaching a title through Prime must schedule the same targeted
+    lookups as reaching it through ``/api/movie/<pk>/`` — otherwise the
+    availability a user sees would depend on which route they used.
+    """
+
+    def _prime_movie(self, tmdb_id, **extra):
+        return Movie.objects.create(
+            tmdb_id=tmdb_id, title=f"Movie {tmdb_id}", year=2020,
+            content_type="movie", **extra,
+        )
+
+    def _prime_series(self, tmdb_id, **extra):
+        return Movie.objects.create(
+            tmdb_id=tmdb_id, title=f"Series {tmdb_id}", year=2020,
+            content_type="series", **extra,
+        )
+
+    def _get(self, kind, tmdb_id):
+        return self.client.get(f"/api/prime/{kind}/{tmdb_id}/")
+
+    def _queued(self, movie):
+        return set(
+            RefreshRequest.objects.filter(movie=movie).values_list(
+                "source", flat=True
+            )
+        )
+
+    @patch("tracker.services.offer_pipeline.OfficialOffersPipeline")
+    @patch(
+        "tracker.services.source_policy.consult_metered_only_when_unresolved",
+        return_value=False,
+    )
+    def test_prime_movie_fans_out_to_every_title_level_source(
+        self, _gate, pipeline_cls
+    ):
+        pipeline_cls.return_value.run.return_value = MagicMock(offers_out=[])
+        movie = self._prime_movie(1301)
+
+        with patch(REFRESH_CONTENT) as refresh_content:
+            refresh_content.side_effect = AssertionError("prime read fetched")
+            resp = self._get("movie", movie.tmdb_id)
+
+        self.assertEqual(resp.status_code, 200, resp.content)
+        refresh_content.assert_not_called()
+        self.assertEqual(self._queued(movie), set(title_level_source_slugs()))
+
+    @patch("tracker.services.offer_pipeline.OfficialOffersPipeline")
+    @patch(
+        "tracker.services.source_policy.consult_metered_only_when_unresolved",
+        return_value=False,
+    )
+    def test_prime_series_fans_out_to_every_title_level_source(
+        self, _gate, pipeline_cls
+    ):
+        pipeline_cls.return_value.run.return_value = MagicMock(offers_out=[])
+        series = self._prime_series(1302)
+
+        with patch(REFRESH_CONTENT) as refresh_content:
+            refresh_content.side_effect = AssertionError("prime read fetched")
+            resp = self._get("series", series.tmdb_id)
+
+        self.assertEqual(resp.status_code, 200, resp.content)
+        refresh_content.assert_not_called()
+        self.assertEqual(self._queued(series), set(title_level_source_slugs()))
+
+    @patch("tracker.services.offer_pipeline.OfficialOffersPipeline")
+    @patch(
+        "tracker.services.source_policy.consult_metered_only_when_unresolved",
+        return_value=True,
+    )
+    def test_prime_movie_resolved_title_skips_the_metered_scope_on_the_ladder(
+        self, _gate, pipeline_cls
+    ):
+        pipeline_cls.return_value.run.return_value = MagicMock(offers_out=[])
+        movie = self._prime_movie(1303)
+        local_offer(movie)
+        _backdate_offers(movie)
+
+        resp = self._get("movie", movie.tmdb_id)
+
+        self.assertEqual(resp.status_code, 200, resp.content)
+        queued = self._queued(movie)
+        self.assertNotIn("streaming_availability", queued)
+        self.assertIn("justwatch", queued)
+        self.assertIn("watchmode", queued)
+
+    @patch("tracker.services.offer_pipeline.OfficialOffersPipeline")
+    @patch(
+        "tracker.services.source_policy.consult_metered_only_when_unresolved",
+        return_value=True,
+    )
+    def test_prime_series_resolved_title_skips_the_metered_scope_on_the_ladder(
+        self, _gate, pipeline_cls
+    ):
+        pipeline_cls.return_value.run.return_value = MagicMock(offers_out=[])
+        series = self._prime_series(1304)
+        local_offer(series)
+        _backdate_offers(series)
+
+        resp = self._get("series", series.tmdb_id)
+
+        self.assertEqual(resp.status_code, 200, resp.content)
+        queued = self._queued(series)
+        self.assertNotIn("streaming_availability", queued)
+        self.assertIn("justwatch", queued)
+
+    @patch("tracker.services.offer_pipeline.OfficialOffersPipeline")
+    def test_prime_routes_never_create_a_catalogue_refresh_job(self, pipeline_cls):
+        pipeline_cls.return_value.run.return_value = MagicMock(offers_out=[])
+        movie = self._prime_movie(1305)
+        series = self._prime_series(1306)
+
+        self._get("movie", movie.tmdb_id)
+        self._get("series", series.tmdb_id)
+
+        self.assertEqual(CatalogueRefreshRequest.objects.count(), 0)
+        self.assertNotIn("prime_video", self._queued(movie))
+        self.assertNotIn("prime_video", self._queued(series))
+
+    @patch("tracker.services.offer_pipeline.OfficialOffersPipeline")
+    def test_prime_detail_fresh_title_queues_nothing(self, pipeline_cls):
+        pipeline_cls.return_value.run.return_value = MagicMock(offers_out=[])
+        movie = self._prime_movie(1307)
+        _fresh_every_title_level_scope(movie)
+
+        resp = self._get("movie", movie.tmdb_id)
+
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(RefreshRequest.objects.count(), 0)
+
+    @patch("tracker.services.offer_pipeline.OfficialOffersPipeline")
+    def test_repeated_prime_opens_do_not_multiply_requests(self, pipeline_cls):
+        """The Prime fan-out is idempotent, like the movie-detail one."""
+        pipeline_cls.return_value.run.return_value = MagicMock(offers_out=[])
+        movie = self._prime_movie(1308)
+
+        self._get("movie", movie.tmdb_id)
+        first = self._queued(movie)
+        self._get("movie", movie.tmdb_id)
+
+        self.assertEqual(self._queued(movie), first)
+        self.assertEqual(
+            RefreshRequest.objects.filter(movie=movie).count(), len(first)
+        )
+
+    @patch("tracker.services.offer_pipeline.OfficialOffersPipeline")
+    def test_prime_detail_keeps_cached_offers_while_refresh_runs(
+        self, pipeline_cls
+    ):
+        """The response still carries the cached offers and a pending flag —
+        the fan-out never blocks or clears them."""
+        pipeline_cls.return_value.run.return_value = MagicMock(
+            offers_out=[{"service": "prime", "country": "US", "url": "https://x"}]
+        )
+        movie = self._prime_movie(1309)
+
+        resp = self._get("movie", movie.tmdb_id)
+
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(len(resp.json()["offers"]), 1)
+        self.assertTrue(resp.json()["refresh_pending"])
 
 
 class ExplicitRefreshEndpointTests(TestCase):
@@ -698,18 +990,21 @@ class DrainTests(TestCase):
             self.assertEqual(request.status, RefreshRequestStatus.DONE)
             self.assertIsNotNone(request.completed_at)
 
-    def test_budget_exhaustion_settles_the_remainder_as_blocked(self):
-        """A request the drain decides it cannot run is settled, not queued.
+    def test_budget_exhaustion_leaves_the_remainder_pending(self):
+        """A spent *run* budget defers work; it never fakes source exhaustion.
 
-        This asserted ``PENDING`` and ``requests_pending == 1``. That was the
-        pre-P6a contract: "pending" claimed the worker still intended to run it,
-        which is false the moment the budget is spent. Live consequence: 490
-        requests skipped for budget, 490 left queued, and the run could not
-        finalise at all.
+        A run budget limits *work performed*, not future eligibility. The worker
+        spent its one unit on the higher-priority request, so the other is
+        deferred — left ``PENDING`` for the next tick, not settled. Recording it
+        as ``blocked``/``quota_exhausted`` conflated the run's own execution
+        budget with a source running dry; on the live watchlist a single
+        10-unit tick stranded ~181 requests per source that way, and 22 titles
+        read as ``not_applicable`` unknowns purely because the worker never
+        reached them.
 
-        The budget is still respected — only one upstream call happens, and the
-        skip counter still reports it. What changed is the row's terminal state
-        and the reason it carries.
+        The budget itself is honoured exactly as before: one upstream call, and
+        the deferral is still counted — in ``skipped_budget_exhausted``, never
+        in ``blocked_by_reason``.
         """
         first = Movie.objects.create(tmdb_id=911, title="First", year=2020)
         second = Movie.objects.create(tmdb_id=912, title="Second", year=2021)
@@ -727,15 +1022,17 @@ class DrainTests(TestCase):
         self.assertEqual(summary["refreshed"], 1)
         self.assertEqual(summary["remaining_budget"], 0)
         self.assertEqual(summary["skipped_budget_exhausted"], 1)
+        # A run budget is never recorded as a source-quota block.
         self.assertEqual(
-            summary["blocked_by_reason"][BlockedReason.QUOTA_EXHAUSTED], 1
+            summary["blocked_by_reason"].get(BlockedReason.QUOTA_EXHAUSTED, 0), 0
         )
-        # And the unrun request is settled rather than left queued.
-        self.assertEqual(summary["requests_pending"], 0)
-        settled = RefreshRequest.objects.get(movie=second)
-        self.assertEqual(settled.status, RefreshRequestStatus.BLOCKED)
-        self.assertEqual(settled.blocked_reason, BlockedReason.QUOTA_EXHAUSTED)
-        self.assertIsNotNone(settled.completed_at)
+        self.assertEqual(summary["requests_drained"], 1)
+        # The unrun request is deferred, not settled: eligible next tick.
+        self.assertEqual(summary["requests_pending"], 1)
+        deferred = RefreshRequest.objects.get(movie=second)
+        self.assertEqual(deferred.status, RefreshRequestStatus.PENDING)
+        self.assertEqual(deferred.blocked_reason, "")
+        self.assertIsNone(deferred.completed_at)
 
     def _stale_backlog_and_fresh_event(self):
         """An old BACKGROUND request plus a brand-new RECENTLY_VIEWED one."""
@@ -773,12 +1070,12 @@ class DrainTests(TestCase):
         self.assertEqual(summary["requests_pending"], 0)
 
     def test_fairness_slot_never_overrides_priority_when_budget_is_one(self):
-        """Priority still wins the single unit; the loser settles as blocked.
+        """Priority still wins the single unit; the loser is deferred.
 
         The priority half is unchanged and is the point of the test: the
-        high-priority event gets the one unit of budget. Only the loser's
-        terminal state changed — `blocked`/`quota_exhausted` rather than
-        `pending`, because the drain has decided it cannot run this tick.
+        high-priority event gets the one unit of budget. The loser is left
+        ``PENDING`` — deferred by the run budget, not settled as a source-quota
+        block.
         """
         self._stale_backlog_and_fresh_event()
 
@@ -788,8 +1085,8 @@ class DrainTests(TestCase):
         self.assertEqual(summary["refreshed"], 1)
         self.assertEqual(summary["skipped_budget_exhausted"], 1)
         loser = RefreshRequest.objects.get(movie__tmdb_id=971)
-        self.assertEqual(loser.status, RefreshRequestStatus.BLOCKED)
-        self.assertEqual(loser.blocked_reason, BlockedReason.QUOTA_EXHAUSTED)
+        self.assertEqual(loser.status, RefreshRequestStatus.PENDING)
+        self.assertEqual(loser.blocked_reason, "")
 
     def test_fairness_slot_returns_the_unit_when_reserved_request_is_fresh(self):
         backlog = Movie.objects.create(tmdb_id=973, title="FreshBacklog", year=2019)

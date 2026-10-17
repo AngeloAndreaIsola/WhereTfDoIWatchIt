@@ -555,13 +555,25 @@ class CollectorAuditTests(TestCase):
         self.assertTrue(row["error"])
 
     def test_collector_and_title_sources_are_reported_separately(self):
-        """A catalogue source cannot answer a per-title question, so
-        reporting it in the same list as per-title sources would imply it
-        did."""
+        """A catalogue-**only** source cannot answer a per-title question, so
+        reporting it in the same list as per-title sources would imply it did.
+
+        JustWatch is the deliberate exception: it implements *both* a
+        title-targeted fetch and a catalogue walk, so it legitimately appears
+        in both lists. The invariant is that a source with no title fetch
+        capability never shows up among the title sources.
+        """
         movie = make_movie(50, "Separate")
         sources = {r["source"] for r in ar.source_progress([movie.pk])}
         collectors = {r["source"] for r in ar.catalogue_progress()}
-        self.assertEqual(sources & collectors, set())
+        catalogue_only = {
+            slug
+            for slug in collectors
+            if not source_registry.get(slug).capabilities.supports_title_fetch
+        }
+        self.assertEqual(sources & catalogue_only, set())
+        self.assertIn("justwatch", sources)
+        self.assertIn("justwatch", collectors)
 
 
 class CounterfactualConsistencyTests(TestCase):

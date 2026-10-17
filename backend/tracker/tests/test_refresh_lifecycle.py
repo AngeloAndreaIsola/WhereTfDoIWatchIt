@@ -47,7 +47,6 @@ from tracker.services.rate_limit import SOURCE_DAILY_LIMITS
 from tracker.services.refresh_lifecycle import (
     STALE_RUNNING_AFTER,
     AvailabilityRefreshLifecycle,
-    UnsettledWorkError,
     claim_active_run,
     finalise_run,
     reconcile_stale_runs,
@@ -215,7 +214,7 @@ class TerminalStatusTests(TestCase):
         self.assertEqual(run.available_titles, 0)
 
     def test_outstanding_requests_can_no_longer_produce_a_terminal_run(self):
-        """A pending request no longer means PARTIAL — it means *refusal*.
+        """A pending request no longer means PARTIAL — it means *deferral*.
 
         This test previously asserted ``PARTIAL`` for a run holding one
         outstanding request. That single assertion encoded the defect P6a
@@ -223,9 +222,10 @@ class TerminalStatusTests(TestCase):
         and by "the worker ran out of budget mid-queue", so a report could not
         tell a legitimate partial result from an interrupted one.
 
-        Now a runnable outstanding request is not a status at all — it is an
-        error, because finalising over it would record a terminal status over a
-        non-empty queue. Settling it first is what makes PARTIAL legitimate.
+        Now a runnable outstanding request is not a status at all: finalisation
+        defers, leaving the run ``RUNNING`` so the next tick resumes it — a run
+        budget limits work performed, not future eligibility. Settling the
+        request first is what makes PARTIAL legitimate.
         """
         batch = uuid.uuid4()
         run = make_run(batch=batch, movie_ids=[self.movie])
@@ -235,19 +235,34 @@ class TerminalStatusTests(TestCase):
 
         # Ladder off for this half on purpose. With it on, settlement would
         # legitimately block the metered request (a free source answered), and
-        # there would be nothing left to refuse — which is the *other* half of
-        # this test. Here the request must be genuinely runnable so that only
-        # the terminal invariant stands between it and a false PARTIAL.
+        # there would be nothing left to defer — which is the *other* half of
+        # this test. Here the request must be genuinely runnable, so the run
+        # cannot finalise and stays RUNNING.
         with patch.object(
             source_policy,
             "consult_metered_only_when_unresolved",
             return_value=False,
         ):
-            with self.assertRaises(UnsettledWorkError):
-                finalise_run(run, [self.movie.pk])
+            finalise_run(run, [self.movie.pk])
 
         run.refresh_from_db()
+        self.assertNotIn(
+            run.status,
+            {
+                AvailabilityRefreshStatus.COMPLETED,
+                AvailabilityRefreshStatus.PARTIAL,
+                AvailabilityRefreshStatus.FAILED,
+            },
+            "finalisation must not record a terminal status over a live queue",
+        )
         self.assertIsNone(run.finished_at)
+        self.assertEqual(
+            RefreshRequest.objects.get(
+                movie=self.movie, source=SA, batch=batch
+            ).status,
+            RefreshRequestStatus.PENDING,
+            "the runnable request must stay queued, not be settled away",
+        )
 
         # And once it is settled, the run finalises honestly. The metered
         # source declines it here because the ladder is on and a free source
@@ -287,10 +302,10 @@ class TerminalStatusTests(TestCase):
         must be counted — the batch defines ownership, not the spelling.
 
         The consequence changed with P6a: being counted no longer means
-        ``PARTIAL``, it means finalising is refused. Ownership is what decides
-        whether a row blocks terminalisation, and a legacy empty-scope row is
-        owned by the run, so it blocks it. Asserting the refusal rather than a
-        status is the honest form of this test now — the old assertion
+        ``PARTIAL``, it means finalising is deferred. Ownership is what decides
+        whether a row holds the run open, and a legacy empty-scope row is owned
+        by the run, so it keeps it ``RUNNING``. Asserting the deferral rather
+        than a status is the honest form of this test now — the old assertion
         (`PARTIAL`) was really asserting the very ambiguity P6a removes.
         """
         batch = uuid.uuid4()
@@ -299,11 +314,25 @@ class TerminalStatusTests(TestCase):
         add_request(self.movie, WM, RefreshRequestStatus.DONE, batch)
         add_request(self.movie, "", RefreshRequestStatus.PENDING, batch)
 
-        with self.assertRaises(UnsettledWorkError):
-            finalise_run(run, [self.movie.pk])
+        finalise_run(run, [self.movie.pk])
 
         run.refresh_from_db()
+        self.assertNotIn(
+            run.status,
+            {
+                AvailabilityRefreshStatus.COMPLETED,
+                AvailabilityRefreshStatus.PARTIAL,
+                AvailabilityRefreshStatus.FAILED,
+            },
+            "finalisation must not record a terminal status over a live queue",
+        )
         self.assertIsNone(run.finished_at)
+        self.assertEqual(
+            RefreshRequest.objects.filter(
+                batch=batch, status=RefreshRequestStatus.PENDING
+            ).count(),
+            1,
+        )
 
 
 class PersistedStateTests(TestCase):

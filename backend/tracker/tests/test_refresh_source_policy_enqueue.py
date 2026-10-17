@@ -55,9 +55,8 @@ SA = "streaming_availability"          # the one metered aggregator
 #: Broad, unmetered, and *title-addressable* — so it can hold a real
 #: per-title request row and be used in the enqueue tests.
 WM = "watchmode"
-#: Broad and unmetered but **catalogue-driven**: it cannot be asked about one
-#: film (its ``fetch(content)`` raises), so no per-title request row can
-#: exist for it. Used only where the test passes a synthetic applicable list.
+#: Broad and unmetered and **title-addressable** (it implements both a title
+#: lookup and a catalogue walk), so it too can hold a per-title request row.
 JW = "justwatch"
 COLLECTOR = "mediaset_infinity"         # first-party, title-addressable
 

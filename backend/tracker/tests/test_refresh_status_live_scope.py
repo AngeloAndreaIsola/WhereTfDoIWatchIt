@@ -135,19 +135,20 @@ class PendingCountReflectsLiveWorkTests(_WatchlistFixture):
 
         Asserted directly against the database rather than through the
         endpoint, so the endpoint's filtering cannot be what makes this pass.
-        Run through the *current* lifecycle, the same attempt is refused.
+        Run through the *current* lifecycle, the same attempt is deferred: the
+        run stays RUNNING, so no terminal status is ever recorded over a live
+        queue.
         """
         run = self.make_run(AvailabilityRefreshStatus.RUNNING, [self.movie.pk])
         self.pending_row(run.batch)
 
-        # Current lifecycle: refused, because the request is runnable.
+        # Current lifecycle: deferred, because the request is runnable.
         with patch.object(
             source_policy,
             "consult_metered_only_when_unresolved",
             return_value=False,
         ):
-            with self.assertRaises(rl.UnsettledWorkError):
-                rl.AvailabilityRefreshLifecycle.finalise(run)
+            rl.AvailabilityRefreshLifecycle.finalise(run)
 
         run.refresh_from_db()
         self.assertIsNone(run.finished_at)

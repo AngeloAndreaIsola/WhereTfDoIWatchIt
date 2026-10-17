@@ -103,12 +103,28 @@ class SourceCapabilities:
     values narrow the scope; the refresh service skips offers whose content
     type is outside a declared set (the provider/country filtering already
     happens against enabled DB rows).
+
+    ``supports_title_fetch`` and ``supports_catalogue_sync`` are **independent
+    capabilities**, and neither implies the other:
+
+    - ``supports_title_fetch`` — ``fetch(content=...)`` answers one title. It
+      is the discriminator for "may hold a per-title ``RefreshRequest``".
+    - ``supports_catalogue_sync`` — ``fetch(content=None)`` walks a whole
+      provider catalogue (partition/page/cursor) for discovery.
+
+    A source can support either, both, or neither. Catalogue-only collectors
+    (Prime Video, BBC iPlayer, CBC Gem, Tubi, Pluto TV, RaiPlay, PBS, ABC
+    iview) set only ``supports_catalogue_sync`` and reject ``content``;
+    title-only sources (Streaming Availability, Watchmode, YouTube, Mediaset
+    Infinity) set only ``supports_title_fetch`` and reject ``content=None``;
+    JustWatch implements **both** and sets both flags.
     """
 
     supported_providers: Optional[frozenset[str]] = None
     supported_countries: Optional[frozenset[str]] = None
     supported_content_types: Optional[frozenset[str]] = None
     supports_incremental_sync: bool = False
+    supports_title_fetch: bool = False
     supports_catalogue_sync: bool = False
     supports_authoritative_snapshots: bool = False
     supports_tmdb_ids: bool = True

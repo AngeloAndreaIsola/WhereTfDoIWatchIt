@@ -231,6 +231,24 @@ class AvailabilityRefreshLifecycle:
         # is what let a run report `PARTIAL` with 553 requests still queued.
         settled = settle_unexecutable_requests(refresh)
 
+        # A run whose worker exhausted its *execution budget* still owns
+        # runnable work: the drain leaves those requests PENDING precisely
+        # because a run budget is not a source quota, so they were not settled
+        # above. Deriving a terminal status now would raise on the invariant
+        # (or, worse, record a verdict over a queue that is still full). Leave
+        # the run ``RUNNING`` so the next tick resumes it — the same stance
+        # ``reconcile`` already takes for a run interrupted with work in
+        # flight. This is what makes a run budget limit *work performed*, not
+        # future eligibility.
+        outstanding = _outstanding_request_count(refresh)
+        if outstanding:
+            logger.info(
+                "availability_refresh_finalise_deferred refresh_id=%s "
+                "outstanding=%s (worker run budget, not source quota)",
+                refresh.pk, outstanding,
+            )
+            return refresh
+
         summary = build_run_summary(ids, batch=refresh.batch)
         sync_run_progress(refresh, ids, batch=refresh.batch)
 

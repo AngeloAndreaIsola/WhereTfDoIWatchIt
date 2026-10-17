@@ -349,6 +349,28 @@ class WatchlistReportEndpointTests(TestCase):
         self.assertIsNone(row["best_country"])
         self.assertIsNone(row["best_service"])
 
+    def test_available_elsewhere_never_reads_unavailable(self):
+        """Regression (Platoon, NL): offers present ⇒ 🟠, never ⚫.
+
+        The response simultaneously reported ``available_countries`` including
+        NL (from ``rank_offers``) and ``watchability.status: "not_watchable"``
+        ⚫ — the watchlist badge contradicting its own summary and the
+        canonical verdict. ⚫ is reserved for canonical unavailability.
+        """
+        Preference.objects.create(user_id=1, candidate_countries=[])
+        movie = Movie.objects.create(tmdb_id=792, title="Platoon", year=1986)
+        WatchlistItem.objects.create(user_id=1, movie=movie, source="manual")
+        # The only local offer is a rent one, and no subscription is held.
+        local_offer(movie, country="NL", service="rakuten_tv", offer_type="rent",
+                    quality="hd", audio_languages=["EN"], subtitle_languages=["EN"])
+
+        resp = self.client.get("/api/watchlist/report/?current_country=NL")
+        self.assertEqual(resp.status_code, 200)
+        row = next(r for r in resp.json()["report"] if r["movie"]["tmdb_id"] == 792)
+        self.assertEqual(row["watchability"]["status"], "available_elsewhere")
+        self.assertEqual(row["watchability"]["status_symbol"], "🟠")
+        self.assertNotEqual(row["watchability"]["status"], "not_watchable")
+
     def test_mixed_list(self):
         from tracker.models import WatchlistItem
         Preference.objects.create(user_id=1, candidate_countries=["US", "GB"])

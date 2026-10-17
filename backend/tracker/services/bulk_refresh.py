@@ -105,26 +105,32 @@ def title_level_source_slugs() -> list[str]:
     slug-driven:
 
         registered source
-        AND supports a title-targeted fetch
-        AND NOT supports_catalogue_sync
+        AND supports_title_fetch
 
-    ``supports_catalogue_sync`` is the discriminator because it is the one
-    capability that is mutually exclusive with per-title work: a
-    catalogue-driven source has no title-targeted path at all — its
-    ``fetch(content)`` rejects a title request outright (``"prime_video is
-    catalogue-driven: ... no title-targeted lookup exists"``) — so it must be
-    refreshed whole (``process_catalogue_refresh``) and can never contribute a
-    per-title ``RefreshRequest``. Every registered source that is not
-    catalogue-driven is title-addressable, and joins Refresh All
-    automatically: a newly registered title-level collector fans out with no
-    further change here.
+    ``supports_title_fetch`` is the correct discriminator because it is the
+    *only* capability that says a source accepts a per-title request. It is
+    deliberately **not** ``not supports_catalogue_sync``: that older test
+    conflated two independent capabilities and so dropped any source that
+    implements **both** a title-targeted fetch and a catalogue walk.
+    JustWatch is exactly such a source — its ``fetch(content=...)`` resolves
+    one title by name/year (``_fetch_title``) while ``fetch(content=None)``
+    walks whole provider catalogues — so the old rule excluded it from every
+    per-title path even though it can answer per title, leaving it able to
+    contribute only through the slow, incomplete catalogue walk.
+
+    Catalogue-only collectors (Prime Video, BBC iPlayer, CBC Gem, Tubi, Pluto
+    TV, RaiPlay, PBS, ABC iview) leave ``supports_title_fetch`` at its default
+    ``False`` — their ``fetch(content)`` raises — so their behaviour is
+    unchanged. Every registered source that *does* implement a title fetch
+    joins Refresh All automatically: a newly registered title-level collector
+    fans out with no further change here.
 
     Unknown slugs are excluded by construction (they are not registered).
     """
     return [
         slug
         for slug in source_registry.slugs()
-        if not source_registry.get(slug).capabilities.supports_catalogue_sync
+        if source_registry.get(slug).capabilities.supports_title_fetch
     ]
 
 
@@ -359,7 +365,11 @@ def process_watchlist_refresh(
     - attempted: number of sweep candidates considered
     - refreshed: number of titles successfully refreshed (requests + sweep)
     - skipped_cached: number skipped because existing cache was fresh
-    - skipped_budget_exhausted: number skipped because no refresh budget remained
+    - skipped_budget_exhausted: number deferred because the *run's execution
+      budget* was spent. This is a scheduling deferral, not a source-quota
+      fact: the work is left PENDING and is retried on the next tick. It is
+      deliberately kept out of ``blocked_by_reason`` so a run budget can never
+      be misreported as a source running dry.
     - skipped_rate_limited: number skipped because rate limit/quota prevented further refreshes
     - skipped_upstream_missing: number skipped because the upstream catalogue has no
       record of the title at all (a permanent 404) — not an error, and never retried
@@ -369,8 +379,18 @@ def process_watchlist_refresh(
     - rate_limited: boolean indicating whether quota/rate limiting stopped the run
     - rate_limited_sources: sources whose own daily budget is spent (their
       titles are *waiting*, not failed); empty when nothing is blocked
-    - requests_drained: pending RefreshRequest rows settled (done/failed) this run
-    - requests_pending: RefreshRequest rows still queued after the run
+    - blocked_by_reason: settled ``BLOCKED`` rows by reason — the only home for
+      *genuine* source-quota exhaustion (``BlockedReason.QUOTA_EXHAUSTED``),
+      which is terminal and not retried aggressively
+    - requests_drained: pending RefreshRequest rows settled (done/failed/blocked) this run
+    - requests_pending: RefreshRequest rows still queued after the run — this
+      includes run-budget deferrals, which are queued work, not settled work
+
+    The five request outcomes the user-facing summary must not conflate:
+    queued (``requests_pending``), attempted (``attempted``), completed
+    (``refreshed``), genuinely quota-blocked
+    (``blocked_by_reason[QUOTA_EXHAUSTED]``), and deferred by the worker's run
+    budget (``skipped_budget_exhausted``).
 
     Quota is per source, so an exhausted budget on one source never stops the
     others: a stale Prime scope still refreshes while Streaming Availability

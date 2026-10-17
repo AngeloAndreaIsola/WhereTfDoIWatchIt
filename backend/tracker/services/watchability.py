@@ -15,12 +15,26 @@ from tracker.services.score import score_offer
 from tracker.services.streaming_api import service_display_name
 
 
+# Offer types that count as "included" for watchability: a subscription the
+# user may hold, or a genuinely free stream. ``free_with_ads`` (AVOD) is a free
+# stream — Tubi, Pluto TV, YouTube, Mediaset AVOD, ABC iview, PBS and JustWatch
+# ``ADS`` all persist it — so it must qualify exactly like ``free``. Rent and
+# buy stay excluded by design (SPEC).
+QUALIFYING_OFFER_TYPES = frozenset({"subscription", "free", "free_with_ads"})
+
+
 class WatchabilityStatus:
-    WATCHABLE_HERE = "watchable_here"   # 🟢
-    WATCHABLE_VPN = "watchable_vpn"     # 🟡
-    NOT_WATCHABLE = "not_watchable"     # ⚫
-    UNKNOWN = "unknown"                 # ⚪
-    CHECKING = "checking"               # 🔵
+    WATCHABLE_HERE = "watchable_here"        # 🟢
+    WATCHABLE_VPN = "watchable_vpn"          # 🟡
+    NOT_WATCHABLE = "not_watchable"          # ⚫
+    UNKNOWN = "unknown"                      # ⚪
+    CHECKING = "checking"                    # 🔵
+    # Canonical availability is positive, but nothing qualifies for *this*
+    # user (no subscription, out-of-region, or a language mismatch). ⚫ is
+    # reserved for canonical unavailability, so this is deliberately a
+    # non-negative badge — the title is not unavailable, it is just not
+    # watchable with what the user has.
+    AVAILABLE_ELSEWHERE = "available_elsewhere"  # 🟠
 
 
 class RefreshState:
@@ -138,6 +152,13 @@ def evaluate_watchability(
     now" (🔵 Checking…) and "never fetched at all" (⚪ Unknown). When offers
     exist they always decide the status; a queued re-check never hides a
     known result.
+
+    ``NOT_WATCHABLE`` (⚫ "Not available") is emitted **only** when the store
+    holds no offers *and* the title was checked — i.e. canonical
+    unavailability. When offers exist but none qualify for this user, the
+    result is :attr:`WatchabilityStatus.AVAILABLE_ELSEWHERE` (🟠): the title
+    is available, just not with the user's subscriptions/region/languages.
+    The watchlist badge must never contradict a positive canonical verdict.
     """
     if user_subscriptions is None:
         user_subscriptions = get_user_subscriptions(preference.user_id if preference else 1)
@@ -230,8 +251,8 @@ def evaluate_watchability(
 
         reasons = []
 
-        # 1. Offer type requirement: subscription or free
-        is_qualifying_type = offer_type in ("subscription", "free")
+        # 1. Offer type requirement: subscription or free (incl. ad-supported)
+        is_qualifying_type = offer_type in QUALIFYING_OFFER_TYPES
         if not is_qualifying_type:
             price_str = f" ({price_info})" if price_info else ""
             reasons.append(f"Only available to {offer_type}{price_str} (not included in subscription)")
@@ -307,8 +328,13 @@ def evaluate_watchability(
         status_label = "Watchable with VPN"
         status_symbol = "🟡"
     else:
-        status = WatchabilityStatus.NOT_WATCHABLE
-        status_symbol = "⚫"
+        # Offers exist, so canonical availability is positive (any active
+        # offer resolves the title). They just do not qualify for this user:
+        # unsubscribed, out-of-region, or a language mismatch. ⚫ is reserved
+        # for canonical unavailability, so this reads 🟠 — available, but not
+        # with what the user has — never "not available".
+        status = WatchabilityStatus.AVAILABLE_ELSEWHERE
+        status_symbol = "🟠"
 
         # Check if any offer was accessible & subscribed but excluded strictly by language rules
         lang_excluded = [
@@ -319,11 +345,11 @@ def evaluate_watchability(
         if lang_excluded:
             has_unknown = any("Language information unknown" in o.rejection_reasons for o in lang_excluded)
             if has_unknown:
-                status_label = "Not matching language filter (language data unknown)"
+                status_label = "Available — language data unknown"
             else:
-                status_label = "Not matching language filter"
+                status_label = "Available — not matching language filter"
         else:
-            status_label = "Not watchable with your subscriptions"
+            status_label = "Available — not with your subscriptions"
 
         # Compile user-friendly summary explanation
         seen_exp = set()

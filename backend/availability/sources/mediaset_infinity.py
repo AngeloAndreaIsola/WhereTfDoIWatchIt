@@ -295,6 +295,7 @@ class MediasetInfinitySource:
         # series requests short-circuit to an empty result (no network).
         supported_content_types=frozenset({ContentType.MOVIE}),
         supports_incremental_sync=False,
+        supports_title_fetch=True,
         supports_catalogue_sync=False,
         # One query's match is a subset of the catalogue: absence must never
         # deactivate offers.

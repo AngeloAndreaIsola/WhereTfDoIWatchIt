@@ -134,10 +134,19 @@ def recently_attempted(movie, source: str = "") -> bool:
     the title stale, and this read-side check is what stops the next detail
     view (or frontend poll) from immediately opening another attempt for the
     very same observation window.
+
+    The scope is **resolved** before matching, so the legacy ``""`` scope and
+    its explicit ``DEFAULT_SOURCE_SLUG`` count as one — exactly as
+    :func:`is_stale` and :func:`resolve_request_source` already treat them.
+    Without that, a drain of a legacy ``""`` row would be invisible to the
+    explicit-slug fan-out, which would immediately reopen the very scope the
+    cooldown exists to leave alone.
     """
+    scope = source or DEFAULT_SOURCE_SLUG
+    scopes = {scope, ""} if scope == DEFAULT_SOURCE_SLUG else {scope}
     return RefreshRequest.objects.filter(
         movie=movie,
-        source=source,
+        source__in=scopes,
         status__in=[RefreshRequestStatus.DONE, RefreshRequestStatus.FAILED],
         completed_at__gte=timezone.now() - RECENT_ATTEMPT_WINDOW,
     ).exists()
@@ -295,6 +304,70 @@ def refresh_states_for(movie_ids) -> dict[int, str]:
         else:
             states[movie_id] = RefreshState.NEVER_CHECKED
     return states
+
+
+def request_title_refresh(
+    movie,
+    priority: int = RefreshPriority.STALE,
+    *,
+    if_stale: bool = True,
+    sources: Optional[list[str]] = None,
+    batch: uuid.UUID | None = None,
+) -> dict:
+    """Fan a **single** title out to every eligible title-level source.
+
+    The single-title counterpart of :func:`request_watchlist_refresh`, and the
+    answer to "why is an opened title still unknown?": one default-scope check
+    cannot report a market only an aggregator like JustWatch covers, so opening
+    a title must ask every source that can answer a per-title question — not
+    just Streaming Availability.
+
+    **Eligibility comes from the capability model**, never a hard-coded list:
+    ``sources`` defaults to :func:`title_level_source_slugs` (every source
+    whose ``capabilities.supports_title_fetch`` is true). Catalogue-only
+    collectors such as Prime Video are therefore structurally excluded, so
+    this can never trigger a catalogue crawl — every request it writes is a
+    title-scoped :func:`request_availability_refresh`.
+
+    Everything else stays the per-title contract: idempotent dedup per
+    ``(movie, source scope)``, priority upgrade, the never-fetched bump, the
+    staleness/cooldown guards (``if_stale``), the metered-source policy
+    (:func:`~tracker.services.source_policy.decide_sources_for_title`, applied
+    *before* a row exists), and swallow-on-failure. Country scope and rate
+    limits are applied later, at drain time, exactly as for the bulk path.
+
+    Returns ``{"sources": <allowed slugs>, "queued": <rows touched>,
+    "skipped": {source: reason}}``.
+    """
+    base_sources = (
+        list(sources) if sources is not None else title_level_source_slugs()
+    )
+
+    from .availability_report import title_source_report
+    from .source_policy import decide_sources_for_title
+
+    report_entry = title_source_report([movie.pk]).get(movie.pk, {})
+    decision = decide_sources_for_title(
+        report_entry, applicable_slugs=base_sources
+    )
+    allowed = list(decision["allowed_sources"])
+
+    queued = 0
+    for source in allowed:
+        row = request_availability_refresh(
+            movie,
+            priority=priority,
+            if_stale=if_stale,
+            source=source,
+            batch=batch,
+        )
+        if row is not None:
+            queued += 1
+    return {
+        "sources": allowed,
+        "queued": queued,
+        "skipped": decision["skipped_sources"],
+    }
 
 
 def request_watchlist_refresh(
@@ -737,10 +810,13 @@ def _drain_one(
     if _is_spent(scope_limiter):
         summary.note_rate_limited_source(source)
         summary.skipped_rate_limited += 1
-        # Settled for the same reason as the run-budget branch below: the
-        # worker has decided this cannot execute now, so it must not stay
-        # queued. Without this a source whose own daily budget is spent
-        # accumulated a pending backlog that no tick could ever clear.
+        # A *source's* own daily quota is genuinely spent, so this request is
+        # settled as `blocked`/`quota_exhausted`: terminal, and not retried
+        # aggressively until the reset. Deliberately different from the
+        # run-budget branch below, which *defers* (leaves PENDING) — a run
+        # budget limits work performed, not future eligibility. Without
+        # settling here, a source whose own daily budget is spent accumulated a
+        # pending backlog that no tick could ever clear.
         request.settle(
             RefreshRequestStatus.BLOCKED,
             blocked_reason=BlockedReason.QUOTA_EXHAUSTED,
@@ -765,30 +841,25 @@ def _drain_one(
         return rate_limit_hit
 
     if summary.remaining_budget <= 0:
-        # Settled as `blocked`, not skipped-and-left-queued.
+        # The *run's* execution budget is spent — not the source's quota. This
+        # request is therefore left PENDING, never settled: it is perfectly
+        # runnable and becomes the very next tick's work. The two conditions
+        # are deliberately different facts with different consequences —
+        # `quota_exhausted` is terminal and must not be retried aggressively,
+        # whereas a run-budget deferral is retried on the next tick — so a run
+        # budget must never be recorded as a source-quota block.
         #
-        # Leaving it pending is the pre-P6a defect wearing a different hat: the
-        # worker has decided this request cannot execute right now, and queued
-        # means "the worker intends to execute this", which is now false. On the
-        # live 191-title watchlist this path skipped 490 requests and left them
-        # all queued, so the run could not finalise — the invariant raised,
-        # the worker caught it and recorded `failed`, and the run ended terminal
-        # with 426 pending requests. Exactly the state P6a exists to prevent.
+        # Conflating them was a real defect. A worker with `--budget 10` and a
+        # 194-title watchlist settled ~181 requests per source as
+        # `blocked/quota_exhausted` inside a single tick, even though four of
+        # the five sources declare no quota at all and the fifth still had
+        # 93/100 calls remaining. 22 titles consequently read as
+        # `not_applicable` unknowns purely because the worker never reached
+        # them — an absence of *information* misreported as a scheduling fact.
         #
-        # Note this is independent of `is_policy_metered`. That predicate answers
-        # "should this source take part in the metered ladder"; a budget answers
-        # "can this request execute now". A free collector has a budget too, and
-        # when it is spent the request is legitimately `quota_exhausted` — it
-        # becomes runnable at the next reset.
-        request.settle(
-            RefreshRequestStatus.BLOCKED,
-            blocked_reason=BlockedReason.QUOTA_EXHAUSTED,
-        )
+        # Only the counter moves here. `requests_drained` deliberately does
+        # not: that counts settled rows, and a deferred row is not settled.
         summary.skipped_budget_exhausted += 1
-        summary.blocked_by_reason[BlockedReason.QUOTA_EXHAUSTED] = (
-            summary.blocked_by_reason.get(BlockedReason.QUOTA_EXHAUSTED, 0) + 1
-        )
-        summary.requests_drained += 1
         return rate_limit_hit
 
     try:

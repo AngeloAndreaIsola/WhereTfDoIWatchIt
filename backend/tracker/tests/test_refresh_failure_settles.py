@@ -245,11 +245,15 @@ class FailMustSettleTests(FailureSettlesWorkBase):
 
 
 class DrainBudgetExhaustionSettlesTests(FailureSettlesWorkBase):
-    """Decision 2: budget exhaustion must settle, not skip-and-leave-queued.
+    """Two guards, two outcomes — a run budget is not a source quota.
 
-    Independent of `is_policy_metered`, which answers "should this source join
-    the metered ladder". A free collector has a budget too, and when it is spent
-    the request is legitimately `quota_exhausted` — runnable again at reset.
+    A spent *source* daily quota settles the request as
+    ``blocked``/``quota_exhausted``: terminal, and not retried aggressively
+    until the reset. A spent *run* budget defers instead — the request stays
+    ``PENDING`` for the next tick, because a run budget limits work performed,
+    not future eligibility. The deferral is reported as
+    ``skipped_budget_exhausted`` and is deliberately kept out of
+    ``blocked_by_reason``, so the two can never be confused.
     """
 
     def _drain(self, budget):
@@ -269,12 +273,12 @@ class DrainBudgetExhaustionSettlesTests(FailureSettlesWorkBase):
         fetch.return_value = None
         return summary
 
-    def test_run_budget_exhaustion_settles_as_blocked(self):
+    def test_run_budget_exhaustion_leaves_requests_pending(self):
         # The source's *daily* quota is deliberately left wide open: this test is
-        # about the run's own budget, which is a different guard at a different
-        # point in the sequence. Exhausting the source quota instead makes the
-        # source-limiter guard fire first, so the request settles for the wrong
-        # reason and the run-budget path is never exercised.
+        # about the run's own execution budget, a different guard at a different
+        # point in the sequence. A spent run budget means the worker has used up
+        # *this tick's* work allowance — not that the source is dry — so the
+        # requests stay PENDING and are retried on the next tick.
         SOURCE_DAILY_LIMITS[SA] = 100_000
         self.queue(SA, 2)
 
@@ -284,21 +288,17 @@ class DrainBudgetExhaustionSettlesTests(FailureSettlesWorkBase):
             summary = self._drain(budget=0)
 
         self.assertEqual(summary["skipped_budget_exhausted"], 2)
+        # A run budget is never recorded as a source-quota block.
         self.assertEqual(
-            summary["blocked_by_reason"][BlockedReason.QUOTA_EXHAUSTED], 2
+            summary["blocked_by_reason"].get(BlockedReason.QUOTA_EXHAUSTED, 0), 0
         )
-        self.assertEqual(summary["requests_drained"], 2)
+        self.assertEqual(summary["requests_drained"], 0)
         self.assertEqual(summary["refreshed"], 0, "an upstream call was made anyway")
-        self.assertFalse(
-            RefreshRequest.objects.filter(
-                batch=self.batch, status=RefreshRequestStatus.PENDING
-            ).exists(),
-            "budget-exhausted requests were left queued — the pre-P6a defect",
-        )
+        # The work is deferred, not settled: eligible for the very next tick.
         for req in RefreshRequest.objects.filter(batch=self.batch):
-            self.assertEqual(req.status, RefreshRequestStatus.BLOCKED)
-            self.assertEqual(req.blocked_reason, BlockedReason.QUOTA_EXHAUSTED)
-            self.assertIsNotNone(req.completed_at)
+            self.assertEqual(req.status, RefreshRequestStatus.PENDING)
+            self.assertEqual(req.blocked_reason, "")
+            self.assertIsNone(req.completed_at)
 
     def test_a_budget_exhausted_free_collector_settles_as_blocked(self):
         """A free, non-metered source with a spent budget still settles."""
@@ -332,8 +332,9 @@ class DrainBudgetExhaustionSettlesTests(FailureSettlesWorkBase):
         it means such rows are settled by the settlement boundary instead, not
         by the drain, and this pins that division of labour.
 
-        Measured on the live watchlist before the fix: 490 requests skipped for
-        budget and all 490 left queued, so the run could not finalise at all.
+        The run budget here is ample (``budget=10``) so the *only* reason SA's
+        rows go unreached is the SQL exclusion — the point of the test — and not
+        a run-budget deferral, which by design leaves rows PENDING.
         """
         self.exhaust(SA)
         SOURCE_DAILY_LIMITS[WM] = 100_000
@@ -344,15 +345,14 @@ class DrainBudgetExhaustionSettlesTests(FailureSettlesWorkBase):
         with patch.object(
             source_policy, "consult_metered_only_when_unresolved", return_value=False
         ):
-            self._drain(budget=0)
+            self._drain(budget=10)
 
             # The drain settles what it could reach...
             self.assertEqual(
                 RefreshRequest.objects.filter(
-                    batch=self.batch, source=WM, status=RefreshRequestStatus.BLOCKED
+                    batch=self.batch, source=WM, status=RefreshRequestStatus.DONE
                 ).count(),
                 2,
-                "the run-budget path must settle",
             )
             # ...and deliberately does not reach the SQL-excluded source.
             self.assertEqual(
@@ -401,6 +401,128 @@ class DrainBudgetExhaustionSettlesTests(FailureSettlesWorkBase):
                 blocked_reason=BlockedReason.QUOTA_EXHAUSTED,
             ).count(),
             3,
+        )
+
+
+class RunBudgetDeferralTests(FailureSettlesWorkBase):
+    """A spent run budget defers work across ticks; it never fakes exhaustion.
+
+    The live defect this pins: a worker with ``--budget 10`` and a 194-title
+    watchlist settled ~181 requests *per source* as ``blocked/quota_exhausted``
+    in a single tick — four of those sources declare no quota at all — and 22
+    titles read as ``not_applicable`` unknowns purely because the worker never
+    reached them. A run budget limits work performed, not future eligibility,
+    so the unreached requests must stay ``PENDING`` and be retried next tick.
+    """
+
+    def _tick(self, budget):
+        """Drive the real worker entrypoint, stubbing only the upstream fetch."""
+        from tracker.services import refresh_requests as rr
+
+        with patch.object(
+            source_policy, "consult_metered_only_when_unresolved", return_value=False
+        ), patch.object(
+            rr.AvailabilityRefreshService, "refresh_content"
+        ) as fetch, patch.object(rr, "is_stale", return_value=True):
+            fetch.return_value = None
+            return rr.process_refresh_queue(budget=budget)
+
+    def test_a_spent_run_budget_defers_and_the_next_tick_completes_it(self):
+        SOURCE_DAILY_LIMITS[SA] = 100_000
+        first, second = self.movies[0], self.movies[1]
+        self.queue(SA, 2, movies=[first, second])
+
+        first_tick = self._tick(budget=1)
+        self.assertEqual(first_tick["skipped_budget_exhausted"], 1)
+        self.assertEqual(first_tick["requests_pending"], 1)
+
+        # The run still owns runnable work, so finalisation defers: RUNNING.
+        rl.AvailabilityRefreshLifecycle.finalise(self.refresh)
+        self.refresh.refresh_from_db()
+        self.assertEqual(self.refresh.status, AvailabilityRefreshStatus.RUNNING)
+        self.assertIsNone(self.refresh.finished_at)
+        self.assertEqual(
+            RefreshRequest.objects.get(movie=second).status,
+            RefreshRequestStatus.PENDING,
+            "the deferred request must stay eligible for the next tick",
+        )
+
+        # The next tick picks the deferred request up and finishes the run.
+        second_tick = self._tick(budget=10)
+        self.assertEqual(second_tick["refreshed"], 1)
+        rl.AvailabilityRefreshLifecycle.finalise(self.refresh)
+        self.assert_terminal_invariant()
+        self.assertEqual(
+            RefreshRequest.objects.filter(
+                batch=self.batch, status=RefreshRequestStatus.DONE
+            ).count(),
+            2,
+        )
+
+    def test_deferred_work_is_never_recorded_as_quota_exhausted(self):
+        SOURCE_DAILY_LIMITS[SA] = 100_000
+        self.queue(SA, 2)
+
+        summary = self._tick(budget=0)
+
+        self.assertEqual(summary["skipped_budget_exhausted"], 2)
+        self.assertEqual(
+            summary["blocked_by_reason"].get(BlockedReason.QUOTA_EXHAUSTED, 0), 0
+        )
+        self.assertEqual(
+            RefreshRequest.objects.filter(
+                batch=self.batch,
+                status=RefreshRequestStatus.BLOCKED,
+                blocked_reason=BlockedReason.QUOTA_EXHAUSTED,
+            ).count(),
+            0,
+            "a run budget must never be recorded as source-quota exhaustion",
+        )
+
+    def test_repeated_ticks_do_not_duplicate_requests(self):
+        SOURCE_DAILY_LIMITS[SA] = 100_000
+        movie = self.movies[0]
+        self.queue(SA, 1, movies=[movie])
+
+        for _ in range(3):
+            self._tick(budget=0)
+        self.assertEqual(
+            RefreshRequest.objects.filter(batch=self.batch, movie=movie).count(),
+            1,
+            "a deferred request must be retried in place, never re-queued",
+        )
+
+        self._tick(budget=10)
+        self.assertEqual(
+            RefreshRequest.objects.filter(
+                batch=self.batch, movie=movie, status=RefreshRequestStatus.DONE
+            ).count(),
+            1,
+        )
+
+    def test_a_deferred_title_does_not_read_as_not_applicable(self):
+        """A partial batch is an *absence of information*, not a negative answer.
+
+        With run-budget rows previously settled ``blocked``, the title classified
+        as ``not_applicable`` — a scheduling fact misreported as a verdict.
+        Deferred, it is honestly ``queued``.
+        """
+        from tracker.services.availability_report import (
+            AvailabilityResolutionReason,
+            title_source_report,
+        )
+
+        SOURCE_DAILY_LIMITS[SA] = 100_000
+        movie = self.movies[0]
+        self.queue(SA, 1, movies=[movie])
+
+        self._tick(budget=0)
+
+        entry = title_source_report([movie.pk], batch=self.batch)[movie.pk]
+        self.assertEqual(entry["state"], "unknown")
+        self.assertEqual(entry["reason"], AvailabilityResolutionReason.QUEUED)
+        self.assertNotEqual(
+            entry["reason"], AvailabilityResolutionReason.NOT_APPLICABLE
         )
 
 

@@ -11,7 +11,7 @@ from .enrichment import enrich_movie_from_tmdb
 from .preferences import resolve_preferences
 from .ranking import rank_offers
 from .presentation import present_offer
-from .watchability import get_user_subscriptions
+from .watchability import QUALIFYING_OFFER_TYPES, get_user_subscriptions
 from .availability_reads import get_local_offers
 
 logger = logging.getLogger(__name__)
@@ -54,7 +54,7 @@ class OfficialOffersPipeline:
 
         qualifying = []
         for o in offers:
-            if (o.offer_type or "").lower() not in ("subscription", "free"):
+            if (o.offer_type or "").lower() not in QUALIFYING_OFFER_TYPES:
                 continue
 
             slug = o.service or ""
