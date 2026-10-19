@@ -78,8 +78,28 @@ together at one frequency.
   pages**. Sitemap discovery first keeps only the direct `<loc>` of each
   `<url>` entry and drops image/video extension assets, so a 500-page bound now
   buys 500 titles instead of 250 titles plus 250 posters. Hitting the bound
-  logs `tubi_catalogue_truncated title_urls=<n> scanned=<n>
-  max_contents=<n>`.
+  logs `tubi_catalogue_truncated title_urls=<n> batch=<n>
+  remaining_in_cycle=<n>`.
+- **Durable checkpoint**: progress lives in `availability.SyncCursor`
+  (`provider=tubi`, `source=tubi`, `country=US`) as a small JSON document with
+  one last-seen URL per title sitemap. A batch resumes immediately after those
+  URLs, so repeated runs no longer re-read the newest 500 entries forever. The
+  checkpoint advances after every successful batch — including a batch that
+  maps zero offers — and is left untouched when the fetch or persistence step
+  fails, so the same window is retried rather than skipped.
+- **Drift behaviour**: sitemap head insertions do not shift the checkpoint
+  (new entries are picked up at the next cycle). If a checkpointed URL
+  disappears, only that sitemap restarts from its head; the other queues keep
+  their progress. A cursor from an older `CURSOR_VERSION` restarts the cycle.
+  At 500 pages/run one full 82,386-title cycle takes ~165 runs.
+- **Tracked titles first**: the generic catalogue runner passes the local
+  tracker catalogue to sources declaring `supports_priority_hints`. Tubi slug-
+  matches those titles against the sitemap and fetches the matching pages in
+  addition to the traversal batch (bounded by `DEFAULT_MAX_PRIORITY`, 300;
+  currently ~173 matches). This is only candidate selection — identity is
+  still decided by the existing title/year mapping after parsing, never by the
+  slug. A typical run is therefore ~500 traversal pages + ~173 priority pages,
+  roughly 14 minutes at the measured 1.27 s/detail page.
 - **Sitemap retries**: a sitemap document is retried twice with linear backoff
   on transport or parse failure. After the bounded retries the run still fails
   loudly; a malformed or consent page is never converted into an empty
@@ -98,7 +118,9 @@ together at one frequency.
   sitemap, undecodable state) fail the source.
 - **Never authoritative**: every Tubi run reports
   `authoritative=False`/`complete_snapshot=False`, so a truncated or partially
-  observed run deactivates no offer and removes no catalogue row.
+  observed run deactivates no offer and removes no catalogue row. The
+  checkpoint is traversal progress, never evidence that an unvisited title is
+  unavailable.
 
 #### Prime Video scheduling notes
 

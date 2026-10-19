@@ -558,6 +558,74 @@ class CursorPersistenceTests(RefreshServiceTestCase):
 
         self.assertEqual(SyncCursor.objects.count(), 0)
 
+    def test_a_zero_offer_catalogue_batch_still_persists_its_checkpoint(self):
+        from availability.sources.base import SourceCapabilities
+
+        Provider.objects.get_or_create(slug="tubi", defaults={"name": "Tubi"})
+        Country.objects.get_or_create(code="US", defaults={"name": "United States"})
+        source = StubSource(
+            response=_response(cursor='{"v":1,"cycle":0,"queues":{}}'),
+            capabilities=SourceCapabilities(
+                supported_providers=frozenset({"tubi"}),
+                supported_countries=frozenset({"US"}),
+                supports_catalogue_sync=True,
+            ),
+        )
+        service = AvailabilityRefreshService(source=source)
+
+        result = service.refresh_catalogue()
+
+        self.assertEqual(result.processed, 0)
+        cursor = SyncCursor.objects.get()
+        self.assertEqual(cursor.provider.slug, "tubi")
+        self.assertEqual(cursor.country.code, "US")
+        self.assertEqual(cursor.cursor, '{"v":1,"cycle":0,"queues":{}}')
+
+    def test_a_catalogue_refresh_resumes_from_the_stored_checkpoint(self):
+        from availability.sources.base import SourceCapabilities
+
+        Provider.objects.get_or_create(slug="tubi", defaults={"name": "Tubi"})
+        Country.objects.get_or_create(code="US", defaults={"name": "United States"})
+        source = StubSource(
+            response=_response(cursor="checkpoint-2"),
+            capabilities=SourceCapabilities(
+                supported_providers=frozenset({"tubi"}),
+                supported_countries=frozenset({"US"}),
+                supports_catalogue_sync=True,
+            ),
+        )
+        service = AvailabilityRefreshService(source=source)
+
+        service.refresh_catalogue()
+        service.refresh_catalogue()
+
+        self.assertEqual(source.fetch_calls[0]["cursor"], None)
+        self.assertEqual(source.fetch_calls[1]["cursor"], "checkpoint-2")
+
+    def test_a_failed_catalogue_batch_persists_no_checkpoint(self):
+        from availability.sources.base import SourceCapabilities
+
+        Provider.objects.get_or_create(slug="tubi", defaults={"name": "Tubi"})
+        Country.objects.get_or_create(code="US", defaults={"name": "United States"})
+        source = StubSource(
+            response=_response(
+                _normalized(provider_content_id="OK"),
+                _normalized(content_type="bogus_type", provider_content_id="BAD"),
+                cursor="checkpoint-2",
+            ),
+            capabilities=SourceCapabilities(
+                supported_providers=frozenset({"tubi"}),
+                supported_countries=frozenset({"US"}),
+                supports_catalogue_sync=True,
+            ),
+        )
+        service = AvailabilityRefreshService(source=source)
+
+        with self.assertRaises(ValueError):
+            service.refresh_catalogue()
+
+        self.assertEqual(SyncCursor.objects.count(), 0)
+
 
 class RealSourceIntegrationTests(TestCase):
     """AvailabilityRefreshService + StreamingAvailabilitySource (mocked client)."""

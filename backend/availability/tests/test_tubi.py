@@ -25,6 +25,7 @@ Fixture catalogue (recorded pages):
     ancient-aliens, about (the last is never requested).
 """
 import datetime as dt
+import json
 
 import requests
 from django.test import SimpleTestCase
@@ -37,7 +38,12 @@ from availability.sources import (
     TubiSource,
     source_registry,
 )
-from availability.sources.tubi import TubiClient, _state_from_html, _xml_locs
+from availability.sources.tubi import (
+    TubiClient,
+    _priority_urls,
+    _state_from_html,
+    _xml_locs,
+)
 
 from .tubi_fixtures import (
     ABOUT,
@@ -115,15 +121,18 @@ class RegistrationTests(SimpleTestCase):
 
 
 class SnapshotSemanticsTests(SimpleTestCase):
-    def test_result_never_claims_authoritativeness_or_cursor(self):
+    def test_result_never_claims_authoritativeness_but_returns_a_checkpoint(self):
         source, _api = build_source()
         result = source.fetch()
         self.assertFalse(result.authoritative)
         self.assertFalse(result.complete_snapshot)
         # One fetch reports the whole configured window.
         self.assertEqual(result.sync_mode, SyncMode.FULL)
-        # The sitemaps expose no resumable server-side cursor.
-        self.assertIsNone(result.cursor)
+        # Discovery is checkpointed: the cursor is traversal progress, never a
+        # completeness or availability claim.
+        checkpoint = json.loads(result.cursor)
+        self.assertEqual(checkpoint["v"], 1)
+        self.assertIn("queues", checkpoint)
 
 
 class SitemapDiscoveryTests(SimpleTestCase):
@@ -275,6 +284,159 @@ class SitemapRetryTests(SimpleTestCase):
             source.fetch()
         # One initial attempt plus two retries, and never an empty success.
         self.assertEqual(api.requests.count(MOVIES_1), 3)
+
+
+class CatalogueCheckpointTests(SimpleTestCase):
+    def _walk(self, source, api, cursor=None, priority=None):
+        before = len(api.detail_requests)
+        result = source.fetch(cursor=cursor, priority=priority)
+        return result, api.detail_requests[before:]
+
+    def test_repeated_capped_runs_advance_and_cover_every_title_once(self):
+        source, api = build_source(max_contents=2)
+        cursor = None
+        batches = []
+        for _ in range(3):
+            result, batch = self._walk(source, api, cursor)
+            batches.append(batch)
+            cursor = result.cursor
+
+        self.assertEqual(
+            batches,
+            [
+                [I_ROBOT, BLUE_WATER_HIGH],
+                [CLEARCUT, ONE_EIGHT_HUNDRED],
+                [PERMISSION, ANCIENT_ALIENS],
+            ],
+        )
+        self.assertEqual(len([url for batch in batches for url in batch]), 6)
+        self.assertEqual(len(set(url for batch in batches for url in batch)), 6)
+
+        # The fourth run starts the next cycle at the head instead of
+        # re-reading the same newest pages forever.
+        _result, fourth = self._walk(source, api, cursor)
+        self.assertEqual(fourth, [I_ROBOT, BLUE_WATER_HIGH])
+
+    def test_a_batch_that_observes_nothing_still_advances_the_checkpoint(self):
+        source, api = build_source(max_contents=2)
+        shell = api.pages[CLEARCUT]
+        api.pages[I_ROBOT] = shell
+        api.pages[BLUE_WATER_HIGH] = shell
+
+        first, first_batch = self._walk(source, api)
+        self.assertEqual(first.contents, [])
+        self.assertEqual(first_batch, [I_ROBOT, BLUE_WATER_HIGH])
+        self.assertIsNotNone(first.cursor)
+
+        second, second_batch = self._walk(source, api, first.cursor)
+        self.assertEqual(second_batch, [CLEARCUT, ONE_EIGHT_HUNDRED])
+        self.assertNotEqual(first.cursor, second.cursor)
+
+    def test_a_head_insertion_does_not_shift_the_checkpoint(self):
+        source, api = build_source(max_contents=2)
+        _first, first_batch = self._walk(source, api)
+        cursor = _first.cursor
+        self.assertEqual(first_batch, [I_ROBOT, BLUE_WATER_HIGH])
+
+        new_url = "https://tubitv.com/movies/700000/brand-new"
+        api.sitemaps[MOVIES_1] = api.sitemaps[MOVIES_1].replace(
+            "<url>",
+            url_entry(new_url) + "<url>",
+            1,
+        )
+        api.pages[new_url] = api.pages[PERMISSION]
+
+        _second, second_batch = self._walk(source, api, cursor)
+        # Resume is keyed on the last-seen URL, not an offset: the new head
+        # entry waits for the next cycle and does not push older titles back.
+        self.assertEqual(second_batch, [CLEARCUT, ONE_EIGHT_HUNDRED])
+
+        # It is not starved permanently: the next cycle starts at the head and
+        # includes the newly inserted entry.
+        third, _third_batch = self._walk(source, api, _second.cursor)
+        fourth, fourth_batch = self._walk(source, api, third.cursor)
+        self.assertEqual(fourth_batch, [new_url, BLUE_WATER_HIGH])
+
+    def test_a_removed_checkpoint_url_restarts_only_that_sitemap(self):
+        source, api = build_source(max_contents=2)
+        first, _batch = self._walk(source, api)
+        self.assertEqual(first.contents[0].provider_content_id, "578912")
+
+        api.sitemaps[TV_SHOWS_1] = api.sitemaps[TV_SHOWS_1].replace(
+            "<url><loc>https://tubitv.com/series/02185/blue-water-high</loc>"
+            "<lastmod>2026-09-12</lastmod></url>",
+            "",
+        )
+        second, batch = self._walk(source, api, first.cursor)
+
+        # movies-1 resumed after I, Robot; tv-shows-1 (whose checkpoint URL was
+        # removed) restarted at its first remaining entry. No deadlock.
+        self.assertEqual(batch, [CLEARCUT, ONE_EIGHT_HUNDRED])
+        self.assertEqual({c.provider_content_id for c in second.contents}, {"1076"})
+
+    def test_an_unreadable_checkpoint_starts_a_new_cycle_loudly(self):
+        source, api = build_source(max_contents=2)
+        with self.assertLogs("availability.sources.tubi", level="WARNING") as logs:
+            result, batch = self._walk(source, api, cursor="{not-json")
+        self.assertIn("tubi_cursor_invalid", "\n".join(logs.output))
+        self.assertEqual(batch, [I_ROBOT, BLUE_WATER_HIGH])
+        self.assertIsNotNone(result.cursor)
+
+    def test_a_cursor_from_another_version_restarts_the_cycle(self):
+        source, api = build_source(max_contents=2)
+        stale = json.dumps({"v": 999, "cycle": 4, "queues": {}})
+        with self.assertLogs("availability.sources.tubi", level="WARNING") as logs:
+            _result, batch = self._walk(source, api, cursor=stale)
+        self.assertIn("tubi_cursor_reset", "\n".join(logs.output))
+        self.assertEqual(batch, [I_ROBOT, BLUE_WATER_HIGH])
+
+    def test_priority_titles_are_fetched_every_run_without_consuming_the_batch(self):
+        source, api = build_source(max_contents=1)
+        hint = [("Ancient Aliens", None, "series")]
+
+        first, first_batch = self._walk(source, api, priority=hint)
+        self.assertEqual(first_batch, [ANCIENT_ALIENS, I_ROBOT])
+        second, second_batch = self._walk(source, api, first.cursor, priority=hint)
+        # The traversal batch advanced (I, Robot -> Clearcut) and the priority
+        # page was fetched again; slug matching never decided identity.
+        self.assertEqual(second_batch, [ANCIENT_ALIENS, CLEARCUT])
+
+    def test_priority_slug_matching_respects_content_type(self):
+        entries = [
+            "https://tubitv.com/movies/1/permission",
+            "https://tubitv.com/series/2/permission",
+        ]
+        self.assertEqual(
+            _priority_urls(entries, [("Permission", 2018, "series")], 10),
+            ["https://tubitv.com/series/2/permission"],
+        )
+        self.assertEqual(
+            _priority_urls(entries, [("Permission", 2018, "movie")], 10),
+            ["https://tubitv.com/movies/1/permission"],
+        )
+
+    def test_a_failed_priority_page_does_not_block_the_traversal_batch(self):
+        source, api = build_source(max_contents=1)
+        del api.pages[ANCIENT_ALIENS]
+        hint = [("Ancient Aliens", None, "series")]
+
+        with self.assertLogs("availability.sources.tubi", level="WARNING") as logs:
+            result, batch = self._walk(source, api, priority=hint)
+
+        self.assertIn("tubi_priority_page_failed", "\n".join(logs.output))
+        self.assertEqual(batch, [ANCIENT_ALIENS, I_ROBOT])
+        self.assertEqual(
+            {c.provider_content_id for c in result.contents}, {"578912"}
+        )
+        self.assertIsNotNone(result.cursor)
+
+    def test_a_priority_page_that_is_also_in_the_batch_still_aborts(self):
+        """Priority tolerance must never hide a traversal-page failure."""
+        source, api = build_source(max_contents=1)
+        del api.pages[I_ROBOT]
+
+        with self.assertRaises(SourceFetchError):
+            source.fetch(priority=[("I, Robot", 2004, "movie")])
 
 
 class CatalogueParsingTests(SimpleTestCase):

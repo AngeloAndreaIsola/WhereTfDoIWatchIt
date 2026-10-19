@@ -131,6 +131,10 @@ class SourceCapabilities:
     supports_seasons: bool = False
     supports_episodes: bool = False
     supports_languages: bool = True
+    # The source can use optional local-catalogue hints (e.g. tracked titles)
+    # to prioritise discovery candidates. Hints only select candidates; the
+    # source still decides identity through its normal payload/mapping path.
+    supports_priority_hints: bool = False
 
 
 @dataclass(frozen=True)

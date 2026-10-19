@@ -6,7 +6,7 @@ discovery is *sitemap-driven* rather than API- or index-driven:
     https://tubitv.com/sitemap.xml (sitemap index)
         -> only the title sitemaps  sitemaps/movies-*.xml, sitemaps/tv-shows-*.xml
         -> direct <loc> page URLs only (image/video assets are filtered out)
-        -> a bounded, interleaved batch across the title sitemaps
+        -> a bounded batch resumed from a per-sitemap last-URL checkpoint
         -> ``window.__data`` embedded in each detail page's SSR HTML
         -> one ``DiscoveredContent`` per title + ``ProviderOffer`` at every
            granularity the embedded state actually carries
@@ -93,6 +93,20 @@ Product semantics, all documented rather than papered over:
   ``authoritative=False`` / ``complete_snapshot=False`` (absence never
   deactivates) even though ``sync_mode`` is ``FULL`` — one fetch reports the
   whole configured window.
+- **Discovery is checkpointed, not restarted.** Sitemaps are ordered
+  newest-first, so walking ``entries[:max_contents]`` every run inspected the
+  same newest pages forever. A run now consumes a bounded batch from a
+  per-sitemap last-seen-URL checkpoint (``SyncCursor.cursor``, JSON) and
+  advances it only after a successful batch. Head insertions do not shift the
+  checkpoint; a removed checkpoint URL restarts only its own sitemap; a
+  complete pass increments ``cycle`` and starts over. The checkpoint is
+  traversal progress, never evidence about availability.
+- **Tracked titles come first.** The caller may pass ``priority`` hints (the
+  local tracker catalogue's titles). Title-page slugs that match are fetched
+  in addition to the traversal batch every run, so a tracked title does not
+  wait months for the bounded walk to reach it. Slug matching only selects
+  *candidate pages*; identity is still decided by the existing title/year
+  mapping, never by the slug.
 - Sitemap responses are retried a bounded number of times with backoff. A
   malformed or non-XML answer still fails loudly after the retries; it is
   never converted into an empty-but-successful catalogue.
@@ -101,8 +115,9 @@ Product semantics, all documented rather than papered over:
   mapping happens in the refresh service by local title/year matching.
 - **Runtime bound**: at 82,386 title pages the full catalogue is ~82k
   requests of 194 kB..2 MB each. ``DEFAULT_MAX_CONTENTS`` therefore bounds one
-  run (entries are interleaved so a capped run still mixes movies and series)
-  and the truncation is logged; see ``docs/CRON.md``.
+  run (queues are interleaved so a capped run still mixes movies and series),
+  a durable per-sitemap checkpoint advances between runs, and the truncation is
+  logged; see ``docs/CRON.md``.
 """
 from __future__ import annotations
 
@@ -110,6 +125,7 @@ import json
 import logging
 import re
 import time
+import unicodedata
 from datetime import date, datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse
@@ -143,11 +159,18 @@ DEFAULT_TIMEOUT = 30
 DEFAULT_DELAY = 0.1
 # Safety bound on one run, counted in **title pages** (image/video sitemap
 # locations are filtered out first). The full title catalogue is ~82k detail
-# pages of 194 kB..2 MB; the sitemaps are ordered by the provider, newest
-# ``lastmod`` first, so a capped walk still covers current titles. ``None``
-# disables the bound (tests use it; production must not).
+# pages of 194 kB..2 MB; a run advances a durable checkpoint instead of always
+# re-reading the newest entries. ``None`` disables the bound (tests use it;
+# production must not).
 DEFAULT_MAX_CONTENTS = 500
+# Extra title pages fetched every run for locally tracked titles, on top of the
+# checkpointed traversal batch. The expected match set is ~140 titles; the
+# bound only protects against a pathological slug collision set.
+DEFAULT_MAX_PRIORITY = 300
 SOURCE_VERSION = "tubi-ssr-v2"
+# Bump when the traversal algorithm changes. A cursor written by another
+# version is ignored (with a log line) and a fresh cycle starts.
+CURSOR_VERSION = 1
 STATE_MARKER = "window.__data"
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -294,13 +317,20 @@ class TubiSource:
         supports_seasons=True,
         supports_episodes=True,
         supports_languages=True,
+        # The refresh service passes the local tracker catalogue as hints so
+        # tracked titles are fetched every run, not only when the bounded
+        # traversal eventually reaches them.
+        supports_priority_hints=True,
     )
 
-    def __init__(self, client=None, max_contents=DEFAULT_MAX_CONTENTS):
+    def __init__(self, client=None, max_contents=DEFAULT_MAX_CONTENTS,
+                 max_priority=DEFAULT_MAX_PRIORITY):
         self.client = client or TubiClient()
         self.max_contents = max_contents
+        self.max_priority = max_priority
 
-    def fetch(self, content=None, *, provider=None, country=None, cursor=None) -> SourceFetchResult:
+    def fetch(self, content=None, *, provider=None, country=None, cursor=None,
+              priority=None) -> SourceFetchResult:
         if content is not None:
             raise ValueError(
                 "tubi is catalogue-driven: fetch the catalogue with "
@@ -308,21 +338,40 @@ class TubiSource:
             )
         # provider/country are the caller's scope hints, already validated
         # against ``capabilities`` by the refresh service; Tubi only ever
-        # reports its own (tubi, US). cursor is accepted but unused: the
-        # sitemaps offer no resumable server-side cursor, so one fetch reports
-        # the whole configured window instead of inventing a token.
+        # reports its own (tubi, US).
+        #
+        # ``cursor`` is the durable traversal checkpoint (per-sitemap
+        # last-seen URL, JSON) and ``priority`` is an optional iterable of
+        # local tracker titles that should be fetched in addition to this
+        # batch. Both are plain values: the source never reads the database.
         queues, stats = self._title_queues()
         entries = list(dict.fromkeys(_interleave([urls for _url, urls in queues])))
-        scanned = entries if self.max_contents is None else entries[: self.max_contents]
-        if len(scanned) < len(entries):
+        state = _decode_cursor(cursor)
+        selected, next_cursor, plan = _plan_batch(
+            queues, state, self.max_contents
+        )
+        priority_urls = _priority_urls(entries, priority, self.max_priority)
+        scanned = list(dict.fromkeys(priority_urls + selected))
+
+        if plan["truncated"]:
             logger.warning(
-                "tubi_catalogue_truncated title_urls=%d scanned=%d max_contents=%d",
-                len(entries), len(scanned), self.max_contents,
+                "tubi_catalogue_truncated title_urls=%d batch=%d "
+                "remaining_in_cycle=%d max_contents=%d cycle=%d",
+                len(entries), len(selected), plan["remaining"],
+                self.max_contents, plan["cycle"],
+            )
+        if plan["checkpoint_missing"]:
+            logger.warning(
+                "tubi_cursor_checkpoint_missing sitemaps=%s "
+                "reason=restarting_those_sitemaps",
+                ",".join(plan["checkpoint_missing"]),
             )
 
         contents: list[DiscoveredContent] = []
         offers: list[ProviderOffer] = []
-        fetched = observed = shelled = skipped = 0
+        fetched = observed = shelled = skipped = failed_priority = 0
+        priority_set = set(priority_urls)
+        traversal_set = set(selected)
         for url in scanned:
             match = DETAIL_PATH_RE.match(urlparse(url).path)
             if match is None:
@@ -332,8 +381,24 @@ class TubiSource:
                 skipped += 1
                 continue
             fetched += 1
-            html = self.client.detail_page(url)
-            page_state = _state_from_html(html, url=url)
+            try:
+                html = self.client.detail_page(url)
+                page_state = _state_from_html(html, url=url)
+            except SourceFetchError as exc:
+                if url not in priority_set or url in traversal_set:
+                    # A traversal page failing must leave the checkpoint where
+                    # it is: the batch is retried instead of silently skipping
+                    # the page for a whole cycle. This stays true even when the
+                    # same URL also happens to be a priority candidate.
+                    raise
+                # The priority pass is an accelerator, never the checkpoint:
+                # one stale tracked-title URL must not block the batch.
+                logger.warning(
+                    "tubi_priority_page_failed url=%s error=%s", url, exc
+                )
+                failed_priority += 1
+                skipped += 1
+                continue
             if page_state is None:
                 # 200 SPA shell: the title is not observable right now.
                 logger.info("tubi_content_missing url=%s reason=spa_shell", url)
@@ -355,16 +420,19 @@ class TubiSource:
             offers.extend(page_offers)
             observed += 1
 
-        unexpected = max(0, fetched - observed - shelled)
+        unexpected = max(0, fetched - observed - shelled - failed_priority)
         logger.info(
             "tubi_catalogue_summary sitemap_locs=%d title_urls=%d "
-            "non_title_filtered=%d duplicates_removed=%d batch_selected=%d "
+            "non_title_filtered=%d duplicates_removed=%d priority_matched=%d "
+            "priority_selected=%d priority_failed=%d batch_selected=%d "
             "pages_fetched=%d pages_observed=%d shell_pages=%d "
-            "unexpected_pages=%d contents=%d offers=%d",
+            "unexpected_pages=%d contents=%d offers=%d cycle=%d "
+            "remaining_in_cycle=%d",
             stats["sitemap_locs"], stats["title_urls"],
-            stats["non_title_filtered"], stats["duplicates_removed"], len(scanned),
+            stats["non_title_filtered"], stats["duplicates_removed"],
+            len(priority_urls), len(priority_urls), failed_priority, len(selected),
             fetched, observed, shelled, unexpected,
-            len(contents), len(offers),
+            len(contents), len(offers), plan["cycle"], plan["remaining"],
         )
 
         if scanned and observed == 0:
@@ -382,7 +450,7 @@ class TubiSource:
             authoritative=False,
             complete_snapshot=False,
             sync_mode=SyncMode.FULL,
-            cursor=None,
+            cursor=next_cursor,
         )
 
     # ------------------------------------------------------------------ walk
@@ -393,8 +461,9 @@ class TubiSource:
         Only the direct ``<loc>`` child of each ``<url>`` entry is a page URL;
         the image/video extension tags carry asset URLs under their own
         ``<loc>``/``thumbnail_loc>`` and are never fetched. Keeping the queues
-        separate (rather than flattening immediately) is what keeps an
-        interleaved batch mixed across movies and series.
+        separate (rather than flattening immediately) is what lets the
+        checkpoint resume each sitemap independently and keeps a batch mixed
+        across movies and series.
         """
         index = self.client.sitemap_index()
         sitemaps = list(dict.fromkeys(
@@ -668,6 +737,201 @@ def _is_title_url(url: str) -> bool:
     if (parsed.hostname or "").lower() not in ("tubitv.com", "www.tubitv.com"):
         return False
     return DETAIL_PATH_RE.match(parsed.path) is not None
+
+
+def _decode_cursor(cursor) -> dict:
+    """Decode the durable traversal checkpoint, tolerating old/garbage values.
+
+    An unreadable checkpoint is a reason to restart the cycle, never a reason
+    to fail a refresh: a run that cannot resume still does useful work. A
+    version mismatch is treated the same way, which is what makes changing the
+    traversal algorithm a controlled, tested reset.
+    """
+    empty = {"v": CURSOR_VERSION, "cycle": 0, "queues": {}}
+    if cursor in (None, ""):
+        return empty
+    data = cursor
+    if not isinstance(cursor, dict):
+        try:
+            data = json.loads(str(cursor))
+        except (TypeError, ValueError):
+            logger.warning("tubi_cursor_invalid cursor=%r", str(cursor)[:160])
+            return empty
+    if (
+        not isinstance(data, dict)
+        or data.get("v") != CURSOR_VERSION
+        or not isinstance(data.get("queues"), dict)
+    ):
+        logger.warning(
+            "tubi_cursor_reset reason=version_or_shape cursor_version=%r",
+            data.get("v") if isinstance(data, dict) else None,
+        )
+        return empty
+    return data
+
+
+def _plan_batch(
+    queues: list[tuple[str, list[str]]], state: dict, cap: Optional[int]
+) -> tuple[list[str], str, dict]:
+    """Select one checkpointed batch and the checkpoint that follows it.
+
+    Traversal order is the sitemap's own order, round-robin across sitemaps,
+    resuming each queue immediately after the last URL consumed from it. A
+    checkpoint is a URL, not an integer offset: sitemap head insertions move
+    every offset but leave the URL itself in place, so they cannot shift the
+    resume point. If the checkpoint URL disappears, only that queue restarts
+    (logged); the other queues keep their progress and nothing deadlocks.
+    """
+    cycle = int(state.get("cycle") or 0)
+    checkpoint_missing: list[str] = []
+    restarted_cycle = False
+
+    while True:
+        stored = state.get("queues") or {}
+        positions: dict[str, int] = {}
+        for sitemap_url, urls in queues:
+            after = stored.get(sitemap_url) or ""
+            position = 0
+            if after:
+                try:
+                    position = urls.index(after) + 1
+                except ValueError:
+                    checkpoint_missing.append(sitemap_url)
+                    position = 0
+            positions[sitemap_url] = position
+
+        selected: list[str] = []
+        while cap is None or len(selected) < cap:
+            progressed = False
+            for sitemap_url, urls in queues:
+                position = positions[sitemap_url]
+                if position < len(urls):
+                    selected.append(urls[position])
+                    positions[sitemap_url] = position + 1
+                    progressed = True
+                    if cap is not None and len(selected) >= cap:
+                        break
+            if not progressed:
+                break
+
+        exhausted = all(
+            positions[sitemap_url] >= len(urls)
+            for sitemap_url, urls in queues
+        )
+        if selected or not exhausted:
+            break
+        # The checkpoint sits at the end of a completed cycle: start the next
+        # cycle now instead of returning an empty batch and waiting a day.
+        cycle += 1
+        state = {"v": CURSOR_VERSION, "cycle": cycle, "queues": {}}
+        restarted_cycle = True
+
+    next_queues: dict[str, str] = {}
+    for sitemap_url, urls in queues:
+        position = positions[sitemap_url]
+        if urls and position > 0:
+            next_queues[sitemap_url] = urls[position - 1]
+
+    remaining = sum(
+        max(0, len(urls) - positions[sitemap_url])
+        for sitemap_url, urls in queues
+    )
+    if exhausted:
+        # The batch reached the end of every sitemap: persist a fresh cycle so
+        # the next run starts at the head, rather than doing a discovery pass
+        # just to notice the cycle is over.
+        cursor_state = {
+            "v": CURSOR_VERSION,
+            "cycle": cycle + 1,
+            "queues": {},
+        }
+    else:
+        cursor_state = {
+            "v": CURSOR_VERSION,
+            "cycle": cycle,
+            "queues": next_queues,
+        }
+
+    plan = {
+        "cycle": cycle,
+        "remaining": remaining,
+        "truncated": bool(remaining) and cap is not None and len(selected) >= cap,
+        "checkpoint_missing": checkpoint_missing,
+        "restarted_cycle": restarted_cycle,
+    }
+    return selected, json.dumps(cursor_state, sort_keys=True, separators=(",", ":")), plan
+
+
+# ------------------------------------------------------------------ priority
+
+
+def _slugify(text: str) -> str:
+    """Tracker title -> the slug shape Tubi uses in a detail-page URL."""
+    value = unicodedata.normalize("NFKD", str(text or ""))
+    value = value.encode("ascii", "ignore").decode("ascii").lower()
+    value = value.replace("&", " and ")
+    return re.sub(r"[^a-z0-9]+", "-", value).strip("-")
+
+
+def _url_slug(url: str) -> str:
+    path = urlparse(url).path.rstrip("/")
+    return path.rsplit("/", 1)[-1] if "/" in path else ""
+
+
+def _priority_parts(hint) -> tuple[str, Optional[str]]:
+    """Accept ``(title, year, content_type)``, ``(title, year)`` or a dict."""
+    if isinstance(hint, dict):
+        return str(hint.get("title") or ""), hint.get("content_type")
+    if isinstance(hint, (tuple, list)) and hint:
+        title = str(hint[0] or "")
+        content_type = hint[2] if len(hint) > 2 else None
+        return title, content_type
+    return str(hint or ""), None
+
+
+def _priority_urls(entries: list[str], hints, limit: int) -> list[str]:
+    """Candidate detail URLs for locally tracked titles, matched by slug.
+
+    This is deliberately only a *candidate* selector: the slug says the URL
+    probably names the same title, and the existing title/year mapping still
+    decides identity after the page is parsed. Series and movies are matched
+    only against their own path kind, so a movie cannot be fetched because a
+    series shares its name.
+    """
+    if not hints or not entries or not limit or limit <= 0:
+        return []
+    by_kind: dict[str, dict[str, list[str]]] = {"movies": {}, "series": {}}
+    for url in entries:
+        parsed = urlparse(url)
+        match = DETAIL_PATH_RE.match(parsed.path)
+        if match is None:
+            continue
+        by_kind[match.group(1)].setdefault(_url_slug(url), []).append(url)
+
+    selected: list[str] = []
+    seen: set[str] = set()
+    for hint in hints:
+        title, content_type = _priority_parts(hint)
+        slug = _slugify(title)
+        if not slug:
+            continue
+        kind = str(content_type or "").strip().lower()
+        kinds = ["series"] if kind == "series" else ["movies"] if kind == "movie" else [
+            "movies", "series"
+        ]
+        for bucket in kinds:
+            for url in by_kind[bucket].get(slug, []):
+                if url in seen:
+                    continue
+                seen.add(url)
+                selected.append(url)
+                if len(selected) >= limit:
+                    logger.info(
+                        "tubi_priority_truncated matched=%d limit=%d",
+                        len(selected), limit,
+                    )
+                    return selected
+    return selected
 
 
 def _diagnostic_prefix(text: str, limit: int = 200) -> str:

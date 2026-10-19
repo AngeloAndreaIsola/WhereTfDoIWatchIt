@@ -87,14 +87,17 @@ ever deactivates anything.
 
 Failure handling: all offer writes for one refresh unit run in a single
 transaction, and the whole discovery unit (``ProviderContent`` upserts +
-mapping) runs in an earlier one. Any failure rolls every write back
-(including cursor writes) and marks the created runs failed, so a broken
-refresh can never leave a partially-written or partially deactivated state.
-Fetch failures happen before any SyncRun exists (SyncRun attribution —
-provider + country — is only derivable from the response) and are re-raised
-for the caller to record; nothing was written, so existing offers remain
-untouched. A fetch that raises is therefore always distinguishable from a
-fetch that succeeds with zero offers.
+mapping) runs in an earlier one. Any offer/discovery failure rolls those
+writes back and marks the created runs failed, so a broken refresh can never
+leave a partially-written or partially deactivated state. A catalogue
+checkpoint is written only after that work commits and only for a successful
+batch; a checkpoint-write failure fails the refresh (the offers are already
+committed, and the previous checkpoint remains, so the next run retries rather
+than skips). Fetch failures happen before any SyncRun exists
+(SyncRun attribution — provider + country — is only derivable from the
+response) and are re-raised for the caller to record; nothing was written, so
+existing offers remain untouched. A fetch that raises is therefore always
+distinguishable from a fetch that succeeds with zero offers.
 """
 from __future__ import annotations
 
@@ -226,7 +229,7 @@ class AvailabilityRefreshService:
         return self._persist(result, tmdb_id=movie.tmdb_id)
 
     def refresh_catalogue(self, *, provider=None, country=None, cursor=None,
-                          pages: int = 1) -> RefreshResult:
+                          pages: int = 1, priority=None) -> RefreshResult:
         """Refresh a catalogue-capable source's whole catalogue.
 
         Scope comes from the source's declared capabilities: a single supported
@@ -258,6 +261,27 @@ class AvailabilityRefreshService:
         resolved_country = self._resolve_scope(
             "country", country, capabilities.supported_countries
         )
+        provider_row = self._provider(resolved_provider) if resolved_provider else None
+        country_row = (
+            Country.objects.filter(
+                code=str(resolved_country).upper(), enabled=True
+            ).first()
+            if resolved_country
+            else None
+        )
+        source_row = Source.objects.filter(slug=self.source.slug).first()
+        # Resume from the durable checkpoint unless the caller supplied one
+        # explicitly (JustWatch's partition coordinator does). A source that
+        # never writes a cursor is unaffected: its row is absent or empty.
+        # No Source row means no checkpoint can exist; the row is created by
+        # the persistence step only after a successful fetch.
+        if cursor is None and source_row is not None and provider_row is not None \
+                and country_row is not None:
+            stored = self.cursors.get(
+                provider=provider_row, source=source_row, country=country_row
+            )
+            if stored is not None and stored.cursor:
+                cursor = stored.cursor
         fetch_kwargs = {
             "provider": resolved_provider,
             "country": resolved_country,
@@ -265,6 +289,8 @@ class AvailabilityRefreshService:
         }
         if pages is not None and accepts_kwarg(self.source.fetch, "pages"):
             fetch_kwargs["pages"] = pages
+        if priority is not None and accepts_kwarg(self.source.fetch, "priority"):
+            fetch_kwargs["priority"] = priority
         try:
             result = self.source.fetch(None, **fetch_kwargs)
         except Exception as exc:
@@ -273,7 +299,32 @@ class AvailabilityRefreshService:
                 self.source.slug, None, exc,
             )
             raise
-        return self._persist(result, tmdb_id=None)
+        refresh_result = self._persist(result, tmdb_id=None, persist_cursor=False)
+        # Progress is a property of the *batch*, not of the offers it happened
+        # to produce: a successful batch that maps zero titles still advances
+        # the checkpoint. Writing it after the offer transaction means a
+        # failed batch leaves the previous checkpoint intact and retries the
+        # same window instead of silently skipping it.
+        if result.cursor and provider_row is not None and country_row is not None:
+            try:
+                if source_row is None:
+                    source_row = Source.objects.get(slug=self.source.slug)
+                self.cursors.set(
+                    provider=provider_row, source=source_row,
+                    country=country_row, cursor=result.cursor,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "availability_cursor_persist_failed source=%s provider=%s "
+                    "country=%s error=%s",
+                    self.source.slug, resolved_provider, resolved_country, exc,
+                )
+                raise
+            logger.info(
+                "availability_cursor_advanced source=%s provider=%s country=%s",
+                self.source.slug, resolved_provider, resolved_country,
+            )
+        return refresh_result
 
     @staticmethod
     def _resolve_scope(kind, requested, supported):
@@ -530,7 +581,7 @@ class AvailabilityRefreshService:
             ],
         )
 
-    def _persist(self, result, *, tmdb_id=None) -> RefreshResult:
+    def _persist(self, result, *, tmdb_id=None, persist_cursor=True) -> RefreshResult:
         capabilities = self.source.capabilities
 
         source, _ = Source.objects.get_or_create(
@@ -689,15 +740,13 @@ class AvailabilityRefreshService:
                         run.pk, may_deactivate, len(group), len(group),
                         group_created, group_updated, group_deactivated,
                     )
-                if result.cursor:
-                    # Cursor persistence is this layer's job; it commits with the
-                    # same transaction and only when a run scope exists to own it.
-                    #
-                    # A catalogue cursor may be a partition-namespaced map rather
-                    # than a bare offset. It is written verbatim so this layer
-                    # stays unaware of how a source encodes its own partitions,
-                    # and so the sibling partitions a map holds are preserved
-                    # instead of being overwritten by one partition's progress.
+                if persist_cursor and result.cursor:
+                    # Title-targeted refreshes keep the legacy contract: the
+                    # cursor commits with the offer transaction and only when a
+                    # run scope exists to own it. Catalogue refreshes persist
+                    # theirs in ``refresh_catalogue`` instead, because a
+                    # successful batch with zero mapped offers has no run at
+                    # all and must still advance.
                     for _run, provider, country, _group in runs:
                         self.cursors.set(
                             provider=provider, source=source, country=country,

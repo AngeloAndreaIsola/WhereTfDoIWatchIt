@@ -54,7 +54,7 @@ from availability.services.refresh import (
     RefreshResult,
 )
 from availability.sources import DEFAULT_SOURCE_SLUG, source_registry
-from availability.sources.base import SourceFetchError
+from availability.sources.base import SourceFetchError, accepts_kwarg
 
 from ..models import (
     CatalogueRefreshRequest,
@@ -738,6 +738,19 @@ def stale_catalogue_sources(now=None) -> list[str]:
     )
 
 
+def _catalogue_priority_hints(source):
+    """Tracked titles the source may use to prioritise discovery candidates.
+
+    Only sources that declare ``supports_priority_hints`` receive hints, so
+    every other collector keeps its exact previous call shape. The hints are
+    plain values (title, year, content type); the source never reads the
+    database and still resolves identity through its normal mapping path.
+    """
+    if not getattr(source.capabilities, "supports_priority_hints", False):
+        return None
+    return list(Movie.objects.values_list("title", "year", "content_type"))
+
+
 def _default_catalogue_runner(
     slug, source, refresh_service, availability_refreshes=()
 ):
@@ -750,6 +763,9 @@ def _default_catalogue_runner(
     caller has one uniform contract regardless of which runner ran.
     """
     service = refresh_service or AvailabilityRefreshService(source=source)
+    hints = _catalogue_priority_hints(source)
+    if hints is not None and accepts_kwarg(service.refresh_catalogue, "priority"):
+        return service.refresh_catalogue(priority=hints)
     return service.refresh_catalogue()
 
 

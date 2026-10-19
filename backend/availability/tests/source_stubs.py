@@ -43,9 +43,14 @@ class StubSource:
         if source_type is not None:
             self.source_type = source_type
         self.fetches = []
+        self.fetch_calls = []
 
     def fetch(self, content=None, *, provider=None, country=None, cursor=None):
         self.fetches.append(content)
+        self.fetch_calls.append(
+            {"content": content, "provider": provider, "country": country,
+             "cursor": cursor}
+        )
         if self.error is not None:
             raise self.error
         return self.response

@@ -304,6 +304,41 @@ class OptionalKwargCompatibilityTests(TestCase):
         self.assertNotIn("pages", seen)
 
 
+class CataloguePriorityHintTests(TestCase):
+    """Tracked-title hints reach only sources that declare the capability."""
+
+    def test_a_priority_capable_source_receives_tracked_titles(self):
+        from tracker.models import Movie
+
+        Movie.objects.create(tmdb_id=103, title="Taxi Driver", year=1976)
+        seen = {}
+
+        class Service:
+            def refresh_catalogue(self, *, priority=None):
+                seen["priority"] = priority
+                return RefreshResult()
+
+        br._default_catalogue_runner(
+            "tubi", source_registry.get("tubi"), Service()
+        )
+
+        self.assertIn(("Taxi Driver", 1976, "movie"), seen["priority"])
+
+    def test_a_source_without_the_capability_gets_no_priority_kwarg(self):
+        seen = {}
+
+        class Service:
+            def refresh_catalogue(self):
+                seen["called"] = True
+                return RefreshResult()
+
+        br._default_catalogue_runner(
+            "abc_iview", source_registry.get("abc_iview"), Service()
+        )
+
+        self.assertTrue(seen["called"])
+
+
 class WorkerToGraphQLCountryTests(TestCase):
     """The whole chain, ending at the bytes JustWatch would receive.
 
