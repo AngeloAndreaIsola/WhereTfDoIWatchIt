@@ -12,7 +12,7 @@ Fixture catalogue (recorded pages):
     movies-2    i-robot (duplicate entry, same URL as movies-1)
     tv-shows-1  blue-water-high, 1-800-missing, ancient-aliens
 
-    i-robot             movie, 2004, 720P, window 2026-09-15 .. 2026-10-15
+    i-robot             movie, 2004, 720P, window 2026-09-15 .. 2035-10-15
     permission          movie, 2018, 720P, open-ended window
     blue-water-high     series 02185, season 1 with 4 episodes (576P)
     1-800-missing       series 01076, no episode observable -> content only
@@ -37,7 +37,7 @@ from availability.sources import (
     TubiSource,
     source_registry,
 )
-from availability.sources.tubi import TubiClient, _state_from_html
+from availability.sources.tubi import TubiClient, _state_from_html, _xml_locs
 
 from .tubi_fixtures import (
     ABOUT,
@@ -46,6 +46,7 @@ from .tubi_fixtures import (
     CLEARCUT,
     I_ROBOT,
     MOVIES_1,
+    MOVIES_2,
     ONE_EIGHT_HUNDRED,
     PERMISSION,
     SITEMAP_INDEX_URL,
@@ -176,6 +177,105 @@ class SitemapDiscoveryTests(SimpleTestCase):
         with self.assertRaisesMessage(SourceFetchError, "sitemap root"):
             source.fetch()
 
+    def test_image_locations_are_never_title_pages(self):
+        """The real sitemap nests <image:loc> under every <url><loc>.
+
+        Only the direct <loc> child is a page URL. Before this guard, half of
+        every batch was poster assets (250 detail pages from a 500 cap).
+        """
+        source, api = build_source(max_contents=None)
+        queues, stats = source._title_queues()
+
+        title_urls = [url for _sitemap, urls in queues for url in urls]
+        self.assertNotIn("https://canvas-lb.tubitv.com/opts/poster-i-robot", title_urls)
+        self.assertTrue(all("/movies/" in url or "/series/" in url for url in title_urls))
+        self.assertEqual(stats["title_urls"], 6)
+        # Four movie <url> entries (one is /about), one duplicate, three series.
+        self.assertEqual(stats["sitemap_locs"], 8)
+        self.assertEqual(stats["non_title_filtered"], 1)
+        self.assertEqual(stats["duplicates_removed"], 1)
+
+        source.fetch()
+        self.assertNotIn(
+            "https://canvas-lb.tubitv.com/opts/poster-i-robot", api.requests
+        )
+
+    def test_the_cap_counts_title_pages_not_asset_locations(self):
+        source, api = build_source(max_contents=2)
+        source.fetch()
+        # The fixture carries three <image:loc> assets; they consume no slot.
+        self.assertEqual(len(api.detail_requests), 2)
+        self.assertEqual(api.detail_requests, [I_ROBOT, BLUE_WATER_HIGH])
+
+    def test_a_title_sitemap_with_no_title_urls_is_a_failure(self):
+        source, api = build_source()
+        empty = (
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+            "<url><loc>https://tubitv.com/about</loc></url></urlset>"
+        )
+        for sitemap_url in (MOVIES_1, MOVIES_2, TV_SHOWS_1):
+            api.sitemaps[sitemap_url] = empty
+        with self.assertRaisesMessage(SourceFetchError, "no title URLs"):
+            source.fetch()
+
+    def test_direct_loc_child_only(self):
+        document = (
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" '
+            'xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">'
+            "<url><loc>https://tubitv.com/movies/1/one</loc>"
+            "<image:image><image:loc>https://canvas/one</image:loc>"
+            "</image:image></url></urlset>"
+        )
+        self.assertEqual(
+            _xml_locs(document, expect="urlset", url="synthetic"),
+            ["https://tubitv.com/movies/1/one"],
+        )
+
+
+class SitemapRetryTests(SimpleTestCase):
+    class FlakyRequester:
+        def __init__(self, api, fragment, failures):
+            self.api = api
+            self.fragment = fragment
+            self.failures = failures
+            self.calls = 0
+
+        def __call__(self, url):
+            if self.fragment in url:
+                self.calls += 1
+                if self.calls <= self.failures:
+                    raise requests.ConnectionError("transient flap")
+            return self.api(url)
+
+    def test_a_transient_sitemap_failure_is_retried(self):
+        api = FakeTubiApi()
+        flaky = self.FlakyRequester(api, MOVIES_1, failures=2)
+        source = TubiSource(client=TubiClient(requester=flaky, retries=2))
+
+        result = source.fetch()
+
+        self.assertEqual(flaky.calls, 3)
+        self.assertEqual(len(result.contents), TOTAL_CONTENTS)
+
+    def test_a_permanent_sitemap_failure_stops_after_bounded_retries(self):
+        api = FakeTubiApi()
+        flaky = self.FlakyRequester(api, MOVIES_1, failures=99)
+        source = TubiSource(client=TubiClient(requester=flaky, retries=2))
+
+        with self.assertRaisesMessage(SourceFetchError, "transient flap"):
+            source.fetch()
+        self.assertEqual(flaky.calls, 3)
+
+    def test_a_malformed_sitemap_is_retried_then_fails_loudly(self):
+        api = FakeTubiApi()
+        api.sitemaps[MOVIES_1] = "<urlset><loc>not closed"
+        source = TubiSource(client=TubiClient(requester=api, retries=2))
+
+        with self.assertRaisesMessage(SourceFetchError, "malformed sitemap"):
+            source.fetch()
+        # One initial attempt plus two retries, and never an empty success.
+        self.assertEqual(api.requests.count(MOVIES_1), 3)
+
 
 class CatalogueParsingTests(SimpleTestCase):
     @classmethod
@@ -243,7 +343,7 @@ class CatalogueParsingTests(SimpleTestCase):
         self.assertEqual(offer.country, "US")
         self.assertEqual(offer.provider_url, I_ROBOT)
         self.assertEqual(offer.source_record_id, "578912")
-        self.assertEqual(offer.source_version, "tubi-ssr-v1")
+        self.assertEqual(offer.source_version, "tubi-ssr-v2")
         self.assertIsNone(offer.tmdb_id)
         self.assertIsNone(offer.season_number)
         self.assertIsNone(offer.episode_number)
@@ -255,7 +355,7 @@ class CatalogueParsingTests(SimpleTestCase):
             offer.available_from, dt.datetime(2026, 9, 15, 7, 0, tzinfo=dt.timezone.utc)
         )
         self.assertEqual(
-            offer.available_until, dt.datetime(2026, 10, 15, 6, 59, tzinfo=dt.timezone.utc)
+            offer.available_until, dt.datetime(2035, 10, 15, 6, 59, tzinfo=dt.timezone.utc)
         )
 
     def test_series_offers_cover_series_season_and_its_episodes(self):
@@ -399,7 +499,7 @@ class OfferWindowTests(SimpleTestCase):
     def test_an_offer_whose_window_has_closed_is_skipped(self):
         source, api = build_source()
         api.pages[I_ROBOT] = api.pages[I_ROBOT].replace(
-            "2026-10-15T06:59:00.000Z", "2020-01-01T00:00:00.000Z"
+            "2035-10-15T06:59:00.000Z", "2020-01-01T00:00:00.000Z"
         )
         with self.assertLogs("availability.sources.tubi", level="INFO") as logs:
             result = source.fetch()

@@ -74,17 +74,31 @@ together at one frequency.
 
 #### Tubi scheduling notes
 
-- **Bounded walk**: a run requests at most `DEFAULT_MAX_CONTENTS` (500) title
-  pages, selected round-robin across the movie and series sitemaps so even a
-  capped run mixes both types. Hitting the bound logs
-  `tubi_catalogue_truncated`; to walk the whole ~100k-URL catalogue (hours of
-  requests at 0.1 s apart) raise that constant in
-  `backend/availability/sources/tubi.py` — it is a code-level default, not a
-  CLI flag.
+- **Bounded walk**: a run requests at most `DEFAULT_MAX_CONTENTS` (500) **title
+  pages**. Sitemap discovery first keeps only the direct `<loc>` of each
+  `<url>` entry and drops image/video extension assets, so a 500-page bound now
+  buys 500 titles instead of 250 titles plus 250 posters. Hitting the bound
+  logs `tubi_catalogue_truncated title_urls=<n> scanned=<n>
+  max_contents=<n>`.
+- **Sitemap retries**: a sitemap document is retried twice with linear backoff
+  on transport or parse failure. After the bounded retries the run still fails
+  loudly; a malformed or consent page is never converted into an empty
+  "successful" catalogue. Diagnostics include status/content type/size and a
+  short, sanitized body prefix (never cookies or auth headers).
 - **US egress required**: Tubi geo-blocks non-US callers (a GDPR redirect
   answers instead of the catalogue). From an EU egress the run fails cleanly
   with `SourceFetchError` → exit `1`/`2` and no writes, never an empty
   "successful" catalogue.
+- **Absence is logged, not fatal**: a stale title that answers with the SPA
+  shell (`tubi_content_missing`), an offer window that is closed or has not
+  opened (`tubi_offer_expired`, `tubi_offer_not_yet_available`), and a series
+  with no episode on its page (`tubi_content_only`) skip that row only. A walk
+  that observes nothing at all logs `tubi_catalogue_nothing_observed` as a
+  warning; only transport/parse failures (missing `window.__data`, malformed
+  sitemap, undecodable state) fail the source.
+- **Never authoritative**: every Tubi run reports
+  `authoritative=False`/`complete_snapshot=False`, so a truncated or partially
+  observed run deactivates no offer and removes no catalogue row.
 
 #### Prime Video scheduling notes
 
@@ -115,16 +129,6 @@ together at one frequency.
   `prime_video_categories_unavailable` and continues with the remaining seeds;
   a missing hydration marker, an unreadable payload, or a transport failure
   raises `SourceFetchError` and fails the source (exit `1`/`2`).
-- **Absence is logged, not fatal**: a stale title that answers with the SPA
-  shell (`tubi_content_missing`), an offer window that is closed or has not
-  opened (`tubi_offer_expired`, `tubi_offer_not_yet_available`), and a series
-  with no episode on its page (`tubi_content_only`) skip that row only. A walk
-  that observes nothing at all logs `tubi_catalogue_nothing_observed` as a
-  warning; only transport/parse failures (missing `window.__data`, malformed
-  sitemap, undecodable state) fail the source.
-- **Never authoritative**: every Tubi run reports
-  `authoritative=False`/`complete_snapshot=False`, so a truncated or partially
-  observed run deactivates no offer and removes no catalogue row.
 
 #### RaiPlay scheduling notes
 

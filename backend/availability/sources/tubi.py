@@ -5,7 +5,8 @@ discovery is *sitemap-driven* rather than API- or index-driven:
 
     https://tubitv.com/sitemap.xml (sitemap index)
         -> only the title sitemaps  sitemaps/movies-*.xml, sitemaps/tv-shows-*.xml
-        -> one detail URL per entry (round-robin across sitemaps, bounded)
+        -> direct <loc> page URLs only (image/video assets are filtered out)
+        -> a bounded, interleaved batch across the title sitemaps
         -> ``window.__data`` embedded in each detail page's SSR HTML
         -> one ``DiscoveredContent`` per title + ``ProviderOffer`` at every
            granularity the embedded state actually carries
@@ -92,13 +93,16 @@ Product semantics, all documented rather than papered over:
   ``authoritative=False`` / ``complete_snapshot=False`` (absence never
   deactivates) even though ``sync_mode`` is ``FULL`` — one fetch reports the
   whole configured window.
+- Sitemap responses are retried a bounded number of times with backoff. A
+  malformed or non-XML answer still fails loudly after the retries; it is
+  never converted into an empty-but-successful catalogue.
 - **No TMDb ids** (``supports_tmdb_ids=False``): Tubi publishes ``imdb_id``,
   recorded in the content metadata as an external id for reference, while
   mapping happens in the refresh service by local title/year matching.
-- **Runtime bound**: at 10,000 entries per sitemap the full catalogue is ~100k
-  detail pages of 194 kB..2 MB each. ``DEFAULT_MAX_CONTENTS`` therefore bounds
-  one run (entries are interleaved across sitemaps so a capped run still mixes
-  movies and series) and the truncation is logged; see ``docs/CRON.md``.
+- **Runtime bound**: at 82,386 title pages the full catalogue is ~82k
+  requests of 194 kB..2 MB each. ``DEFAULT_MAX_CONTENTS`` therefore bounds one
+  run (entries are interleaved so a capped run still mixes movies and series)
+  and the truncation is logged; see ``docs/CRON.md``.
 """
 from __future__ import annotations
 
@@ -137,12 +141,13 @@ DEFAULT_TIMEOUT = 30
 # Politeness gap between live requests only (tests route through ``requester``
 # and never sleep): one catalogue walk hits hundreds of detail pages.
 DEFAULT_DELAY = 0.1
-# Safety bound on one run. The full title catalogue is ~100k detail pages of
-# 194 kB..2 MB; the sitemaps are ordered by the provider, newest ``lastmod``
-# first, so a capped walk still covers current titles. ``None`` disables the
-# bound (tests use it; production must not).
+# Safety bound on one run, counted in **title pages** (image/video sitemap
+# locations are filtered out first). The full title catalogue is ~82k detail
+# pages of 194 kB..2 MB; the sitemaps are ordered by the provider, newest
+# ``lastmod`` first, so a capped walk still covers current titles. ``None``
+# disables the bound (tests use it; production must not).
 DEFAULT_MAX_CONTENTS = 500
-SOURCE_VERSION = "tubi-ssr-v1"
+SOURCE_VERSION = "tubi-ssr-v2"
 STATE_MARKER = "window.__data"
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -181,23 +186,55 @@ class TubiClient:
     :func:`_state_from_html`, not to the client.
     """
 
-    def __init__(self, requester=None, timeout=DEFAULT_TIMEOUT, delay=DEFAULT_DELAY):
+    def __init__(self, requester=None, timeout=DEFAULT_TIMEOUT, delay=DEFAULT_DELAY,
+                 retries=2, retry_backoff=None):
         self.requester = requester
         self.timeout = timeout
         self.delay = delay
+        # Sitemap documents are the discovery entry point: a transient
+        # transport or parse failure must not turn a whole run into a false
+        # "nothing found". Retries are bounded and never applied to a
+        # successful document. An injected requester (tests) defaults to no
+        # sleep; live HTTP defaults to a short linear backoff.
+        self.retries = max(0, int(retries))
+        if retry_backoff is None:
+            retry_backoff = 0.0 if requester is not None else 1.0
+        self.retry_backoff = max(0.0, float(retry_backoff))
 
     def sitemap_index(self) -> list[str]:
         """Child ``<loc>`` URLs of the sitemap index."""
-        return _xml_locs(self._get(SITEMAP_INDEX_URL), expect="sitemapindex",
-                         url=SITEMAP_INDEX_URL)
+        return self._xml(SITEMAP_INDEX_URL, expect="sitemapindex")
 
     def sitemap_entries(self, url: str) -> list[str]:
-        """``<loc>`` URLs of one sitemap (title order, provider's own order)."""
-        return _xml_locs(self._get(url), expect="urlset", url=url)
+        """``<url>`` page URLs of one sitemap (provider order, no image locs)."""
+        return self._xml(url, expect="urlset")
 
     def detail_page(self, url: str) -> str:
         """Raw HTML of one detail page (shell pages included)."""
         return self._get(url)
+
+    def _xml(self, url: str, *, expect: str) -> list[str]:
+        """Fetch and parse one sitemap document, retrying transient failures."""
+        attempts = self.retries + 1
+        for attempt in range(1, attempts + 1):
+            try:
+                return _xml_locs(self._get(url), expect=expect, url=url)
+            except SourceFetchError as exc:
+                if attempt >= attempts:
+                    logger.error(
+                        "tubi_sitemap_failed url=%s attempts=%d error=%s",
+                        url, attempt, exc,
+                    )
+                    raise
+                delay = self.retry_backoff * attempt
+                logger.warning(
+                    "tubi_sitemap_retry url=%s attempt=%d/%d backoff_s=%.1f "
+                    "error=%s",
+                    url, attempt, attempts, delay, exc,
+                )
+                if delay:
+                    time.sleep(delay)
+        raise AssertionError("unreachable")
 
     def _get(self, url: str) -> str:
         try:
@@ -223,7 +260,14 @@ class TubiClient:
             timeout=self.timeout,
         )
         if response.status_code != 200:
-            raise SourceFetchError(f"Tubi returned HTTP {response.status_code} for {url}")
+            # Diagnostic only: status/content type/size plus a short,
+            # whitespace-collapsed prefix. Never cookies or auth headers.
+            body = _diagnostic_prefix(response.text)
+            raise SourceFetchError(
+                f"Tubi returned HTTP {response.status_code} for {url} "
+                f"(content_type={response.headers.get('Content-Type', '')!r}, "
+                f"bytes={len(response.content)}, prefix={body!r})"
+            )
         return response.text
 
 
@@ -267,31 +311,33 @@ class TubiSource:
         # reports its own (tubi, US). cursor is accepted but unused: the
         # sitemaps offer no resumable server-side cursor, so one fetch reports
         # the whole configured window instead of inventing a token.
-        entries = self._entries()
+        queues, stats = self._title_queues()
+        entries = list(dict.fromkeys(_interleave([urls for _url, urls in queues])))
         scanned = entries if self.max_contents is None else entries[: self.max_contents]
         if len(scanned) < len(entries):
             logger.warning(
-                "tubi_catalogue_truncated entries=%d scanned=%d max_contents=%d",
+                "tubi_catalogue_truncated title_urls=%d scanned=%d max_contents=%d",
                 len(entries), len(scanned), self.max_contents,
             )
 
         contents: list[DiscoveredContent] = []
         offers: list[ProviderOffer] = []
-        observed = 0
-        skipped = 0
+        fetched = observed = shelled = skipped = 0
         for url in scanned:
             match = DETAIL_PATH_RE.match(urlparse(url).path)
             if match is None:
-                # A non-title URL in the index: editorial surface, not a
-                # catalogue item. It is never even requested.
+                # Defensive: ``_title_queues`` already filtered these, so this
+                # can only happen if a caller hands the source a raw list.
                 logger.info("tubi_entry_skipped url=%s reason=not_a_title_url", url)
                 skipped += 1
                 continue
+            fetched += 1
             html = self.client.detail_page(url)
-            state = _state_from_html(html, url=url)
-            if state is None:
+            page_state = _state_from_html(html, url=url)
+            if page_state is None:
                 # 200 SPA shell: the title is not observable right now.
                 logger.info("tubi_content_missing url=%s reason=spa_shell", url)
+                shelled += 1
                 skipped += 1
                 continue
             parsed = self._parse_page(
@@ -299,7 +345,7 @@ class TubiSource:
                 raw_id=match.group(2),
                 url=url,
                 html=html,
-                state=state,
+                state=page_state,
             )
             if parsed is None:
                 skipped += 1
@@ -308,6 +354,18 @@ class TubiSource:
             contents.append(discovered)
             offers.extend(page_offers)
             observed += 1
+
+        unexpected = max(0, fetched - observed - shelled)
+        logger.info(
+            "tubi_catalogue_summary sitemap_locs=%d title_urls=%d "
+            "non_title_filtered=%d duplicates_removed=%d batch_selected=%d "
+            "pages_fetched=%d pages_observed=%d shell_pages=%d "
+            "unexpected_pages=%d contents=%d offers=%d",
+            stats["sitemap_locs"], stats["title_urls"],
+            stats["non_title_filtered"], stats["duplicates_removed"], len(scanned),
+            fetched, observed, shelled, unexpected,
+            len(contents), len(offers),
+        )
 
         if scanned and observed == 0:
             # Everything came back as a shell/unsupported page: that reads like
@@ -329,14 +387,49 @@ class TubiSource:
 
     # ------------------------------------------------------------------ walk
 
-    def _entries(self) -> list[str]:
-        """Title URLs from the index, interleaved and de-duplicated."""
+    def _title_queues(self) -> tuple[list[tuple[str, list[str]]], dict]:
+        """Valid title URLs per title sitemap, de-duplicated across sitemaps.
+
+        Only the direct ``<loc>`` child of each ``<url>`` entry is a page URL;
+        the image/video extension tags carry asset URLs under their own
+        ``<loc>``/``thumbnail_loc>`` and are never fetched. Keeping the queues
+        separate (rather than flattening immediately) is what keeps an
+        interleaved batch mixed across movies and series.
+        """
         index = self.client.sitemap_index()
-        sitemaps = [url for url in index if TITLE_SITEMAP_RE.match(url)]
+        sitemaps = list(dict.fromkeys(
+            url for url in index if TITLE_SITEMAP_RE.match(url)
+        ))
         if not sitemaps:
             raise SourceFetchError("Tubi sitemap index lists no movie/series sitemaps")
-        queues = [self.client.sitemap_entries(url) for url in sitemaps]
-        return list(dict.fromkeys(_interleave(queues)))
+
+        stats = {
+            "sitemap_locs": 0,
+            "non_title_filtered": 0,
+            "duplicates_removed": 0,
+        }
+        seen: set[str] = set()
+        queues: list[tuple[str, list[str]]] = []
+        for sitemap_url in sitemaps:
+            kept: list[str] = []
+            for loc in self.client.sitemap_entries(sitemap_url):
+                stats["sitemap_locs"] += 1
+                if not _is_title_url(loc):
+                    stats["non_title_filtered"] += 1
+                    continue
+                if loc in seen:
+                    stats["duplicates_removed"] += 1
+                    continue
+                seen.add(loc)
+                kept.append(loc)
+            queues.append((sitemap_url, kept))
+
+        if not seen:
+            # A title sitemap that lists no title page at all is a broken
+            # discovery document, not a provider with an empty catalogue.
+            raise SourceFetchError("Tubi title sitemaps list no title URLs")
+        stats["title_urls"] = len(seen)
+        return queues, stats
 
     # ------------------------------------------------------------------ parse
 
@@ -561,6 +654,28 @@ def _interleave(queues: list[list[str]]) -> list[str]:
     return merged
 
 
+# ------------------------------------------------------------------ bounds
+
+
+def _is_title_url(url: str) -> bool:
+    """A Tubi movie/series detail page on the expected host and path."""
+    try:
+        parsed = urlparse(str(url).strip())
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    if (parsed.hostname or "").lower() not in ("tubitv.com", "www.tubitv.com"):
+        return False
+    return DETAIL_PATH_RE.match(parsed.path) is not None
+
+
+def _diagnostic_prefix(text: str, limit: int = 200) -> str:
+    """A short, single-line, secret-free prefix for a failure log."""
+    collapsed = re.sub(r"\s+", " ", str(text or "")).strip()
+    return collapsed[:limit]
+
+
 # ------------------------------------------------------------------ client
 
 
@@ -569,23 +684,42 @@ def _localname(tag) -> str:
 
 
 def _xml_locs(text: str, *, expect: str, url: str) -> list[str]:
-    """``<loc>`` values of a sitemap document, namespace-agnostic."""
+    """Page URLs of a sitemap document, namespace-agnostic and tag-scoped.
+
+    Only the ``<loc>`` that is a **direct child** of a ``<url>`` (urlset) or
+    ``<sitemap>`` (index) entry is a page URL. Descendant ``<loc>`` elements
+    belong to extension blocks — notably ``<image:image><image:loc>``, which
+    doubles the location count on Tubi's title sitemaps — and must never
+    consume a detail-page slot.
+    """
     try:
         root = ElementTree.fromstring(text)
     except ElementTree.ParseError as exc:
         # An HTML interstitial (GDPR consent, challenge page) parses as XML
         # only by accident: treat anything else as a failed retrieval.
-        raise SourceFetchError(f"Tubi returned a malformed sitemap for {url}") from exc
+        raise SourceFetchError(
+            f"Tubi returned a malformed sitemap for {url} "
+            f"(bytes={len(text)}, prefix={_diagnostic_prefix(text)!r})"
+        ) from exc
     root_name = _localname(root.tag)
     if root_name != expect:
         raise SourceFetchError(
-            f"Unexpected Tubi sitemap root {root_name!r} for {url} (want {expect!r})"
+            f"Unexpected Tubi sitemap root {root_name!r} for {url} "
+            f"(want {expect!r}, bytes={len(text)}, "
+            f"prefix={_diagnostic_prefix(text)!r})"
         )
-    locs = [
-        element.text.strip()
-        for element in root.iter()
-        if _localname(element.tag) == "loc" and element.text and element.text.strip()
-    ]
+    entry_name = "sitemap" if expect == "sitemapindex" else "url"
+    locs: list[str] = []
+    for entry in root:
+        if _localname(entry.tag) != entry_name:
+            continue
+        for child in entry:
+            if _localname(child.tag) != "loc":
+                continue
+            value = (child.text or "").strip()
+            if value:
+                locs.append(value)
+            break
     return locs
 
 
