@@ -10,7 +10,6 @@ from tracker.services.availability_reads import get_local_offers
 from tracker.services.watchability import (
     WatchabilityStatus,
     evaluate_watchability,
-    get_user_subscriptions,
 )
 
 logger = logging.getLogger(__name__)
@@ -132,9 +131,11 @@ def apply_composable_filters(
     # Convert queryset to list if it was evaluated
     movie_list = list(queryset)
 
-    # 6. Evaluate Watchability & Availability filters per item
-    if user_subscriptions is None:
-        user_subscriptions = get_user_subscriptions(preference.user_id if preference else 1)
+    # 6. Evaluate Watchability & Availability filters per item.
+    # ``user_subscriptions`` is an explicit override for tests/callers that
+    # simulate a user; when omitted, ``evaluate_watchability`` builds the
+    # access map from ``Subscription`` rows — the same path the detail page
+    # uses, so list surfaces cannot disagree with it.
 
     raw_providers = params.get("providers") or params.get("provider") or params.get("service") or ""
     provider_slug_set = None
@@ -156,6 +157,18 @@ def apply_composable_filters(
             quality_filter_set = {q.strip().lower() for item in raw_quality for q in str(item).split(",") if q.strip()}
         elif isinstance(raw_quality, str) and raw_quality.strip():
             quality_filter_set = {q.strip().lower() for q in raw_quality.split(",") if q.strip()}
+
+    # Access-type filter: subscription | addon | free | free_with_ads | rent | buy
+    raw_access = params.get("access") or params.get("access_type") or ""
+    access_filter_set = None
+    if raw_access:
+        if isinstance(raw_access, list):
+            values = [a for item in raw_access for a in str(item).split(",")]
+        else:
+            values = str(raw_access).split(",")
+        values = {v.strip().lower() for v in values if v.strip()}
+        if values and "all" not in values:
+            access_filter_set = values
 
     evaluated_items = []
     for m in movie_list:
@@ -206,6 +219,14 @@ def apply_composable_filters(
             elif status_filter == "watchable_vpn" and watch_res.status != WatchabilityStatus.WATCHABLE_VPN:
                 continue
             elif status_filter == "not_watchable" and watch_res.status != WatchabilityStatus.NOT_WATCHABLE:
+                continue
+
+        # Apply Access-Type Filter (subscription/addon/free/free_with_ads/rent/buy)
+        if access_filter_set:
+            present_types = {
+                str(t).lower() for t in (watch_res.access_flags or {}).get("present_access_types", [])
+            }
+            if not (present_types & access_filter_set):
                 continue
 
         # Apply Quality Filter

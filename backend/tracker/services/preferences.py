@@ -45,6 +45,7 @@ def resolve_preferences(user_id: int = 1) -> dict[str, Any]:
             "candidate_countries": list(row.candidate_countries),
             "current_country": row.current_country,
             "language_rule": row.language_rule,
+            "vpn_enabled": bool(row.vpn_enabled),
         }
     # No DB row, or empty row (migration-seeded) — use server-side defaults.
     return {
@@ -53,7 +54,26 @@ def resolve_preferences(user_id: int = 1) -> dict[str, Any]:
         "candidate_countries": list(defaults.get("candidate_countries", [])),
         "current_country": defaults.get("current_country", ""),
         "language_rule": defaults.get("language_rule", None),
+        "vpn_enabled": bool(defaults.get("vpn_enabled", False)),
     }
+
+
+def build_preference(user_id: int = 1) -> Preference:
+    """An (unsaved) ``Preference`` instance from :func:`resolve_preferences`.
+
+    Shared so every read path (detail verdict, access classification) scores
+    and filters with the exact same language rule, countries and VPN setting.
+    """
+    data = resolve_preferences(user_id=user_id)
+    return Preference(
+        user_id=user_id,
+        audio_languages=data.get("audio_languages") or [],
+        subtitle_languages=data.get("subtitle_languages") or [],
+        candidate_countries=data.get("candidate_countries") or [],
+        current_country=data.get("current_country") or "",
+        language_rule=data.get("language_rule"),
+        vpn_enabled=bool(data.get("vpn_enabled")),
+    )
 
 
 def resolve_source_country(user_id: int = 1) -> str | None:

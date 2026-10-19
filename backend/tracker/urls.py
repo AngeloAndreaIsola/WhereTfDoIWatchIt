@@ -14,6 +14,7 @@ urlpatterns = [
     path("movie/<int:tmdb_id>/refresh/", views.refresh_availability, name="movie-refresh"),
     path("movie/<int:tmdb_id>/language-info/", views.movie_language_info, name="movie-language-info"),
     path("providers/", views.providers_list, name="providers-list"),
+    path("providers/sync/", views.providers_sync, name="providers-sync"),
     path("providers/<str:slug>/toggle/", views.provider_toggle, name="provider-toggle"),
     path("providers/<str:slug>/refresh/", views.provider_refresh, name="provider-refresh"),
     path("providers/<str:slug>/", views.provider_delete, name="provider-delete"),

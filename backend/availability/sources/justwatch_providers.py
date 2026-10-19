@@ -57,6 +57,42 @@ PACKAGE_TO_PROVIDER_SLUG: dict[str, str] = {
     "raiplay": "raiplay",
     "mediasetplay": "mediaset_infinity",
     "bbc": "bbc_iplayer",
+    # Netherlands — verified against the live ``GetProviders`` catalogue. Kept
+    # per-service (never merged on display-name similarity): Videoland, Viaplay
+    # and Ziggo are different services that merely share a market.
+    "videoland": "videoland",
+    "viaplay": "viaplay",
+    "viaplaysports": "viaplay",  # Viaplay's sports tier; same brand/account.
+    "skyshowtime": "skyshowtime",
+    "canalplus": "canal_plus",
+    "nlziet": "nlziet",
+    "film1nl": "film1",
+    "hayu": "hayu",
+    "ziggo": "ziggo",
+    "npoplus": "npo_plus",
+    # Netherlands — niche / niche-adjacent VOD.
+    "picl": "picl",
+    "sooner": "sooner",
+    "iffrunleashed": "iffr_unleashed",
+    "pathe": "pathe_thuis",
+    # Apple TV *Store* (rent/buy) is a different package from Apple TV+ (svod);
+    # ``itunes`` is the storefront id, ``appletvplus`` the subscription above.
+    "itunes": "apple_tv_store",
+    # Specialist / documentary.
+    "curiositystream": "curiosity_stream",
+    "guidedoc": "guidedoc",
+    "docsville": "docsville",
+    "magellantv": "magellan_tv",
+    "broadwayhd": "broadwayhd",
+    "wowpresentsplus": "wow_presents_plus",
+    # Free / ad-supported (NL).
+    "justwatchtv": "justwatch_tv",
+    "filmzie": "filmzie",
+    "southpark": "south_park",
+    # Netflix Kids is a *curated Netflix profile*, not a separate service or
+    # entitlement: its titles are part of the Netflix subscription, so it maps
+    # to the one canonical ``netflix`` provider rather than inventing a second.
+    "netflixkids": "netflix",
     # Rakuten TV was Wuaki.tv; JustWatch still uses the pre-rebrand id. Its
     # NL offers are ad-supported (``ADS`` -> ``free_with_ads``), so mapping it
     # is what lets a free-with-ads title surface instead of disappearing.
@@ -95,6 +131,34 @@ PACKAGE_SHORT_NAMES: dict[str, dict[str, str]] = {
     "raiplay": {"IT": "rai"},
     "mediaset_infinity": {"IT": "msp"},
     "bbc_iplayer": {"GB": "bbc"},
+    # Netherlands — measured on the live endpoint (task: complete the
+    # subscriptions catalogue). Only NL is asserted here; other markets can be
+    # added as they are measured, which keeps an unmeasured market meaning
+    # "not walkable" rather than "walked with a guessed id".
+    "videoland": {"NL": "vil"},
+    "viaplay": {"NL": "vip"},
+    "skyshowtime": {"NL": "sst"},
+    "canal_plus": {"NL": "cpd"},
+    "nlziet": {"NL": "nlz"},
+    "film1": {"NL": "fm1"},
+    "hayu": {"NL": "hay"},
+    "ziggo": {"NL": "zig"},
+    "npo_plus": {"NL": "npp"},
+    "picl": {"NL": "pcl"},
+    "sooner": {"NL": "snr"},
+    "iffr_unleashed": {"NL": "ifr"},
+    "pathe_thuis": {"NL": "pth"},
+    "apple_tv_store": {"NL": "itu"},
+    "curiosity_stream": {"NL": "cts"},
+    "guidedoc": {"NL": "gdc"},
+    "docsville": {"NL": "dsv"},
+    "magellan_tv": {"NL": "mgl"},
+    "broadwayhd": {"NL": "bhd"},
+    "wow_presents_plus": {"NL": "wow"},
+    "justwatch_tv": {"NL": "jwt"},
+    "filmzie": {"NL": "fmz"},
+    "south_park": {"NL": "spk"},
+    "rakuten_tv": {"NL": "wki"},
 }
 
 

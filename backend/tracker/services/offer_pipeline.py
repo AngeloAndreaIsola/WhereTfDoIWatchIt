@@ -8,11 +8,12 @@ from django.conf import settings
 from tracker.models import Preference, Provider, ProviderCategory
 
 from .enrichment import enrich_movie_from_tmdb
-from .preferences import resolve_preferences
+from .preferences import build_preference, resolve_preferences
 from .ranking import rank_offers
 from .presentation import present_offer
-from .watchability import QUALIFYING_OFFER_TYPES, get_user_subscriptions
+from .watchability import QUALIFYING_OFFER_TYPES
 from .availability_reads import get_local_offers
+from .access import build_reach, build_user_access, classify_offer
 
 logger = logging.getLogger(__name__)
 
@@ -46,11 +47,26 @@ class OfficialOffersPipeline:
         return {p.slug: p for p in Provider.objects.all()}
 
     def _qualify_offers(self, offers, provider_map: dict[str, Provider], provider_slug: str):
+        """Keep every *catalogued, displayable* offer in this page's scope.
+
+        Entitlement is deliberately **not** decided here. This method answers
+        "which offers can the detail page show as concrete availability?" — a
+        real catalogue provider in the page's category scope — not "which can
+        the user play?". The access resolver (``tracker.services.access``)
+        annotates each kept offer with ``is_entitled``/``is_accessible`` so an
+        offer from a service the user has not selected still renders, muted and
+        labelled, instead of vanishing.
+
+        The gate this replaces dropped every offer from a provider the user had
+        not subscribed to. For a title whose only offers were on unowned
+        services (movie 194: Netflix/Max/Hulu, none selected) that emptied the
+        list while the source-first verdict still said ``available`` — so the
+        page showed "a source reported this title as available, but no current
+        offer could be displayed" about offers it had silently discarded.
+        """
         official_categories = self.provider_category_set
         if official_categories is None:
             official_categories = {ProviderCategory.OFFICIAL, ProviderCategory.BVOD, ProviderCategory.AVOD, ProviderCategory.TVOD, ProviderCategory.FAST}
-
-        user_subs = get_user_subscriptions(self.user_id)
 
         qualifying = []
         for o in offers:
@@ -61,25 +77,16 @@ class OfficialOffersPipeline:
             prov = provider_map.get(slug)
 
             if prov is None:
+                # An un-catalogued slug. Only the configured default provider is
+                # trusted, so a stray source slug cannot inject a phantom service.
                 if slug.lower() == provider_slug.lower():
                     qualifying.append(o)
                 continue
 
             if prov.category in official_categories:
-                service_clean = slug.lower().strip()
-                is_subscribed = (
-                    prov.category in (ProviderCategory.BVOD, ProviderCategory.AVOD, ProviderCategory.TVOD, ProviderCategory.FAST)
-                    or service_clean in user_subs
-                    or any(
-                        sub in service_clean or service_clean in sub
-                        for sub in user_subs
-                        if len(sub) >= 3
-                    )
-                )
-                if is_subscribed:
-                    if not o.country and prov.country_code:
-                        o.country = prov.country_code
-                    qualifying.append(o)
+                if not o.country and prov.country_code:
+                    o.country = prov.country_code
+                qualifying.append(o)
 
         return qualifying
 
@@ -98,6 +105,9 @@ class OfficialOffersPipeline:
         preference: Preference,
         provider_map: dict[str, Provider],
         current_country: Optional[str] = None,
+        access=None,
+        reach=None,
+        classify_preference: Optional[Preference] = None,
     ):
         ranked = rank_offers(
             qualifying_offers,
@@ -105,15 +115,42 @@ class OfficialOffersPipeline:
             country_filter=set(),
             current_country=current_country,
         )
-        offers_out = []
+        annotated: list[tuple[tuple[int, int], dict]] = []
         for offer in ranked:
             presented = present_offer(offer, provider_map)
             offer_dict = offer.to_dict()
             offer_dict["service"] = presented.service_display
             offer_dict["source_indicator"] = presented.source_indicator
             offer_dict["country"] = presented.country
-            offers_out.append(offer_dict)
-        return offers_out
+            # Sorts the offer the user can actually watch ahead of an offer they
+            # merely *could* reach (unowned/foreign), without disturbing the
+            # strict-priority ranking *within* either group. Stable, so pure
+            # ranking order is preserved among equal offers.
+            order_key = (0, 0)
+            # Annotate with the shared access model so the detail page reads
+            # the same rules as the watchlist badge (see tracker.services.access).
+            if access is not None and reach is not None and classify_preference is not None:
+                classified = classify_offer(
+                    offer,
+                    access=access,
+                    preference=classify_preference,
+                    reach=reach,
+                    provider_map=provider_map,
+                )
+                offer_dict["access_type"] = classified.access_type
+                offer_dict["access_label"] = classified.access_label
+                offer_dict["locality"] = classified.locality
+                offer_dict["is_accessible"] = classified.is_accessible
+                offer_dict["is_entitled"] = classified.is_entitled
+                offer_dict["requires_payment"] = classified.requires_payment
+                offer_dict["rejection_reasons"] = classified.rejection_reasons
+                order_key = (
+                    0 if classified.is_accessible else 1,
+                    0 if classified.is_entitled else 1,
+                )
+            annotated.append((order_key, offer_dict))
+        annotated.sort(key=lambda pair: pair[0])
+        return [offer_dict for _, offer_dict in annotated]
 
     def run(
         self,
@@ -128,5 +165,14 @@ class OfficialOffersPipeline:
         enrich_movie_from_tmdb(movie)
         offers = self.get_cached_offers(movie, season=season)
         qualifying = self._qualify_offers(offers, provider_map, provider_slug)
-        offers_out = self.rank_and_present(qualifying, pref, provider_map, current_country=current_country)
+        # Ranking keeps the legacy preference (unchanged ordering); the shared
+        # classifier uses the full preference (language rule + VPN) purely to
+        # annotate eligibility, never to reorder or drop offers here.
+        classify_pref = build_preference(self.user_id)
+        access = build_user_access(self.user_id)
+        reach = build_reach(classify_pref, current_country)
+        offers_out = self.rank_and_present(
+            qualifying, pref, provider_map, current_country=current_country,
+            access=access, reach=reach, classify_preference=classify_pref,
+        )
         return OfficialOffersPipelineResult(offers_out=offers_out)

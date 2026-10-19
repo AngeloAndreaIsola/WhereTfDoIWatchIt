@@ -105,6 +105,7 @@ from tracker.models import ExternalProviderMapping, Provider
 
 from ..domain.enums import MatchMethod, SyncMode
 from ..models import ContentMapping, Country, Source
+from ..sources.justwatch_providers import provider_slug_for_package
 from ..persistence.repositories import (
     CursorRepository,
     MappingRepository,
@@ -745,5 +746,17 @@ class AvailabilityRefreshService:
             mapping = mapping_qs.filter(country="").first()
         if mapping:
             return mapping.provider
+        # JustWatch reports several technical names for one provider, but
+        # ``ExternalProviderMapping`` stores only one per (provider, market).
+        # When the stored slot holds a sibling spelling (``netflixkids`` for
+        # ``netflix``, ``viaplaysports`` for ``viaplay``) the precise lookup
+        # above misses. Consult the static identity table before the slug
+        # fallback so the other spelling still resolves — including while the
+        # provider is still disabled, since a mapped-but-inactive provider's
+        # offers are kept and annotated, not silently dropped.
+        if integration == "justwatch":
+            slug = provider_slug_for_package(external_id)
+            if slug:
+                return Provider.objects.filter(slug=slug).first()
         # Existing seeded providers use their Streaming Availability id as slug.
         return Provider.objects.filter(slug=external_id, is_enabled=True).first()

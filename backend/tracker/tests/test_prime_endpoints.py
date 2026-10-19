@@ -13,7 +13,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from tracker.models import Movie, Availability, Region, LanguageInfo, LanguageEntry, Provider, ScrapedContentMapping, Subscription
+from tracker.models import Movie, Availability, Region, LanguageInfo, LanguageEntry, Preference, Provider, ScrapedContentMapping, Subscription
 from tracker.services.offers import Offer
 from tracker.tests.availability_factories import local_offer
 
@@ -419,6 +419,72 @@ class PrimeMovieEndpointTests(TestCase):
         self.assertEqual(len(data["offers"]), 1)
         self.assertEqual(data["offers"][0]["offer_type"], "free_with_ads")
         self.assertEqual(data["offers"][0]["country"], "NL")
+
+    def test_unowned_service_offers_are_shown_but_not_claimed_accessible(self):
+        """Movie 194 regression: offers on unowned services must not vanish.
+
+        Amélie's only offers were Netflix/Max/Hulu — none selected by the user.
+        The pipeline used to drop every offer whose provider was not
+        subscribed, leaving ``offers == []`` while the source-first verdict
+        still said ``available``; the page then showed "a source reported this
+        title as available, but no current offer could be displayed" about
+        offers it had silently discarded. The offers must stay in the list,
+        annotated as not-entitled and not accessible, and the verdict must
+        never claim watchability with the user's subscriptions.
+        """
+        movie = Movie.objects.create(tmdb_id=194, title="Amélie", year=2001)
+        # No Subscription rows at all: every offer is from an unowned service.
+        local_offer(movie, country="CA", service="netflix", offer_type="subscription",
+                    quality="hd", audio_languages=["EN"], subtitle_languages=["EN"])
+        local_offer(movie, country="JP", service="hulu", offer_type="subscription",
+                    quality="hd", audio_languages=["EN"], subtitle_languages=["EN"])
+        local_offer(movie, country="SE", service="max", offer_type="subscription",
+                    quality="hd", audio_languages=["EN"], subtitle_languages=["EN"])
+
+        from django.test import Client
+        response = Client().get("/api/prime/movie/194/?current_country=NL")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual({o["service"] for o in data["offers"]},
+                         {"Netflix", "Hulu", "Max"})
+        for offer in data["offers"]:
+            self.assertFalse(offer["is_entitled"])
+            self.assertFalse(offer["is_accessible"])
+        # Available, but not with the user's subscriptions — never "available
+        # here" and never hidden.
+        self.assertEqual(data["watchability"]["verdict"], "available_elsewhere")
+        self.assertEqual(data["availability"]["state"], "available")
+
+    def test_accessible_offer_outranks_unowned_offer(self):
+        """A playable offer leads the list even when an unowned offer ranks higher.
+
+        Ranking still sorts by language/quality within each group, but an offer
+        the user can actually watch is a better "Best Match" than a
+        higher-scored one they cannot play.
+        """
+        movie = Movie.objects.create(tmdb_id=889, title="Order Test", year=2024)
+        Preference.objects.create(
+            user_id=1, audio_languages=["EN", "IT", "JA"],
+            subtitle_languages=["EN", "IT", "JA"], current_country="US",
+        )
+        prime_provider = Provider.objects.get(slug="prime")
+        Subscription.objects.create(user_id=1, provider=prime_provider, name="Prime Video")
+
+        # Netflix (unowned) has the better JA audio rank; Prime (owned) is EN.
+        local_offer(movie, country="US", service="netflix",
+                    quality="hd", audio_languages=["JA"], subtitle_languages=["JA"])
+        local_offer(movie, country="US", service="prime",
+                    quality="hd", audio_languages=["EN"], subtitle_languages=["EN"])
+
+        from django.test import Client
+        response = Client().get("/api/prime/movie/889/?current_country=US")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data["offers"][0]["is_accessible"])
+        self.assertEqual(data["offers"][0]["service"], "Prime Video")
+        self.assertFalse(data["offers"][1]["is_accessible"])
 
     def test_detail_includes_canonical_availability_verdict(self):
         """The detail payload carries the canonical verdict, never just offers.

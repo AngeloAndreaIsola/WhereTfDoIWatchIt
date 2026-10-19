@@ -8,7 +8,7 @@ from typing import Any
 
 from django.conf import settings
 from django.db import connection, transaction
-from django.db.models import Count, Max, Subquery
+from django.db.models import Count, Max, Q, Subquery
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.views.decorators.http import require_GET
@@ -62,8 +62,8 @@ from tracker.services.unified_catalogue import resolve_catalogue_scope, unoffici
 from tracker.services.watchability import (
     QUALIFYING_OFFER_TYPES,
     evaluate_watchability,
-    get_user_subscriptions,
 )
+from tracker.services.access import SubscriptionAccessMode
 from availability.services.legacy_ingest import ingest_scraped_mapping
 from availability.sources import DEFAULT_SOURCE_SLUG
 import math
@@ -220,16 +220,19 @@ def genres_list(request):
 @api_view(["GET"])
 def homepage_feed(request):
     """GET /api/homepage/ — returns only watchable titles (🟢 Watchable here & 🟡 Watchable with VPN) with pagination."""
-    curr_country = request.GET.get("country") or "US"
+    curr_country = _active_country(request)
     pref = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
-    user_subs = get_user_subscriptions(user_id=1)
 
     movies = Movie.objects.all().order_by("-id")
+    # The resolver builds the access map from ``Subscription`` rows, exactly as
+    # the detail page does. Passing the legacy flat slug set here would route
+    # list surfaces through ``build_explicit_access``, which ignores
+    # ``access_mode`` and AVOD/FAST auto-entitlement — the detail↔list
+    # disagreement this redesign exists to remove.
     evaluated, _ = apply_composable_filters(
         movies,
         request.GET,
         pref,
-        user_subscriptions=user_subs,
         current_country=curr_country,
     )
 
@@ -254,9 +257,8 @@ def homepage_feed(request):
 @api_view(["GET"])
 def unified_catalog(request):
     """GET /api/catalog/unified/ — Unified catalog endpoint merging official and unofficial sources."""
-    curr_country = request.GET.get("current_country") or request.GET.get("country") or "US"
+    curr_country = _active_country(request)
     pref = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
-    user_subs = get_user_subscriptions(user_id=1)
 
     scope = resolve_catalogue_scope(request.GET)
     allowed_provider_slugs = scope.allowed_provider_slugs
@@ -273,7 +275,6 @@ def unified_catalog(request):
             movies,
             request.GET,
             pref,
-            user_subscriptions=user_subs,
             current_country=curr_country,
             allowed_provider_slugs=allowed_provider_slugs,
         )
@@ -512,7 +513,16 @@ def providers_list(request):
     is_major = request.GET.get("is_major")
 
     qs = (
-        Provider.objects.filter(is_enabled=True)
+        # Every service our sources can actually cover: either already active
+        # (``is_enabled``) or discovered in the JustWatch catalogue (has a
+        # ``justwatch`` external mapping). Including the discovered-but-disabled
+        # ones is what makes the service-access manager *catalogue-driven*: a
+        # newly found service is visible and selectable, while still defaulting
+        # to inactive until the user declares access to it.
+        Provider.objects.filter(
+            Q(is_enabled=True) | Q(external_mappings__integration_name="justwatch")
+        )
+        .distinct()
         .prefetch_related("external_mappings")
         # Batched scraped-item count: the serializer prefers this annotation
         # over its per-object fallback count.
@@ -529,12 +539,16 @@ def providers_list(request):
     user_sub_provider_ids = set(
         Subscription.objects.filter(user_id=1, provider__isnull=False).values_list("provider_id", flat=True)
     )
+    user_access_modes = dict(
+        Subscription.objects.filter(user_id=1, provider__isnull=False).values_list("provider_id", "access_mode")
+    )
 
     serializer = ProviderSerializer(
         providers,
         many=True,
         context={
             "user_subscribed_ids": user_sub_provider_ids,
+            "user_access_modes": user_access_modes,
             "provider_status": provider_card_status(providers),
         },
     )
@@ -542,22 +556,118 @@ def providers_list(request):
 
 
 @api_view(["POST"])
+def providers_sync(request):
+    """Reconcile the local provider catalogue from JustWatch's provider list.
+
+    Idempotent and additive: creates *disabled* ``Provider`` rows for newly
+    discovered services and upserts the per-country ``justwatch`` external
+    mappings the refresh service resolves offers through. Never touches
+    ``Subscription`` rows. ``country`` (body, repeated or comma-separated)
+    limits the markets walked; default is every enabled country.
+    """
+    from .services.provider_catalogue import run_sync_provider_catalogue
+
+    raw = (request.data or {}).get("country") if isinstance(request.data, dict) else None
+    if raw is None:
+        countries = None
+    elif isinstance(raw, (list, tuple)):
+        countries = [str(c) for c in raw]
+    else:
+        countries = [part for part in str(raw).split(",")]
+
+    report = run_sync_provider_catalogue(countries)
+    return Response(report)
+
+
+@api_view(["POST"])
 def provider_toggle(request, slug: str):
-    """Toggle user subscription state for a provider by slug."""
-    provider = get_object_or_404(Provider, slug__iexact=slug, is_enabled=True)
+    """Own/unown a provider, or set the user's *access mode* for it.
+
+    Two contracts share this endpoint so nothing existing breaks:
+
+    * **Bodyless POST** — legacy flip: subscribed → unsubscribe, else
+      subscribe as ``included``. What the source cards have always done.
+    * **POST with ``access_mode``** — set-mode (idempotent): ``included``,
+      ``addon``, ``free``, ``rent_buy`` record *how* the user holds the
+      service, while ``none`` removes it. This is the write path behind the
+      service-access manager UI, where "subscribe/unsubscribe" is not a toggle
+      but a declared state.
+
+    A mapped-but-disabled provider (discovered by catalogue sync, not yet
+    active) is addressable here too: declaring access to it flips it to active,
+    because owning a service is exactly the signal that its catalogue should be
+    collected. Un-declaring leaves ``is_enabled`` alone — the service stays
+    browsable, only the user's claim to it is removed.
+    """
+    provider = get_object_or_404(
+        Provider.objects.filter(
+            Q(is_enabled=True) | Q(external_mappings__integration_name="justwatch")
+        ).distinct(),
+        slug__iexact=slug,
+    )
+    data = request.data if isinstance(request.data, dict) else {}
+
+    def _activate():
+        # Idempotent: only touches the row when it is still inactive.
+        if not provider.is_enabled:
+            provider.is_enabled = True
+            provider.save(update_fields=["is_enabled"])
+
     sub = Subscription.objects.filter(user_id=1, provider=provider).first()
 
-    if sub:
-        sub.delete()
-        is_subscribed = False
-    else:
+    if "access_mode" not in data:
+        if sub:
+            sub.delete()
+            return Response({
+                "provider": provider.slug,
+                "is_subscribed": False,
+                "access_mode": SubscriptionAccessMode.NONE,
+                "message": f"Unsubscribed from {provider.name}",
+            })
         Subscription.objects.create(user_id=1, provider=provider, name=provider.name)
-        is_subscribed = True
+        _activate()
+        return Response({
+            "provider": provider.slug,
+            "is_subscribed": True,
+            "access_mode": SubscriptionAccessMode.INCLUDED,
+            "message": f"Subscribed to {provider.name}",
+        })
 
+    requested = str(data.get("access_mode") or "included").lower().strip()
+    valid_modes = {choice for choice, _ in SubscriptionAccessMode.CHOICES}
+    if requested not in valid_modes:
+        return Response(
+            {"error": f"Invalid access_mode '{requested}'."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if requested == SubscriptionAccessMode.NONE:
+        if sub:
+            sub.delete()
+        return Response({
+            "provider": provider.slug,
+            "is_subscribed": False,
+            "access_mode": SubscriptionAccessMode.NONE,
+            "message": f"Marked {provider.name} as not owned",
+        })
+
+    if sub:
+        sub.access_mode = requested
+        sub.save(update_fields=["access_mode"])
+        created = False
+    else:
+        sub = Subscription.objects.create(
+            user_id=1, provider=provider, name=provider.name, access_mode=requested
+        )
+        created = True
+
+    _activate()
     return Response({
         "provider": provider.slug,
-        "is_subscribed": is_subscribed,
-        "message": f"{'Subscribed to' if is_subscribed else 'Unsubscribed from'} {provider.name}"
+        "is_subscribed": True,
+        "access_mode": requested,
+        "created": created,
+        "message": f"{'Subscribed to' if created else 'Updated'} {provider.name}",
     })
 
 
@@ -653,19 +763,27 @@ def subscriptions_list_create(request):
     serializer.is_valid(raise_exception=True)
     validated = serializer.validated_data
     resolved_p = validated.get("resolved_provider")
+    access_mode = validated.get("access_mode") or "included"
 
     if resolved_p:
         sub, created = Subscription.objects.get_or_create(
             user_id=1,
             provider=resolved_p,
-            defaults={"name": resolved_p.name},
+            defaults={"name": resolved_p.name, "access_mode": access_mode},
         )
+        if not created and sub.access_mode != access_mode:
+            sub.access_mode = access_mode
+            sub.save(update_fields=["access_mode"])
     else:
         name_clean = (validated.get("name") or "").strip()
         sub, created = Subscription.objects.get_or_create(
             user_id=1,
             name=name_clean,
+            defaults={"access_mode": access_mode},
         )
+        if not created and sub.access_mode != access_mode:
+            sub.access_mode = access_mode
+            sub.save(update_fields=["access_mode"])
 
     return Response(SubscriptionSerializer(sub).data, status=status.HTTP_201_CREATED)
 
@@ -871,16 +989,14 @@ def provider_delete(request, slug: str):
 @api_view(["GET"])
 def catalog_list(request):
     """GET /api/catalog/ — List all tracked catalog items with composable filters, watchability & pagination."""
-    curr_country = request.GET.get("country") or "US"
+    curr_country = _active_country(request)
     pref = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
-    user_subs = get_user_subscriptions(user_id=1)
 
     movies = Movie.objects.all().order_by("-id")
     evaluated, _ = apply_composable_filters(
         movies,
         request.GET,
         pref,
-        user_subscriptions=user_subs,
         current_country=curr_country,
     )
 
@@ -1166,9 +1282,8 @@ def watchlist_resolve(request):
 @api_view(["GET"])
 def watchlist_report(request):
     """Return aggregated report for watchlist items (user_id=1) with full watchability evaluation, composable filters & pagination."""
-    curr_country = request.GET.get("current_country") or request.query_params.get("current_country") or request.GET.get("country") or "US"
+    curr_country = _active_country(request)
     preference = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
-    user_subs = get_user_subscriptions(user_id=1)
 
     items = (
         WatchlistItem.objects.select_related("movie")
@@ -1188,7 +1303,6 @@ def watchlist_report(request):
         watchlist_movies,
         request.GET,
         preference,
-        user_subscriptions=user_subs,
         current_country=curr_country,
         refresh_states=refresh_states,
     )
@@ -2109,6 +2223,24 @@ def _current_country(request) -> str:
     )
 
 
+def _active_country(request) -> str:
+    """Active country for the list surfaces (homepage, catalog, watchlist).
+
+    Mirrors :func:`_current_country` (the detail pages) but also honours the
+    legacy ``country`` parameter. All four surfaces must evaluate the same
+    country, or the same title reads 🟢 "Watchable here" on its detail page and
+    🟡 "Watchable with VPN" in the watchlist — the movie 615457 report. They
+    used to default to a hard-coded "US" while the detail page used the user's
+    saved country (NL), so a local offer looked foreign.
+    """
+    return (
+        request.GET.get("current_country")
+        or request.GET.get("country")
+        or resolve_preferences(user_id=1).get("current_country")
+        or "US"
+    )
+
+
 def _load_content_item(tmdb_id: int, content_type: str) -> Movie | None:
     """Load the tracked row for tmdb_id, resolving it through TMDb when missing.
 
@@ -2189,6 +2321,8 @@ def _build_prime_offers(request, movie: Movie, season: int | None = None) -> lis
     from tracker.services.presentation import present_offer
     from tracker.services.ranking import rank_offers
     from tracker.services.scraped_offers import BVOD_CATEGORIES, get_scraped_offers
+    from tracker.services.access import build_reach, build_user_access, classify_offer
+    from tracker.services.preferences import build_preference
 
     from .services.offer_pipeline import OfficialOffersPipeline
 
@@ -2213,6 +2347,9 @@ def _build_prime_offers(request, movie: Movie, season: int | None = None) -> lis
     )
     if bvod_offers:
         preference = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
+        classify_pref = build_preference(1)
+        access = build_user_access(1)
+        reach = build_reach(classify_pref, current_country)
         ranked = rank_offers(bvod_offers, preference, current_country=current_country)
         for offer in ranked:
             presented = present_offer(offer, provider_map)
@@ -2220,6 +2357,17 @@ def _build_prime_offers(request, movie: Movie, season: int | None = None) -> lis
             offer_dict["service"] = presented.service_display
             offer_dict["source_indicator"] = presented.source_indicator
             offer_dict["country"] = presented.country
+            classified = classify_offer(
+                offer, access=access, preference=classify_pref,
+                reach=reach, provider_map=provider_map,
+            )
+            offer_dict["access_type"] = classified.access_type
+            offer_dict["access_label"] = classified.access_label
+            offer_dict["locality"] = classified.locality
+            offer_dict["is_accessible"] = classified.is_accessible
+            offer_dict["is_entitled"] = classified.is_entitled
+            offer_dict["requires_payment"] = classified.requires_payment
+            offer_dict["rejection_reasons"] = classified.rejection_reasons
             offers_out.append(offer_dict)
 
     return offers_out
@@ -2250,12 +2398,33 @@ def _prime_detail_response(request, item: Movie, key: str) -> Response:
         .order_by("-requested_at", "-pk")
         .first()
     )
+    from tracker.services.access import resolve_title as access_resolve_title
+    from tracker.services.preferences import build_preference
+
+    access_pref = build_preference(1)
+    access_verdict = access_resolve_title(
+        item,
+        get_local_offers(item, season=season),
+        access_pref,
+        current_country=_current_country(request) or access_pref.current_country,
+    )
+
     payload = {
         key: MovieDetailSerializer(item).data,
         "user_data": UserMovieDataSerializer(user_data).data if user_data else None,
         "is_in_watchlist": is_in_watchlist,
         "watch_events": MovieWatchEventSerializer(watch_events, many=True).data,
         "offers": _build_prime_offers(request, item, season=season),
+        # The single access verdict for this title, computed by the same
+        # resolver the watchlist badge uses (tracker.services.access). The
+        # detail page and the watchlist can therefore never disagree about
+        # whether a title is watchable, reachable via VPN, purchase-only or
+        # genuinely unavailable.
+        "watchability": access_verdict.to_watchability_dict(),
+        # Rent/buy offers are surfaced separately (never in ``offers``, which
+        # stays subscription/free by design) so "available only for an
+        # additional payment" is distinguishable from "included".
+        "purchase_offers": [c.to_dict() for c in access_verdict.purchase_offers],
         # The canonical availability verdict for this title, exactly as the
         # availability report computes it. Present so an empty ``offers`` list
         # is never ambiguous: the detail page can tell "checked and genuinely

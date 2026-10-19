@@ -96,15 +96,18 @@ export function AvailabilityStateMessage({
   }
 
   // state === "available" with no offers is contradictory; treat it honestly
-  // rather than claiming a positive we cannot show.
+  // rather than claiming a positive we cannot show. Name where the source says
+  // it is available so the line is actionable instead of a dead end.
+  const availableOn = (availability?.available_on ?? []).filter(Boolean);
   return (
     <div>
       <p className="font-medium text-amber-700 dark:text-amber-300">
-        Availability not shown.
+        Available — but not on a service we can show.
       </p>
       <p className="mt-1 text-gray-600 dark:text-gray-400">
-        A source reported this title as available, but no current offer could be
-        displayed.
+        {availableOn.length > 0
+          ? `A source reports this title on ${availableOn.join(", ")}, but no offer could be matched to a service in our catalogue.`
+          : "A source reported this title as available, but no current offer could be displayed."}
       </p>
     </div>
   );

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import ViewerLanguageBuilder from "./ViewerLanguageBuilder";
 import { useViewerPreferences } from "./ViewerPreferencesProvider";
 import { ProviderFilter, ProviderItem } from "./ProviderFilter";
+import { AccessTypeFilter } from "./AccessTypeFilter";
 import CountrySelect, { countryName } from "./CountrySelect";
 import { useCurrentLocation } from "./CurrentLocationProvider";
 
@@ -20,6 +21,8 @@ export interface FilterState {
   quality: string; // "", "4k,uhd", "hdr", "hd", "sd"
   score_min: string; // "", "8.0", "7.0", "6.0", "5.0"
   sort_by: string; // "", "rating_desc", "year_desc", "year_asc", "title_asc", "title_desc"
+  /** Access model filter: "", "all", or "subscription,addon,free,free_with_ads,rent,buy". */
+  access: string;
 }
 
 interface FilterBarProps {
@@ -38,6 +41,8 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
   const { viewersRule, setViewersRule, loading: viewerPreferencesLoading, error: viewerPreferencesError } = useViewerPreferences();
   const { currentCountry, loading: currentLocationLoading, error: currentLocationError, setCurrentCountry } = useCurrentLocation();
   const [currentLocationSaving, setCurrentLocationSaving] = useState(false);
+  const [vpnEnabled, setVpnEnabled] = useState(false);
+  const [vpnSaving, setVpnSaving] = useState(false);
   const viewerSummary = viewersRule.viewers
     .map((viewer) => `${viewer.name} (${viewer.languages.join(", ") || "No languages"})`)
     .join(" · ");
@@ -48,6 +53,26 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
       await setCurrentCountry(country);
     } finally {
       setCurrentLocationSaving(false);
+    }
+  };
+
+  // VPN reach is the user's own declaration, never auto-detected: the switch
+  // says "I can reach other countries' catalogues", and the candidate-country
+  // list (edited on Preferences) is where they apply.
+  const handleVpnToggle = async (enabled: boolean) => {
+    setVpnEnabled(enabled);
+    setVpnSaving(true);
+    try {
+      const res = await fetch("/api/preferences/", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ vpn_enabled: enabled }),
+      });
+      if (!res.ok) throw new Error(`Failed to save VPN setting (${res.status})`);
+    } catch {
+      setVpnEnabled(!enabled); // revert on failure
+    } finally {
+      setVpnSaving(false);
     }
   };
 
@@ -66,6 +91,13 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
           setProviders(data);
         }
       })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/preferences/")
+      .then((res) => (res.ok ? res.json() : {}))
+      .then((data: { vpn_enabled?: boolean }) => setVpnEnabled(Boolean(data.vpn_enabled)))
       .catch(() => {});
   }, []);
 
@@ -147,6 +179,46 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
             {currentLocationLoading ? "Determining location…" : currentCountry ? `Local results: ${countryName(currentCountry)}` : "Choose a country to prioritize local results"}
           </p>
           {currentLocationError && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{currentLocationError}</p>}
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+            VPN Access
+          </label>
+          <label
+            className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm transition-colors ${
+              vpnEnabled
+                ? "border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
+                : "border-gray-300 bg-gray-50 text-gray-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+            } ${vpnSaving ? "opacity-60" : ""}`}
+          >
+            <input
+              type="checkbox"
+              checked={vpnEnabled}
+              disabled={vpnSaving}
+              onChange={(e) => handleVpnToggle(e.target.checked)}
+              className="h-4 w-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+            />
+            I can use a VPN
+          </label>
+          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {vpnEnabled
+              ? "Other countries are treated as reachable; add regions on Preferences."
+              : "Other countries' catalogues are ignored."}
+          </p>
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+            Access Type
+          </label>
+          <AccessTypeFilter
+            access={filters.access || ""}
+            onChange={(access) => onChange({ ...filters, access })}
+          />
+          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            Filter offers by how they are delivered. Manage which services you own on Subscriptions.
+          </p>
         </div>
       </div>
 

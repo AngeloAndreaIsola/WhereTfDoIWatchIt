@@ -45,6 +45,7 @@ function CatalogPageClient() {
     const quality = searchParams.get("quality") || "";
     const score_min = searchParams.get("score_min") || "";
     const sort_by = searchParams.get("sort_by") || "";
+    const access = searchParams.get("access") || "";
     const rawProviders = searchParams.get("providers") || "";
     const providers = rawProviders ? rawProviders.split(",").map((s) => s.trim()).filter(Boolean) : [];
 
@@ -74,6 +75,7 @@ function CatalogPageClient() {
         quality,
         score_min,
         sort_by,
+        access,
       },
       page: initialPage,
     };
@@ -149,6 +151,7 @@ function CatalogPageClient() {
     if (filters.quality) params.set("quality", filters.quality);
     if (filters.score_min) params.set("score_min", filters.score_min);
     if (filters.sort_by) params.set("sort_by", filters.sort_by);
+    if (filters.access) params.set("access", filters.access);
     if (filters.actors && filters.actors.length > 0) {
       params.set("actors", JSON.stringify(filters.actors));
     }
@@ -184,6 +187,7 @@ function CatalogPageClient() {
     if (filters.quality) params.quality = filters.quality;
     if (filters.score_min) params.score_min = filters.score_min;
     if (filters.sort_by) params.sort_by = filters.sort_by;
+    if (filters.access) params.access = filters.access;
     if (filters.country) params.country = filters.country;
     if (filters.actors && filters.actors.length > 0) {
       params.actor_id = filters.actors.map((a) => a.id).join(",");

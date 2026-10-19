@@ -3,7 +3,12 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import ProviderGrid, { ProviderItem } from "@/components/ProviderGrid";
-import { refreshProvider } from "@/lib/api";
+import {
+  refreshProvider,
+  setProviderAccessMode,
+  syncProviderCatalogue,
+  ProviderAccessMode,
+} from "@/lib/api";
 
 /** Fast cadence for re-reading the list right after a press. */
 const POLL_INTERVAL_MS = 2500;
@@ -27,6 +32,10 @@ export default function SubscriptionsPage() {
   const [refreshingFree, setRefreshingFree] = useState(false);
   const [refreshingScrapers, setRefreshingScrapers] = useState(false);
   const [refreshResults, setRefreshResults] = useState<Record<string, string>>({});
+
+  const [syncingCatalogue, setSyncingCatalogue] = useState(false);
+  const [syncResult, setSyncResult] = useState("");
+  const [syncError, setSyncError] = useState("");
 
   // Refresh state that the backend cannot know about yet: the press happened,
   // the queue marker / scraper run is still landing. Server-side
@@ -117,6 +126,44 @@ export default function SubscriptionsPage() {
       }
     } catch (err) {
       console.error(`Failed to toggle provider ${slug}:`, err);
+    }
+  };
+
+  /**
+   * Declare the user's access to a service (included / add-on / free /
+   * rent·buy / not owned). Updates the card in place so the page never resets.
+   */
+  const handleSetAccessMode = async (slug: string, mode: ProviderAccessMode) => {
+    const result = await setProviderAccessMode(slug, mode);
+    setProviders((prev) =>
+      prev.map((p) =>
+        p.slug === slug
+          ? { ...p, is_subscribed: result.is_subscribed, access_mode: result.access_mode }
+          : p
+      )
+    );
+  };
+
+  /** Pull the current provider catalogue in from JustWatch (idempotent). */
+  const handleSyncCatalogue = async () => {
+    setSyncingCatalogue(true);
+    setSyncError("");
+    setSyncResult("");
+    try {
+      const report = await syncProviderCatalogue();
+      const created = report.created_providers?.length ?? 0;
+      const mappings = report.mappings_created?.length ?? 0;
+      const unmapped = report.unmapped_count ?? 0;
+      setSyncResult(
+        `Catalogue synced across ${report.countries?.length ?? 0} countries: ` +
+          `${mappings} mapping(s) refreshed, ${created} new service(s) added ` +
+          `(disabled — enable them below), ${unmapped} unmapped package(s) skipped.`
+      );
+      await fetchProviders();
+    } catch (err: unknown) {
+      setSyncError(err instanceof Error ? err.message : "Catalogue sync failed");
+    } finally {
+      setSyncingCatalogue(false);
     }
   };
 
@@ -242,6 +289,13 @@ export default function SubscriptionsPage() {
   const scraperProviders = providers.filter(
     (p) => !p.is_major && p.category === "scraper"
   );
+  // Everything else the catalogue sources can cover: services discovered from
+  // JustWatch that are not majors, broadcasters or imported scrapers. They are
+  // listed so the user can declare access to them (which activates the card);
+  // until then they sit inactive rather than being hidden.
+  const otherProviders = providers.filter(
+    (p) => !p.is_major && p.category !== "bvod" && p.category !== "scraper"
+  );
 
   return (
     <main className="mx-auto max-w-4xl px-4 py-10 sm:px-6">
@@ -253,14 +307,49 @@ export default function SubscriptionsPage() {
       </div>
 
       {/* Header */}
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-gray-100">
-          Subscriptions & Sources
-        </h1>
-        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-          Manage major streaming service subscriptions, free public broadcasters &amp; streaming services, and custom scraper sources.
-        </p>
+      <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-gray-100">
+            Subscriptions &amp; Sources
+          </h1>
+          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+            Declare how you access each service — an included subscription, an
+            add-on channel, a free service, or a rent/buy account — plus free
+            public broadcasters &amp; imported scraper sources.
+          </p>
+        </div>
+        {!loading && !fetchError && (
+          <button
+            type="button"
+            onClick={handleSyncCatalogue}
+            disabled={syncingCatalogue}
+            title="Reconcile the service list from the JustWatch provider catalogue"
+            className="flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-2 text-xs font-semibold text-gray-600 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+          >
+            <svg
+              className={`h-4 w-4 ${syncingCatalogue ? "animate-spin" : ""}`}
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            {syncingCatalogue ? "Syncing catalogue…" : "Sync service catalogue"}
+          </button>
+        )}
       </div>
+
+      {syncResult && (
+        <div className="mb-6 rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-2.5 text-xs text-emerald-800 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
+          {syncResult}
+        </div>
+      )}
+      {syncError && (
+        <div className="mb-6 rounded-lg border border-red-300 bg-red-50 px-4 py-2.5 text-xs text-red-700 dark:border-red-700 dark:bg-red-900/30 dark:text-red-400">
+          {syncError}
+        </div>
+      )}
 
       {/* Loading state */}
       {loading && (
@@ -295,6 +384,7 @@ export default function SubscriptionsPage() {
             <ProviderGrid
               providers={majorProviders}
               onToggle={handleToggleProvider}
+              onSetAccessMode={handleSetAccessMode}
               onRefresh={refreshOne}
               refreshPending={refreshPending}
               refreshErrors={refreshErrors}
@@ -342,6 +432,7 @@ export default function SubscriptionsPage() {
               <ProviderGrid
                 providers={bvodProviders}
                 onToggle={handleToggleProvider}
+                onSetAccessMode={handleSetAccessMode}
                 onRefresh={refreshOne}
                 refreshPending={refreshPending}
                 refreshErrors={refreshErrors}
@@ -361,7 +452,35 @@ export default function SubscriptionsPage() {
             )}
           </section>
 
-          {/* Section 3: Imported Small Providers & Sources */}
+          {/* Section 3: Other catalogue services (mapped, not majors/broadcasters) */}
+          <section className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+            <div className="mb-4">
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                Other Services (from the JustWatch catalogue)
+              </h2>
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                Services our sources can cover. Pick how you access one to activate
+                it — until then it stays inactive and is not counted as yours.
+              </p>
+            </div>
+            {otherProviders.length === 0 ? (
+              <p className="text-xs text-gray-400 italic">
+                Nothing else discovered yet — run &ldquo;Sync service catalogue&rdquo;.
+              </p>
+            ) : (
+              <ProviderGrid
+                providers={otherProviders}
+                onToggle={handleToggleProvider}
+                onSetAccessMode={handleSetAccessMode}
+                onRefresh={refreshOne}
+                refreshPending={refreshPending}
+                refreshErrors={refreshErrors}
+                loading={loading}
+              />
+            )}
+          </section>
+
+          {/* Section 4: Imported Small Providers & Sources */}
           <section className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900">
             <div className="mb-4 flex items-center justify-between">
               <div>
@@ -450,6 +569,7 @@ export default function SubscriptionsPage() {
                 <ProviderGrid
                   providers={scraperProviders}
                   onToggle={handleToggleProvider}
+                  onSetAccessMode={handleSetAccessMode}
                   onRefresh={refreshOne}
                   onRemove={handleDeleteProvider}
                   useFavicons

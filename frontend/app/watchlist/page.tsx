@@ -96,6 +96,7 @@ export default function WatchlistPage() {
       quality: sp.get("quality") || "",
       score_min: sp.get("score_min") || "",
       sort_by: sp.get("sort_by") || "",
+      access: sp.get("access") || "",
     };
   };
 
@@ -170,6 +171,7 @@ export default function WatchlistPage() {
     if (filters.status) params.set("status", filters.status);
     if (filters.score_min) params.set("score_min", filters.score_min);
     if (filters.sort_by) params.set("sort_by", filters.sort_by);
+    if (filters.access) params.set("access", filters.access);
     filters.actors.forEach((a) => params.append("actor_id", a.id.toString()));
     if (currentCountry) params.set("current_country", currentCountry);
 

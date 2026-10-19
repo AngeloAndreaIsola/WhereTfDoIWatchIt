@@ -741,6 +741,27 @@ class AggregatorPipelineTests(TestCase):
         # Same provider row both times - no duplicate Provider is created.
         self.assertEqual(Provider.objects.filter(slug="prime").count(), 1)
 
+    def test_alias_spelling_resolves_when_the_market_slot_holds_its_sibling(self):
+        """One row per (provider, integration, country) must not lose a name.
+
+        ``netflix``/``netflixkids`` and ``viaplay``/``viaplaysports`` share one
+        market slot. Whichever name the sync wrote last, *both* spellings must
+        resolve to the canonical provider — even while that provider is
+        disabled, because mapped-but-inactive offers are kept and annotated
+        rather than dropped.
+        """
+        viaplay, _ = Provider.objects.get_or_create(
+            slug="viaplay", defaults={"name": "Viaplay"})
+        viaplay.is_enabled = False
+        viaplay.save(update_fields=["is_enabled"])
+        mapping(viaplay, "justwatch", "viaplaysports", "NL")
+
+        service = AvailabilityRefreshService(source=self.source())
+        self.assertEqual(service._provider("viaplaysports", country="NL").slug, "viaplay")
+        self.assertEqual(service._provider("viaplay", country="NL").slug, "viaplay")
+        # An unmapped id is still refused rather than guessed.
+        self.assertIsNone(service._provider("amazonhbomax", country="NL"))
+
     def test_unscoped_mapping_still_resolves_for_existing_integrations(self):
         """A collector's country='' row must keep working after the change."""
         mapping(self.prime, "streaming_availability", "prime")

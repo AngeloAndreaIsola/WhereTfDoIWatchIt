@@ -28,10 +28,22 @@ export interface MovieWatchEvent {
   created_at?: string;
 }
 
+export type OfferType =
+  | "subscription"
+  | "addon"
+  | "free"
+  | "free_with_ads"
+  | "rent"
+  | "buy"
+  | "unknown";
+
+export type AccessType = OfferType;
+export type OfferLocality = "local" | "vpn" | "out_of_reach" | "anywhere";
+
 export interface PrimeOffer {
   country: string;
   service: string;
-  offer_type: "subscription" | "free";
+  offer_type: OfferType;
   source_indicator?: "Official" | "SVOD" | "BVOD" | "AVOD" | "FAST" | "TVOD" | "Scraper" | string;
   quality: string;
   url?: string;
@@ -43,6 +55,37 @@ export interface PrimeOffer {
     subtitle_rank: number;
     quality_rank: number;
     is_language_match?: boolean;
+  };
+  /** Access model of this offer — subscription, add-on, free, free_with_ads, rent or buy. */
+  access_type?: AccessType;
+  access_label?: string;
+  locality?: OfferLocality;
+  /** True only when the user is entitled, the language rule passes and the country is reachable. */
+  is_accessible?: boolean;
+  is_entitled?: boolean;
+  requires_payment?: boolean;
+  rejection_reasons?: string[];
+}
+
+/** The backend's single access verdict for a title (detail pages). */
+export interface TitleWatchability {
+  verdict?: string;
+  status?: string;
+  status_label?: string;
+  status_symbol?: string;
+  explanation?: string[];
+  refresh_state?: string | null;
+  best_offer?: PrimeOffer | null;
+  access_flags?: {
+    present_access_types?: AccessType[];
+    available_access_types?: AccessType[];
+    has_subscription?: boolean;
+    has_addon?: boolean;
+    has_free?: boolean;
+    has_free_with_ads?: boolean;
+    has_rent?: boolean;
+    has_buy?: boolean;
+    requires_payment_only?: boolean;
   };
 }
 
@@ -76,6 +119,16 @@ export interface PrimeMovieResponse {
   is_in_watchlist?: boolean;
   watch_events?: MovieWatchEvent[];
   offers: PrimeOffer[];
+  /**
+   * Rent/buy offers that resolve canonical availability but require an extra
+   * payment. Kept apart from `offers` so "buy it" is never read as "you have it".
+   */
+  purchase_offers?: PrimeOffer[];
+  /**
+   * The shared access verdict (same resolver as the watchlist badge) — the one
+   * field that tells the detail page how the title is reachable for this user.
+   */
+  watchability?: TitleWatchability | null;
   /** True while this title still waits in the backend refresh queue — the page polls until it clears. */
   refresh_pending?: boolean;
   /** Status of the newest refresh request: `"pending"` / `"done"` / `"failed"`, null when never requested. */
@@ -123,6 +176,10 @@ export interface PrimeSeriesResponse {
   is_in_watchlist?: boolean;
   watch_events?: MovieWatchEvent[];
   offers: PrimeOffer[];
+  /** Rent/buy offers, kept apart from `offers` (see `PrimeMovieResponse`). */
+  purchase_offers?: PrimeOffer[];
+  /** The shared access verdict for this title (see `PrimeMovieResponse`). */
+  watchability?: TitleWatchability | null;
   /** TMDb season list for the selector (series responses only). */
   seasons?: SeasonSummary[];
   /** Season echoed back for `?season=N`; null/absent when unfiltered. */
@@ -526,6 +583,8 @@ export interface TitleAvailabilityVerdict {
   resolved_sources: string[];
   unresolved_sources: string[];
   sources: TitleAvailabilitySource[];
+  /** Provider slugs a source reported this title as available on. */
+  available_on?: string[];
 }
 
 /**
@@ -1013,6 +1072,76 @@ export async function refreshProvider(
     throw new Error(body.error ?? `Refresh failed (${res.status})`);
   }
   return body as ProviderRefreshResponse;
+}
+
+
+// ─── Service access modes ───────────────────────────────────────────────────
+
+/** How the user holds a service (mirrors the backend Subscription.access_mode). */
+export type ProviderAccessMode = "included" | "addon" | "free" | "rent_buy" | "none";
+
+export interface ProviderAccessResult {
+  provider: string;
+  is_subscribed: boolean;
+  access_mode: ProviderAccessMode;
+  created?: boolean;
+  message?: string;
+}
+
+/**
+ * Declare the user's access to a provider. ``none`` removes the selection;
+ * every other mode records *how* they hold it (included subscription, add-on,
+ * free, or a rent/buy account).
+ */
+export async function setProviderAccessMode(
+  providerSlug: string,
+  accessMode: ProviderAccessMode
+): Promise<ProviderAccessResult> {
+  const res = await fetch(
+    `/api/providers/${encodeURIComponent(providerSlug)}/toggle/`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ access_mode: accessMode }),
+    }
+  );
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(body.error ?? `Failed to update access (${res.status})`);
+  }
+  return body as ProviderAccessResult;
+}
+
+export interface ProviderCatalogueSyncReport {
+  integration?: string;
+  countries?: string[];
+  packages_seen?: number;
+  mapped?: Array<{ country: string; slug: string; technical_name: string }>;
+  created_providers?: string[];
+  mappings_created?: string[];
+  errors?: Array<{ country: string; error: string }>;
+  unmapped?: Array<{ technical_name: string; clear_name: string; countries: string[] }>;
+  unmapped_count?: number;
+  providers_touched?: string[];
+}
+
+/**
+ * Reconcile the local provider catalogue from JustWatch's provider list.
+ * Idempotent; newly discovered services are created disabled.
+ */
+export async function syncProviderCatalogue(
+  countries?: string[]
+): Promise<ProviderCatalogueSyncReport> {
+  const res = await fetch("/api/providers/sync/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(countries && countries.length ? { country: countries } : {}),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(body.error ?? `Catalogue sync failed (${res.status})`);
+  }
+  return body as ProviderCatalogueSyncReport;
 }
 
 

@@ -103,15 +103,34 @@ def _merge_provider(canonical, duplicate, apps=None) -> None:
         ExternalProviderMapping,
         Region,
         ScrapedContentMapping,
-        Subscription,
     )
 
-    for sub in Subscription.objects.filter(provider=duplicate):
-        if Subscription.objects.filter(user_id=sub.user_id, provider=canonical).exists():
-            sub.delete()
-        else:
-            sub.provider = canonical
-            sub.save()
+    # Resolved as a *historical* model when available: later migrations add
+    # columns to ``Subscription`` (e.g. 0041's ``access_mode``), so a live-class
+    # query here would SELECT a column that does not exist yet at this point in
+    # the chain and every fresh database would fail. Filter by ``provider_id``
+    # (a live ``Provider`` instance cannot be passed to a historical queryset).
+    SubscriptionModel = (
+        apps.get_model("tracker", "Subscription")
+        if apps is not None else None
+    )
+    if SubscriptionModel is not None:
+        for sub in SubscriptionModel.objects.filter(provider_id=duplicate.pk):
+            if SubscriptionModel.objects.filter(
+                user_id=sub.user_id, provider_id=canonical.pk
+            ).exists():
+                sub.delete()
+            else:
+                sub.provider_id = canonical.pk
+                sub.save()
+    else:
+        from tracker.models import Subscription
+        for sub in Subscription.objects.filter(provider=duplicate):
+            if Subscription.objects.filter(user_id=sub.user_id, provider=canonical).exists():
+                sub.delete()
+            else:
+                sub.provider = canonical
+                sub.save()
 
     # Both sides are resolved as *historical* models when available. This
     # migration runs before tracker.0035 adds the country-aware ``country``

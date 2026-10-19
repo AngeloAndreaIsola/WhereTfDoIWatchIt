@@ -544,6 +544,26 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
               />
             </div>
 
+            {data.watchability && (
+              <div className="mb-4 flex items-start gap-3 rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
+                <span className="text-2xl leading-none" aria-hidden="true">
+                  {data.watchability.status_symbol || "⚪"}
+                </span>
+                <div>
+                  <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                    {data.watchability.status_label || "Availability unknown"}
+                  </p>
+                  {(data.watchability.explanation || []).length > 0 && (
+                    <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-gray-500 dark:text-gray-400">
+                      {(data.watchability.explanation || []).map((line, i) => (
+                        <li key={i}>{line}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+            )}
+
             {data.offers.length === 0 ? (
               waitingForRefresh && !pollTimedOut ? (
                 <div className="rounded-xl border border-dashed border-blue-300 bg-blue-50/50 p-6 text-center text-sm text-blue-700 dark:border-blue-700 dark:bg-blue-900/20 dark:text-blue-300">
@@ -578,44 +598,87 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
                 </>
               )
             ) : (
+              (() => {
+                // Lead with an offer the user can actually play. When none of
+                // the found offers is included (movie 194: Netflix/Max/Hulu,
+                // none subscribed) we do not crown one "Best Match" — we say
+                // so and list everything for reference.
+                const bestOffer = data.offers.find((o: PrimeOffer) => o.is_accessible);
+                const rest = data.offers.filter((o: PrimeOffer) => o !== bestOffer);
+                return (
+                  <div className="space-y-3">
+                    {bestOffer ? (
+                      <div className="rounded-xl border-2 border-green-400 bg-green-50 p-4 dark:border-green-600 dark:bg-green-900/20">
+                        <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-green-800 dark:text-green-300">
+                          Best Match
+                        </h3>
+                        <OfferRow
+                          offer={bestOffer}
+                          tmdbId={tmdbId}
+                          isBest={true}
+                          preferredAudio={preferences.audio_languages}
+                          preferredSubtitles={preferences.subtitle_languages}
+                          currentCountry={currentCountry}
+                        />
+                      </div>
+                    ) : (
+                      <p className="rounded-xl border border-dashed border-amber-300 bg-amber-50/60 p-3 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
+                        None of the offers found is included with your
+                        subscriptions — they are listed for reference.
+                      </p>
+                    )}
+
+                    {rest.length > 0 && (
+                      <div className="space-y-3 pt-2">
+                        <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                          {bestOffer ? "All Ranked Offers" : "All Availability"}
+                        </h3>
+                        {rest.map((offer: PrimeOffer, i: number) => (
+                          <OfferRow
+                            key={`${offer.country}-${offer.service}-${offer.quality}-${i}`}
+                            offer={offer}
+                            tmdbId={tmdbId}
+                            isBest={false}
+                            preferredAudio={preferences.audio_languages}
+                            preferredSubtitles={preferences.subtitle_languages}
+                            currentCountry={currentCountry}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()
+            )}
+          </section>
+
+          {/* Rent / buy: canonical availability that needs an extra payment,
+              kept apart from the included offers above. */}
+          {data.purchase_offers && data.purchase_offers.length > 0 && (
+            <section>
               <div className="space-y-3">
-                {/* Best match card */}
-                <div className="rounded-xl border-2 border-green-400 bg-green-50 p-4 dark:border-green-600 dark:bg-green-900/20">
-                  <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-green-800 dark:text-green-300">
-                    Best Match
+                <div>
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                    Rent or Buy
                   </h3>
+                  <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    Available for an extra payment — not included in your subscriptions.
+                  </p>
+                </div>
+                {data.purchase_offers.map((offer: PrimeOffer, i: number) => (
                   <OfferRow
-                    offer={data.offers[0]}
+                    key={`${offer.country}-${offer.service}-${offer.quality}-purchase-${i}`}
+                    offer={offer}
                     tmdbId={tmdbId}
-                    isBest={true}
+                    isBest={false}
                     preferredAudio={preferences.audio_languages}
                     preferredSubtitles={preferences.subtitle_languages}
                     currentCountry={currentCountry}
                   />
-                </div>
-
-                {/* All ranked offers */}
-                {data.offers.length > 1 && (
-                  <div className="space-y-3 pt-2">
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                      All Ranked Offers
-                    </h3>
-                    {data.offers.slice(1).map((offer: PrimeOffer, i: number) => (
-                      <OfferRow
-                        key={`${offer.country}-${offer.service}-${offer.quality}-${i}`}
-                        offer={offer}
-                        tmdbId={tmdbId}
-                        isBest={false}
-                        preferredAudio={preferences.audio_languages}
-                        preferredSubtitles={preferences.subtitle_languages}
-                        currentCountry={currentCountry}
-                      />
-                    ))}
-                  </div>
-                )}
+                ))}
               </div>
-            )}
-          </section>
+            </section>
+          )}
 
           {/* Scraper Sources Section */}
           {unofficialLoading && (

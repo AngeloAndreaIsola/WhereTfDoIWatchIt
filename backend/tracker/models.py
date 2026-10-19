@@ -318,6 +318,22 @@ class Subscription(models.Model):
         blank=True,
     )
     name = models.CharField(max_length=50, blank=True, default="")
+    access_mode = models.CharField(
+        max_length=16,
+        default="included",
+        choices=[
+            ("included", "Included subscription"),
+            ("addon", "Add-on subscription"),
+            ("free", "Free access"),
+            ("rent_buy", "Account for rental / purchase"),
+            ("none", "Not owned / not available"),
+        ],
+        help_text=(
+            "How the user holds this service. ``included``/``addon``/``free`` "
+            "grant watchability; ``rent_buy`` only enables rent/buy offers; "
+            "``none`` means explicitly not owned."
+        ),
+    )
 
     class Meta:
         constraints = [
@@ -340,6 +356,14 @@ class Preference(models.Model):
     candidate_countries = ArrayField(models.CharField(max_length=2), default=list, blank=True)
     current_country = models.CharField(max_length=2, blank=True, default="", null=True)
     language_rule = models.JSONField(default=dict, blank=True, null=True)
+    vpn_enabled = models.BooleanField(
+        default=False,
+        help_text=(
+            "User's explicit VPN capability. When set, offers in "
+            "``candidate_countries`` (or any country, when that list is empty) "
+            "count as potentially reachable. Never inferred from IP or locale."
+        ),
+    )
 
     def __str__(self):
         return f"Preference user {self.user_id}"

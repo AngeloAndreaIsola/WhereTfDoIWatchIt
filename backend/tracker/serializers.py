@@ -82,6 +82,7 @@ class ExternalProviderMappingSerializer(serializers.ModelSerializer):
 class ProviderSerializer(serializers.ModelSerializer):
     external_mappings = ExternalProviderMappingSerializer(many=True, read_only=True)
     is_subscribed = serializers.SerializerMethodField()
+    access_mode = serializers.SerializerMethodField()
     scraped_content_count = serializers.SerializerMethodField()
     source_indicator = serializers.SerializerMethodField()
     has_scraper = serializers.SerializerMethodField()
@@ -109,6 +110,7 @@ class ProviderSerializer(serializers.ModelSerializer):
             "country_code",
             "last_scraped_at",
             "is_subscribed",
+            "access_mode",
             "scraped_content_count",
             "source_indicator",
             "has_scraper",
@@ -166,6 +168,14 @@ class ProviderSerializer(serializers.ModelSerializer):
             return obj.id in user_subscribed_ids
         return Subscription.objects.filter(user_id=1, provider__id=obj.id).exists()
 
+    def get_access_mode(self, obj: Provider):
+        """The user's declared access mode for this provider (or ``None``)."""
+        modes = self.context.get("user_access_modes")
+        if modes is not None:
+            return modes.get(obj.id)
+        sub = Subscription.objects.filter(user_id=1, provider=obj).only("access_mode").first()
+        return sub.access_mode if sub else None
+
     def get_scraped_content_count(self, obj: Provider) -> int:
         annotated = getattr(obj, "scraped_total", None)
         if annotated is not None:
@@ -184,7 +194,7 @@ class SubscriptionSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Subscription
-        fields = ["id", "name", "provider", "provider_id", "provider_slug"]
+        fields = ["id", "name", "provider", "provider_id", "provider_slug", "access_mode"]
         extra_kwargs = {
             "name": {"validators": [], "required": False, "allow_blank": True},
         }
@@ -275,10 +285,11 @@ class PreferenceSerializer(serializers.ModelSerializer):
     )
     current_country = serializers.CharField(max_length=2, required=False, allow_blank=True)
     language_rule = serializers.JSONField(required=False, allow_null=True)
+    vpn_enabled = serializers.BooleanField(required=False)
 
     class Meta:
         model = Preference
-        fields = ["audio_languages", "subtitle_languages", "candidate_countries", "current_country", "language_rule"]
+        fields = ["audio_languages", "subtitle_languages", "candidate_countries", "current_country", "language_rule", "vpn_enabled"]
 
     def validate_audio_languages(self, value: list) -> list[str]:
         return validate_language_codes(value)

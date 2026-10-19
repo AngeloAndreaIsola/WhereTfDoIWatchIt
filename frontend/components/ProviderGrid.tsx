@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import ProviderIcon from "./ProviderIcon";
 import { formatRelativeTime } from "@/lib/time";
+import type { ProviderAccessMode } from "@/lib/api";
 
 export interface ProviderItem {
   id: number;
@@ -16,6 +17,8 @@ export interface ProviderItem {
   last_scraped_at?: string | null;
   scraped_content_count?: number;
   is_subscribed: boolean;
+  /** How the user holds this service (null when not owned). */
+  access_mode?: ProviderAccessMode | null;
   has_scraper?: boolean;
   /** Which collector refreshes this card: a catalogue source, its scraper, or `null` when none is registered (the refresh control stays hidden). */
   refresh_kind?: "catalogue" | "scraper" | null;
@@ -36,6 +39,12 @@ export interface ProviderItem {
 interface ProviderGridProps {
   providers: ProviderItem[];
   onToggle: (slug: string) => Promise<void>;
+  /**
+   * Declare *how* the user holds a service. When provided, each card renders
+   * an access-mode selector (included / add-on / free / rent·buy / not owned)
+   * instead of relying on the binary subscribe/unsubscribe toggle.
+   */
+  onSetAccessMode?: (slug: string, mode: ProviderAccessMode) => Promise<void>;
   /** Per-source refresh. Rendered only when the card resolves to a registered collector. Resolves with an optional failure message (ignored here, surfaced by `refreshErrors`). */
   onRefresh?: (slug: string) => Promise<unknown>;
   /** Delete control, offered by the imported-sources section only. */
@@ -53,9 +62,26 @@ interface ProviderGridProps {
   loading?: boolean;
 }
 
+/** How each access mode is shown on a card, in selector order. */
+const ACCESS_MODE_OPTIONS: Array<{ value: ProviderAccessMode; label: string }> = [
+  { value: "included", label: "Included subscription" },
+  { value: "addon", label: "Add-on channel" },
+  { value: "free", label: "Free access" },
+  { value: "rent_buy", label: "Rent / buy account" },
+  { value: "none", label: "Not owned" },
+];
+
+const ACCESS_MODE_LABELS: Record<string, string> = {
+  included: "Included",
+  addon: "Add-on",
+  free: "Free",
+  rent_buy: "Rent / buy",
+};
+
 export default function ProviderGrid({
   providers,
   onToggle,
+  onSetAccessMode,
   onRefresh,
   onRemove,
   useFavicons = false,
@@ -64,6 +90,7 @@ export default function ProviderGrid({
   loading = false,
 }: ProviderGridProps) {
   const [togglingSlug, setTogglingSlug] = useState<string | null>(null);
+  const [modeSaving, setModeSaving] = useState<string | null>(null);
 
   const handleToggle = async (slug: string) => {
     if (togglingSlug) return;
@@ -72,6 +99,16 @@ export default function ProviderGrid({
       await onToggle(slug);
     } finally {
       setTogglingSlug(null);
+    }
+  };
+
+  const handleSetMode = async (slug: string, mode: ProviderAccessMode) => {
+    if (!onSetAccessMode || modeSaving) return;
+    setModeSaving(slug);
+    try {
+      await onSetAccessMode(slug, mode);
+    } finally {
+      setModeSaving(null);
     }
   };
 
@@ -96,7 +133,10 @@ export default function ProviderGrid({
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {providers.map((provider) => {
           const isSelected = provider.is_subscribed;
-          const isPending = togglingSlug === provider.slug;
+          const isPending = togglingSlug === provider.slug || modeSaving === provider.slug;
+          const effectiveMode: ProviderAccessMode =
+            provider.access_mode ?? (isSelected ? "included" : "none");
+          const modeLabel = ACCESS_MODE_LABELS[effectiveMode] ?? "Inactive";
           const isRefreshing =
             Boolean(provider.refreshing) || Boolean(refreshPending?.has(provider.slug));
           const canRefresh = Boolean(onRefresh && provider.refresh_kind);
@@ -161,7 +201,7 @@ export default function ProviderGrid({
                       <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                     </svg>
                   )}
-                  {isPending ? "Updating…" : isSelected ? "Active" : "Inactive"}
+                  {isPending ? "Updating…" : isSelected ? modeLabel : "Inactive"}
                 </span>
 
                 {/* Operational meta: counts and last run come batched with the
@@ -192,6 +232,33 @@ export default function ProviderGrid({
                   </span>
                 )}
               </button>
+
+              {/* Access-mode selector: a sibling of the card so it never
+                  triggers the subscribe toggle. It records *how* the user
+                  holds the service — included, add-on, free or a rent/buy
+                  account — instead of a binary on/off. */}
+              {onSetAccessMode && (
+                <select
+                  value={effectiveMode}
+                  onChange={(e) =>
+                    handleSetMode(provider.slug, e.target.value as ProviderAccessMode)
+                  }
+                  disabled={isPending}
+                  aria-label={`Access mode for ${provider.name}`}
+                  title="How do you access this service?"
+                  className={`mt-1.5 w-full rounded-lg border px-2 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50 ${
+                    isSelected
+                      ? "border-blue-300 bg-blue-50 text-blue-900 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-200"
+                      : "border-gray-200 bg-white text-gray-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                  }`}
+                >
+                  {ACCESS_MODE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              )}
 
               {/* Refresh: a sibling of the card, never a child of it, so the
                   press runs one source without toggling the subscription. */}

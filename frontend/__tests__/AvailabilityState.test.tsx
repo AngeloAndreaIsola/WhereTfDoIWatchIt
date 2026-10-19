@@ -163,11 +163,17 @@ describe("AvailabilityState", () => {
     it("does not turn an available-with-no-offers into unavailable", () => {
       // A backend/UI discrepancy, not a frontend judgement: the classifier says
       // available but no displayable offer exists. The conservative reading is
-      // "not shown", never "not available".
-      render(<AvailabilityState availability={verdict("available", null)} />);
+      // "available, but not on a service we can show", never "not available".
+      render(
+        <AvailabilityState
+          availability={verdict("available", null, { available_on: ["max", "netflix"] })}
+        />,
+      );
 
       expect(screen.queryByText(FALSE_UNAVAILABLE)).not.toBeInTheDocument();
-      expect(screen.getByText(/not shown/i)).toBeInTheDocument();
+      expect(screen.getByText(/not on a service we can show/i)).toBeInTheDocument();
+      // Names where the source says it is, so the line is actionable.
+      expect(screen.getByText(/max, netflix/i)).toBeInTheDocument();
     });
   });
 

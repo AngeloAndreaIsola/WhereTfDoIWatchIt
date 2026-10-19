@@ -382,11 +382,14 @@ class SeasonEndToEndEndpointTests(TestCase):
 class SeriesSubscriptionFilterTests(TestCase):
     """Canonical rows for a series whose services the user does not subscribe to.
 
-    Regression guard for the reported "not available" outcome: an empty
-    ``offers`` list must come from the subscription/provider filters, never
-    from a series-only drop. The series payload has to stay complete so the
-    page can render its empty state, and one subscribed row in the same set
-    must still be surfaced.
+    Regression guard for the reported "not available" outcome *and* for movie
+    194: an empty ``offers`` list must come from the source never having
+    answered — never from the offer list silently discarding rows it did find.
+    Offers on unowned services stay in the list (muted, not accessible) so the
+    page can show *what* exists elsewhere, the series payload stays complete so
+    the page can render, and only the un-catalogued slug (no ``Provider`` row)
+    is dropped. One subscribed row in the same set is still surfaced *and*
+    marked accessible.
     """
 
     def setUp(self):
@@ -417,7 +420,7 @@ class SeriesSubscriptionFilterTests(TestCase):
             for country, service in (("NL", "netflix"), ("NL", "disney"), ("NL", "skyshowtime"))
         ]
 
-    def test_unsubscribed_rows_yield_empty_offers_but_full_series_payload(self):
+    def test_unsubscribed_rows_are_surfaced_muted_and_payload_stays_full(self):
         self.read_offers.return_value = self.unsubscribed
 
         response = self.client.get("/api/prime/series/90001/")
@@ -425,20 +428,36 @@ class SeriesSubscriptionFilterTests(TestCase):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.read_offers.assert_called_once_with(self.series, season=None)
-        self.assertEqual(data["offers"], [])
+        # Unowned services are still listed (muted + not accessible) so the
+        # page shows what is available elsewhere instead of a bare empty list.
+        # The un-catalogued slug (skyshowtime) has no Provider row and drops.
+        services = {offer["service"] for offer in data["offers"]}
+        self.assertEqual(services, {"Netflix", "Disney+"})
+        for offer in data["offers"]:
+            self.assertFalse(offer["is_entitled"])
+            self.assertFalse(offer["is_accessible"])
+        # The series payload stays complete regardless of the offer filter.
         self.assertIsNone(data["selected_season"])
         self.assertEqual(data["series"]["tmdb_id"], 90001)
         self.assertEqual(data["series"]["title"], "Some Series")
         self.assertEqual([row["season"] for row in data["seasons"]], [1, 2, 3])
 
-    def test_a_subscribed_prime_row_in_the_same_cache_is_still_returned(self):
+    def test_a_subscribed_prime_row_is_returned_and_accessible(self):
         self.read_offers.return_value = self.unsubscribed + [
             Offer(country="AT", service="prime", offer_type="subscription",
                   quality="hd", audio_languages=["EN"], subtitle_languages=["EN"]),
         ]
 
-        response = self.client.get("/api/prime/series/90001/")
+        response = self.client.get("/api/prime/series/90001/?current_country=AT")
 
         self.assertEqual(response.status_code, 200)
-        services = {offer["service"] for offer in response.json()["offers"]}
-        self.assertEqual(services, {"Prime Video"})
+        data = response.json()
+        services = {offer["service"] for offer in data["offers"]}
+        self.assertEqual(services, {"Netflix", "Disney+", "Prime Video"})
+        prime = next(o for o in data["offers"] if o["service"] == "Prime Video")
+        self.assertTrue(prime["is_entitled"])
+        self.assertTrue(prime["is_accessible"])
+        # Its unowned peers stay listed but must never be claimed accessible.
+        peers = [o for o in data["offers"] if o["service"] != "Prime Video"]
+        self.assertTrue(peers)
+        self.assertTrue(all(not o["is_accessible"] for o in peers))
