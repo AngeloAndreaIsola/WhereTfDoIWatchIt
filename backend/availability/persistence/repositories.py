@@ -9,6 +9,8 @@ from ..models import (
     Country,
     ContentMapping,
     Offer,
+    OfferEvidence,
+    OfferPrice,
     ProviderContent,
     SyncCursor,
     SyncRun,
@@ -29,8 +31,201 @@ class InactiveSyncError(Exception):
     """Raised when a sync run is not allowed to deactivate unseen offers."""
 
 
+class OfferEvidenceRepository:
+    """Persistence for per-source offer observation evidence.
+
+    One row per ``(offer_identity, source)``: the identity is the exact
+    canonical ``Offer.identity``, so evidence follows the offer across
+    refreshes, deactivation and recreation without a database FK (see
+    ``OfferEvidence`` for why a FK is unsafe here). The read/write policy lives
+    in ``OfferRepository``; this class owns only the row lifecycle and the
+    integrity helpers.
+    """
+
+    def record(self, *, offer_identity, source, provider_slug, country_code,
+               content_type, tmdb_id, season_number=None, episode_number=None,
+               offer_type, provider_content_id="", is_present=True,
+               authoritative=False, observed_at=None, now=None):
+        """Upsert one source's observation state for one canonical offer.
+
+        ``first_seen`` never moves; ``last_seen``/``observed_at`` follow the
+        latest observation and ``is_present``/``authoritative`` state the
+        current one.
+        """
+        now = now or timezone.now()
+        defaults = {
+            "provider_slug": provider_slug,
+            "country_code": country_code,
+            "content_type": content_type,
+            "tmdb_id": tmdb_id,
+            "season_number": season_number,
+            "episode_number": episode_number,
+            "offer_type": offer_type,
+            "provider_content_id": provider_content_id,
+            "is_present": is_present,
+            "authoritative": authoritative,
+            "last_seen": now,
+            "observed_at": observed_at if observed_at is not None else now,
+        }
+        row, _created = OfferEvidence.objects.update_or_create(
+            offer_identity=offer_identity,
+            source=source,
+            defaults=defaults,
+            create_defaults={**defaults, "first_seen": now},
+        )
+        return row
+
+    def record_absent_bulk(self, offers, *, source, now=None):
+        """Record one source's authoritative absence for many canonical offers.
+
+        ``offers`` is an iterable of ``Offer`` rows (provider/country may be
+        preloaded). Only *this* source's evidence is touched: a second source
+        that still observes an offer keeps its present row. Returns the number
+        of evidence rows written (created or updated).
+        """
+        now = now or timezone.now()
+        offers = list(offers)
+        if not offers:
+            return 0
+        identities = [offer.identity for offer in offers]
+        existing = {
+            row.offer_identity: row
+            for row in OfferEvidence.objects.filter(
+                offer_identity__in=identities, source=source
+            )
+        }
+        to_create = []
+        to_update = []
+        for offer in offers:
+            row = existing.get(offer.identity)
+            if row is None:
+                to_create.append(OfferEvidence(
+                    source=source,
+                    offer_identity=offer.identity,
+                    provider_slug=offer.provider.slug,
+                    country_code=offer.country.code,
+                    content_type=offer.content_type,
+                    tmdb_id=offer.tmdb_id,
+                    season_number=offer.season_number,
+                    episode_number=offer.episode_number,
+                    offer_type=offer.offer_type,
+                    provider_content_id=offer.provider_content_id,
+                    is_present=False,
+                    authoritative=True,
+                    first_seen=now,
+                    last_seen=now,
+                    observed_at=now,
+                ))
+            else:
+                row.is_present = False
+                row.authoritative = True
+                row.last_seen = now
+                row.observed_at = now
+                row.updated_at = now
+                to_update.append(row)
+        if to_create:
+            OfferEvidence.objects.bulk_create(to_create)
+        if to_update:
+            OfferEvidence.objects.bulk_update(
+                to_update,
+                ["is_present", "authoritative", "last_seen", "observed_at",
+                 "updated_at"],
+            )
+        return len(to_create) + len(to_update)
+
+    def present_identities(self, identities):
+        """The subset of ``identities`` some source currently observes."""
+        identities = [identity for identity in identities if identity]
+        if not identities:
+            return set()
+        return set(
+            OfferEvidence.objects.filter(
+                offer_identity__in=identities, is_present=True
+            ).values_list("offer_identity", flat=True)
+        )
+
+    def for_identities(self, identities):
+        """Every evidence row (present or absent) for the given identities."""
+        identities = [identity for identity in identities if identity]
+        if not identities:
+            return []
+        return list(
+            OfferEvidence.objects.filter(offer_identity__in=identities)
+            .select_related("source")
+            .order_by("source__slug", "id")
+        )
+
+    def recompute_availability(self, identities, *, now=None):
+        """Re-derive ``Offer.currently_available`` from current evidence.
+
+        Used after evidence changes made outside the refresh pipeline (a source
+        purge), so stored availability never drifts from the evidence it is
+        derived from. An identity with no remaining evidence at all is set
+        unavailable: the caller only recomputes identities whose evidence it
+        just removed, so "no evidence" here means "the observations it had are
+        gone", never "a legacy row that predates evidence". Returns the number
+        of canonical rows changed.
+        """
+        identities = list({identity for identity in identities if identity})
+        if not identities:
+            return 0
+        present = self.present_identities(identities)
+        available = [identity for identity in identities if identity in present]
+        unavailable = [identity for identity in identities if identity not in present]
+        return self._set_availability(available, unavailable, now=now)
+
+    def purge_orphans(self):
+        """Delete evidence rows whose canonical offer no longer exists.
+
+        The explicit integrity counterpart to ``OfferEvidence`` having no FK to
+        ``Offer``: run it after any manual offer deletion. An evidence row is
+        only removed when its identity is absent from ``Offer``. Returns the
+        number of deleted rows.
+        """
+        deleted, _ = OfferEvidence.objects.exclude(
+            offer_identity__in=Offer.objects.values("identity")
+        ).delete()
+        return deleted
+
+    def purge_for_source(self, source):
+        """Remove all evidence for one source and recompute affected offers.
+
+        The explicit policy for a source that must stop contributing evidence
+        (a deleted or retired source). Deleting the ``Source`` row itself is
+        refused while evidence exists (FK ``PROTECT``), so this runs first.
+        After removal an offer another source still observes stays available;
+        one this source alone observed becomes unavailable - its only
+        observations are gone. Returns ``(deleted, recomputed)``.
+        """
+        identities = list(
+            OfferEvidence.objects.filter(source=source)
+            .values_list("offer_identity", flat=True)
+            .distinct()
+        )
+        deleted, _ = OfferEvidence.objects.filter(source=source).delete()
+        recomputed = self.recompute_availability(identities)
+        return deleted, recomputed
+
+    @staticmethod
+    def _set_availability(available, unavailable, *, now=None):
+        now = now or timezone.now()
+        changed = 0
+        if available:
+            changed += Offer.objects.filter(
+                identity__in=available, currently_available=False
+            ).update(currently_available=True, updated_at=now)
+        if unavailable:
+            changed += Offer.objects.filter(
+                identity__in=unavailable, currently_available=True
+            ).update(currently_available=False, updated_at=now)
+        return changed
+
+
 class OfferRepository:
     """Read/write persistence for canonical offers. No fetching, no querying policy."""
+
+    def __init__(self, evidence_repository=None):
+        self.evidence = evidence_repository or OfferEvidenceRepository()
 
     def upsert(self, *, provider, country, source, content_type, tmdb_id, offer_type,
                season_number=None, episode_number=None, provider_content_id="",
@@ -98,40 +293,57 @@ class OfferRepository:
             identity=identity,
             defaults=defaults,
         )
-        if created:
-            return offer, True
-
-        # first_seen is deliberately absent: an offer's first sighting never moves.
-        offer.source = source
-        offer.sync_run = sync_run
-        offer.provider_url = provider_url
-        offer.quality = quality
-        offer.audio_languages = audio_languages
-        offer.subtitle_languages = subtitle_languages
-        offer.available_from = available_from
-        offer.available_until = available_until
-        offer.source_record_id = source_record_id
-        offer.source_version = source_version
-        offer.observed_at = observed_at
-        offer.last_seen = now
-        offer.currently_available = True
-        offer.save(update_fields=[
-            "source",
-            "sync_run",
-            "provider_url",
-            "quality",
-            "audio_languages",
-            "subtitle_languages",
-            "available_from",
-            "available_until",
-            "source_record_id",
-            "source_version",
-            "observed_at",
-            "last_seen",
-            "currently_available",
-            "updated_at",
-        ])
-        return offer, False
+        if not created:
+            # first_seen is deliberately absent: an offer's first sighting never moves.
+            offer.source = source
+            offer.sync_run = sync_run
+            offer.provider_url = provider_url
+            offer.quality = quality
+            offer.audio_languages = audio_languages
+            offer.subtitle_languages = subtitle_languages
+            offer.available_from = available_from
+            offer.available_until = available_until
+            offer.source_record_id = source_record_id
+            offer.source_version = source_version
+            offer.observed_at = observed_at
+            offer.last_seen = now
+            offer.currently_available = True
+            offer.save(update_fields=[
+                "source",
+                "sync_run",
+                "provider_url",
+                "quality",
+                "audio_languages",
+                "subtitle_languages",
+                "available_from",
+                "available_until",
+                "source_record_id",
+                "source_version",
+                "observed_at",
+                "last_seen",
+                "currently_available",
+                "updated_at",
+            ])
+        # The observation is also recorded per source, so a later authoritative
+        # removal by *another* source cannot erase this source's evidence for
+        # the shared canonical row.
+        self.evidence.record(
+            offer_identity=identity,
+            source=source,
+            provider_slug=provider.slug,
+            country_code=country.code,
+            content_type=content_type,
+            tmdb_id=tmdb_id,
+            season_number=season_number,
+            episode_number=episode_number,
+            offer_type=offer_type,
+            provider_content_id=provider_content_id,
+            is_present=True,
+            authoritative=bool(sync_run is not None and sync_run.authoritative),
+            observed_at=observed_at,
+            now=now,
+        )
+        return offer, created
 
     def get_for_content(self, tmdb_id, content_type, country_code=None):
         qs = Offer.objects.filter(
@@ -212,10 +424,22 @@ class OfferRepository:
         return claims
 
     def deactivate_unseen(self, sync_run, seen_identities):
-        """Mark previously-active offers absent from an authoritative full snapshot.
+        """Mark this source's evidence absent for offers it did not see.
 
         Rows are never deleted and last_seen never moves: a deactivated offer
         is still "last seen" when we last observed it.
+
+        Source-scoped by design. The canonical identity deliberately excludes
+        the source, so a second source may still be reporting the same offer.
+        This run only proves its *own* source stopped observing it, so it:
+
+        * records an authoritative absence for ``sync_run.source`` only;
+        * recomputes effective availability from *all* sources' present
+          evidence - an offer any other source still observes stays available;
+        * marks only this source's price rows stale (never another source's).
+
+        Effective availability is therefore no longer last-writer-wins: it is
+        derived from the union of current per-source evidence.
         """
         if sync_run.status != SyncStatus.SUCCEEDED or not sync_run.authoritative:
             raise InactiveSyncError(
@@ -223,20 +447,146 @@ class OfferRepository:
                 f"(run {sync_run.pk}: status={sync_run.status}, "
                 f"authoritative={sync_run.authoritative})."
             )
-        qs = Offer.objects.filter(
-            provider=sync_run.provider,
-            currently_available=True,
-            content_type__in=[ContentType.MOVIE, ContentType.SERIES],
+        now = timezone.now()
+        qs = (
+            Offer.objects.filter(
+                provider=sync_run.provider,
+                currently_available=True,
+                content_type__in=[ContentType.MOVIE, ContentType.SERIES],
+            )
+            .select_related("provider", "country")
         )
         if sync_run.country_id is not None:
             qs = qs.filter(country=sync_run.country)
         if seen_identities:
             qs = qs.exclude(identity__in=seen_identities)
-        return qs.update(
-            currently_available=False,
-            sync_run=sync_run,
-            updated_at=timezone.now(),
+        candidates = list(qs)
+        if not candidates:
+            return 0
+        stale_identities = [offer.identity for offer in candidates]
+
+        # 1. This run's own authoritative absence, and only this source's.
+        self.evidence.record_absent_bulk(candidates, source=sync_run.source, now=now)
+
+        # 2. Effective availability is the OR over every source's current
+        #    evidence: an offer a co-reporting source still observes stays up.
+        present = self.evidence.present_identities(stale_identities)
+        to_deactivate = [
+            identity for identity in stale_identities if identity not in present
+        ]
+        deactivated = 0
+        if to_deactivate:
+            deactivated = Offer.objects.filter(identity__in=to_deactivate).update(
+                currently_available=False,
+                sync_run=sync_run,
+                updated_at=now,
+            )
+
+        # 3. Price lifecycle stays source-scoped, and covers every offer this
+        #    run stopped seeing - even one another source keeps available. The
+        #    rows themselves stay (last known value, is_current=False) so the
+        #    removal is inspectable and a reappearing offer reuses them.
+        OfferPrice.objects.filter(
+            offer_identity__in=stale_identities,
+            source=sync_run.source,
+            is_current=True,
+        ).update(is_current=False, updated_at=now)
+        return deactivated
+
+
+class OfferPriceRepository:
+    """Persistence for per-source price observations.
+
+    One row per ``(offer_identity, source)``: the identity is the exact
+    canonical ``Offer.identity``, so a price follows the offer across refreshes,
+    deactivation and recreation without a database FK (see ``OfferPrice`` for
+    why a FK is unsafe here). Reads never cross the availability boundary
+    themselves; ``AvailabilityReconciliationService`` attaches these rows to the
+    observations it already selected.
+    """
+
+    def record(self, *, offer, source, amount, currency, source_offer_id="",
+               error="", observed_at=None, now=None):
+        """Persist one source observation's price.
+
+        ``amount``/``currency`` are already validated by
+        ``availability.services.normalize.normalize_price``. A valid pair
+        updates the row and makes it current. Anything else preserves the last
+        known value and marks it not current — a missing price is never stored
+        as zero and never erases a value observed by *another* source (those
+        are different rows).
+        """
+        now = now or timezone.now()
+        currency = (currency or "").strip().upper()
+        valid = amount is not None and bool(currency) and not error
+
+        row = OfferPrice.objects.filter(
+            offer_identity=offer.identity, source=source
+        ).first()
+        if row is None:
+            # Nothing to record when the source simply supplied no price and
+            # there is no previous value to preserve. A malformed/ambiguous
+            # observation is kept so the reason is inspectable.
+            if amount is None and not error:
+                return None
+            row = OfferPrice(
+                offer_identity=offer.identity,
+                source=source,
+                first_seen=now,
+            )
+
+        row.provider_slug = offer.provider.slug
+        row.country_code = offer.country.code
+        row.content_type = offer.content_type
+        row.tmdb_id = offer.tmdb_id
+        row.season_number = offer.season_number
+        row.episode_number = offer.episode_number
+        row.offer_type = offer.offer_type
+        row.provider_content_id = offer.provider_content_id
+        row.source_offer_id = source_offer_id or ""
+        row.last_seen = now
+        row.observed_at = observed_at or now
+        if valid:
+            row.amount = amount
+            row.currency = currency
+            row.is_current = True
+            row.validation_error = ""
+        else:
+            # Keep the last known amount/currency: absence or malformed data is
+            # not proof that the price disappeared, and zero would be a lie.
+            row.is_current = False
+            row.validation_error = (error or "price not reported")[:100]
+        row.save()
+        return row
+
+    def for_identities(self, identities):
+        """Every price row for the given canonical offer identities."""
+        identities = [identity for identity in identities if identity]
+        if not identities:
+            return []
+        return list(
+            OfferPrice.objects.filter(offer_identity__in=identities)
+            .select_related("source")
+            .order_by("source__slug", "id")
         )
+
+    def purge_orphans(self):
+        """Delete price rows whose canonical offer no longer exists.
+
+        ``OfferPrice`` deliberately has no database ``ForeignKey`` to ``Offer``
+        (see :class:`~availability.models.OfferPrice`), so deleting an offer -
+        by hand, through the admin, or by an operator script - cannot cascade.
+        The row is harmless (reads are always keyed by live offer identities),
+        but it would otherwise accumulate forever. This is the explicit
+        integrity counterpart: run it after any manual offer deletion. A price
+        row is only ever removed when its identity is absent from ``Offer``.
+
+        Returns the number of deleted rows.
+        """
+        deleted, _ = OfferPrice.objects.exclude(
+            offer_identity__in=Offer.objects.values("identity")
+        ).delete()
+        return deleted
 
 
 class ProviderContentRepository:

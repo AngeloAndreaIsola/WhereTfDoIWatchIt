@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from typing import Optional
 
 from .enums import ConflictKind, FreshnessState, SyncStatus
@@ -57,6 +58,30 @@ class ReconciliationConflict:
 
 
 @dataclass(frozen=True)
+class PriceObservation:
+    """One source's price row for one canonical offer, as reconciliation read it.
+
+    Provenance side of the price split: ``source`` is the source that supplied
+    the amount, and ``amount``/``currency`` are exactly what it supplied (never
+    inferred). ``is_current`` is False when the latest observation did not
+    confirm the price; such a row is kept for inspection but is never selected
+    as the display price.
+    """
+
+    source: str
+    amount: Optional[Decimal]
+    currency: str
+    source_offer_id: str
+    observed_at: Optional[datetime]
+    is_current: bool
+    validation_error: str = ""
+
+    @property
+    def is_valid(self) -> bool:
+        return self.amount is not None and bool(self.currency)
+
+
+@dataclass(frozen=True)
 class OfferObservation:
     """One raw ``Offer`` row as reconciliation interpreted it.
 
@@ -84,6 +109,11 @@ class OfferObservation:
     sync_status: Optional[SyncStatus]
     mapping_doubt: str
     """Non-empty when this observation's provider content resolves to another TMDB id."""
+    price: Optional["PriceObservation"] = None
+    """This observation's **own source's** price for its offer identity, if any."""
+    source_prices: tuple["PriceObservation", ...] = ()
+    """Every source's price for this observation's offer identity, so a price
+    row can never be attached to the wrong observation."""
 
 
 @dataclass(frozen=True)
@@ -126,6 +156,18 @@ class ReconciledOffer:
     offer_ids: tuple[int, ...]
     observations: tuple[OfferObservation, ...]
     conflicts: tuple[ReconciliationConflict, ...]
+    price: Optional[PriceObservation] = None
+    """The selected display price, or None when no source has a current one.
+
+    Selection is deterministic and documented in
+    ``AvailabilityReconciliationService._select_price`` — never "last writer
+    wins", which is the bug a single price column on ``Offer`` would have had.
+    """
+    price_is_from: bool = False
+    """True when several current prices share the selected currency but differ,
+    so the UI can say "from €X" instead of implying one exact price."""
+    prices: tuple[PriceObservation, ...] = ()
+    """Every source-specific price row, current and stale, for inspection."""
 
     @property
     def source_urls(self) -> tuple[tuple[str, str], ...]:

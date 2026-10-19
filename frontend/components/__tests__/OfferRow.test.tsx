@@ -1,7 +1,8 @@
 import React from "react";
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
-import OfferRow from "../OfferRow";
+import OfferRow, { formatPrice } from "../OfferRow";
+import type { PrimeOffer } from "@/lib/api";
 
 const baseOffer = {
   country: "IT",
@@ -91,3 +92,159 @@ describe("OfferRow", () => {
     expect(screen.queryByTestId("offer-not-subscribed")).not.toBeInTheDocument();
   });
 });
+
+const rentOffer = (overrides: Partial<PrimeOffer> = {}): PrimeOffer => ({
+  ...baseOffer,
+  offer_type: "rent",
+  price: {
+    amount: "2.99",
+    currency: "EUR",
+    source: "justwatch",
+    is_current: true,
+    is_from: false,
+  },
+  ...overrides,
+});
+
+describe("OfferRow price display", () => {
+  it("formats the structured amount and currency for a rent offer", () => {
+    render(<OfferRow offer={rentOffer()} currentCountry="NL" />);
+    const price = screen.getByTestId("offer-price");
+    expect(price).toHaveAttribute("data-amount", "2.99");
+    expect(price).toHaveAttribute("data-currency", "EUR");
+    expect(price.textContent).toContain("€");
+    expect(price.textContent).toContain("2.99");
+  });
+
+  it("shows a distinct price for a buy offer", () => {
+    render(
+      <OfferRow
+        offer={rentOffer({
+          offer_type: "buy",
+          price: { amount: "9.99", currency: "EUR", is_current: true },
+        })}
+        currentCountry="NL"
+      />,
+    );
+    expect(screen.getByTestId("offer-price")).toHaveAttribute("data-amount", "9.99");
+  });
+
+  it("renders a different currency without converting it", () => {
+    render(
+      <OfferRow
+        offer={rentOffer({
+          price: { amount: "3.99", currency: "USD", is_current: true },
+        })}
+        currentCountry="US"
+      />,
+    );
+    const price = screen.getByTestId("offer-price");
+    expect(price).toHaveAttribute("data-currency", "USD");
+    expect(price.textContent).toContain("3.99");
+  });
+
+  it("labels a multi-source disagreement as 'from' the cheapest price", () => {
+    render(
+      <OfferRow
+        offer={rentOffer({
+          price: { amount: "2.99", currency: "EUR", is_current: true, is_from: true },
+        })}
+        currentCountry="NL"
+      />,
+    );
+    expect(screen.getByTestId("offer-price").textContent).toMatch(/^from /);
+  });
+
+  it("falls back to 'not confirmed' rather than implying a missing price is free", () => {
+    render(
+      <OfferRow offer={rentOffer({ price: null })} currentCountry="NL" />,
+    );
+    expect(screen.getByTestId("offer-price-missing")).toBeInTheDocument();
+    expect(screen.queryByTestId("offer-price")).not.toBeInTheDocument();
+    expect(screen.queryByText(/free/i)).not.toBeInTheDocument();
+  });
+
+  it("never presents a stale price as freshly confirmed", () => {
+    render(
+      <OfferRow
+        offer={rentOffer({
+          price: { amount: "2.99", currency: "EUR", is_current: false },
+        })}
+        currentCountry="NL"
+      />,
+    );
+    expect(screen.queryByTestId("offer-price")).not.toBeInTheDocument();
+    expect(screen.getByTestId("offer-price-missing")).toBeInTheDocument();
+  });
+
+  it("does not show a per-title price for subscription offers", () => {
+    render(
+      <OfferRow
+        offer={{
+          ...baseOffer,
+          offer_type: "subscription",
+          price: { amount: "9.99", currency: "EUR", is_current: true },
+        }}
+        currentCountry="IT"
+      />,
+    );
+    expect(screen.queryByTestId("offer-price")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("offer-price-missing")).not.toBeInTheDocument();
+  });
+
+  it("shows a price on an unowned offer without implying entitlement", () => {
+    render(
+      <OfferRow
+        offer={rentOffer({
+          locality: "local" as const,
+          is_entitled: false,
+          is_accessible: false,
+          access_label: "Purchase",
+        })}
+        currentCountry="NL"
+        isBest={true}
+      />,
+    );
+    // Price is visible...
+    expect(screen.getByTestId("offer-price")).toBeInTheDocument();
+    // ...but the offer is still clearly not playable, and never "Best Match".
+    expect(screen.getByTestId("offer-not-subscribed")).toBeInTheDocument();
+    expect(screen.queryByText("Best Match")).not.toBeInTheDocument();
+  });
+
+  it("keeps the add-on label when a price is present", () => {
+    render(
+      <OfferRow
+        offer={rentOffer({
+          offer_type: "addon",
+          is_addon: true,
+          required_base_display: "Prime Video",
+          price: { amount: "4.99", currency: "EUR", is_current: true },
+        })}
+        currentCountry="NL"
+      />,
+    );
+    expect(screen.getByText(/Add-on/)).toBeInTheDocument();
+    expect(screen.getByTestId("offer-price")).toHaveAttribute("data-amount", "4.99");
+  });
+});
+
+describe("formatPrice", () => {
+  it("formats a decimal string with the requested currency", () => {
+    expect(formatPrice("2.99", "EUR", "en-US")).toBe("€2.99");
+  });
+
+  it("preserves the currency's own precision rules", () => {
+    // JPY has no minor unit; the formatter must not invent .00.
+    expect(formatPrice("1200", "JPY", "en-US")).toBe("¥1,200");
+  });
+
+  it("falls back to a plain code label for a code Intl rejects", () => {
+    expect(formatPrice("2.99", "EU", "en-US")).toBe("2.99 EU");
+  });
+
+  it("returns empty for a non-numeric amount", () => {
+    expect(formatPrice("not-a-number", "EUR", "en-US")).toBe("");
+  });
+});
+

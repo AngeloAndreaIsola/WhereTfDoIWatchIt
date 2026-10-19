@@ -336,8 +336,19 @@ class ClassifiedOffer:
     locality: str = Locality.LOCAL
     is_accessible: bool = False
     requires_payment: bool = False
+    #: True for an offer delivered as an add-on channel (its provider has a
+    #: base platform). ``required_base``/``required_base_display`` name the
+    #: platform the user must also hold; both are empty for standalone offers.
+    is_addon: bool = False
+    required_base: str = ""
+    required_base_display: str = ""
     rejection_reasons: list[str] = field(default_factory=list)
     ranking_score: tuple = field(default_factory=tuple)
+    #: Display price (structured amount + currency) or None. Price never
+    #: affects ``is_entitled``/``is_accessible`` — it only tells the reader what
+    #: a rent/buy offer would cost, which is orthogonal to access.
+    price: Optional[dict] = None
+    prices: list[dict] = field(default_factory=list)
 
     @property
     def is_qualifying_offer_type(self) -> bool:
@@ -370,7 +381,12 @@ class ClassifiedOffer:
             "locality": self.locality,
             "is_accessible": self.is_accessible,
             "requires_payment": self.requires_payment,
+            "is_addon": self.is_addon,
+            "required_base": self.required_base,
+            "required_base_display": self.required_base_display,
             "rejection_reasons": self.rejection_reasons,
+            "price": self.price,
+            "prices": self.prices,
         }
 
 
@@ -398,6 +414,8 @@ def _coerce_offer(raw: Any) -> Offer:
             getattr(raw, "subtitle_languages", None) or getattr(raw, "subs", None) or []
         ),
         is_scraped_source=bool(getattr(raw, "is_scraped_source", False)),
+        price=getattr(raw, "price", None),
+        prices=list(getattr(raw, "prices", None) or []),
     )
 
 
@@ -431,8 +449,39 @@ def classify_offer(
     is_lang_match = scored.is_match
 
     locality = reach.locality(country, is_scraped)
-    entitled = access.entitles(service, access_type)
     requires_payment = access_type in PAYMENT_ACCESS_TYPES
+
+    # An offer whose provider has a base platform is delivered as an add-on
+    # channel. It is only entitled when the user holds *both* the channel and
+    # that base platform: selecting the channel never grants the base, and
+    # holding the base never grants every channel. The requirement is surfaced
+    # on the offer itself (``required_base``) so the UI can say what is missing.
+    provider = provider_map.get((service or "").lower().strip())
+    is_addon = False
+    base_slug = ""
+    base_display = ""
+    if provider is not None:
+        channel_base = getattr(provider, "addon_parent_slug", "") or ""
+        if channel_base:
+            base_provider = provider_map.get(channel_base)
+            is_addon = True
+            base_slug = channel_base
+            base_display = (
+                getattr(base_provider, "name", "") or channel_base
+                if base_provider is not None
+                else channel_base
+            )
+            if access_type == AccessType.SUBSCRIPTION:
+                access_type = AccessType.ADDON
+
+    if is_addon:
+        base_entitled = access.entitles(base_slug, AccessType.SUBSCRIPTION)
+        channel_entitled = access.entitles(service, AccessType.ADDON)
+        entitled = base_entitled and channel_entitled
+    else:
+        base_entitled = True
+        channel_entitled = True
+        entitled = access.entitles(service, access_type)
 
     is_accessible = bool(
         entitled
@@ -442,12 +491,19 @@ def classify_offer(
     )
 
     reasons: list[str] = []
+    if is_addon and not base_entitled:
+        reasons.append(f"Requires {base_display or base_slug} (add-on channel)")
     if not entitled:
         if requires_payment:
             reasons.append(
                 f"Only available to {offer_type} (not included in subscription)"
             )
-        else:
+        elif is_addon and not channel_entitled:
+            reasons.append(
+                f"No active subscription for {presented.service_display or service} "
+                "(add-on channel)"
+            )
+        elif not is_addon:
             reasons.append(
                 f"No active subscription for {presented.service_display or service}"
             )
@@ -484,8 +540,13 @@ def classify_offer(
         locality=locality,
         is_accessible=is_accessible,
         requires_payment=requires_payment,
+        is_addon=is_addon,
+        required_base=base_slug,
+        required_base_display=base_display,
         rejection_reasons=reasons,
         ranking_score=scored.score_tuple,
+        price=raw.price,
+        prices=list(raw.prices or []),
     )
 
 
@@ -584,10 +645,7 @@ def resolve_title(
         access = build_user_access(getattr(preference, "user_id", 1) or 1)
 
     reach = build_reach(preference, current_country)
-    provider_map = {
-        p.slug: p
-        for p in Provider.objects.only("slug", "name", "category", "country_code")
-    }
+    provider_map = {p.slug: p for p in Provider.objects.all()}
 
     classified = [
         classify_offer(

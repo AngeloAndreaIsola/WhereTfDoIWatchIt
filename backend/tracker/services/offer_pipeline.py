@@ -143,6 +143,9 @@ class OfficialOffersPipeline:
                 offer_dict["is_accessible"] = classified.is_accessible
                 offer_dict["is_entitled"] = classified.is_entitled
                 offer_dict["requires_payment"] = classified.requires_payment
+                offer_dict["is_addon"] = classified.is_addon
+                offer_dict["required_base"] = classified.required_base
+                offer_dict["required_base_display"] = classified.required_base_display
                 offer_dict["rejection_reasons"] = classified.rejection_reasons
                 order_key = (
                     0 if classified.is_accessible else 1,

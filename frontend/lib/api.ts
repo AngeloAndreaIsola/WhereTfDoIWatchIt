@@ -40,6 +40,24 @@ export type OfferType =
 export type AccessType = OfferType;
 export type OfferLocality = "local" | "vpn" | "out_of_reach" | "anywhere";
 
+/**
+ * A structured price attached to an offer. `amount` is a decimal string (never
+ * a float, so precision survives) and `currency` an explicit ISO-4217 code.
+ * `is_current` is false for a remembered value that the latest observation did
+ * not confirm; such a price must not be presented as freshly confirmed.
+ */
+export interface OfferPrice {
+  amount: string | null;
+  currency: string;
+  source?: string;
+  source_offer_id?: string;
+  observed_at?: string | null;
+  is_current?: boolean;
+  /** True when several current prices share a currency but differ ("from €X"). */
+  is_from?: boolean;
+  validation_error?: string;
+}
+
 export interface PrimeOffer {
   country: string;
   service: string;
@@ -64,7 +82,17 @@ export interface PrimeOffer {
   is_accessible?: boolean;
   is_entitled?: boolean;
   requires_payment?: boolean;
+  /** True when this offer is delivered as an add-on channel. */
+  is_addon?: boolean;
+  /** Base platform slug the user must also hold (add-on offers only). */
+  required_base?: string;
+  /** Display name of the base platform the add-on requires. */
+  required_base_display?: string;
   rejection_reasons?: string[];
+  /** Selected display price (rent/buy/add-on); absent or null means "no confirmed price". */
+  price?: OfferPrice | null;
+  /** Every source-specific price row, for inspection. */
+  prices?: OfferPrice[];
 }
 
 /** The backend's single access verdict for a title (detail pages). */
@@ -585,6 +613,26 @@ export interface TitleAvailabilityVerdict {
   sources: TitleAvailabilitySource[];
   /** Provider slugs a source reported this title as available on. */
   available_on?: string[];
+  /**
+   * How the state was reached, so the page can tell a concrete offer apart
+   * from a source's bare "it is available" claim:
+   * - `offers` — at least one currently-available canonical offer exists.
+   * - `title_signal` — a source reports the title as available, but no
+   *   concrete offer could be matched/displayed. Never a playable option.
+   * - `absence` — sources were checked and none offered it.
+   * - `none` — no evidence resolved either way.
+   */
+  evidence?: "offers" | "title_signal" | "absence" | "none";
+  /** Number of currently-available canonical offers behind `state`. */
+  offer_count?: number;
+  /** Title-level availability claims with no displayable offer. */
+  title_signals?: Array<{
+    provider: string;
+    country?: string;
+    offer_type?: string;
+    source: string;
+    checked_at?: string | null;
+  }>;
 }
 
 /**

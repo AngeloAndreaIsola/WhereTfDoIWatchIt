@@ -34,6 +34,12 @@ export interface ProviderItem {
   refreshing?: boolean;
   /** Site host used to fetch this card's favicon. Absent for catalogue providers, which use the brand badges. */
   favicon_domain?: string;
+  /** True when this service is an add-on channel sold through a base platform. */
+  is_addon?: boolean;
+  /** Base platform slug this add-on requires (only for `is_addon` rows). */
+  parent?: string | null;
+  /** Display name of the base platform this add-on requires. */
+  parent_name?: string | null;
 }
 
 interface ProviderGridProps {
@@ -203,6 +209,15 @@ export default function ProviderGrid({
                   )}
                   {isPending ? "Updating…" : isSelected ? modeLabel : "Inactive"}
                 </span>
+
+                {/* Add-on channels are selectable on their own, but the card
+                    must say what base platform they require — a channel the
+                    user buys is not the same as the platform underneath it. */}
+                {provider.is_addon && (
+                  <span className="mt-1 text-[10px] font-medium text-amber-700 dark:text-amber-400">
+                    Add-on{provider.parent_name ? ` · needs ${provider.parent_name}` : ""}
+                  </span>
+                )}
 
                 {/* Operational meta: counts and last run come batched with the
                     list response, so the card never fetches its own data. */}

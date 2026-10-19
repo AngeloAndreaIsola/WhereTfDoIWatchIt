@@ -40,6 +40,7 @@ from django.utils import timezone
 from ..domain.enums import ConflictKind, ContentType, FreshnessState, SyncStatus
 from ..domain.reconciliation import (
     OfferObservation,
+    PriceObservation,
     ReconciledOffer,
     ReconciliationAudit,
     ReconciliationConflict,
@@ -54,6 +55,7 @@ from ..freshness import FRESHNESS_INTERVAL_KEY, freshness_state
 from ..models import ContentMapping, ProviderContent
 from ..persistence.repositories import (
     MappingRepository,
+    OfferPriceRepository,
     OfferRepository,
     SyncRunRepository,
 )
@@ -63,10 +65,11 @@ class AvailabilityReconciliationService:
     """Read-only reconciliation of canonical availability rows."""
 
     def __init__(self, offer_repository=None, mapping_repository=None,
-                 sync_run_repository=None):
+                 sync_run_repository=None, price_repository=None):
         self.offers = offer_repository or OfferRepository()
         self.mappings = mapping_repository or MappingRepository()
         self.sync_runs = sync_run_repository or SyncRunRepository()
+        self.prices = price_repository or OfferPriceRepository()
 
     # ------------------------------------------------------------------ API
 
@@ -194,12 +197,19 @@ class AvailabilityReconciliationService:
         statuses = self.sync_runs.latest_by_scope(
             (row.provider_id, row.source_id, row.country_id) for row in rows
         )
+        # Prices are read once, by canonical offer identity, and handed to every
+        # observation of that identity. A price row can therefore never be
+        # attached to an offer it does not belong to.
+        prices_by_identity: dict[str, list] = {}
+        for price in self.prices.for_identities({row.identity for row in rows}):
+            prices_by_identity.setdefault(price.offer_identity, []).append(price)
 
         grouped: dict[ReconciliationGroup, dict[str, list[OfferObservation]]] = {}
         for row in rows:
             observation = self._observe(
                 row,
                 now=now, mappings=mappings, claims=claims, statuses=statuses,
+                prices=prices_by_identity.get(row.identity, ()),
             )
             group = ReconciliationGroup(
                 content_type=row.content_type,
@@ -225,7 +235,7 @@ class AvailabilityReconciliationService:
         conflicts.sort(key=lambda c: (c.provider, c.country, str(c.kind), c.offer_ids))
         return offers, conflicts, statuses
 
-    def _observe(self, row, *, now, mappings, claims, statuses) -> OfferObservation:
+    def _observe(self, row, *, now, mappings, claims, statuses, prices=()) -> OfferObservation:
         detail = ""
         provider_content_id = row.provider_content_id
         if provider_content_id:
@@ -249,6 +259,13 @@ class AvailabilityReconciliationService:
             now=now,
         )
 
+        source_prices = tuple(_price_observation(price) for price in prices)
+        own_source = row.source.slug
+        own_price = next(
+            (price for price in source_prices if price.source == own_source),
+            None,
+        )
+
         return OfferObservation(
             offer_id=row.pk,
             source=row.source.slug,
@@ -267,6 +284,8 @@ class AvailabilityReconciliationService:
             freshness=freshness,
             sync_status=statuses.get((row.provider_id, row.source_id, row.country_id)),
             mapping_doubt=detail,
+            price=own_price,
+            source_prices=source_prices,
         )
 
     def _reconcile_group(self, group, subgroups):
@@ -382,6 +401,15 @@ class AvailabilityReconciliationService:
                 with_url, key=lambda obs: (obs.last_seen, obs.source),
             ).provider_url
 
+        prices = _dedupe_prices(
+            price for obs in observations for price in obs.source_prices
+        )
+        price, price_is_from, price_conflict = self._price_value(
+            group, observations, prices,
+        )
+        if price_conflict is not None:
+            conflicts.append(price_conflict)
+
         return ReconciledOffer(
             provider=group.provider,
             country=group.country,
@@ -403,7 +431,62 @@ class AvailabilityReconciliationService:
             offer_ids=tuple(sorted(obs.offer_id for obs in observations)),
             observations=tuple(observations),
             conflicts=tuple(_dedupe(list(conflicts) + list(extra_conflicts))),
+            price=price,
+            price_is_from=price_is_from,
+            prices=prices,
         )
+
+    def _price_value(self, group, observations, prices):
+        """Select one display price and report source disagreement.
+
+        ``prices`` are every source-specific row for the group's offers. Only
+        current, fully validated prices can be displayed; a stale row is kept
+        but never selected, so an unconfirmed price is never shown as fresh.
+        """
+        current = [price for price in prices if price.is_current and price.is_valid]
+        conflict = None
+        if len({(price.currency, price.amount) for price in current}) > 1:
+            priced = [obs for obs in observations if obs.source_prices]
+            conflict = self._conflict(
+                ConflictKind.PRICE,
+                group=group,
+                offer_ids=[obs.offer_id for obs in (priced or observations)],
+                sources=[price.source for price in current],
+                facts=[
+                    SourceFact(price.source, f"{price.currency} {price.amount}")
+                    for price in current
+                ],
+            )
+        selected, is_from = self._select_price(current)
+        return selected, is_from, conflict
+
+    @staticmethod
+    def _select_price(current):
+        """Deterministic display-price choice among current, valid prices.
+
+        Rule (documented in the redesign report):
+
+        1. the currency reported by the most sources wins; ties break on the
+           ISO code, so the choice never depends on row order;
+        2. within that currency the **lowest** amount wins (what "from €X"
+           means for the user);
+        3. amount ties break on ``(source, source_offer_id)``.
+
+        No single "canonical price" is invented: different amounts in the same
+        currency set ``is_from``, and every source-specific row is exposed
+        alongside, so a disagreement is visible rather than silently averaged.
+        """
+        if not current:
+            return None, False
+        counts = Counter(price.currency for price in current)
+        currency = sorted(counts, key=lambda code: (-counts[code], code))[0]
+        same_currency = [price for price in current if price.currency == currency]
+        chosen = min(
+            same_currency,
+            key=lambda price: (price.amount, price.source, price.source_offer_id),
+        )
+        is_from = len({price.amount for price in same_currency}) > 1
+        return chosen, is_from
 
     def _quality_value(self, group, observations):
         """Known quality wins over unknown; two known values cannot be ranked."""
@@ -556,3 +639,48 @@ def _dedupe(conflicts: Iterable[ReconciliationConflict]) -> list[ReconciliationC
         seen.add(conflict.dedupe_key)
         unique.append(conflict)
     return unique
+
+
+def _price_observation(row) -> PriceObservation:
+    """Adapt one stored ``OfferPrice`` row to its derived value object."""
+    return PriceObservation(
+        source=row.source.slug,
+        amount=row.amount,
+        currency=row.currency or "",
+        source_offer_id=row.source_offer_id or "",
+        observed_at=_aware_opt(row.observed_at),
+        is_current=bool(row.is_current),
+        validation_error=row.validation_error or "",
+    )
+
+
+def _dedupe_prices(prices: Iterable[PriceObservation]) -> tuple[PriceObservation, ...]:
+    """Collapse identical rows and order deterministically.
+
+    Two observations with the same identity cannot both exist (the canonical
+    offer identity is unique), but a group can hold several identities whose
+    price rows coincide; the reader sees one row per distinct value.
+    """
+    seen = set()
+    unique = []
+    for price in prices:
+        key = (
+            price.source,
+            price.source_offer_id,
+            price.amount,
+            price.currency,
+            price.is_current,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(price)
+    unique.sort(
+        key=lambda price: (
+            price.source,
+            str(price.amount if price.amount is not None else ""),
+            price.currency,
+            price.source_offer_id,
+        )
+    )
+    return tuple(unique)

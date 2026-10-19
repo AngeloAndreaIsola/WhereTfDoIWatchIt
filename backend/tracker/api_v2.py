@@ -356,6 +356,14 @@ def _title_availability(movie_id):
     state = verdict.get("state") or TitleAvailabilityState.UNKNOWN
     return {
         "state": state,
+        # Evidence class (``offers`` / ``title_signal`` / ``absence`` /
+        # ``none``): lets the page tell "here is an offer" apart from "a
+        # source says this is there, but we have no offer to show" — the
+        # latter must never read as a playable option.
+        "evidence": verdict.get("evidence") or "none",
+        "offer_count": verdict.get("offer_count") or 0,
+        "title_signals": verdict.get("title_signals", []),
+        "available_on": verdict.get("available_on", []),
         "reason": _reason_value(verdict.get("reason")),
         "resolved_sources": verdict.get("resolved_sources", []),
         "unresolved_sources": verdict.get("unresolved_sources", []),

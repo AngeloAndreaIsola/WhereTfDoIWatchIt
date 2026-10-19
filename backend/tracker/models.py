@@ -180,6 +180,25 @@ class Provider(models.Model):
         return f"{self.name} ({self.slug})"
 
     @property
+    def is_addon(self) -> bool:
+        """True when this service is an add-on channel with a base platform.
+
+        The relationship is stored in ``config["addon_parent"]`` (a canonical
+        slug) rather than a self-FK so it needs no ``Provider`` column: the
+        relationship is one-directional on purpose — holding the base never
+        grants the child, and holding the child never grants the base. The
+        access resolver requires both entitlements.
+        """
+        return bool(self.addon_parent_slug)
+
+    @property
+    def addon_parent_slug(self) -> str:
+        """Canonical slug of the base platform this service requires, or ``""``."""
+        if isinstance(self.config, dict):
+            return str(self.config.get("addon_parent") or "").strip().lower()
+        return ""
+
+    @property
     def source_indicator(self) -> str:
         """Return a short label for the source type badge in the UI."""
         if isinstance(self.config, dict) and self.config.get("business_model"):
@@ -270,6 +289,97 @@ class ExternalProviderMapping(models.Model):
     def __str__(self):
         scope = self.country or "*"
         return f"{self.provider.slug} -> {self.integration_name}:{scope}:{self.external_id}"
+
+
+class PackageResolutionStatus(models.TextChoices):
+    """How a JustWatch package relates to a canonical provider."""
+
+    MAPPED = "mapped", "Mapped to a canonical provider"
+    ALIAS = "alias", "Alias of another provider"
+    ADDON = "addon", "Add-on channel of a base platform"
+    UNRESOLVED = "unresolved", "Unresolved"
+
+
+class PackageReasonCode(models.TextChoices):
+    """Why a package is unresolved (or how it resolved).
+
+    A closed vocabulary on purpose: an unresolved package must be
+    *inspectable*, not silently dropped, and a free-text reason would let a
+    new class of package enter the catalogue without anyone deciding what it
+    is. ``NEEDS_MANUAL_REVIEW`` is the honest default — it says a human must
+    look, never that the package is unimportant.
+    """
+
+    KNOWN_ALIAS = "known_alias", "Alias of an existing provider"
+    DUPLICATE_PROVIDER = "duplicate_provider", "Duplicate representation of a mapped provider"
+    ADDON_PARENT_UNRESOLVED = "addon_parent_unresolved", "Add-on channel with no confirmed parent"
+    CONTENT_BRAND_NOT_PROVIDER = "content_brand_not_provider", "Content brand, not an independent provider"
+    UNSUPPORTED_OFFER_TYPE = "unsupported_offer_type", "Offer type outside the tracked domains (e.g. cinema)"
+    MISSING_IDENTITY = "missing_identity", "No usable technical identity in the response"
+    AMBIGUOUS_IDENTITY = "ambiguous_identity", "Identity collides with an existing provider"
+    NEEDS_MANUAL_REVIEW = "needs_manual_review", "Requires a manual identity decision"
+
+
+class ProviderCataloguePackage(models.Model):
+    """One package JustWatch reports for one country — resolved or not.
+
+    The persistent counterpart of the sync report: ``sync_providers`` upserts a
+    row per ``(country, technicalName)`` so an unmapped package is kept and
+    inspectable with an explicit reason instead of vanishing into a log line.
+    It is a *catalogue observation*, never an availability signal: a row here
+    never implies a title is watchable, and reads must not treat it as one.
+    """
+
+    country = models.CharField(max_length=2, db_index=True)
+    package_id = models.IntegerField(null=True, blank=True)
+    external_id = models.CharField(max_length=120, blank=True, default="")
+    technical_name = models.CharField(max_length=120)
+    clear_name = models.CharField(max_length=200, blank=True, default="")
+    short_name = models.CharField(max_length=20, blank=True, default="")
+    slug = models.CharField(max_length=120, blank=True, default="")
+    monetization_types = models.JSONField(default=list, blank=True)
+
+    #: Canonical slug of the provider this package resolved to, or ``""``.
+    #: Deliberately a slug, not an FK: migration ``0033`` replays with the
+    #: *live* model registry, so any new ``ForeignKey(Provider)`` would make
+    #: its cascade delete reference a table that does not exist yet on a fresh
+    #: database. A slug keeps this observation table self-contained.
+    resolved_provider_slug = models.CharField(max_length=50, blank=True, default="", db_index=True)
+    resolution_status = models.CharField(
+        max_length=16,
+        choices=PackageResolutionStatus.choices,
+        default=PackageResolutionStatus.UNRESOLVED,
+        db_index=True,
+    )
+    reason_code = models.CharField(
+        max_length=32,
+        choices=PackageReasonCode.choices,
+        blank=True,
+        default="",
+        db_index=True,
+    )
+    reason = models.TextField(blank=True, default="")
+
+    first_seen = models.DateTimeField(default=timezone.now)
+    last_seen = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["country", "technical_name"],
+                name="uniq_catalogue_package_country_technical",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=["resolution_status", "reason_code"],
+                name="idx_catpackage_status_reason",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.country}:{self.technical_name} ({self.resolution_status})"
 
 
 class ScrapedContentMapping(models.Model):

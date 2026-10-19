@@ -67,6 +67,36 @@ export function AvailabilityStateMessage({
   // Absence is unknown, never unavailable. This is the whole point.
   const state = availability?.state ?? "unknown";
   const reason = reasonCopy(availability?.reason);
+  const evidence = availability?.evidence;
+  const titleSignals = (availability?.title_signals ?? []).filter((s) => s.provider);
+
+  // A source reported the title as available, but no concrete offer exists to
+  // show. This must never read as a playable option (the requirement the
+  // evidence split exists for), and it must not fall through to "unknown" —
+  // a source *did* answer.
+  if (evidence === "title_signal" && state !== "unavailable" && !refreshing) {
+    const availableOn = Array.from(
+      new Set([
+        ...(availability?.available_on ?? []),
+        ...titleSignals.map((s) => s.provider),
+      ].filter(Boolean)),
+    );
+    return (
+      <div>
+        <p className="font-medium text-amber-700 dark:text-amber-300">
+          Reported available — no current offer to show.
+        </p>
+        <p className="mt-1 text-gray-600 dark:text-gray-400">
+          {availableOn.length > 0
+            ? `A source reports this title on ${availableOn.join(", ")}, but no concrete offer could be matched to a service in our catalogue yet.`
+            : "A source reported this title as available, but no concrete offer could be displayed yet."}{" "}
+          <span className="text-gray-500 dark:text-gray-500">
+            That is a report, not yet a playable option.
+          </span>
+        </p>
+      </div>
+    );
+  }
 
   if (state === "unavailable" && !refreshing) {
     return (

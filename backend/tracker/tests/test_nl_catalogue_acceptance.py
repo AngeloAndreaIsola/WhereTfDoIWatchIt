@@ -27,7 +27,11 @@ NL_ACCEPTANCE: list[tuple[str, tuple[str, ...], str]] = [
     ("Disney+", ("disneyplus",), "disney"),
     ("Apple TV+", ("appletvplus",), "apple"),
     ("Videoland", ("videoland",), "videoland"),
-    ("Viaplay", ("viaplay", "viaplaysports"), "viaplay"),
+    ("Viaplay", ("viaplay",), "viaplay"),
+    # Explicit distinction (not one of the 31 requested services, but named in
+    # the requirements): Viaplay Sports is a separate entitlement, so it must
+    # never resolve to the Viaplay subscription.
+    ("Viaplay Sports", ("viaplaysports",), "viaplay_sports"),
     ("SkyShowtime", ("skyshowtime",), "skyshowtime"),
     ("Canal+", ("canalplus",), "canal_plus"),
     ("NLZIET", ("nlziet",), "nlziet"),
@@ -89,6 +93,17 @@ class NLCatalogueAcceptanceTests(SimpleTestCase):
         # Netflix subscription, so it must not become a separate provider.
         self.assertEqual(provider_slug_for_package("netflixkids"), "netflix")
         self.assertNotIn("netflix_kids", PACKAGE_TO_PROVIDER_SLUG.values())
+
+    def test_viaplay_sports_is_not_conflated_with_viaplay(self):
+        # Viaplay Sports has its own FLATRATE entitlement and JustWatch does not
+        # confirm it shares Viaplay's subscription, so the two must be distinct
+        # canonical providers (a Viaplay subscription never unlocks it).
+        self.assertEqual(provider_slug_for_package("viaplay"), "viaplay")
+        self.assertEqual(provider_slug_for_package("viaplaysports"), "viaplay_sports")
+        self.assertNotEqual(
+            provider_slug_for_package("viaplaysports"),
+            provider_slug_for_package("viaplay"),
+        )
 
     def test_apple_tv_store_is_distinct_from_apple_tv_plus(self):
         # A rent/buy storefront must never resolve to the subscription service.

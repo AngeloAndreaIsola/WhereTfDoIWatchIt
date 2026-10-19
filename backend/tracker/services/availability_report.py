@@ -41,6 +41,7 @@ from availability.models import Offer, ProviderContent, Source, SyncRun
 from availability.sources import DEFAULT_SOURCE_SLUG, source_registry
 
 from ..models import (
+    Availability,
     AvailabilityResolutionReason,
     AvailabilityRefresh,
     AvailabilityRefreshSource,
@@ -49,6 +50,7 @@ from ..models import (
     RefreshRequest,
     RefreshRequestStatus,
     RefreshRun,
+    ScrapedContentMapping,
 )
 from .rate_limit import rate_limiter_for
 
@@ -403,6 +405,74 @@ def _offered_providers(movie_ids: list[int]) -> dict[int, set[str]]:
     return out
 
 
+def _active_offer_count(movie_ids: list[int]) -> dict[int, int]:
+    """``{movie_id: number of currently-available canonical offers}``."""
+    by_tmdb: dict[int, list[int]] = defaultdict(list)
+    for movie_id, tmdb_id in _movie_tmdb_map(movie_ids).items():
+        if tmdb_id:
+            by_tmdb[tmdb_id].append(movie_id)
+
+    counts: dict[int, int] = defaultdict(int)
+    for tmdb_id, total in (
+        Offer.objects.filter(tmdb_id__in=set(by_tmdb), currently_available=True)
+        .values("tmdb_id")
+        .annotate(total=Count("id"))
+        .values_list("tmdb_id", "total")
+    ):
+        for movie_id in by_tmdb.get(tmdb_id, ()):
+            counts[movie_id] += total
+    return counts
+
+
+def _title_availability_signals(movie_ids: list[int]) -> dict[int, list[dict]]:
+    """Title-level availability claims from sources that produced no offer.
+
+    A scraper row with ``is_available=True``, or a legacy ``Availability`` row,
+    is *explicit positive evidence from a source* that the title is there — but
+    it is not a displayable, playable offer. Reading these separately is what
+    lets the app distinguish "a source reports this title as available" from
+    "here is a concrete offer you can watch", and stops the first from being
+    rendered as the second (or as a flat ``unknown``).
+    """
+    out: dict[int, list[dict]] = defaultdict(list)
+    for movie_id, slug, country, seen in (
+        ScrapedContentMapping.objects.filter(
+            movie_id__in=movie_ids, is_available=True
+        )
+        .exclude(provider__isnull=True)
+        .values_list("movie_id", "provider__slug", "country_code", "updated_at")
+        .iterator()
+    ):
+        out[movie_id].append(
+            {
+                "provider": slug or "",
+                "country": (country or "").upper(),
+                "offer_type": "",
+                "source": "legacy_scraper",
+                "checked_at": seen,
+            }
+        )
+    for movie_id, slug, country, offer_type, seen in (
+        Availability.objects.filter(movie_id__in=movie_ids, is_available=True)
+        .select_related("region")
+        .values_list(
+            "movie_id", "region__provider", "region__country",
+            "offer_type", "last_checked_at",
+        )
+        .iterator()
+    ):
+        out[movie_id].append(
+            {
+                "provider": slug or "",
+                "country": (country or "").upper(),
+                "offer_type": offer_type or "",
+                "source": "legacy_availability",
+                "checked_at": seen,
+            }
+        )
+    return out
+
+
 def _last_attempted_per_source(movie_ids: list[int], batch=None) -> dict[tuple[int, str], object]:
     """``{(movie_id, source): when the source last touched this title}``.
 
@@ -643,6 +713,8 @@ def title_source_report(movie_ids, batch=None) -> dict[int, dict]:
     permanent = _permanent_miss_sources(movie_ids)
     offers_by_source, active_offer_movies = _active_offers_by_source(movie_ids)
     providers = _offered_providers(movie_ids)
+    offer_counts = _active_offer_count(movie_ids)
+    signals_by_movie = _title_availability_signals(movie_ids)
     last_checked = _last_checked_per_source(movie_ids)
     last_attempted = _last_attempted_per_source(movie_ids, batch=batch)
     blocked = {s: (source_quota(s) or {}) for s in title_slugs}
@@ -718,9 +790,33 @@ def title_source_report(movie_ids, batch=None) -> dict[int, dict]:
         ]
         gap_rows = [r for r in src_rows if r["reason"] in INFORMATION_GAP_REASONS]
 
+        # Evidence class: *how* the title's state was reached. This is the
+        # distinction the detail page needs and the state alone cannot carry —
+        # `available` because a concrete offer exists is a claim the user can
+        # act on, while `title_signal` is a source saying "this is there" with
+        # no offer we can display. `absence` is a checked-and-negative answer.
+        offer_count = offer_counts.get(movie_id, 0)
+        title_signals = signals_by_movie.get(movie_id, [])
+        if offer_count:
+            evidence_class = "offers"
+        elif title_signals:
+            evidence_class = "title_signal"
+        elif state == TitleAvailabilityState.UNAVAILABLE:
+            evidence_class = "absence"
+        else:
+            evidence_class = "none"
+
+        available_on = set(providers.get(movie_id, set()))
+        available_on.update(
+            s["provider"] for s in title_signals if s["provider"]
+        )
+
         report[movie_id] = {
             "state": state,
-            "available_on": sorted(providers.get(movie_id, set())),
+            "evidence": evidence_class,
+            "offer_count": offer_count,
+            "title_signals": title_signals,
+            "available_on": sorted(available_on),
             "sources": src_rows,
             "reason": reason,
             "resolved_sources": [r["source"] for r in resolved_rows],

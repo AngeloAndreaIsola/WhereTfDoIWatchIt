@@ -95,6 +95,12 @@ class ProviderSerializer(serializers.ModelSerializer):
     last_run_error = serializers.SerializerMethodField()
     available_items = serializers.SerializerMethodField()
     refreshing = serializers.SerializerMethodField()
+    #: Add-on relationship: the channel's base platform (slug + display name)
+    #: and whether this row is an add-on at all. A channel and its platform are
+    #: separately selectable, so the UI needs both to group and to explain.
+    is_addon = serializers.SerializerMethodField()
+    parent = serializers.SerializerMethodField()
+    parent_name = serializers.SerializerMethodField()
 
     class Meta:
         model = Provider
@@ -120,6 +126,9 @@ class ProviderSerializer(serializers.ModelSerializer):
             "last_run_error",
             "available_items",
             "refreshing",
+            "is_addon",
+            "parent",
+            "parent_name",
             "external_mappings",
         ]
 
@@ -185,6 +194,25 @@ class ProviderSerializer(serializers.ModelSerializer):
     def get_has_scraper(self, obj: Provider) -> bool:
         from tracker.scrapers import resolve_scraper_class
         return resolve_scraper_class(obj.slug) is not None
+
+    def get_is_addon(self, obj: Provider) -> bool:
+        return obj.is_addon
+
+    def get_parent(self, obj: Provider):
+        """Canonical slug of the base platform, or ``None`` for standalone."""
+        return obj.addon_parent_slug or None
+
+    def get_parent_name(self, obj: Provider):
+        slug = obj.addon_parent_slug
+        if not slug:
+            return None
+        names = self.context.get("provider_names")
+        if names is not None:
+            return names.get(slug, slug)
+        return (
+            Provider.objects.filter(slug=slug).values_list("name", flat=True).first()
+            or slug
+        )
 
 
 class SubscriptionSerializer(serializers.ModelSerializer):
@@ -399,6 +427,11 @@ class RankedOfferSerializer(serializers.Serializer):
     audio_languages = serializers.ListField(child=serializers.CharField())
     subtitle_languages = serializers.ListField(child=serializers.CharField())
     ranking = serializers.DictField()
+    #: Structured price (amount + currency + provenance) or null. Present so the
+    #: legacy ranked-offers endpoint does not silently drop what the canonical
+    #: read path carries.
+    price = serializers.DictField(required=False, allow_null=True)
+    prices = serializers.ListField(child=serializers.DictField(), required=False)
 
 
 class CountrySummarySerializer(serializers.Serializer):

@@ -366,6 +366,199 @@ class Offer(models.Model):
         return f"{self.content_type}:{self.tmdb_id} @ {self.provider.slug}/{self.country.code}"
 
 
+class OfferPrice(models.Model):
+    """One source's most recent *validated* price for one canonical offer.
+
+    Why a separate table instead of columns on ``Offer``
+    ----------------------------------------------------
+    ``availability`` migrations after ``0003`` are ordered *after*
+    ``tracker.0033_merge_duplicate_providers`` on a fresh database, and that
+    data migration still reads ``Offer`` through the **live** model class
+    (``Offer.objects.filter(provider=duplicate)``). A new column on ``Offer``
+    would therefore be selected before it exists and every fresh install would
+    fail. This table is additive, and it deliberately has **no**
+    ``ForeignKey`` to ``Offer`` or ``Provider``: ``tracker.0033`` calls
+    ``duplicate.delete()`` with the live registry, and a new relation pointing
+    at ``Provider`` would make the collector query a table that does not exist
+    yet. Referential integrity is maintained by the stable canonical identity
+    (``offer_identity`` is exactly ``Offer.identity``) and by the refresh
+    lifecycle below, not by a database cascade.
+
+    Why not one price on ``Offer``
+    ------------------------------
+    ``Offer.identity`` deliberately excludes the source: two sources observing
+    the same provider offer are two observations of one canonical offer, and
+    the last writer owns ``Offer.source``. Storing a single amount there would
+    let whichever source refreshed last overwrite another source's price.
+    Keying by ``(offer_identity, source)`` preserves provenance and lets the
+    read layer expose every source's price.
+
+    Lifecycle (see ``OfferPriceRepository``)
+    ----------------------------------------
+    * a valid observation updates this row and marks it current;
+    * an observation with no price, or with a malformed/ambiguous price,
+      preserves the last known amount but marks the row not current (a missing
+      price is never zero and never proof that the offer is free);
+    * authoritative deactivation of the offer marks its price rows not current;
+    * re-observation sets the row current again on the same row (identity is
+      stable), so a removed-then-recreated offer reattaches its price.
+
+    ``amount`` is a ``Decimal``: binary floating-point is never stored, and
+    ``currency`` is an explicit ISO-4217 code supplied by the source (never
+    inferred from a symbol or a localized display string).
+    """
+
+    source = models.ForeignKey(
+        Source, on_delete=models.PROTECT, related_name="offer_prices"
+    )
+
+    # Exactly Offer.identity. The identity slots are denormalized so a price
+    # row stays inspectable without joining back to the offer table.
+    offer_identity = models.CharField(max_length=255, db_index=True)
+    provider_slug = models.CharField(max_length=100, db_index=True)
+    country_code = models.CharField(max_length=2)
+    content_type = models.CharField(max_length=10, choices=ContentType.choices)
+    tmdb_id = models.IntegerField(db_index=True)
+    season_number = models.IntegerField(null=True, blank=True)
+    episode_number = models.IntegerField(null=True, blank=True)
+    offer_type = models.CharField(max_length=20, choices=OfferType.choices)
+    provider_content_id = models.CharField(max_length=100, blank=True, default="")
+
+    # NULL amount means "no validated amount was ever observed", never zero.
+    amount = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True)
+    currency = models.CharField(max_length=3, blank=True, default="")
+    source_offer_id = models.CharField(max_length=150, blank=True, default="")
+
+    # False means "last known value, no longer confirmed by a fresh
+    # observation": it is kept for audit and is never displayed as current.
+    is_current = models.BooleanField(default=True, db_index=True)
+    # Why the latest observation did not yield a usable price (blank when it
+    # did). This is the inspectable counterpart of is_current=False.
+    validation_error = models.CharField(max_length=100, blank=True, default="")
+
+    first_seen = models.DateTimeField(default=timezone.now)
+    last_seen = models.DateTimeField(default=timezone.now)
+    observed_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["offer_identity", "source"],
+                name="uniq_offer_price_identity_source",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["content_type", "tmdb_id", "country_code"],
+                name="idx_offer_price_content",
+            ),
+        ]
+
+    def __str__(self):
+        amount = "—" if self.amount is None else f"{self.amount} {self.currency}"
+        return f"{self.offer_identity} @ {self.source.slug}: {amount}"
+
+
+class OfferEvidence(models.Model):
+    """One source's current observation state for one canonical offer.
+
+    Why this exists
+    ---------------
+    ``Offer.identity`` deliberately excludes the source: several sources
+    describing the same provider offer share **one** canonical ``Offer`` row,
+    and the last writer owns ``Offer.source``, ``Offer.currently_available`` and
+    the other descriptive fields. That made canonical availability
+    last-writer-wins: an authoritative removal from source A flipped the shared
+    row to unavailable even though source B still reported the same offer as
+    available, silently hiding an offer the user could watch.
+
+    This table records each source's *own* statement about whether it currently
+    observes the offer, keyed ``(offer_identity, source)`` - the same stable key
+    ``OfferPrice`` uses. Effective canonical availability is then derived from
+    *all* current evidence instead of the last writer:
+
+    * any present evidence (``is_present=True``) keeps the offer available;
+    * authoritative absence (``is_present=False``) is recorded, but only decides
+      the outcome for an offer no source still has present evidence for.
+
+    Lifecycle
+    ---------
+    * a source observing an offer upserts its row with ``is_present=True``;
+    * an authoritative complete snapshot records ``is_present=False`` for the
+      offers it stops seeing - the run source's *own* evidence only, never
+      another source's;
+    * a non-authoritative (or incremental) refresh never records absence:
+      absence is not evidence;
+    * re-observation flips ``is_present`` back to True on the same row, so a
+      removed-then-reappearing offer reattaches without fabricating evidence
+      for any other source.
+
+    Migration safety
+    ----------------
+    Like ``OfferPrice``, this table deliberately has **no** ``ForeignKey`` to
+    ``Offer`` or ``Provider``. ``tracker.0033_merge_duplicate_providers`` runs
+    before this app's post-``0003`` migrations on a fresh database and deletes
+    providers through the live model registry (``Offer``/``ProviderContent``/
+    ``SyncRun`` are pulled in by the collector). A relation pointing at
+    ``Provider`` - or a ``post_delete`` receiver that queries this table - would
+    make that migration touch a table that does not exist yet. The row is joined
+    to the canonical offer by the stable ``offer_identity`` string, and
+    integrity is maintained by the refresh lifecycle plus
+    ``OfferEvidenceRepository.purge_orphans``.
+
+    ``authoritative`` records whether the observation that last set the row came
+    from an authoritative, complete snapshot (the only kind allowed to record
+    absence). It is provenance, not part of the availability key.
+    """
+
+    source = models.ForeignKey(
+        Source, on_delete=models.PROTECT, related_name="offer_evidence"
+    )
+
+    # Exactly Offer.identity. The identity slots are denormalized so an evidence
+    # row stays inspectable without joining back to the offer table.
+    offer_identity = models.CharField(max_length=255, db_index=True)
+    provider_slug = models.CharField(max_length=100, db_index=True)
+    country_code = models.CharField(max_length=2)
+    content_type = models.CharField(max_length=10, choices=ContentType.choices)
+    tmdb_id = models.IntegerField(db_index=True)
+    season_number = models.IntegerField(null=True, blank=True)
+    episode_number = models.IntegerField(null=True, blank=True)
+    offer_type = models.CharField(max_length=20, choices=OfferType.choices)
+    provider_content_id = models.CharField(max_length=100, blank=True, default="")
+
+    #: True means this source currently observes the offer; False means its own
+    #: authoritative complete snapshot no longer listed it. Never set False by a
+    #: non-authoritative refresh.
+    is_present = models.BooleanField(default=True, db_index=True)
+    #: Whether the observation that last set this row was authoritative.
+    authoritative = models.BooleanField(default=False)
+
+    first_seen = models.DateTimeField(default=timezone.now)
+    last_seen = models.DateTimeField(default=timezone.now)
+    observed_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["offer_identity", "source"],
+                name="uniq_offer_evidence_identity_source",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["content_type", "tmdb_id", "country_code"],
+                name="idx_offer_evidence_content",
+            ),
+        ]
+
+    def __str__(self):
+        state = "present" if self.is_present else "absent"
+        return f"{self.offer_identity} @ {self.source.slug}: {state}"
+
+
 class ContentMapping(models.Model):
     """Which canonical/TMDb content a provider's catalogue entry corresponds to.
 

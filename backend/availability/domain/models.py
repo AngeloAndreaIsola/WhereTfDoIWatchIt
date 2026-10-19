@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Optional
 
 
@@ -61,6 +62,15 @@ class ProviderOffer:
     available_until: Optional[datetime] = None
     source_record_id: str = ""
     source_version: str = ""
+    #: Structured source price, already validated by
+    #: ``availability.services.normalize.normalize_price``. ``None`` means the
+    #: source supplied no validated amount — never that the offer is free.
+    price_amount: Optional[Decimal] = None
+    #: Explicit ISO-4217 code from the source; empty when it supplied none.
+    price_currency: str = ""
+    #: Why a mentioned price is not usable (blank when there is no price or it
+    #: is valid). Persisted so an ambiguous observation is inspectable.
+    price_error: str = ""
 
 
 @dataclass(frozen=True)

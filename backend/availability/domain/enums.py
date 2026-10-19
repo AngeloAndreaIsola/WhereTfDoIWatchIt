@@ -67,6 +67,7 @@ class ConflictKind(models.TextChoices):
     QUALITY = "quality", "Quality"
     LANGUAGE = "language", "Language"
     FRESHNESS = "freshness", "Freshness"
+    PRICE = "price", "Price"
 
 
 class FreshnessState(models.TextChoices):

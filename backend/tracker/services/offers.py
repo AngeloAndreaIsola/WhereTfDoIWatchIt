@@ -21,6 +21,11 @@ class Offer:
     audio_languages: list[str] = field(default_factory=list)
     subtitle_languages: list[str] = field(default_factory=list)
     is_scraped_source: bool = False
+    #: Structured display price (``{"amount": "2.99", "currency": "EUR", ...}``)
+    #: or None. "No price" is never rendered as "free".
+    price: Optional[dict] = None
+    #: Every source-specific price row (current and stale) for inspection.
+    prices: list[dict] = field(default_factory=list)
 
     def get(self, key: str, default: Any = None) -> Any:
         """Dict-like access for backward compatibility."""
@@ -49,6 +54,8 @@ class Offer:
             audio_languages=list(audio),
             subtitle_languages=list(subs),
             is_scraped_source=bool(d.get("is_scraped_source", False)),
+            price=d.get("price") or None,
+            prices=list(d.get("prices") or []),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -64,4 +71,6 @@ class Offer:
             "audio_languages": self.audio_languages,
             "subtitle_languages": self.subtitle_languages,
             "is_scraped_source": self.is_scraped_source,
+            "price": self.price,
+            "prices": self.prices,
         }

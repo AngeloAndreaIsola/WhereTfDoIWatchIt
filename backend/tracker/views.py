@@ -579,6 +579,58 @@ def providers_sync(request):
     return Response(report)
 
 
+@api_view(["GET"])
+def provider_packages(request):
+    """Inspect the persisted JustWatch package catalogue — resolved or not.
+
+    Requirement 4.4: an unresolved package must be *inspectable* with a
+    structured reason, not merely absent from a count. Filters: ``country``
+    (comma-separated), ``status`` (``mapped``/``alias``/``addon``/``unresolved``),
+    ``reason`` (a ``PackageReasonCode``), and ``resolved=true|false``. Read-only;
+    it never triggers a sync and never touches availability.
+    """
+    from tracker.models import (
+        PackageResolutionStatus,
+        ProviderCataloguePackage,
+    )
+
+    qs = ProviderCataloguePackage.objects.all().order_by("country", "technical_name")
+    raw_country = request.GET.get("country")
+    if raw_country:
+        codes = [c.strip().upper() for c in raw_country.split(",") if c.strip()]
+        qs = qs.filter(country__in=codes)
+    status = (request.GET.get("status") or "").strip().lower()
+    if status:
+        qs = qs.filter(resolution_status=status)
+    reason = (request.GET.get("reason") or "").strip().lower()
+    if reason:
+        qs = qs.filter(reason_code=reason)
+    resolved = (request.GET.get("resolved") or "").strip().lower()
+    if resolved in ("true", "1"):
+        qs = qs.exclude(resolution_status=PackageResolutionStatus.UNRESOLVED)
+    elif resolved in ("false", "0"):
+        qs = qs.filter(resolution_status=PackageResolutionStatus.UNRESOLVED)
+
+    rows = [
+        {
+            "country": row.country,
+            "package_id": row.package_id,
+            "technical_name": row.technical_name,
+            "clear_name": row.clear_name,
+            "short_name": row.short_name,
+            "monetization_types": row.monetization_types,
+            "resolution_status": row.resolution_status,
+            "reason_code": row.reason_code,
+            "reason": row.reason,
+            "resolved_provider_slug": row.resolved_provider_slug,
+            "first_seen": row.first_seen,
+            "last_seen": row.last_seen,
+        }
+        for row in qs[:1000]
+    ]
+    return Response({"count": len(rows), "results": rows})
+
+
 @api_view(["POST"])
 def provider_toggle(request, slug: str):
     """Own/unown a provider, or set the user's *access mode* for it.
@@ -2367,6 +2419,9 @@ def _build_prime_offers(request, movie: Movie, season: int | None = None) -> lis
             offer_dict["is_accessible"] = classified.is_accessible
             offer_dict["is_entitled"] = classified.is_entitled
             offer_dict["requires_payment"] = classified.requires_payment
+            offer_dict["is_addon"] = classified.is_addon
+            offer_dict["required_base"] = classified.required_base
+            offer_dict["required_base_display"] = classified.required_base_display
             offer_dict["rejection_reasons"] = classified.rejection_reasons
             offers_out.append(offer_dict)
 

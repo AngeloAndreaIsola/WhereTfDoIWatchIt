@@ -5,7 +5,10 @@ writes belong to the refresh service and repositories respectively.
 """
 from __future__ import annotations
 
+import re
 import unicodedata
+from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from typing import Iterable, Optional
 
 from tracker.languages import normalize_language_code
@@ -106,6 +109,98 @@ def normalize_country(value: str) -> str:
     if len(code) != 2 or not code.isalpha():
         raise ValueError(f"Unsupported country code: {value!r}")
     return code
+
+
+#: Prices are stored to four decimal places so a source's sub-cent precision is
+#: not silently rounded at the persistence boundary. Display formatting decides
+#: how many of those places a given currency actually shows.
+PRICE_QUANTUM = Decimal("0.0001")
+#: ``OfferPrice.amount`` is ``max_digits=12, decimal_places=4`` -> 8 integer
+#: digits. Rejecting larger values here turns a source bug into a validation
+#: error instead of a database error that aborts a whole refresh.
+MAX_PRICE = Decimal("99999999.9999")
+
+_CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
+
+
+@dataclass(frozen=True)
+class NormalizedPrice:
+    """A source price after validation: never a display-string guess.
+
+    ``error`` is non-empty when the source mentioned a price but did not supply
+    a usable structured amount/currency pair. ``amount`` may still be set while
+    ``currency`` is empty (or vice versa) so the caller can record exactly why
+    the observation is not displayable.
+    """
+
+    amount: Optional[Decimal] = None
+    currency: str = ""
+    error: str = ""
+
+    @property
+    def is_valid(self) -> bool:
+        return self.amount is not None and bool(self.currency) and not self.error
+
+
+def normalize_price_amount(value) -> tuple[Optional[Decimal], str]:
+    """Coerce a structured source amount to ``Decimal`` without binary drift.
+
+    Accepts int/float/Decimal/numeric string. Rejects bools (``True`` is not a
+    price), NaN/Infinity, negatives, and values too large for the column. The
+    conversion goes through ``str(value)`` so a JSON float such as ``2.99``
+    becomes ``Decimal("2.99")`` rather than the binary approximation.
+    """
+    if value is None:
+        return None, ""
+    if isinstance(value, bool):
+        return None, "invalid amount"
+    try:
+        amount = value if isinstance(value, Decimal) else Decimal(str(value).strip())
+    except (InvalidOperation, TypeError, ValueError):
+        return None, "invalid amount"
+    if not amount.is_finite() or amount < 0:
+        return None, "invalid amount"
+    try:
+        amount = amount.quantize(PRICE_QUANTUM)
+    except InvalidOperation:
+        return None, "invalid amount"
+    if amount > MAX_PRICE:
+        return None, "amount out of range"
+    return amount, ""
+
+
+def normalize_currency(value) -> tuple[str, str]:
+    """Validate an explicit ISO-4217-shaped code (three ASCII letters)."""
+    code = str(value or "").strip().upper()
+    if not code:
+        return "", ""
+    if not _CURRENCY_RE.match(code):
+        return "", "invalid currency"
+    return code, ""
+
+
+def normalize_price(amount_value, currency_value, display_value=None) -> NormalizedPrice:
+    """Validate a source price, preserving the reason it is unusable.
+
+    The display string (``retailPrice``) is deliberately *not* parsed: when the
+    structured ``retailPriceValue`` is absent the amount stays unknown rather
+    than being reverse-engineered from a localized ``€2,99`` string. A
+    display-only price is still recorded as an ambiguity so it is inspectable
+    instead of looking like "the source says no price".
+    """
+    amount, amount_error = normalize_price_amount(amount_value)
+    currency, currency_error = normalize_currency(currency_value)
+    if amount is not None and not currency:
+        currency_error = currency_error or "missing currency"
+    elif currency and amount is None:
+        amount_error = amount_error or "missing amount"
+    elif amount is None and str(display_value or "").strip():
+        amount_error = "display-only price"
+    return NormalizedPrice(
+        amount=amount,
+        currency=currency,
+        error=amount_error or currency_error,
+    )
 
 
 def truncate_field(value: str, max_length: int) -> str:

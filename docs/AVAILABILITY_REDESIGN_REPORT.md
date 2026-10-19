@@ -1,15 +1,31 @@
 # Availability Redesign — Final Report
 
-> **Status:** complete (working tree, uncommitted)
-> **Scope:** the seven-part availability follow-up — detail/watchlist agreement,
-> the muted-offer contract, the catalogue completion, the access-type filter, and
-> the 31-service Netherlands acceptance list
-> **Branch state:** all changes sit in the git working tree; nothing is committed.
+> **Status:** complete for the acceptance criteria; see §14 for the follow-up
+> pass (add-on channels, unresolved-package inspection, availability evidence)
+> and §15 for the requirement-by-requirement acceptance table.
+> **Scope:** the availability follow-up — detail/watchlist agreement, the
+> muted-offer contract, the catalogue completion, add-on channels, the
+> access-type filter, the 31-service Netherlands acceptance list, and the
+> availability-evidence distinction.
+> **Branch state:** branch `feature/scrapres-improvedment`. The first pass is
+> committed as `e58183d`; the follow-up pass described in §14 is **in the git
+> working tree, uncommitted**, so it is preserved for review. Nothing has been
+> staged, reset, stashed or amended.
 
-This report closes the loop on the seven-part follow-up: the two reported bugs
-and their root causes, the muted-offer contract, the completed catalogue, the
-access-type filter, the executable 31-service Netherlands acceptance list, the
-test evidence behind all of it, and the honest limits of the result.
+This report closes the loop on the availability follow-up: the two reported
+bugs and their root causes, the muted-offer contract, the completed catalogue,
+add-on channels, the access-type filter, the executable 31-service Netherlands
+acceptance list, the availability-evidence distinction the detail page needs,
+the test evidence behind all of it, and the honest limits of the result.
+
+Sections §1–§13 describe the first pass as it shipped in `e58183d`. **Section
+§14 is the follow-up pass** (uncommitted) and supersedes any count or claim it
+revises — in particular the NL catalogue counts (`33 mapped / 81 unmapped` →
+`54 resolved / 60 unresolved`, of which 21 are add-on channels), the
+`viaplaysports → viaplay` conflation (now a distinct `viaplay_sports`), and the
+`amazon*` add-on channels (previously "deliberately not mapped", now mapped as
+gated add-ons). **Section §15** is the requirement-by-requirement acceptance
+table; **§16** the outstanding, honestly-blocked items.
 
 ---
 
@@ -42,6 +58,12 @@ so its titles could be discovered but never *walked*. Adding
 `"rakuten_tv": {"NL": "wki"}` to `PACKAGE_SHORT_NAMES` closed that gap.
 
 **Evidence in one line each:**
+
+> These are the **first-pass** figures (`e58183d`). §14.4, §14.8 and §14.9
+> supersede the catalogue counts and the test totals: NL is now **114 seen · 54
+> resolved · 60 unresolved** and the full suites are **2205 backend / 185
+> frontend** tests (4 pre-existing Tubi backend failures, 2 pre-existing tsc
+> errors). §14.10 adds the source-aware availability model.
 
 | Check | Result |
 | --- | --- |
@@ -92,15 +114,16 @@ omitted by accident.
 
 ### 3.1 The executable acceptance list (task 7)
 
-`backend/tracker/tests/test_nl_catalogue_acceptance.py` (5 tests) pins the list
+`backend/tracker/tests/test_nl_catalogue_acceptance.py` (6 tests) pins the list
 against the static identity tables. It is a `SimpleTestCase`: no network, no DB
 seeding, fully deterministic.
 
 | Test | Guarantees |
 | --- | --- |
-| `test_every_acceptance_service_maps_to_its_canonical_slug` | each service's JustWatch `technicalName`(s) resolve to the intended slug (incl. `netflixkids`→`netflix`, `viaplaysports`→`viaplay`) |
+| `test_every_acceptance_service_maps_to_its_canonical_slug` | each service's JustWatch `technicalName`(s) resolve to the intended slug (incl. `netflixkids`→`netflix`, `viaplaysports`→`viaplay_sports`) |
 | `test_every_acceptance_slug_is_walkable_in_nl` | every canonical slug has a measured **NL** short name (so it is actually collectable) |
 | `test_netflix_kids_is_an_alias_not_a_second_entitlement` | `netflixkids`→`netflix`; no `netflix_kids` slug ever appears |
+| `test_viaplay_sports_is_not_conflated_with_viaplay` | `viaplaysports`→`viaplay_sports` ≠ `viaplay` — a Viaplay subscription never unlocks Viaplay Sports (§14.2) |
 | `test_apple_tv_store_is_distinct_from_apple_tv_plus` | `itunes`→`apple_tv_store`, `appletvplus`→`apple` |
 | `test_absent_services_are_not_silently_mapped` | Google Play Movies stays unmapped (not offered in NL) |
 
@@ -133,25 +156,31 @@ a free-with-ads Rakuten title surface instead of disappearing.
 
 ### 3.3 The catalogue expansion
 
-The old identity table mapped **22** JustWatch technical names. It now maps
-**47**, covering **44** canonical providers, **31** of which are walkable in NL.
-The additions are 23 NL services measured on the live `GetProviders` endpoint
-(each with its NL short name so the catalogue can actually be walked):
+The old identity table mapped **22** JustWatch technical names. After the first
+pass it mapped **47**, covering **44** canonical providers, **31** of which were
+walkable in NL. The **follow-up pass (§14)** added **21 add-on channels** and
+split `viaplaysports` into its own provider, so the table now maps **68**
+technical names → **66** distinct canonical slugs, **53** walkable in NL
+(**32** standalone + **21** add-on). The first-pass additions were 23 NL services
+measured on the live `GetProviders` endpoint (each with its NL short name so the
+catalogue can actually be walked):
 
 | Group | Newly mapped |
 | --- | --- |
-| Subscription SVOD | Videoland, Viaplay (`viaplay` + `viaplaysports`), SkyShowtime, Canal+, NLZIET, Film1, Hayu, Ziggo TV, NPO Plus |
+| Subscription SVOD | Videoland, Viaplay (`viaplay`), Viaplay Sports (`viaplaysports` → `viaplay_sports`, split out in §14.2), SkyShowtime, Canal+, NLZIET, Film1, Hayu, Ziggo TV, NPO Plus |
 | Niche / festival | Picl, Sooner, IFFR Unleashed |
 | Rent / buy | Pathé Thuis, Apple TV Store (`itunes`) |
 | Specialist / documentary | Curiosity Stream, GuideDoc, DOCSVILLE, Magellan TV, BroadwayHD, WOW Presents Plus |
 | Free / ad-supported | JustWatch TV, Filmzie, South Park |
 | Alias | Netflix Kids → `netflix` (a curated profile, not a second service) |
 
-Deliberately **not** mapped: every `amazon*` add-on channel
-(`amazonhayu`, `amazonmubi`, `amazonappletvplus`, …), the near-collision ids
-(`amazonprimevideowithads`, `amazonimdbtv`, `amazonhbomax`, `amazonmgm`,
-`appletvparamountplus`), and Google Play Movies (absent from NL). Mapping those
-would attach offers to the wrong canonical service.
+Deliberately **not** mapped as their own standalone services: the near-collision
+ids (`amazonprimevideowithads`, `amazonimdbtv`, `amazonhbomax`, `amazonmgm`,
+`appletvparamountplus`) and Google Play Movies (absent from NL). The Amazon
+**Channel** add-ons — previously listed here as "not mapped" — are now mapped as
+gated add-on providers in the follow-up pass (§14); mapping them as *standalone*
+providers would attach Prime-channel offers to a service the user may not hold,
+which is exactly what the add-on parent model prevents.
 
 The sync then created the new `Provider` rows **disabled**, so nothing widened
 silently; they are listed in the manager for the user to claim (section 5.4).
@@ -201,6 +230,11 @@ errors                        []
 
 The re-run created nothing and re-wrote nothing — the idempotency contract holds
 on live data, not just in unit tests.
+
+> **Superseded by §14.** These are the *first-pass* numbers (before add-on
+> channels and the Viaplay Sports split). The current NL measurement is **114
+> seen / 54 resolved / 60 unresolved**; §14.4 gives the full breakdown and
+> re-runs the idempotency check on the current tables.
 
 **Three different counts, three different meanings.** `114` is every JustWatch
 package returned for NL. `33` is the number of *packages* whose `technicalName`
@@ -335,7 +369,8 @@ the service's role; the catalogue sync additionally assigns a best-effort
 | 4 | Disney+ | `disneyplus` | `disney` | `dnp` | ✅ | subscription |
 | 5 | Apple TV+ | `appletvplus` | `apple` | `atp` | ✅ | subscription |
 | 6 | Videoland | `videoland` | `videoland` | `vil` | ✅ | subscription |
-| 7 | Viaplay | `viaplay`, `viaplaysports` | `viaplay` | `vip` | ✅ | subscription |
+| 7 | Viaplay | `viaplay` | `viaplay` | `vip` | ✅ | subscription |
+| 7a | Viaplay Sports *(named in the requirements; not one of the 31)* | `viaplaysports` | `viaplay_sports` | `vps` | ✅ | subscription (separate entitlement — §14.2) |
 | 8 | SkyShowtime | `skyshowtime` | `skyshowtime` | `sst` | ✅ | subscription |
 | 9 | Canal+ | `canalplus` | `canal_plus` | `cpd` | ✅ | subscription |
 | 10 | NLZIET | `nlziet` | `nlziet` | `nlz` | ✅ | subscription |
@@ -373,42 +408,55 @@ So: **30 services mapped and walkable, 1 recorded as carried-nowhere = the
 
 ## 7. Coverage accounting — seen / mapped / selectable / unresolved
 
-From the NL sync:
+From the current NL sync (the follow-up-pass measurement; §14.4 re-verifies the
+idempotency of these numbers):
 
 | Bucket | Count | Meaning |
 | --- | --- | --- |
 | **Packages seen** | 114 | every JustWatch package returned for NL |
-| **Mapped packages** | 33 | packages whose `technicalName` matches the identity table |
-| **Mapped slugs (distinct)** | 31 | canonical providers NL can cover |
-| **Stored NL mapping rows** | 31 | rows actually persisted — one per `(provider, integration, country)`, so the two alias pairs share a slot |
-| **Selectable** | 31 | every mapped slug has a `Provider` + NL `ExternalProviderMapping`; discovered rows are created **disabled** yet still listed and selectable in the service-access manager |
-| **Unresolved (unmapped)** | 81 | packages deliberately not mapped — reported, never guessed (114 − 33) |
+| **Resolved packages** | 54 | packages whose `technicalName` matched the identity table (as *mapped*, *alias* or *add-on*) |
+| **Mapped packages** | 32 | resolved as a standalone subscription/storefront provider |
+| **Alias packages** | 1 | `netflixkids` → `netflix` (a curated profile, not a second service) |
+| **Add-on packages** | 21 | an Amazon Channel, resolved to its own provider gated on a base (§14) |
+| **Distinct resolved slugs** | 53 | canonical providers NL can cover (32 mapped + 21 add-ons, of which `viaplay_sports` is the split from `viaplay`) |
+| **Stored NL mapping rows** | 53 | rows actually persisted — one per `(provider, integration, country)`, so the alias shares its parent's slot |
+| **Selectable** | 53 | every resolved slug has a `Provider` + NL `ExternalProviderMapping`; discovered rows are created **disabled** yet still listed and selectable in the service-access manager |
+| **Unresolved** | 60 | packages deliberately not mapped — reported with a structured reason, never guessed (114 − 54) |
 | **Errors** | 0 | no market fetch failed |
 
+The 60 unresolved decompose by the closed reason vocabulary (§14.4):
+
+| Reason | Count | Meaning |
+| --- | --- | --- |
+| `needs_manual_review` | 57 | no source-declared identity; a human must decide |
+| `unsupported_offer_type` | 3 | only ever a cinema (`CINEMA`) offer — not a streamable package |
+| `addon_parent_unresolved` | 0 | (live NL) every Amazon Channel is in the verified table; the code still flags an unknown one |
+
 **Provider-level counts are not package counts.** The `/api/providers/` list
-returns 70 rows because it includes both enabled providers and mapped-but-disabled
-ones. Decomposed: **21** enabled-and-JustWatch-mapped (8 with an NL mapping, 13
-with mappings only in other markets) + **23** mapped-NL-but-disabled + **26**
-enabled-but-unmapped (seeded/scraper providers) = 70. The 23 disabled rows are
-exactly the "discovered but not yet claimed" set.
+returns **92** rows because it includes both enabled providers, mapped-but-disabled
+ones, and the new add-on channels. Decomposed: **21** enabled-and-JustWatch-mapped
+(the first-pass figure; 8 with an NL mapping) + the discovery set + **21**
+add-on channels (all `is_enabled=false`, parent `prime`) = 92. Add-on rows are
+exactly the "discovered but not yet claimed" set plus the gated channels.
 
-**Mapped set vs the acceptance list.** The 31 distinct NL slugs are the
-acceptance set (29 distinct canonical slugs; Netflix Kids and Viaplay Sports
-collapse into their parents) **plus two further mapped, NL-walkable services
-outside the minimum list**: `npo_plus` (NPO Plus) and `max` (HBO Max). They are
-listed and selectable, just not *required* by the acceptance criterion.
+**Mapped set vs the acceptance list.** The standalone NL slugs are the
+acceptance set **plus further mapped, NL-walkable services outside the minimum
+list** — `npo_plus` (NPO Plus), `max` (HBO Max) and now `viaplay_sports`
+(Viaplay Sports, §14.2). They are listed and selectable, just not *required* by
+the acceptance criterion.
 
-**Unresolved (81) — why they are not mapped.** Unmapped packages fall into
+**Unresolved (60) — why they are not mapped.** Unmapped packages fall into
 classes that mapping would actively harm:
 
 - **Different services with near-colliding names** — `amazonprimevideowithads`
   (ad tier), `amazonimdbtv` (Free with Ads), `amazonhbomax` (HBO Max under
   Amazon), `amazonmgm`, `appletvparamountplus`. Attaching these to the wrong
   canonical provider is exactly the failure the table exists to prevent.
-- **Long-tail NL/niché services** not on the minimum list — left unmapped until
-  an operator deliberately adds them.
-- **Non-NL storefront packages** that appear in the NL response but belong to
-  other markets.
+- **Cinema-only packages** (`CINEMA` monetization) — not streamable, so
+  `unsupported_offer_type`.
+- **Long-tail NL/niché services** not on the minimum list (DAZN, MUBI,
+  FOUND TV, …) — left unmapped until an operator deliberately adds them, now
+  **inspectable** through `/api/providers/packages/` with the reason code.
 
 This is the intended steady state: unmapped ≠ broken. It means "we refuse to
 guess", and the sync reports it so the table can be extended on purpose.
@@ -491,20 +539,29 @@ knowledge (the identity tables), not schema.
 | `tracker/tests/test_surface_country_agreement.py` | 2 | detail ↔ list surfaces agree on the saved country |
 | `availability/tests/test_aggregators.py` | +1 | both spellings of a shared market slot resolve (incl. a disabled provider) |
 | `frontend/components/__tests__/AccessTypeFilter.test.tsx` | 4 | multi-select encoding (`""` / `all` / subset) |
-| `frontend/components/__tests__/OfferRow.test.tsx` | 6 | muted unowned offers, reason-aware blocker text, locality badge, Best-Match suppression |
+| `frontend/components/__tests__/OfferRow.test.tsx` | 19 | muted unowned offers, reason-aware blocker text, locality badge, Best-Match suppression, price/currency display, missing/stale fallback |
+| `availability/tests/test_offer_prices.py` | 50 | price normalization, persistence lifecycle, source-isolated deactivation, orphan cleanup, refresh, multi-source conflict, monetization partitioning, currency comparability, API shape, entitlement invariance |
+| `availability/tests/test_offer_evidence.py` | 29 | source-aware evidence: isolation, conflicting evidence, order independence, stale evidence, source retirement, legacy fallback, country scope, non-authoritative/partial/failed runs, idempotency, atomic rollback, purge, price-is-not-evidence, entitlement invariance, API |
+| `tracker/tests/test_purge_orphan_offer_evidence.py` | 6 | orphan/source evidence cleanup command (dry-run default); other sources' rows never removed |
 
 ### Totals (final run)
 
 | Suite | Result |
 | --- | --- |
-| `python manage.py test tracker availability` | 2104 tests · **4 failures, confirmed on an unmodified HEAD worktree** |
-| `npx vitest run` | 170 tests · **23 files passed** |
+| `python manage.py test tracker availability` | **2205 tests** · **4 failures**, all pre-existing Tubi tests, re-run identically at `88658f7` |
+| `npx vitest run` | **185 tests · 23 files passed** |
 | `npx tsc --noEmit` | 2 pre-existing errors (`error-states.test.tsx` TS2554, `pages.test.ts` TS1501) |
 | `makemigrations --check --dry-run` | No changes detected |
+| Fresh + upgrade + reverse/reapply migrations | `availability.0009`/`0010` apply from zero, upgrade over a seeded pre-change database, and reverse/reapply; `Offer`/`Subscription`/legacy `Offer` survive with no fabricated evidence (see §14.8.3, §14.10) |
+
+The first pass measured 2104 backend / 170 frontend tests. The follow-up pass
+(§14) added **13 backend tests**; the source-aware availability pass (§14.10)
+added a further **35 backend tests** — none of them failures.
 
 The Tubi baseline was not assumed: the four failing tests were run from a
 detached worktree at `HEAD` (88658f7) with the same image, and fail identically
-there (`0 != 1`, `11 != 12`, `12 != 13`, `12 != 13`).
+there (`0 != 1`, `11 != 12`, `12 != 13`, `12 != 13`). They are unchanged in the
+follow-up pass.
 
 Updated regression contracts: `tracker/tests/test_prime_endpoints.py`,
 `tracker/tests/test_season_availability.py`,
@@ -540,9 +597,10 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml exec -T frontend 
   withdrawing* a package until someone re-runs `sync_providers` and the unmapped
   report changes — by design (deterministic, offline), but it means the tables
   need an occasional live re-measure.
-- **81 NL packages remain unmapped.** Intentional (section 7), but the app
-  therefore does not claim complete NL coverage — it claims complete coverage of
-  the 31-service minimum list plus two extra mapped services.
+- **60 NL packages remain unmapped.** Intentional (section 7), but the app
+  therefore does not claim complete NL coverage — it claims coverage of the
+  31-service minimum list, the add-on channels, and the extra mapped services
+  (`npo_plus`, `max`, `viaplay_sports`).
 - **NL is the only market with a measured short-name table of this depth.** Other
   enabled countries are asserted far more thinly, so "walkable in NL" does not
   generalise to every market yet.
@@ -569,16 +627,15 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml exec -T frontend 
   use it — they build the same `build_user_access` map from `Subscription`
   rows — so it is a test seam rather than a second product classifier.
 - **One mapping slot per provider+market.** `ExternalProviderMapping` is unique on
-  `(provider, integration_name, country)`, but two services now share a provider
-  in one market (`netflix` + `netflixkids`; `viaplay` + `viaplaysports`). Only one
-  technical name is stored per slot (whichever the sync wrote last). Resolution
-  no longer depends on which one was stored: `_provider` falls back to the static
-  identity table when the precise lookup misses, so both spellings resolve — even
-  while the provider is still disabled (verified: `viaplay` and `viaplaysports`
-  both → `viaplay`; `netflix` and `netflixkids` both → `netflix`). The stored
-  value is still not the "primary" name, so a future need to *store* every
-  technical name per market would require splitting the unique constraint; offer
-  resolution itself no longer does.
+  `(provider, integration_name, country)`. After §14.2 split `viaplaysports` into
+  its own provider, the only remaining shared slot is `netflix` + `netflixkids`.
+  Only one technical name is stored per slot (whichever the sync wrote last).
+  Resolution no longer depends on which one was stored: `_provider` falls back to
+  the static identity table when the precise lookup misses, so both spellings
+  resolve — even while the provider is still disabled (verified: `netflix` and
+  `netflixkids` both → `netflix`). The stored value is still not the "primary"
+  name, so a future need to *store* every technical name per market would require
+  splitting the unique constraint; offer resolution itself no longer does.
 - **Access labels now state the truth.** An unowned offer no longer prints
   "Included with your subscription" next to "Not in your subscriptions"; the
   entitlement-phrased chip is suppressed when `is_entitled` is false, and the
@@ -595,19 +652,25 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml exec -T frontend 
 ## 12. Outstanding / next steps
 
 - **Optional coverage growth.** Extend `PACKAGE_TO_PROVIDER_SLUG` /
-  `PACKAGE_SHORT_NAMES` from the 81-package unmapped report for services the
+  `PACKAGE_SHORT_NAMES` from the 60-package unresolved report (§14.4, queryable
+  via `/api/providers/packages/?country=NL&resolved=false`) for services the
   product actually wants; each addition is a deliberate, reviewable diff.
 - **Re-measure markets beyond NL** as deeper coverage is needed, adding short
   names per market rather than guessing.
-- **Commit the working tree** — everything described here is currently
-  uncommitted (the follow-up work spanned tasks 1–7; this report documents all of
-  them).
+- **Commit the working tree.** The first pass is committed as `e58183d`; the
+  follow-up pass described in §14 is uncommitted and left for the user to
+  review and commit (§16 lists the exact files and the new migration).
 - **Optional:** schedule `sync_providers` (e.g. via cron) so newly added
-  JustWatch packages show up in the unmapped report without a manual run.
+  JustWatch packages show up in the unresolved report without a manual run.
 
 ---
 
 ## 13. Final acceptance audit (post-implementation)
+
+> **First pass.** This audit was run against `e58183d`. The follow-up pass
+> (§14) revises the catalogue counts and adds add-on channels, unresolved-package
+> inspection and the availability-evidence distinction; §15 is the consolidated
+> acceptance table.
 
 This pass re-checked the user-facing requirements against the running stack
 rather than against the design.
@@ -655,20 +718,752 @@ rather than against the design.
    live: `241` catalog `watchable_here` ↔ detail `available_here`; `311` the
    same.
 
-### 13.3 Count reconciliation
+### 13.3 Count reconciliation (first pass)
 
 - **114** packages seen; **33** matched the identity table; **31** distinct
   canonical slugs; **31** stored mapping rows (aliases share a slot); **81**
-  unmapped = 114 − 33.
+  unmapped = 114 − 33. **(Superseded by §14.4: 54 resolved / 60 unresolved.)**
 - **70** provider rows listed = **21** mapped+enabled (8 NL, 13 other markets) +
   **23** mapped-NL-but-disabled + **26** enabled-unmapped.
+  **(Superseded: 92 rows including 21 add-on channels.)**
 - The **31-entry** acceptance list is **30 mapped services + Google Play Movies
-  recorded absent**; those 30 collapse to **29 distinct canonical slugs**.
+  recorded absent**; those 30 collapse to **29 distinct canonical slugs**
+  (Viaplay Sports is now split out, §14.2).
 
-### 13.4 Remaining, by design
+### 13.4 Remaining, by design (first pass)
 
 - Google Play Movies is absent from JustWatch NL — asserted unmapped, not invented.
-- 81 NL packages are unmapped; only NL has this depth of measured short names.
+- NL packages are unmapped; only NL has this depth of measured short names.
 - 4 Tubi tests fail on `HEAD` as well (verified in a detached worktree); they are
   unrelated to this work and left untouched.
-- Nothing is committed; the working tree is safe to resume from.
+- First pass committed as `e58183d`; the §14 follow-up is uncommitted.
+
+---
+
+# 14. Follow-up pass — add-on channels, unresolved packages, availability evidence, price/currency
+
+> **Uncommitted.** Everything in §14 sits in the working tree on
+> `feature/scrapres-improvedment` (HEAD `e58183d`). It is left for review; no
+> file has been staged, reset, stashed or amended.
+
+This pass addressed the remaining requirements that the first pass left open:
+add-on channels (§14.1), the Viaplay Sports distinction (§14.2), persisted
+inspection of unresolved packages with structured reasons (§14.5), and the
+availability-evidence distinction the detail page needed so a bare source claim
+could never render as a playable offer (§14.6).
+
+## 14.1 Add-on channels
+
+An add-on channel (e.g. **Hayu on Prime Video**) is a service sold *through* a
+base platform. Modelled wrongly as a standalone provider, its offers would look
+like an entitlement the user might not hold; modelled as pure metadata, it would
+be unselectable. It is now a **distinct canonical provider gated on a base**.
+
+**Identity is source-declared, never guessed.** The source names an Amazon
+Channel as `amazon<hayu>` with a display name ending "Amazon Channel". The
+identity table `PACKAGE_TO_PROVIDER_SLUG` gained 21 such packages, each mapped to
+a stable canonical slug (`hayu_amazon`, `mubi_amazon`, …), and their
+base platform is recorded separately in `ADDON_PACKAGE_PARENT` (all → `prime`).
+Only the 21 names confirmed on the live `GetProviders` endpoint are tabulated;
+an *unknown* `… Amazon Channel` is flagged, not guessed:
+
+| Verified add-on channels (package → slug, parent `prime`) |
+| --- |
+| `amazonacorntv`→`acorn_tv_amazon`, `amazonappletvplus`→`apple_tv_amazon`, `amazonciplay`→`crime_investigation_play_amazon`, `amazoncjenmselects`→`cj_enm_selects_amazon`, `amazoncrunchyroll`→`crunchyroll_amazon`, `amazoncuriositystreamstandard`→`curiosity_stream_amazon`, `amazondiscoveryplus`→`discovery_plus_amazon`, `amazondizi`→`dizi_amazon`, `amazondocubay`→`docubay_amazon`, `amazonfear`→`fear_amazon`, `amazonhayu`→`hayu_amazon`, `amazonhbomax`→`max_amazon`, `amazonhopster`→`hopster_amazon`, `amazonlionsgateplus`→`lionsgate_plus_amazon`, `amazonlovenature`→`love_nature_amazon`, `amazonmgmplus`→`mgm_plus_amazon`, `amazonmubi`→`mubi_amazon`, `amazonnbalp`→`nba_league_pass_amazon`, `amazonshorts`→`shorts_tv_amazon`, `amazonstingraykaraoke`→`stingray_karaoke_amazon`, `amazonviaplaysport`→`viaplay_tv_amazon` |
+
+**The relationship is one-directional and non-granting.** It is stored in the
+existing `Provider.config` JSON (`config["addon_parent"]`), *not* a new
+`Provider` column — see §14.7 for why that mattered. Holding the base never
+grants a channel; holding a channel never grants the base.
+
+**Entitlement requires both.** `tracker.services.access.classify_offer` — the
+single resolver — now requires:
+
+- **channel entitlement** (`Subscription.access_mode = "addon"` for that
+  channel), **and**
+- **base entitlement** (`Subscription` for the parent platform),
+
+and rewrites an add-on subscription offer's `access_type` to `addon`
+(`AccessType.ADDON`). The offer carries `is_addon`, `required_base` and
+`required_base_display`, and its rejection reasons name what is missing
+(`Requires Amazon Prime Video (add-on channel)` / `No active subscription for
+<channel> (add-on channel)`). The offer is still **shown** (muted and labelled),
+never hidden.
+
+| Base held | Channel held | Result |
+| --- | --- | --- |
+| ✗ | ✗ | `available_elsewhere` 🟠; reason "Requires Prime Video" |
+| ✓ | ✗ | `available_elsewhere` 🟠; reason "Add-on channel …" |
+| ✗ | ✓ | `available_elsewhere` 🟠; reason "Requires Prime Video" |
+| ✓ | ✓ | `available_here` 🟢; `is_accessible=true`, `present_access_types` includes `addon` |
+
+**UI.** Each add-on provider is listed on `/subscriptions/` as its own selectable
+card (so declaring `access_mode=addon` for it is possible), labelled
+`Add-on · needs <base>` (`ProviderGrid`). `OfferRow` renders an `Add-on · needs
+<base>` chip and, when unowned, the muted line
+`Add-on channel — requires <base>`. The `ProviderSerializer` exposes
+`is_addon`, `parent`, `parent_name`.
+
+Live: **21 add-on providers**, all `is_enabled=false` and `is_subscribed=false` by
+default, listed through `GET /api/providers/`.
+
+## 14.2 Viaplay Sports is not Viaplay
+
+The first pass conflated `viaplaysports` into `viaplay`. The requirement forbids
+that: Viaplay Sports carries its own `FLATRATE` entitlement and the source does
+not confirm it shares Viaplay's subscription. It is now a **separate canonical
+provider** `viaplay_sports` (NL short name `vps`), standalone (no base), and a
+regression test asserts the two slugs differ. A Viaplay subscription never
+unlocks Viaplay Sports, and vice versa.
+
+## 14.3 Netflix Kids stays an alias
+
+`netflixkids` remains a `KNOWN_ALIASES` entry → `netflix`: it is a curated
+profile, not a second entitlement, and no `netflix_kids` provider exists. This is
+unchanged from the first pass and re-asserted in §14.9.
+
+## 14.4 Catalogue sync — idempotency and counts (current)
+
+Re-run twice against the live NL endpoint after the changes:
+
+```
+packages_seen    114
+resolved_count    54        # mapped 32 + alias 1 + addon 21
+unresolved_count  60        # 114 - 54
+created_providers []        # second run
+mappings_created  []        # second run
+errors            []
+unresolved_by_reason {needs_manual_review: 57, unsupported_offer_type: 3}
+```
+
+The second run created nothing and rewrote nothing; `ProviderCataloguePackage`
+rows exist for **all 114** NL packages (60 of them unresolved), and re-syncing
+advances `last_seen` without duplicating a row.
+
+**Definitions.** *Seen* = every JustWatch package for NL. *Resolved* = the
+`technicalName` matched the identity table (as a standalone *mapped* provider, an
+*alias*, or an *add-on*). *Unresolved* = deliberately not mapped, recorded with a
+reason. These are **package** counts; **provider** counts are different: 92
+`Provider` rows = the first-pass set + 21 add-on channels. A successful sync is
+not evidence of coverage — 60 packages remain unresolved on purpose.
+
+## 14.5 Unresolved packages are inspectable
+
+Every package the sync sees is persisted in the new `ProviderCataloguePackage`
+model — a **catalogue observation**, never an availability signal. Unresolved
+rows carry a closed reason vocabulary (`PackageReasonCode`):
+
+| Reason | Meaning | Emitted today |
+| --- | --- | --- |
+| `known_alias` | a known alias spelling (resolved via its parent, recorded) | ✅ |
+| `addon_parent_unresolved` | source declares an add-on channel whose base is not in the verified table | ✅ |
+| `unsupported_offer_type` | only ever a `CINEMA` offer — not streamable | ✅ |
+| `missing_identity` | no technical name to key on | ✅ |
+| `needs_manual_review` | none of the above; a human must decide (default) | ✅ |
+| `duplicate_provider` | duplicates an existing provider identity | reserved |
+| `content_brand_not_provider` | a content brand, not a service (e.g. South Park) | reserved |
+| `ambiguous_identity` | one name, more than one plausible provider | reserved |
+
+The five ✅ codes are what `classify_unresolved_package` emits; the three
+`reserved` codes exist in the closed vocabulary so a future classifier can return
+them without a migration, but nothing emits them yet (documented, not implied).
+
+`classify_unresolved_package` is a pure function of the package (technical name,
+display name, monetization types) — no network, no heuristics beyond the
+source's own markers. The sync report gains `addons`, `resolution_counts`,
+`unresolved_by_reason`, and `unmapped` (aggregated by technical name with a
+`countries` list). Inspection is exposed read-only:
+
+```
+GET /api/providers/packages/?country=NL&resolved=false
+GET /api/providers/packages/?country=NL&reason=unsupported_offer_type
+GET /api/providers/packages/?country=NL&resolved=true
+```
+
+Live: `country=NL&resolved=false` → 60 rows, reasons
+`needs_manual_review` 57 / `unsupported_offer_type` 3, each with a human-readable
+`reason` and `resolved_provider_slug=""`. No fake provider is ever created for an
+unresolved package; the record is preserved for revisiting.
+
+## 14.6 Availability evidence — a claim is not an offer
+
+**Problem.** `title_source_report` reported `state = available` only when a
+concrete canonical offer existed, and `unknown` otherwise. A source that reports
+a title as available (a scraper row with `is_available=True`, a legacy
+`Availability` row) with no displayable offer was therefore indistinguishable
+from "never checked". The detail page could not tell a source's *claim* from a
+*playable option*.
+
+**Fix.** Each verdict now carries an `evidence` class plus `offer_count` and
+`title_signals`:
+
+| `evidence` | When | UI meaning |
+| --- | --- | --- |
+| `offers` | ≥1 currently-available canonical offer | the actionable case |
+| `title_signal` | no offer, but a source claims availability | **reported available — no current offer to show** |
+| `absence` | sources checked, none offered it | genuinely unavailable |
+| `none` | no evidence resolved | unknown |
+
+`title_signals` are read from the legacy scraper (`ScrapedContentMapping`) and
+`Availability` rows — the only places a source claims availability *without* an
+offer. Their providers are merged into `available_on`, so the claim names the
+service. `AvailabilityStateMessage` renders the `title_signal` case **before** the
+`unknown` branch and explicitly says *"That is a report, not yet a playable
+option."* — it never reads as an offer and never falls through to "unknown". The
+`_title_availability` endpoint (`/api/v2/unofficial/.../offers/`) and the prime
+detail payload both carry the new fields additively; no existing field changed.
+
+## 14.7 Files & migration (follow-up pass)
+
+| File | Change |
+| --- | --- |
+| `backend/availability/sources/justwatch_providers.py` | `viaplaysports`→`viaplay_sports`; +21 add-on entries; `ADDON_PACKAGE_PARENT`; `KNOWN_ALIASES`; NL short names; helpers `addon_parent_slug_for_package`, `is_addon_package`, `is_alias_package` |
+| `backend/tracker/models.py` | `PackageResolutionStatus`/`PackageReasonCode` choices; new `ProviderCataloguePackage` model; `Provider.is_addon` / `Provider.addon_parent_slug` (read `config["addon_parent"]`) |
+| `backend/tracker/services/provider_catalogue.py` | rewritten sync: add-on parents, unresolved reason codes, package persistence, `addons`/`resolution_counts`/`unresolved_by_reason` in the report; idempotent and additive-only |
+| `backend/tracker/services/access.py` | add-on gating (channel **and** base), `access_type=ADDON`, `is_addon`/`required_base`/`required_base_display` on `ClassifiedOffer` + `to_dict` |
+| `backend/tracker/services/offer_pipeline.py` | `rank_and_present` copies the add-on fields onto each offer dict |
+| `backend/tracker/services/availability_report.py` | `evidence`/`offer_count`/`title_signals`/`available_on` in `title_source_report`; `_active_offer_count`, `_title_availability_signals` |
+| `backend/tracker/api_v2.py` | `_title_availability` passes the evidence fields through |
+| `backend/tracker/serializers.py` | `ProviderSerializer` gains `is_addon`, `parent`, `parent_name` |
+| `backend/tracker/views.py` | `provider_packages` (read-only); add-on fields in the prime offer payload |
+| `backend/tracker/urls.py` | `providers/packages/` route |
+| `backend/tracker/migrations/0042_providercataloguepackage.py` | **new** — creates `ProviderCataloguePackage` (no `Provider` column added; see note) |
+| `backend/tracker/tests/test_addon_channels.py` | **new** — 8 tests (sync identity, idempotency, unresolved reasons, gating matrix, endpoint) |
+| `backend/tracker/tests/test_detail_availability_state.py` | +4 evidence-class tests |
+| `backend/tracker/tests/test_nl_catalogue_acceptance.py` | Viaplay Sports de-conflation assertion |
+| `frontend/components/ProviderGrid.tsx` | add-on label + `is_addon`/`parent`/`parent_name` on `ProviderItem` |
+| `frontend/components/OfferRow.tsx` | add-on chip + "requires base" muted line |
+| `frontend/components/AvailabilityState.tsx` | `title_signal` copy |
+| `frontend/lib/api.ts` | `PrimeOffer` add-on fields; `TitleAvailabilityVerdict` evidence fields |
+| `frontend/__tests__/AvailabilityState.test.tsx` | +2 evidence tests |
+
+**Why no `Provider.parent` column.** The first attempt added a self-FK. It broke
+*fresh* databases: migration `0033_merge_duplicate_providers` deliberately replays
+using the **live** model registry, so any new `Provider` column (or a new
+`ForeignKey(Provider)`) makes its "iterate every provider / cascade delete"
+step reference a table or column that does not exist yet at that point in the
+migration chain. `config["addon_parent"]` avoids both hazards and needs no
+`Provider` migration; `ProviderCataloguePackage` deliberately stores
+`resolved_provider_slug` (a `CharField`) rather than a FK, for the same reason.
+
+**Price/currency is now implemented** in a separate, additive table rather than
+a new `Offer` column, for the same live-model migration reason. See §14.8 for
+the schema, semantics, migration proof, API/UI shape and tests.
+
+## 14.8 Price & currency persistence (implemented)
+
+### 14.8.1 Original limitation and root cause
+
+JustWatch already returns a **structured** price for rent/buy offers —
+`retailPriceValue` (a JSON number) and `currency` (an explicit code) — alongside
+a localized `retailPrice` display string. `JustWatchOffer` carried all three,
+but `ProviderOffer`, canonical `Offer`, reconciliation, and the API dropped
+them, so the UI could not show what a rental or purchase costs.
+
+The obvious fix — add `amount`/`currency` columns to `availability.Offer` — is
+not safe on a fresh database:
+
+* On an empty database, the migration plan places `availability.0009_offerprice`
+  **after** `tracker.0033_merge_duplicate_providers` (verified plan indices:
+  `0033` = 54, `0009` = 62; `0010_offerevidence` follows `0009` immediately, so
+  both tables are created after the migration that walks the live registry).
+* `tracker.0033` is a data migration that imports and queries the **live**
+  model registry (`from availability.models import Offer`), specifically
+  `Offer.objects.filter(provider=duplicate)` while repointing rows. A column
+  added by a later `availability` migration would be selected before it exists,
+  so every fresh install would fail.
+* Editing `0033`'s dependencies is unsafe for existing databases: Django's
+  `check_consistent_history` raises `InconsistentMigrationHistory` when `0033`
+  is already applied but its new dependency is not. Rewriting `0033` to
+  historical models is also high-risk: the live `Offer.save()` is what rebuilds
+  `Offer.identity`, and the legacy bridge needs live `ProviderContent` /
+  `ContentMapping` instances.
+* A new model with a `ForeignKey` to `Provider` is equally unsafe:
+  `duplicate.delete()` runs the live collector, which would query the new table
+  before it exists.
+
+So the fix had to be additive, ordered after `0033`, and invisible to both its
+direct `Offer` query and its cascade.
+
+### 14.8.2 Chosen architecture and trade-offs
+
+**`availability.OfferPrice`** — one row per **`(offer_identity, source)`**.
+`offer_identity` is exactly `Offer.identity` (provider slug, country, content
+type, TMDb id, season/episode, offer type, provider content id); the slots are
+also denormalized onto the row for inspection.
+
+* **FK to `Source` only** (`PROTECT`). No FK to `Offer`, `Provider`, or
+  `Country`, so `0033` cannot see the table at all. This is the migration-safety
+  trade-off: integrity is enforced by the write path (a price is only written
+  beside the offer it was observed for, in the same transaction) and by the read
+  path joining on the exact canonical identity — not by a database cascade.
+* **Why not columns on `Offer`:** besides the migration hazard, `Offer.identity`
+  deliberately excludes the source (two sources observing one provider offer are
+  one canonical offer, and `Offer.source` is last-writer-wins). A single column
+  would let the last refreshing source overwrite another source's price, which
+  the requirements explicitly forbid.
+* **Why not a `DO_NOTHING` FK to `Offer`:** it is invisible to the collector,
+  but a later manual offer deletion would raise a database `IntegrityError`, and
+  offers are never deleted by design. Identity keying plus an explicit lifecycle
+  is the safer, more inspectable option. Orphan rows (only possible via manual
+  deletion) never display because reads match identity exactly.
+* **Deduplication:** the unique constraint on `(offer_identity, source)` makes
+  repeated observations idempotent — one row, not history rows per refresh.
+* **Multi-source:** each source has its own row; one source never overwrites
+  another. The read layer exposes all of them and selects a display value
+  deterministically.
+* **Types:** `amount` is a `DecimalField(max_digits=12, decimal_places=4)`
+  (never a float); `currency` is a 3-character explicit source code (never
+  inferred from a symbol or a localized string); `source_offer_id`,
+  `first_seen`, `last_seen`, `observed_at` and `validation_error` preserve
+  provenance and freshness.
+
+### 14.8.3 Migration strategy and verification
+
+`availability/0009_offerprice.py` is additive (creates one table, no column on
+`Offer`/`Provider`). It depends on `0008`, which the fresh plan already orders
+after `tracker.0033`.
+
+* **Fresh database:** a disposable DB migrated from zero applied all migrations
+  including `availability.0009` and `availability.0010`; `availability_offerprice`
+  and `availability_offerevidence` both exist and are empty. The fresh plan
+  orders `tracker.0033` at position 165, `availability.0009` at 186 and
+  `availability.0010` at 188 — the hazard is preserved, and the evidence table is
+  created after the migration that walks the live registry, exactly like the
+  price table.
+* **Existing database upgrade:** a fully migrated disposable DB was seeded with
+  an `Offer`, a `Subscription` and an `OfferPrice`; `migrate availability 0008`
+  reversed only `0009` (table dropped) while the offer and subscription
+  survived; `migrate` re-applied `0009`, the offer and subscription still
+  survived, and a new price row was written successfully. The evidence table was
+  verified the same way: `migrate tracker` on a disposable DB left `availability`
+  at `0008`, a legacy `Offer` was seeded, `migrate availability` applied `0009`
+  then `0010`, the offer survived, **0** evidence rows were fabricated, and the
+  read path still returned the legacy offer (§14.10).
+* `python manage.py makemigrations --check --dry-run` → **No changes detected**.
+* **Reverse/reapply:** on a disposable DB, `migrate availability 0009` reversed
+  only `0010` (evidence table dropped; offers and the price table survived);
+  re-applying recreated the empty evidence table and the read path still
+  returned the offered title through the legacy fallback. `migrate availability
+  0008` reversed both `0010` and `0009`; offers survived, and re-applying
+  recreated both tables. Evidence is a disposable projection; canonical offers
+  are not.
+* The dev database also applied `0009`/`0010` cleanly.
+
+### 14.8.4 Refresh and conflict semantics
+
+| Situation | Result |
+| --- | --- |
+| Valid structured amount + 3-letter currency | Row upserted; `is_current=True`; `observed_at`/`last_seen` updated; `first_seen` stable |
+| Same price observed again | Idempotent: same row, values unchanged, `last_seen` advances |
+| Price changes on a later refresh | Same row updated to the new amount/currency, still current |
+| Later observation has no price | `is_current=False`; last amount/currency **preserved** (never zero); `validation_error="price not reported"` |
+| Malformed/ambiguous price (non-numeric, negative, NaN/Inf, bad/missing currency, display-only `retailPrice`) | `is_current=False`; last known value preserved; `validation_error` records why; **no fabricated amount**. The display string is never parsed |
+| Offer disappears from an authoritative complete snapshot | `deactivate_unseen()` records an authoritative **absence for this run's source only** (§14.10), recomputes effective availability from all present evidence (the offer survives if a co-reporting source still observes it) and marks **only this run's source's** price rows not current (see below) |
+| Offer removed then re-created | Same identity → re-observation flips the same row current again; `first_seen` retained |
+| Different sources observe the offer | Separate rows, both preserved; no source can overwrite another, and one source's removal never stales another's still-valid price |
+| Duplicate observations of the same source offer | Collapsed by `(offer_identity, source)`; reads also dedupe identical price values |
+| Partial/failed refresh | Price writes share the offer transaction; a failed refresh writes nothing. `PARTIAL`/`FAILED` runs cannot deactivate, so they never mark prices stale |
+| Missing price | `price=None`; never rendered as `0` or "free" |
+
+**Display selection** (deterministic, documented in
+`AvailabilityReconciliationService._select_price`):
+
+1. only **current, fully validated** prices are eligible (stale rows are kept
+   for inspection but never displayed as fresh);
+2. the currency reported by the most sources wins; ties break on the ISO code;
+3. within that currency the **lowest** amount wins ("from €X");
+4. amount ties break on `(source, source_offer_id)`.
+
+When current prices disagree, a `ConflictKind.PRICE` conflict records each
+source's fact; no averaged or invented single "canonical" price is produced.
+`price_is_from=True` tells the UI to say "from".
+
+**Source isolation on removal.** `OfferPrice` provenance is per source, so
+`deactivate_unseen()` scopes its price update to `source=<run source>`: an
+authoritative snapshot from source A that no longer lists an offer marks only
+A's own price row not current. A still-current price observed by source B for
+the same canonical identity is left untouched (its row is never zeroed or
+deleted). The shared canonical `Offer` row's availability is likewise
+source-aware now: `deactivate_unseen()` records A's absence in
+`OfferEvidence` and recomputes effective availability from all present evidence
+(§14.10), so B's still-valid observation keeps the offer, and its price, alive.
+
+Price never feeds availability, country reach, language eligibility, VPN,
+entitlement, or add-on base gating. `ReconciledOffer.currently_available` and
+`ClassifiedOffer.is_entitled`/`is_accessible` are computed exactly as before;
+tests assert that adding a price changes none of them.
+
+### 14.8.5 API and UI behaviour
+
+`tracker.services.offers.Offer` carries a selected `price` and the full `prices`
+list; `RankedOffer`, `ClassifiedOffer`, their serializers, and the prime detail
+payload pass them through. Amount is a **decimal string** (precision survives
+JSON), currency is explicit:
+
+```json
+{
+  "offer_type": "rent",
+  "price": {
+    "amount": "2.9900",
+    "currency": "EUR",
+    "source": "justwatch",
+    "source_offer_id": "…",
+    "observed_at": "2026-10-19T14:24:00+00:00",
+    "is_current": true,
+    "is_from": false,
+    "validation_error": ""
+  },
+  "prices": [
+    {"amount": "2.9900", "currency": "EUR", "source": "justwatch", "is_current": true},
+    {"amount": "3.9900", "currency": "EUR", "source": "other", "is_current": true}
+  ]
+}
+```
+
+`OfferRow` shows the price for **rent, buy and add-on** offers only when a
+current amount and currency exist, formatted with `Intl.NumberFormat`
+(`currencyDisplay: "narrowSymbol"`) and prefixed with "from " when
+`is_from`. A missing or stale price renders the muted
+**"Price not currently confirmed"** chip — never "Free". Subscription/free
+offers show no per-title price. The muted unowned styling, entitlement labels,
+add-on chip and "requires base" line are unchanged, and a price never marks an
+offer accessible or Best Match.
+
+### 14.8.6 Files (price pass)
+
+| File | Change |
+| --- | --- |
+| `backend/availability/models.py` | **new `OfferPrice`** (identity+source unique, Decimal amount, explicit currency, lifecycle timestamps, no FK to Offer/Provider) |
+| `backend/availability/migrations/0009_offerprice.py` | **new** additive migration; ordered after `tracker.0033`, invisible to it |
+| `backend/availability/services/normalize.py` | `NormalizedPrice`, `normalize_price_amount`/`normalize_currency`/`normalize_price` (Decimal, ISO-shaped code, display-only rejection) |
+| `backend/availability/domain/models.py` | `ProviderOffer` price fields |
+| `backend/availability/sources/justwatch.py` | structured JustWatch price → `ProviderOffer` |
+| `backend/availability/persistence/repositories.py` | `OfferPriceRepository.record`/`for_identities`/`purge_orphans`; `deactivate_unseen` marks **the run source's** price rows stale |
+| `backend/tracker/management/commands/purge_orphan_offer_prices.py` | **new** explicit orphan cleanup (dry-run default) for rows left by a manual `Offer` deletion |
+| `backend/availability/services/refresh.py` | writes the price beside the offer in the same transaction |
+| `backend/availability/domain/reconciliation.py` | `PriceObservation`; price/provenance on observations and reconciled offers |
+| `backend/availability/domain/enums.py` | `ConflictKind.PRICE` |
+| `backend/availability/services/reconciliation.py` | bulk price read; deterministic display selection; PRICE conflict |
+| `backend/tracker/services/offers.py` | `price`/`prices` on the internal offer and its serialization |
+| `backend/tracker/services/availability_reads.py` | reconciled price → tracker offer (decimal string) |
+| `backend/tracker/services/ranking.py` | price carried through ranking |
+| `backend/tracker/services/access.py` | price carried through classification; no effect on entitlement |
+| `backend/tracker/serializers.py` | ranked-offer serializer includes price/prices |
+| `backend/availability/tests/test_offer_prices.py` | **new** 50 tests |
+| `backend/availability/tests/test_reconciliation_queries.py` | query bound 4→5 (one bulk price read; still constant) |
+| `backend/tracker/tests/test_unofficial_api.py` | additive contract keys asserted |
+| `backend/tracker/tests/test_purge_orphan_offer_prices.py` | **new** 3 tests (dry run writes nothing; only orphans deleted; idempotent) |
+| `frontend/components/OfferRow.tsx` | price chip, "from", missing/stale fallback, `formatPrice` |
+| `frontend/components/__tests__/OfferRow.test.tsx` | +13 price/format tests |
+| `frontend/lib/api.ts` | `OfferPrice` type and `PrimeOffer.price`/`prices` |
+
+### 14.8.7 Remaining price limitations
+
+* No price **history**: the row holds the latest observation per source;
+  `first_seen`/`observed_at`/`last_seen` are the audit trail.
+* Currency validation is structural (three ASCII letters), not a full ISO-4217
+  registry lookup; the source supplies the code and no symbol is ever inferred.
+* If sources disagree on **currency**, the majority currency is selected and the
+  disagreement is exposed via `prices` and a PRICE conflict; there is no FX
+  conversion.
+* A price is only as fresh as the source observation. Freshness is exposed
+  (`observed_at`, `is_current`), but there is no price-only background refresh.
+* Only JustWatch currently supplies structured prices; other adapters leave
+  `price=None` until they pass amounts through the same normalizer.
+* The table has no DB FK to `Offer` by design (migration safety). A manual offer
+  deletion therefore leaves an orphan price row; it never displays (reads match
+  the live identity exactly) and
+  `manage.py purge_orphan_offer_prices` removes it explicitly (`--apply`;
+  dry-run by default), so orphans cannot accumulate silently.
+* Deactivation is source-scoped and evidence-driven (§14.10). A source's
+  authoritative removal records that source's *own* absence and marks only that
+  source's price rows stale; effective availability is recomputed from all
+  present evidence, so a co-reporting source keeps the offer (and its price)
+  alive. The canonical `Offer` row's *descriptive* provenance (`Offer.source`,
+  `quality`, …) is still last-writer-wins — only the availability decision is
+  per source. Season/episode offers are not deactivated by the current
+  lifecycle.
+
+## 14.9 Tests (follow-up pass)
+
+| File | Tests | Focus |
+| --- | --- | --- |
+| `tracker/tests/test_addon_channels.py` | 8 | add-on provider created disabled with the right base; idempotent re-sync; unresolved reason codes persisted; gating matrix (neither/base-only/channel-only/both); standalone ≠ add-on; `providers/packages/` endpoint |
+| `tracker/tests/test_detail_availability_state.py` (new class) | 4 | evidence `offers` / `title_signal` / `none` / `absence` |
+| `tracker/tests/test_nl_catalogue_acceptance.py` | 6 | + Viaplay Sports de-conflation |
+| `frontend/__tests__/AvailabilityState.test.tsx` | 25 | +2: `title_signal` copy, `offers` copy preserved |
+| `backend/availability/tests/test_offer_prices.py` | 50 | normalization, repository lifecycle, source-isolated deactivation, orphan cleanup, refresh, multi-source reconciliation and partitioning, read/API, entitlement invariance, JustWatch parsing |
+| `backend/availability/tests/test_offer_evidence.py` | 29 | source isolation (A removes / B keeps), both remove → unavailable, reappearance, country scope, non-authoritative/partial/failed runs, idempotency, atomic rollback, present-wins conflict, order independence, stale evidence, source retirement, legacy fallback vs evidence, orphan purge, price-is-not-evidence, entitlement/reach invariance, API end-to-end |
+| `tracker/tests/test_purge_orphan_offer_evidence.py` | 6 | dry-run writes nothing; apply deletes only orphans; idempotent re-apply; `--source` purges and recomputes; other sources' rows (incl. live-offer evidence) are never removed |
+| `frontend/components/__tests__/OfferRow.test.tsx` | 19 | +13: amount/currency, rent vs buy, other currency, "from", missing/stale, no false "free", unowned/add-on |
+
+Focused source-aware batch (`test_offer_evidence` +
+`test_purge_orphan_offer_evidence`): **35 tests, OK**. Full backend: **2205
+tests, 4 failures** — all four are the pre-existing
+`test_tubi.py` failures, reproduced **identically** at baseline `88658f7` in a
+detached worktree (same assertions, same `0 != 1` / `11 != 12` / `12 != 13`
+counts), and none of the changed files are imported by `test_tubi.py`. Frontend:
+**185 tests, 23 files passed**. `tsc`: the same 2 pre-existing
+errors (`error-states.test.tsx` TS2554, `pages.test.ts` TS1501).
+`makemigrations --check`: no changes. `0042`, `0009` and `0010` apply cleanly;
+fresh-database and existing-database upgrade paths were verified on disposable
+databases (§14.8.3).
+
+**Final adversarial review pass (code-level).** Two defects were found and
+fixed, with regression tests: (1) `deactivate_unseen` marked *every* source's
+price row stale for a deactivated identity — now scoped to the run's own source,
+so one source's removal never discards another source's still-current price
+(`PriceDeactivationSourceIsolationTests`, 6 tests); (2) orphan price rows had no
+cleanup path, now `OfferPriceRepository.purge_orphans` +
+`manage.py purge_orphan_offer_prices` (3 tests). Three comparability tests
+(rent vs buy kept separate, add-on ≠ subscription, cross-currency not
+numerically cheapest) and one rollback-atomicity test were added. Net: **+13
+backend tests** (2157 → 2170).
+
+**Source-aware availability pass (this pass).** The defect found in the
+adversarial review was the *shared canonical `Offer` row itself*: availability
+was last-writer-wins. It is now fixed with a per-source evidence table
+(§14.10), net **+35 backend tests** (2170 → 2205), including a second adversarial
+pass over evidence precedence, staleness, source retirement and the legacy
+fallback. The residual shared-canonical-row limit no longer hides a valid
+observation; see §14.10 for what remains.
+
+---
+
+## 14.10 Source-aware offer evidence — effective availability is per source
+
+> Naming note: this is not §14.6's *evidence class* (which classifies a title's
+> verdict from existing signals). `OfferEvidence` here is a per-source
+> availability-observation row behind the canonical `Offer`.
+
+**Problem.** `Offer.identity` deliberately excludes the source, so sources A and
+B reporting the same provider offer converge on **one** canonical `Offer` row
+(`test_identical_provider_content_ids_converge_on_one_canonical_row`). The last
+writer owned `Offer.currently_available`, so when A published an authoritative
+complete snapshot that omitted the offer, `deactivate_unseen()` flipped the
+shared row unavailable — even though B still reported the same offer as
+available. B's valid observation (and its price) was silently hidden until B's
+next refresh happened to re-activate the row. Source-isolated *price* staleness
+did not fix this: a price is not availability evidence.
+
+**Fix — `availability.OfferEvidence`.** One row per
+**`(offer_identity, source)`**, the same stable key as `OfferPrice`:
+
+* **State:** `is_present` (this source currently observes the offer) and
+  `authoritative` (whether the observation that last set the row came from an
+  authoritative complete snapshot). `first_seen`/`last_seen`/`observed_at`
+  preserve freshness.
+* **Scope:** provider slug, country, content type, TMDb id, season/episode,
+  offer type and provider content id are denormalized so a row is inspectable
+  without joining back to `Offer`, and so country scope is enforced: the identity
+  already carries the country, and removal is filtered by `sync_run.country`.
+* **No FK to `Offer` or `Provider`** — `Source` only (`PROTECT`), exactly like
+  `OfferPrice` and for the same migration-safety reason (§14.8.1–14.8.3). A new
+  relation into `Provider` (or a `post_delete` receiver querying this table)
+  would make `tracker.0033` query a table that does not exist yet on a fresh
+  database. Integrity is maintained by the write path and
+  `OfferEvidenceRepository.purge_orphans()` /
+  `manage.py purge_orphan_offer_evidence`.
+
+**Effective availability.** `Offer.currently_available` is now *derived* from
+evidence instead of the last writer:
+
+1. any source with `is_present=True` keeps the offer available (present evidence
+   from any eligible source wins);
+2. an authoritative absence decides the outcome only when **no** source has
+   present evidence;
+3. an offer with **no** evidence rows at all keeps its stored value — the
+   compatibility path for rows written before this table existed. No evidence is
+   not proof of absence, and nothing is backfilled or fabricated.
+
+**Write path.**
+
+* `OfferRepository.upsert()` records this source's present evidence beside the
+  offer, in the same transaction.
+* `OfferRepository.deactivate_unseen()` (authoritative, successful runs only)
+  records an absence **for `sync_run.source` only**, recomputes
+  `currently_available` from all present evidence for the candidates, and marks
+  only this source's price rows stale.
+* Non-authoritative/incremental refreshes never record absence: absence is not
+  evidence, so an incomplete catalogue can never deactivate anything.
+* Because all of this runs inside the refresh `_persist` transaction, a failed
+  refresh rolls back evidence, canonical state and prices together.
+
+**Documented policy edges (all tested, `availability/tests/test_offer_evidence.py`).**
+
+| Situation | Result |
+| --- | --- |
+| A removes, B still observes (same canonical offer) | Offer stays available; A's evidence `is_present=False`, B's stays `True`; the read path still returns it |
+| B also removes | Offer becomes unavailable (`any present?` is false); read path drops it |
+| A reappears | Only A's row flips `is_present=True`; B's remembered absence is not fabricated away or re-observed on B's behalf |
+| Removal in country X | Only the country-X evidence/offer is touched (identity + `sync_run.country` scope) |
+| Non-authoritative refresh that omits the offer | No absence recorded, no deactivation, other sources untouched |
+| `PARTIAL`/`FAILED` run | `deactivate_unseen()` refuses (`InactiveSyncError`); no absence evidence written |
+| Failed refresh mid-way | Evidence + canonical + price writes roll back together |
+| Repeated refresh / repeated removal | Idempotent: one evidence row, same state |
+| Removal/observation order | Order-independent: whichever of present/absence lands first, the converged state is the same (`EvidencePrecedenceTests`); absence can only be recorded against an *existing* row, so a removal of an offer nobody ever observed records nothing |
+| Stale present evidence | Stays available: evidence is surfaced (`last_seen`/`observed_at`), never auto-expired, matching the pre-existing offer lifecycle. Only an authoritative absence or an explicit purge revokes it |
+| Legacy `Offer` with no evidence | Keeps stored availability; not treated as unavailable |
+| Evidence appears after a legacy offer | Evidence governs from then on; a stale/legacy write of the stored flag cannot win, because a recompute derives availability from evidence (`LegacyFallbackTests`) |
+| Legacy `Offer` an authoritative snapshot omits | Deactivated (that absence is genuine evidence) |
+| Source deleted while evidence exists | Refused (FK `PROTECT`), matching `OfferPrice` |
+| Source retired | `purge_for_source` / `purge_orphan_offer_evidence --source` removes only that source's evidence and recomputes; another source still observing keeps the offer up |
+| Orphan evidence after a manual `Offer` delete | `manage.py purge_orphan_offer_evidence` (`--apply`, dry-run default) deletes exactly the orphans |
+| Price recorded / stale price | Never creates evidence and never makes an offer available |
+| Entitlement / country / VPN | Unchanged: evidence only decides availability; `classify_offer` still gates access |
+
+**What remains (honest).** The canonical `Offer` row still stores last-writer
+*descriptive* fields (`source`, `quality`, URLs, languages); evidence governs
+only the availability decision. The domain has no "explicit unavailable result"
+signal distinct from authoritative absence, so a source's explicit
+"unavailable" (if a future source emits one) is not yet representable — only
+authoritative absence is, and non-authoritative absence is never recorded. A
+disabled `Source`'s evidence is not auto-revoked (disabling stops refreshes, as
+it does today); retiring it explicitly runs
+`purge_orphan_offer_evidence --source <slug>`, which recomputes affected offers.
+Exceptional data (offer or price changed outside the refresh path) is repaired by
+those explicit commands, not by a scheduler — consistent with the rest of the
+pipeline, which has no auto-expiry.
+
+**Transition behaviour, stated precisely.** `Offer.currently_available` is a
+*maintained projection* of evidence, not an independent fact. The only
+production writers are `OfferRepository.upsert` (writes the observing source's
+present evidence and sets the row available), `deactivate_unseen` (records the
+run source's absence and recomputes from all present evidence) and
+`recompute_availability` (re-derives after a purge). Because every write that
+sets the flag also writes or reads evidence, the projection cannot drift from
+evidence through the pipeline. The **legacy fallback is consulted only while an
+identity has zero evidence rows**: once any evidence exists, availability is
+evidence-derived, and a stale direct write of the flag is corrected by the next
+authoritative run or explicit recompute (`LegacyFallbackTests`). Reversing
+`0010` drops the evidence table; on re-apply it is recreated empty, so every
+offer falls back to its stored flag until a source re-observes — the evidence
+projection is disposable, the canonical offers are not (verified on a
+disposable database).
+
+**Files (source-aware availability pass).**
+
+| File | Change |
+| --- | --- |
+| `backend/availability/models.py` | **new `OfferEvidence`** (identity+source unique, per-source `is_present`/`authoritative`, denormalized scope, `Source` FK only) |
+| `backend/availability/migrations/0010_offerevidence.py` | **new** additive migration; depends on `0009`, ordered after `tracker.0033` |
+| `backend/availability/persistence/repositories.py` | **new `OfferEvidenceRepository`** (`record`, `record_absent_bulk`, `present_identities`, `recompute_availability`, `purge_orphans`, `purge_for_source`); `upsert` records present evidence; `deactivate_unseen` records this source's absence and recomputes effective availability |
+| `backend/tracker/management/commands/purge_orphan_offer_evidence.py` | **new** orphan/source evidence cleanup (dry-run default) |
+| `backend/availability/tests/test_offer_evidence.py` | **new** 29 tests (write path → reconciliation → read → API; precedence, staleness, retirement, legacy fallback) |
+| `backend/tracker/tests/test_purge_orphan_offer_evidence.py` | **new** 6 tests |
+| `backend/availability/tests/test_offer_prices.py` | updated the removal comment to the evidence-driven model (price is not availability evidence) |
+
+---
+
+# 15. Requirement-by-requirement acceptance
+
+| # | Requirement | Status | Evidence |
+| --- | --- | --- | --- |
+| 1 | Movie 194 traced, fixed, tested; no title-level signal misread as an offer | ✅ | §5.1, §14.6; `test_prime_endpoints`, `test_detail_availability_state` |
+| 2 | 615457 consistent detail ↔ watchlist, tested | ✅ | §5.2; `test_surface_country_agreement` (2) |
+| 3 | 31-service NL list accounted entry by entry | ✅ | §6 + §14.2; `test_nl_catalogue_acceptance` (6) |
+| 4 | Verified add-on channels independently selectable and correctly gated | ✅ | §14.1; `test_addon_channels` (8); live `/api/providers/` shows 21 add-ons with `parent` |
+| 5 | Unresolved packages inspectable with structured reasons | ✅ | §14.5; `ProviderCataloguePackage` + `/api/providers/packages/`; `test_addon_channels` |
+| 6 | Access Type non-destructive multi-select | ✅ | §5.3; `AccessTypeFilter` (4); live filter counts re-show excluded types |
+| 7 | Unowned offers visible with accurate labels | ✅ | §5.1, §14.1; `OfferRow` tests; live 194 shows 7 muted offers |
+| 8 | VPN/country per explicit preferences only | ✅ | §8.5; `build_reach` reads only `Preference.vpn_enabled`/`candidate_countries`; geo-IP sets current country only |
+| 9 | All checks run and accurately reported | ✅ | §10, §14.9, §16; 2205 backend (4 pre-existing Tubi) / 185 frontend / 2 pre-existing tsc / migration check |
+| 10 | Report matches implementation and its limits | ✅ | this document; §11 + §16 state the limits |
+| A | Distinguish confirmed offer / title-level evidence / unavailable / unknown / partial | ✅ | §14.6 `evidence` class; `AvailabilityStateMessage` |
+| B | No second classifier or source of truth | ✅ | one `tracker/services/access.py`; evidence class is derived from existing sources |
+| C | Don't infer availability from provider presence; don't classify missing data as unavailable | ✅ | `evidence=none` ≠ `absence`; unresolved packages are catalogue observations only |
+| D | Don't infer VPN reach from IP/locale; don't invent identities | ✅ | §8.5; add-on parents only from the verified table, else `addon_parent_unresolved` |
+| E | Idempotent, non-destructive sync; new providers disabled by default | ✅ | §14.4; 21 add-ons disabled; `Subscription` never touched |
+| F | Never claim full coverage from counts or a successful sync | ✅ | §7, §14.4: 60 unresolved; "sync success ≠ coverage" |
+
+### 15.1 Price/currency requirements (this pass)
+
+| Requirement | Status | Evidence |
+| --- | --- | --- |
+| Diagnose the migration hazard from code, not speculation | ✅ | §14.8.1: `tracker.0033` imports the live `Offer`; fresh-plan indices 54 (`0033`) vs 62 (`0009`) |
+| Choose a backward-compatible design and state trade-offs | ✅ | §14.8.2: identity-keyed `OfferPrice`, `Source` FK only, no `Offer`/`Provider` FK |
+| Fresh DB from zero to latest; existing DB upgrade; offer/subscription data survives; `makemigrations --check` | ✅ | §14.8.3: both disposable-DB paths verified; no changes detected |
+| Decimal amount, explicit ISO-4217 code, rent/buy/subscription context, source + source-offer id + last-observed | ✅ | `OfferPrice`, `ProviderOffer` price fields, `JustWatchOffer.retail_price_value`/`currency` |
+| No symbol inference; no display-string parsing; missing price ≠ zero; no fabricated prices | ✅ | `normalize_price`; `test_display_only_price_is_ambiguous_not_parsed`, `test_missing_amount_is_not_zero`, repository stale tests |
+| Repeated price / changed price / price disappears / different sources / duplicate observations / multiple monetization types / bad currency / offer disappears / partial refresh failure | ✅ | §14.8.4 table; `test_offer_prices` repository, refresh and reconciliation classes |
+| Never overwrite one source with another; preserve provenance; no invented canonical price; deterministic display | ✅ | `(offer_identity, source)` unique; `_select_price`; `ConflictKind.PRICE`; multi-source tests |
+| Price never affects availability, reach, language, VPN, entitlement, add-on base | ✅ | `test_price_does_not_make_an_unowned_offer_accessible`, `test_price_presence_does_not_change_the_title_verdict` |
+| End-to-end JustWatch parse → normalize → persist → reconcile → API → TS types → `OfferRow` | ✅ | §14.8.5–14.8.6; `test_offer_prices` parsing/read tests; `OfferRow` price tests |
+| Backend tests cover parse, rent/buy, precision, missing/malformed, idempotency, changes, cross-source, provenance, source-isolated deactivation, failure, recreation, API, entitlement, add-ons | ✅ | `availability/tests/test_offer_prices.py` (50); `tracker/tests/test_purge_orphan_offer_prices.py` (3) |
+| Frontend tests cover amount/currency, rent vs buy, missing fallback, currencies, stale, no false "free", no entitlement claim, unowned/add-on | ✅ | `OfferRow.test.tsx` 19 total (+13) |
+| Missing/stale price never shown as fresh or free; unowned/add-on styling preserved | ✅ | `is_current` gate + "Price not currently confirmed"; unowned/add-on tests |
+
+### 15.2 Source-aware availability requirements (this pass)
+
+| Requirement | Status | Evidence |
+| --- | --- | --- |
+| A source's authoritative removal removes only that source's evidence | ✅ | §14.10; `SourceIsolationTests`; absence recorded per `(identity, source)` |
+| Effective availability derived from valid current evidence, not last-writer `Offer` | ✅ | `Offer.currently_available` recomputed from evidence in `upsert`/`deactivate_unseen`; `test_a_removal_keeps_b_evidence_and_effective_availability` |
+| Any eligible source's valid current observation keeps the offer available | ✅ | present-wins policy; `test_present_evidence_wins_over_another_sources_absence` |
+| Absence vs explicit-unavailable distinguished if the domain supports it | ✅ (documented limit) | only authoritative absence is representable; non-authoritative absence is never recorded; §14.10 "What remains" |
+| Non-authoritative refresh cannot deactivate others or imply exhaustiveness | ✅ | `test_non_authoritative_refresh_records_no_absence`; `may_deactivate` gate unchanged |
+| Country/source scope correct (removal in X doesn't invalidate Y) | ✅ | identity carries country + `sync_run.country` filter; `test_removal_in_one_country_does_not_touch_another` |
+| Price lifecycle stays source-specific | ✅ | `deactivate_unseen` stales only `source=<run source>`; price-isolation tests (6) |
+| Failed/partial refreshes atomic; no partial evidence/canonical/price writes | ✅ | `_persist` transaction; `test_failed_refresh_rolls_back_evidence_canonical_state_and_price`; `test_partial_and_failed_runs_record_no_absence` |
+| Reappearance restores only the observing source's evidence | ✅ | `test_reappearance_restores_only_the_observing_sources_evidence` |
+| Legacy `Offer` rows without evidence handled predictably | ✅ | compatibility fallback (keep stored value); `test_legacy_offer_without_evidence_is_not_treated_as_unavailable`; no backfill/fabrication |
+| Ranking/access use effective availability while enforcing entitlement/country/VPN/reach/subscription/add-on | ✅ | reads consume the derived view; `AccessRemainsIndependentTests` (entitlement + reach) |
+| Catalogue metadata is not availability evidence | ✅ | evidence written only from offer upsert/deactivation, never from `ProviderContent`/catalogue |
+| Price is never availability evidence | ✅ | `PriceIsNotEvidenceTests`; recording a price creates no evidence and does not reactivate an offer |
+| Migration safety (no new dependency for `tracker.0033`; fresh + upgrade verified) | ✅ | §14.8.3; `Source`-only FK; fresh plan 0033→0009→0010; upgrade seed survived with 0 fabricated evidence; reverse/reapply keeps offers and recreates the projection |
+| Regression tests through the real resolver/read/API pipeline | ✅ | `test_offer_evidence` drives `AvailabilityRefreshService` → reconciliation → `get_local_offers` → `/api/movie/550/availability/` |
+| Source delete/disable explicit, tested policy | ✅ | delete refused (`PROTECT`); `purge_for_source` + `purge_orphan_offer_evidence --source`; §14.10 |
+
+---
+
+# 16. Outstanding & blocked (honest)
+
+- **Price/currency is implemented; the old blocker is removed.** The hazard was
+  real (`availability.0009` runs after the live-registry `tracker.0033`), so the
+  fix is an additive identity-keyed `availability.OfferPrice` table with no FK to
+  `Offer`/`Provider`; see §14.8 for the design, migration proof and semantics.
+  The remaining price limitations (no price history, structural currency check,
+  no FX conversion, no price-only refresh, JustWatch-only coverage, no DB-level
+  FK to `Offer`) are listed in §14.8.7 — they are deliberate scope limits, not
+  an unresolved blocker. Price staleness on removal is **source-scoped** (one
+  source's authoritative removal never stales another source's still-current
+  price), and orphan price rows left by a manual `Offer` deletion are removed by
+  the explicit `purge_orphan_offer_prices` command. The residual
+  shared-canonical-`Offer` limit from the price pass is **fixed by §14.10**: a
+  per-source `OfferEvidence` table makes effective availability the union of
+  current observations, so one source's authoritative removal no longer hides a
+  co-reporting source's valid observation or price. What remains there is that
+  the canonical row's *descriptive* provenance is still last-writer-wins and that
+  a source's explicit "unavailable" signal is not representable beyond
+  authoritative absence.
+- **Second adversarial pass (evidence precedence / staleness / retirement /
+  legacy).** Verified and regression-tested: availability is order-independent
+  for present-vs-absence evidence; stale present evidence is surfaced but never
+  auto-expired (the only revokers are an authoritative absence or an explicit
+  purge); retiring a source removes only that source's evidence and recomputes
+  the affected offers; the default orphan purge never touches a live offer's
+  evidence; and the legacy no-evidence fallback is consulted only while an
+  identity has zero evidence rows, so it cannot override evidence once it exists
+  (`EvidencePrecedenceTests`, `StaleEvidenceTests`, `SourceRetirementTests`,
+  `LegacyFallbackTests`). Reverse/reapply of `0010`/`0009` was verified on a
+  disposable DB: canonical offers survive, the evidence projection is recreated
+  empty and falls back to stored availability.
+- **Worker-lane test isolation (environmental).** 
+  `test_only_one_title_worker_may_hold_the_drain_lock` counts `pg_locks`
+  cluster-wide and fails while the dev worker holds the drain lock; it passes
+  with `worker`/`catalogue-worker` stopped. Not caused by, and not fixed in,
+  this work. (The final full-suite run did not hit it.)
+- **Pre-existing failures left untouched.** 4 `backend/availability/tests/test_tubi.py`
+  tests (re-run at baseline `88658f7` in a detached worktree: same assertions
+  and counts) and 2 TypeScript errors (`error-states.test.tsx` TS2554,
+  `pages.test.ts` TS1501).
+- **60 NL packages remain unresolved.** Deliberately: each is now inspectable
+  with a reason, and mapping one is a reviewable diff, not a guess.
+- **Add-on parent inference is Amazon-only in practice.** The verified table
+  covers the 21 Amazon Channels in NL; other platforms' add-ons (if any) would
+  arrive as `addon_parent_unresolved` until verified — never guessed.
+- **Uncommitted.** The §14 follow-up (add-on channels, unresolved packages,
+  evidence, price/currency) is in the working tree on
+  `feature/scrapres-improvedment` (HEAD `e58183d`). It is preserved for review;
+  committing is left to the user.

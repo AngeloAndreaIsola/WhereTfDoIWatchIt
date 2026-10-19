@@ -270,6 +270,8 @@ class UnofficialOffersContractTests(TestCase):
         self.assertEqual(data["movie"]["content_type"], "movie")
 
         [offer] = data["offers"]
+        # `price`/`prices` are additive: scraper rows carry no structured price,
+        # so the legacy keys are all still present and the new ones are empty.
         self.assertEqual(
             set(offer.keys()),
             {
@@ -277,8 +279,11 @@ class UnofficialOffersContractTests(TestCase):
                 "audio_languages", "subtitle_languages",
                 "is_language_match", "ranking",
                 "service_display", "source_indicator",
+                "price", "prices",
             },
         )
+        self.assertIsNone(offer["price"])
+        self.assertEqual(offer["prices"], [])
         self.assertEqual(offer["service"], "matrixhd")
         self.assertEqual(offer["service_display"], self.scraper.name)
         self.assertEqual(offer["source_indicator"], "Scraper")

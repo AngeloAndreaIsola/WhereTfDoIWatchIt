@@ -201,6 +201,44 @@ describe("AvailabilityState", () => {
     });
   });
 
+  describe("title-level evidence (no concrete offer)", () => {
+    it("reports the source's claim without reading as a playable offer", () => {
+      render(
+        <AvailabilityState
+          availability={verdict("unknown", "not_checked", {
+            evidence: "title_signal",
+            offer_count: 0,
+            available_on: ["videoland"],
+            title_signals: [
+              { provider: "videoland", source: "legacy_scraper" },
+            ],
+          })}
+        />,
+      );
+
+      expect(screen.getByText(/reported available/i)).toBeInTheDocument();
+      expect(screen.getByText(/videoland/i)).toBeInTheDocument();
+      // It must not degrade to "not known yet" — a source did answer.
+      expect(screen.queryByText(/not known yet/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(FALSE_UNAVAILABLE)).not.toBeInTheDocument();
+    });
+
+    it("keeps the concrete-offer copy when offers actually exist", () => {
+      render(
+        <AvailabilityState
+          availability={verdict("available", null, {
+            evidence: "offers",
+            offer_count: 2,
+            available_on: ["max"],
+          })}
+        />,
+      );
+
+      expect(screen.getByText(/not on a service we can show/i)).toBeInTheDocument();
+      expect(screen.queryByText(/reported available/i)).not.toBeInTheDocument();
+    });
+  });
+
   describe("source provenance", () => {
     it("lists unresolved sources so an incomplete answer is visible", () => {
       render(

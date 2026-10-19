@@ -27,8 +27,11 @@ Counter semantics per run:
 - items_discovered: normalized offers the source returned for this group;
 - items_processed: offers upserted for this group;
 - offers_created / offers_updated: upsert outcomes for this group;
-- offers_deactivated: rows deactivated by this run's snapshot (always 0 unless
-  the run qualifies as an authoritative full snapshot);
+- offers_deactivated: offers that became effectively unavailable under this
+  run's snapshot — i.e. no source retained a present observation (§14.10).
+  Always 0 unless the run qualifies as an authoritative full snapshot. An offer
+  a co-reporting source still observes is counted as neither deactivated nor
+  updated;
 - error_count / last_error: populated when the run fails.
 
 Mapping semantics (catalogue sources without external ids): an offer is only
@@ -109,6 +112,7 @@ from ..sources.justwatch_providers import provider_slug_for_package
 from ..persistence.repositories import (
     CursorRepository,
     MappingRepository,
+    OfferPriceRepository,
     OfferRepository,
     ProviderContentRepository,
     SyncRunRepository,
@@ -189,13 +193,14 @@ class AvailabilityRefreshService:
 
     def __init__(self, source=None, offer_repository=None, sync_runs=None,
                  cursor_repository=None, mapping_repository=None,
-                 content_repository=None):
+                 content_repository=None, price_repository=None):
         self.source = source if source is not None else source_registry.get(DEFAULT_SOURCE_SLUG)
         self.offers = offer_repository or OfferRepository()
         self.sync_runs = sync_runs or SyncRunRepository()
         self.cursors = cursor_repository or CursorRepository()
         self.mappings = mapping_repository or MappingRepository()
         self.contents = content_repository or ProviderContentRepository()
+        self.prices = price_repository or OfferPriceRepository()
 
     def refresh_content(self, movie, *, country=None) -> RefreshResult:
         """Title-targeted refresh, optionally scoped to an explicit *country*.
@@ -641,6 +646,17 @@ class AvailabilityRefreshService:
                             available_until=normalized.available_until,
                             source_record_id=normalized.source_record_id,
                             source_version=normalized.source_version,
+                        )
+                        # The price is a property of the observed offer. It is
+                        # written beside the offer, in the same transaction, so
+                        # a failed refresh leaves no price behind either.
+                        self.prices.record(
+                            offer=offer,
+                            source=source,
+                            amount=normalized.price_amount,
+                            currency=normalized.price_currency,
+                            source_offer_id=normalized.source_record_id,
+                            error=normalized.price_error,
                         )
                         seen.add(offer.identity)
                         group_created += int(was_created)

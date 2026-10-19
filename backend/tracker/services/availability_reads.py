@@ -41,6 +41,11 @@ def get_local_offers(movie, *, season: Optional[int] = None, country: Optional[s
             url=offer.provider_url,
             audio_languages=_as_list(offer.audio_languages),
             subtitle_languages=_as_list(offer.subtitle_languages),
+            price=(
+                _price_dict(offer.price, is_from=offer.price_is_from)
+                if offer.price is not None else None
+            ),
+            prices=[_price_dict(price) for price in offer.prices],
         )
         for offer in result.offers
         if offer.currently_available
@@ -50,3 +55,25 @@ def get_local_offers(movie, *, season: Optional[int] = None, country: Optional[s
 def _as_list(values):
     """Tracker offers keep list-or-None language fields; DTOs stay immutable."""
     return None if values is None else list(values)
+
+
+def _price_dict(price, *, is_from: bool = False) -> dict:
+    """Serializable price row: amount as a string so Decimal precision survives.
+
+    The amount is sent as a decimal string (never a binary float) and the
+    currency as its explicit ISO code, so the frontend never has to parse a
+    localized display string. ``is_current`` tells the reader whether the value
+    was confirmed by the latest observation.
+    """
+    return {
+        "amount": None if price.amount is None else str(price.amount),
+        "currency": price.currency or "",
+        "source": price.source,
+        "source_offer_id": price.source_offer_id,
+        "observed_at": (
+            price.observed_at.isoformat() if price.observed_at else None
+        ),
+        "is_current": bool(price.is_current),
+        "is_from": bool(is_from),
+        "validation_error": price.validation_error or "",
+    }

@@ -72,6 +72,7 @@ from ..services.normalize import (
     normalize_justwatch_offer_type,
     normalize_justwatch_quality,
     normalize_languages,
+    normalize_price,
 )
 from .base import ContentRequest, SourceCapabilities, SourceFetchError, SourceFetchResult
 from .justwatch_client import (
@@ -452,6 +453,9 @@ class JustWatchSource:
     def _offer(self, offer, *, provider_slug, country, content_type, tmdb_id,
                content, node):
         provider_content_id = str(node.id or "")
+        price = normalize_price(
+            offer.retail_price_value, offer.currency, offer.retail_price,
+        )
         return ProviderOffer(
             provider_id=provider_slug,
             provider_content_id=provider_content_id,
@@ -470,6 +474,9 @@ class JustWatchSource:
             # JustWatch titles are identified by a stable node id (tm*/ts*/tss*),
             # which is the provenance stamp for this observation.
             source_version=str(node.object_type or ""),
+            price_amount=price.amount,
+            price_currency=price.currency,
+            price_error=price.error,
         )
 
     def _content(self, title, content_type, country):

@@ -28,6 +28,29 @@ function qualityLabel(q: string): string {
   return map[q.toLowerCase()] ?? q.toUpperCase();
 }
 
+/** Offer types where a per-title price is meaningful to show. */
+const PRICE_OFFER_TYPES = new Set(["rent", "buy", "addon"]);
+
+/**
+ * Locale-aware currency formatting from the structured amount/currency the API
+ * sends. The amount arrives as a decimal string, so it is converted at the
+ * display boundary only — never stored or compared as a float.
+ */
+export function formatPrice(amount: string, currency: string, locale?: string): string {
+  const value = Number(amount);
+  if (!Number.isFinite(value)) return "";
+  try {
+    return new Intl.NumberFormat(locale, {
+      style: "currency",
+      currency,
+      currencyDisplay: "narrowSymbol",
+    }).format(value);
+  } catch {
+    // An unknown-but-well-formed currency code must not blank the row.
+    return `${amount} ${currency}`;
+  }
+}
+
 interface OfferRowProps {
   offer: PrimeOffer;
   tmdbId?: number;
@@ -55,6 +78,23 @@ export default function OfferRow({
 
   const watchUrl = offer.url || (tmdbId ? `/watch/${tmdbId}` : null);
 
+  // A price is only shown when a source confirmed it for the latest
+  // observation: a remembered (stale) value is never presented as fresh, and a
+  // missing price is never rendered as "free".
+  const priceApplicable = PRICE_OFFER_TYPES.has(
+    (offer.offer_type || "").toLowerCase()
+  );
+  const confirmedPrice =
+    offer.price &&
+    offer.price.amount &&
+    offer.price.currency &&
+    offer.price.is_current !== false
+      ? offer.price
+      : null;
+  const priceText = confirmedPrice
+    ? formatPrice(confirmedPrice.amount as string, confirmedPrice.currency)
+    : "";
+
   // An offer the user cannot play with their current services is still real
   // availability — show it, muted and labelled, rather than hiding it. This is
   // the movie-194 fix: the offer list used to drop unowned services entirely,
@@ -67,6 +107,9 @@ export default function OfferRow({
   // simply wrong. Prefer the resolver's own rejection reason.
   const mutedReason = (() => {
     if (!notAccessible) return "";
+    if (offer.is_addon && offer.required_base_display) {
+      return `Add-on channel — requires ${offer.required_base_display}`;
+    }
     if (notEntitled) return "Not in your subscriptions — shown for reference";
     const reasons = (offer.rejection_reasons || []).join(" ").toLowerCase();
     if (reasons.includes("language")) return "Not available in your languages";
@@ -142,7 +185,31 @@ export default function OfferRow({
               {qualityLabel(offer.quality)}
             </span>
           )}
-          {offer.access_label && !notEntitled && (
+          {priceApplicable && confirmedPrice && priceText && (
+            <span
+              data-testid="offer-price"
+              data-amount={confirmedPrice.amount}
+              data-currency={confirmedPrice.currency}
+              className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-800 dark:bg-slate-700 dark:text-slate-100"
+            >
+              {confirmedPrice.is_from ? `from ${priceText}` : priceText}
+            </span>
+          )}
+          {priceApplicable && !confirmedPrice && (
+            <span
+              data-testid="offer-price-missing"
+              className="rounded-md bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500 dark:bg-gray-700 dark:text-gray-400"
+            >
+              Price not currently confirmed
+            </span>
+          )}
+          {offer.is_addon && (
+            <span className="rounded-md bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
+              Add-on
+              {offer.required_base_display ? ` · needs ${offer.required_base_display}` : ""}
+            </span>
+          )}
+          {offer.access_label && !notEntitled && !offer.is_addon && (
             <span
               className={`rounded-md px-2 py-0.5 text-xs font-medium ${
                 notAccessible

@@ -113,6 +113,81 @@ def unavailable_everywhere(movie):
     return movie
 
 
+class AvailabilityEvidenceClassTests(TestCase):
+    """The evidence class distinguishes a concrete offer from a bare claim.
+
+    The defect this pins: a source can report a title as available (a scraper
+    row with ``is_available=True``, a legacy ``Availability`` row) without any
+    concrete canonical offer to display. The app must not let that read as a
+    playable option, and must not collapse it to ``unknown`` either — a source
+    *did* answer.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        for slug, name in (
+            (DEFAULT_SOURCE_SLUG, "Streaming Availability API"),
+            ("justwatch", "JustWatch"),
+            ("watchmode", "Watchmode"),
+        ):
+            Source.objects.get_or_create(
+                slug=slug, defaults={"name": name, "type": SourceType.API}
+            )
+
+    def _verdict(self, movie):
+        return self.client.get(
+            f"/api/v2/unofficial/movie/{movie.tmdb_id}/offers/"
+        ).json()["availability"]
+
+    def test_active_offer_yields_offers_evidence(self):
+        movie = Movie.objects.create(tmdb_id=910001, title="Has Offer")
+        local_offer(movie, country="NL", service="prime")
+        verdict = self._verdict(movie)
+        self.assertEqual(verdict["evidence"], "offers")
+        self.assertGreaterEqual(verdict["offer_count"], 1)
+
+    def test_scraped_signal_without_offer_yields_title_signal(self):
+        movie = Movie.objects.create(tmdb_id=910002, title="Reported Only")
+        provider, _ = Provider.objects.get_or_create(
+            slug="signal_only",
+            defaults={
+                "name": "Signal Only",
+                "category": ProviderCategory.SCRAPER,
+                "is_enabled": True,
+            },
+        )
+        ScrapedContentMapping.objects.create(
+            provider=provider,
+            movie=movie,
+            scraped_title=movie.title,
+            country_code="NL",
+            is_available=True,
+        )
+        verdict = self._verdict(movie)
+
+        self.assertEqual(verdict["evidence"], "title_signal")
+        self.assertEqual(verdict["offer_count"], 0)
+        self.assertIn(
+            "signal_only",
+            [s["provider"] for s in verdict["title_signals"]],
+        )
+        self.assertIn("signal_only", verdict["available_on"])
+        # The page's offer list is empty; the evidence is what stops it reading
+        # as a playable option or as "unknown".
+        self.assertNotEqual(verdict["evidence"], "offers")
+
+    def test_no_evidence_yields_none(self):
+        movie = Movie.objects.create(tmdb_id=910003, title="Nothing Yet")
+        self.assertEqual(self._verdict(movie)["evidence"], "none")
+
+    def test_every_source_negative_yields_absence(self):
+        movie = Movie.objects.create(tmdb_id=910004, title="Checked Nein")
+        unavailable_everywhere(movie)
+        verdict = self._verdict(movie)
+        self.assertEqual(verdict["state"], TitleAvailabilityState.UNAVAILABLE)
+        self.assertEqual(verdict["evidence"], "absence")
+
+
 class DetailAvailabilityStateTests(TestCase):
     """One client, three states, one endpoint."""
 

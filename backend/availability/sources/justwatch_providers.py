@@ -62,7 +62,11 @@ PACKAGE_TO_PROVIDER_SLUG: dict[str, str] = {
     # and Ziggo are different services that merely share a market.
     "videoland": "videoland",
     "viaplay": "viaplay",
-    "viaplaysports": "viaplay",  # Viaplay's sports tier; same brand/account.
+    # Viaplay Sports is its own package with its own FLATRATE entitlement, and
+    # the source does not confirm that holding Viaplay grants it (or the
+    # reverse). Kept as a *separate* canonical provider rather than an alias so
+    # a Viaplay subscription never silently unlocks Viaplay Sports.
+    "viaplaysports": "viaplay_sports",
     "skyshowtime": "skyshowtime",
     "canalplus": "canal_plus",
     "nlziet": "nlziet",
@@ -97,7 +101,74 @@ PACKAGE_TO_PROVIDER_SLUG: dict[str, str] = {
     # NL offers are ad-supported (``ADS`` -> ``free_with_ads``), so mapping it
     # is what lets a free-with-ads title surface instead of disappearing.
     "wuaki": "rakuten_tv",
+    # Add-on channels sold through a base platform. The technical names are
+    # JustWatch's own (``<platform><channel>``) and the ``clearName`` ends in
+    # "Amazon Channel" for every one of them, so the channel identity and its
+    # parent are both source-declared, not guessed from a fuzzy name. Each is a
+    # *distinct* canonical provider: holding the channel never grants the base
+    # platform, and holding the base platform never grants the channel. The
+    # parent is recorded separately in ``ADDON_PACKAGE_PARENT``.
+    "amazonshorts": "shorts_tv_amazon",
+    "amazonmgmplus": "mgm_plus_amazon",
+    "amazonstingraykaraoke": "stingray_karaoke_amazon",
+    "amazonciplay": "crime_investigation_play_amazon",
+    "amazoncrunchyroll": "crunchyroll_amazon",
+    "amazondizi": "dizi_amazon",
+    "amazonhayu": "hayu_amazon",
+    "amazonmubi": "mubi_amazon",
+    "amazonlovenature": "love_nature_amazon",
+    "amazonhopster": "hopster_amazon",
+    "amazonacorntv": "acorn_tv_amazon",
+    "amazondiscoveryplus": "discovery_plus_amazon",
+    "amazonappletvplus": "apple_tv_amazon",
+    "amazonnbalp": "nba_league_pass_amazon",
+    "amazonviaplaysport": "viaplay_tv_amazon",
+    "amazoncuriositystreamstandard": "curiosity_stream_amazon",
+    "amazonhbomax": "max_amazon",
+    "amazonlionsgateplus": "lionsgate_plus_amazon",
+    "amazoncjenmselects": "cj_enm_selects_amazon",
+    "amazonfear": "fear_amazon",
+    "amazondocubay": "docubay_amazon",
 }
+
+#: ``technicalName`` -> canonical slug of the base platform a package is an
+#: add-on *to*. Only ids confirmed on the live endpoint are listed; an add-on
+#: whose parent is not source-declared stays unmapped (``addon_parent_unresolved``)
+#: rather than being attached to a guessed base. Amazon Channels require Prime
+#: Video (``prime``), which is the only delivery model this table asserts.
+ADDON_PACKAGE_PARENT: dict[str, str] = {
+    technical: "prime"
+    for technical in (
+        "amazonshorts",
+        "amazonmgmplus",
+        "amazonstingraykaraoke",
+        "amazonciplay",
+        "amazoncrunchyroll",
+        "amazondizi",
+        "amazonhayu",
+        "amazonmubi",
+        "amazonlovenature",
+        "amazonhopster",
+        "amazonacorntv",
+        "amazondiscoveryplus",
+        "amazonappletvplus",
+        "amazonnbalp",
+        "amazonviaplaysport",
+        "amazoncuriositystreamstandard",
+        "amazonhbomax",
+        "amazonlionsgateplus",
+        "amazoncjenmselects",
+        "amazonfear",
+        "amazondocubay",
+    )
+}
+
+#: Technical names that are an *alias* of a mapped provider rather than a
+#: separate service: JustWatch lists them as their own package, but they grant
+#: the same entitlement as the canonical provider. Netflix Kids is a curated
+#: profile inside the Netflix subscription, so it maps to ``netflix`` — it is
+#: never a second subscription the user must buy.
+KNOWN_ALIASES: frozenset[str] = frozenset({"netflixkids"})
 
 #: JustWatch 3-letter ``shortName`` per (canonical slug, country), as measured.
 #: Only the markets this project has mapped providers for are listed; the
@@ -159,6 +230,31 @@ PACKAGE_SHORT_NAMES: dict[str, dict[str, str]] = {
     "filmzie": {"NL": "fmz"},
     "south_park": {"NL": "spk"},
     "rakuten_tv": {"NL": "wki"},
+    # Add-on channels (and the separated Viaplay Sports tier), measured on the
+    # live NL catalogue. Recorded so these providers are walkable too — an
+    # unmeasured market still means "not walkable", never a guessed id.
+    "viaplay_sports": {"NL": "vps"},
+    "shorts_tv_amazon": {"NL": "atv"},
+    "mgm_plus_amazon": {"NL": "mgp"},
+    "stingray_karaoke_amazon": {"NL": "skk"},
+    "crime_investigation_play_amazon": {"NL": "cpa"},
+    "crunchyroll_amazon": {"NL": "cra"},
+    "dizi_amazon": {"NL": "dac"},
+    "hayu_amazon": {"NL": "ahy"},
+    "mubi_amazon": {"NL": "amu"},
+    "love_nature_amazon": {"NL": "aln"},
+    "hopster_amazon": {"NL": "ahs"},
+    "acorn_tv_amazon": {"NL": "aac"},
+    "discovery_plus_amazon": {"NL": "adp"},
+    "apple_tv_amazon": {"NL": "avl"},
+    "nba_league_pass_amazon": {"NL": "anb"},
+    "viaplay_tv_amazon": {"NL": "vpa"},
+    "curiosity_stream_amazon": {"NL": "acs"},
+    "max_amazon": {"NL": "aho"},
+    "lionsgate_plus_amazon": {"NL": "alg"},
+    "cj_enm_selects_amazon": {"NL": "cje"},
+    "fear_amazon": {"NL": "fer"},
+    "docubay_amazon": {"NL": "ado"},
 }
 
 
@@ -177,6 +273,29 @@ def provider_slug_for_package(package) -> str:
 def provider_slugs_for_packages(packages) -> set[str]:
     """Canonical slugs for a sequence of JustWatch packages (unmapped dropped)."""
     return {slug for slug in (provider_slug_for_package(p) for p in packages) if slug}
+
+
+def addon_parent_slug_for_package(package) -> str:
+    """Canonical slug of the base platform *package* is an add-on to, or ``""``.
+
+    Empty means "not a source-declared add-on": either the package is
+    standalone, or its parent is unknown. The two are deliberately not
+    distinguished here — an add-on with no confirmed parent must not be
+    attached to a guessed base, so callers treat ``""`` as "no requirement".
+    """
+    technical_name = getattr(package, "technical_name", package)
+    return ADDON_PACKAGE_PARENT.get(str(technical_name or "").strip().lower(), "")
+
+
+def is_addon_package(package) -> bool:
+    """True when the package is a verified, source-declared add-on channel."""
+    return bool(addon_parent_slug_for_package(package))
+
+
+def is_alias_package(package) -> bool:
+    """True when the package grants the same entitlement as another provider."""
+    technical_name = getattr(package, "technical_name", package)
+    return str(technical_name or "").strip().lower() in KNOWN_ALIASES
 
 
 def package_short_name(provider_slug, country) -> str:

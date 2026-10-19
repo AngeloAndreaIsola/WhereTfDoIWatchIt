@@ -92,15 +92,16 @@ class ReconciledQueryServiceTests(ReconciliationFixtureMixin, TestCase):
             self.offer(provider_content_id=f"pc-{index}")
 
         # Observations, then one bulk lookup each for mappings, cross-content
-        # claims and sync runs: no per-offer query, whatever the row count.
-        with self.assertNumQueries(4):
+        # claims, sync runs and source prices: no per-offer query (and so no
+        # N+1), whatever the row count.
+        with self.assertNumQueries(5):
             result = self.service.get_reconciled_for_content(
                 550, ContentType.MOVIE, country="us", now=self.now,
             )
         self.assertEqual(result.diagnostics.observations, 5)
         self.assertEqual(len(result.offers), 1)
 
-        with self.assertNumQueries(4):
+        with self.assertNumQueries(5):
             again = self.service.get_reconciled_for_content(
                 550, ContentType.MOVIE, country="us", now=self.now,
             )
