@@ -900,7 +900,7 @@ class AggregatorPipelineTests(TestCase):
         self.assertEqual(row.type, SourceType.AGGREGATOR)
 
     def test_watchmode_persists_and_is_readable(self):
-        mapping(self.netflix, "watchmode", "wm:203")
+        mapping(self.netflix, "watchmode", "wm:203:movie:tmdb-550")
 
         def http_get(url, headers=None, timeout=None):
             if "/search/" in url:

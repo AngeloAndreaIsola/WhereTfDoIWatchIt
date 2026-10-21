@@ -45,6 +45,13 @@ to our slug and the mapping is recorded as a country-agnostic
 ``ExternalProviderMapping`` row (``country=""``), which is the pre-existing
 convention for ids that do not vary by market. An unknown provider is logged
 and skipped — it never creates a ``Provider`` row.
+
+Content identity
+----------------
+``source_id`` identifies the *provider*, not the title, so it can never be the
+whole ``ProviderContent`` identity: doing that collapsed every title at a
+provider into one row (see :mod:`..services.watchmode_identity`). The identity
+is provider id + content type + the requested TMDb id.
 """
 from __future__ import annotations
 
@@ -64,6 +71,7 @@ from .watchmode_client import (
     WatchmodeError,
     WatchmodeRegionUnsupported,
 )
+from ..services.watchmode_identity import build_watchmode_content_id, slug
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +138,10 @@ class WatchmodeSource:
 
     slug = "watchmode"
     name = "Watchmode"
+    #: Bumped with the per-title identity format (see
+    #: ``services.watchmode_identity``): offers written before the bump carry
+    #: the collapsed ``wm:<provider id>`` identity.
+    SOURCE_VERSION = "watchmode-v2"
     source_type = SourceType.AGGREGATOR
     capabilities = SourceCapabilities(
         supported_providers=None,
@@ -218,9 +230,9 @@ class WatchmodeSource:
                 )
                 continue
             region = normalize_country(row.region)
-            # Watchmode has no per-title native id; the provider id + title is
-            # the provider-native identity it actually exposes.
-            provider_content_id = self._content_id(row)
+            provider_content_id = self._content_id(
+                row, request=request, content_type=content_type
+            )
             if provider_content_id not in seen_contents:
                 seen_contents.add(provider_content_id)
                 contents.append(DiscoveredContent(
@@ -247,7 +259,7 @@ class WatchmodeSource:
                 audio_languages=None,
                 subtitle_languages=None,
                 source_record_id=str(row.source_id or ""),
-                source_version="v1",
+                source_version=self.SOURCE_VERSION,
             ))
         return SourceFetchResult(
             contents=contents, offers=offers, sync_mode=SyncMode.TARGETED,
@@ -272,9 +284,25 @@ class WatchmodeSource:
         return PROVIDER_NAMES.get(str(row.name or "").strip().lower(), "")
 
     @staticmethod
-    def _content_id(row):
-        """Stable provider-native id for a Watchmode source row."""
-        return f"wm:{row.source_id or row.name or 'unknown'}"
+    def _content_id(row, *, request, content_type):
+        """Stable provider-native id for one Watchmode source row.
+
+        ``row.source_id`` is Watchmode's **provider** id (203 = Netflix,
+        296 = Tubi), not a content id: using it alone collapsed every title
+        the provider carried into one ``ProviderContent`` row, so offers for
+        different films shared an identity and were hidden as "mapping
+        doubt". The discriminator must therefore be the requested content,
+        and the region is deliberately absent (one provider content row can
+        have offers in several regions).
+        """
+        return build_watchmode_content_id(
+            row.source_id or f"name-{slug(str(row.name or 'unknown'))}",
+            content_type,
+            tmdb_id=getattr(request, "tmdb_id", None),
+            imdb_id=getattr(request, "imdb_id", None),
+            title=getattr(request, "title", "") or "",
+            year=getattr(request, "year", None),
+        )
 
     # -- regions ----------------------------------------------------------
     def _regions_for(self, country) -> list[str]:
