@@ -53,8 +53,10 @@ def match_local_catalog(content) -> Optional[MatchCandidate]:
     1. exact title (case-insensitive) + ``release_date.year``, resolving to a
        single distinct TMDb id -> ``TITLE_YEAR`` @ 0.9;
     2. exact title alone resolving to a single distinct TMDb id -> ``TITLE_YEAR``
-       @ 0.7 (covers unknown provider years, ambiguous years, and series);
-    3. otherwise ``None``: ambiguous or unknown titles are left unmapped.
+       @ 0.7 when the provider year is unknown, or for series (whose provider
+       year may be a catalog re-add date rather than a first-air year);
+    3. otherwise ``None``: ambiguous titles, and movies whose known provider
+       year conflicts with every local candidate, are left unmapped.
 
     Candidates are always constrained by ``content_type`` (a series never
     matches a movie row) and uniqueness is judged on distinct TMDb ids, so two
@@ -75,6 +77,11 @@ def match_local_catalog(content) -> Optional[MatchCandidate]:
                 confidence=TITLE_YEAR_EXACT,
                 method=MatchMethod.TITLE_YEAR,
             )
+        if content.content_type == ContentType.MOVIE:
+            # A known, conflicting year is evidence against the match, not an
+            # ambiguity to discard. Never fall back to a title-only match for a
+            # movie when the provider supplied a year that no local row shares.
+            return None
 
     by_title = set(candidates.values_list("tmdb_id", flat=True))
     if len(by_title) == 1:

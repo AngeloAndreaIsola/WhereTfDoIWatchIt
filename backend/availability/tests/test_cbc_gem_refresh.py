@@ -218,14 +218,18 @@ class MappingTests(CBCGemRefreshTestCase):
             {8888},
         )
 
-    def test_provider_year_mismatch_still_maps_by_unique_title(self):
+    def test_provider_year_mismatch_is_not_mapped_by_title_only(self):
         Movie.objects.filter(pk=self.beirut.pk).update(year=2015)
 
-        self.service.refresh_catalogue()
+        result = self.service.refresh_catalogue()
 
-        mapping = self._mapping("beirut")
-        self.assertEqual(mapping.tmdb_id, 9003)
-        self.assertEqual(mapping.confidence, 0.7)
+        # A known provider year that conflicts with the only local candidate is
+        # evidence against the match, not an ambiguity to discard.
+        self.assertFalse(
+            ContentMapping.objects.filter(provider_content_id="beirut").exists()
+        )
+        self.assertFalse(Offer.objects.filter(provider_content_id="beirut").exists())
+        self.assertEqual(result.created, MAPPED_OFFERS - 1)
 
     def test_duplicate_local_titles_resolve_through_the_year_tiebreak(self):
         Movie.objects.create(tmdb_id=9004, title="Beirut", year=2010, content_type="movie")
