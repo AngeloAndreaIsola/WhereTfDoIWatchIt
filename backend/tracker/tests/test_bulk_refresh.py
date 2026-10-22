@@ -11,7 +11,11 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from ..models import ApiCallCounter, Movie, WatchlistItem
-from ..services.bulk_refresh import is_stale, process_watchlist_refresh
+from ..services.bulk_refresh import (
+    is_stale,
+    process_catalogue_refresh,
+    process_watchlist_refresh,
+)
 from ..services.rate_limit import RateLimitExceeded, RateLimiter
 from .availability_factories import local_offer
 
@@ -41,6 +45,23 @@ class BulkRefreshServiceTests(TestCase):
         kwargs.setdefault("refresh_service", self.refresh_service)
         kwargs.setdefault("limiter", self.limiter)
         return process_watchlist_refresh(budget=budget, user_id=1, **kwargs)
+
+    def test_watchmode_cannot_enter_the_catalogue_path(self):
+        """The catalogue lane is structurally unable to make a Watchmode call.
+
+        ``process_pending_catalogue_refresh`` runs in the same worker tick as
+        the title drain. That is safe only while Watchmode remains title-only:
+        the explicit ``--source watchmode`` override must be rejected by
+        capability before any client is invoked, not merely fail later inside
+        a fetch.
+        """
+        from availability.sources.watchmode_client import WatchmodeClient
+
+        with patch.object(WatchmodeClient, "_get") as http_get:
+            with self.assertRaises(ValueError):
+                process_catalogue_refresh(source_slug="watchmode")
+
+        http_get.assert_not_called()
 
     def test_fresh_canonical_offers_are_skipped(self):
         # Fresh canonical availability for every movie; nothing to refresh.

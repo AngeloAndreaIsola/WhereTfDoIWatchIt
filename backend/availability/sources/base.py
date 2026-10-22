@@ -31,6 +31,7 @@ Rules this module encodes:
 from __future__ import annotations
 
 import inspect
+import json
 from dataclasses import dataclass, field
 from typing import Optional, Protocol, runtime_checkable
 
@@ -66,6 +67,72 @@ def accepts_kwarg(func, name):
 
 class SourceFetchError(Exception):
     """A source failed to retrieve data — never an empty (but valid) result."""
+
+
+class SourceQuotaExceeded(SourceFetchError):
+    """The source refused work because its own budget is spent.
+
+    A quota block is deliberately a different fact from a generic fetch
+    failure, because the two have different scheduling consequences:
+
+    - ``kind == "plan_quota"`` is **terminal until the plan resets**. Retrying
+      it cannot succeed, so the request must settle as ``blocked``/
+      ``quota_exhausted`` instead of burning ``MAX_ATTEMPTS`` and ending as
+      ``failed`` (which reads as an outage, not a budget fact).
+    - ``kind == "local_budget"`` is also **terminal**: the local pre-request
+      guard refused before any upstream call, so retrying cannot spend
+      anything until the local window moves.
+    - ``kind == "rate_limit"`` is **retryable**. The source is healthy and the
+      window is short; the request stays ``pending`` and is retried on a later
+      tick. It must not consume an attempt, or a burst of short 429s would
+      permanently fail perfectly good work.
+
+    ``unknown`` is treated as retryable on purpose: without evidence that the
+    plan itself is exhausted, leaving work pending is the safe choice. A
+    terminal block is only recorded when the source actually says so.
+
+    ``quota`` carries the response's quota/rate headers (never credentials) so
+    the decision is auditable after the fact. ``retry_after`` is the upstream
+    hint in seconds, when one was supplied.
+    """
+
+    def __init__(
+        self,
+        message,
+        *,
+        kind: str = "unknown",
+        retry_after: int | None = None,
+        status_code: int | None = None,
+        quota: dict | None = None,
+        detail: str = "",
+    ):
+        super().__init__(message)
+        self.kind = kind
+        self.retry_after = retry_after
+        self.status_code = status_code
+        self.quota = dict(quota or {})
+        self.detail = detail or str(message)
+
+    @property
+    def terminal(self) -> bool:
+        """True for a spent plan or a local budget stop, never a rate window."""
+        return self.kind in ("plan_quota", "local_budget")
+
+    def diagnostic(self) -> str:
+        """Stable, credential-free summary safe for ``RefreshRequest.last_error``.
+
+        Deliberately includes the quota headers and ``Retry-After``: the live
+        Watchmode 429 previously recorded only ``"429"``, which made a monthly
+        plan exhaustion indistinguishable from a one-minute rate limit.
+        """
+        bits = [f"kind={self.kind}"]
+        if self.status_code is not None:
+            bits.append(f"status={self.status_code}")
+        if self.retry_after is not None:
+            bits.append(f"retry_after={self.retry_after}")
+        if self.quota:
+            bits.append(f"quota={json.dumps(self.quota, sort_keys=True)}")
+        return f"{type(self).__name__}({', '.join(bits)}): {self.detail}"
 
 
 @dataclass(frozen=True)

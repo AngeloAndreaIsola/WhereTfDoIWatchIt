@@ -224,14 +224,40 @@ def resolve_season_number(
     return number
 
 
+#: Sentinel for "use the production budget seam". ``budget=None`` explicitly
+#: disables reservation for a transport-only test/parser client.
+_BUDGET_UNSET = object()
+
+
 class StreamingAvailabilityClient:
-    def __init__(self, api_key: Optional[str] = None, timeout: int = DEFAULT_TIMEOUT):
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        timeout: int = DEFAULT_TIMEOUT,
+        *,
+        budget=_BUDGET_UNSET,
+    ):
         # Read the key from the environment directly. settings.RAPIDAPI_KEY is
         # itself defined as os.environ.get("RAPIDAPI_KEY", ""); reading env here
         # is equivalent and avoids recursing into the lazy settings proxy in
         # tests that substitute django.conf.settings.
         self.api_key = api_key or os.environ.get("RAPIDAPI_KEY", "")
         self.timeout = timeout
+        # Every production call must reserve SA's daily + monthly budget at the
+        # HTTP boundary. The coordinator's reservation context prevents this
+        # from charging the same refresh twice. Tests that only exercise URL or
+        # parser behaviour can pass ``budget=None`` explicitly.
+        self._budget = budget
+
+    def _reserve_budget(self) -> None:
+        if self._budget is _BUDGET_UNSET:
+            # Imported lazily so importing this transport module during Django
+            # app loading never pulls in the model layer early.
+            from .rate_limit import reserve_streaming_availability_call
+
+            reserve_streaming_availability_call()
+        elif callable(self._budget):
+            self._budget()
 
     def get_availability(self, tmdb_id: int, content_type: str = "movie") -> StreamingResult:
         # v4 /shows/{show_type}/{tmdbId} returns every country's options in one call;
@@ -243,6 +269,10 @@ class StreamingAvailabilityClient:
             "x-rapidapi-key": self.api_key,
             "x-rapidapi-host": RAPIDAPI_HOST,
         }
+        # Reserve immediately before the only HTTP request this client makes.
+        # A 404/5xx/timeout still consumed upstream quota, so the reservation
+        # stays charged; a local refusal raises before any request is issued.
+        self._reserve_budget()
         resp = requests.get(url, headers=headers, timeout=self.timeout)
         # A 404 is the one upstream answer that is a permanent fact about the
         # title rather than a transient fault, so it is translated into the

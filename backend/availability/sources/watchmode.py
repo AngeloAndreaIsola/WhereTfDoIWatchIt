@@ -12,11 +12,22 @@ neither is the primary source.
 Deliberately *not* pretending to be global
 ------------------------------------------
 Watchmode's coverage is bounded by the account's plan. Measured on the live
-key: 2500 requests/month quota, 1000/hour, and **only NL, CA and JP regions
-enabled** — an unenabled region answers HTTP 400 ``"US is not enabled for
-your current plan."``. That is surfaced as
+key: **2,500 requests/month**, and **only NL, CA and JP regions enabled** — an
+unenabled region answers HTTP 400 ``"US is not enabled for your current
+plan."``. That is surfaced as
 :class:`~.watchmode_client.WatchmodeRegionUnsupported`, an explicit *unsupported*
-outcome, never as an empty availability result. :data:`DEFAULT_REGIONS` is
+outcome, never as an empty availability result.
+
+A spent monthly plan answers HTTP 429 with
+``{"errorMessage": "Over plan quota on this API Key."}``; the response's
+``Retry-After: 60`` is misleading and does not mean the block clears in a
+minute (measured: a retry after 70 seconds returned the same 429). The client
+therefore classifies the refusal by body/account headers, not by the status
+code or ``Retry-After`` alone, and the source raises
+:class:`~.base.SourceQuotaExceeded` with ``kind="plan_quota"`` so the scheduler
+can settle it as a terminal block instead of retrying it.
+
+:data:`DEFAULT_REGIONS` is
 therefore Watchmode-specific and constrains nothing else: JustWatch and the
 direct collectors keep their own scopes.
 
@@ -52,6 +63,14 @@ Content identity
 whole ``ProviderContent`` identity: doing that collapsed every title at a
 provider into one row (see :mod:`..services.watchmode_identity`). The identity
 is provider id + content type + the requested TMDb id.
+
+Search results are verified, never assumed
+------------------------------------------
+``/search/`` is a search: the live API can answer a ``tmdb_movie_id`` query
+with a different title. A result is therefore used only when the requested
+TMDb id (in the matching movie/TV namespace) or IMDb id corroborates it
+exactly, and exactly one result does. ``matches[0]`` is never trusted on its
+own; an unverifiable answer produces no offers.
 """
 from __future__ import annotations
 
@@ -65,10 +84,17 @@ from ..services.normalize import (
     normalize_languages,
     normalize_offer_type,
 )
-from .base import ContentRequest, SourceCapabilities, SourceFetchError, SourceFetchResult
+from .base import (
+    ContentRequest,
+    SourceCapabilities,
+    SourceFetchError,
+    SourceFetchResult,
+    SourceQuotaExceeded,
+)
 from .watchmode_client import (
     WatchmodeClient,
     WatchmodeError,
+    WatchmodeQuotaExceeded,
     WatchmodeRegionUnsupported,
 )
 from ..services.watchmode_identity import build_watchmode_content_id, slug
@@ -131,6 +157,55 @@ PROVIDER_NAMES = {
 PROVIDER_IDS: dict[int, str] = {
     203: "netflix",  # confirmed live: Netflix
 }
+
+
+def _as_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _type_agrees(observed, requested: str) -> bool:
+    """True when the result's ``tmdb_type`` matches the searched namespace.
+
+    TMDb movie and TV ids are separate namespaces, so a numeric id match alone
+    is not proof when the result says it belongs to the other one. A missing
+    type is tolerated because the search field itself (``tmdb_movie_id`` /
+    ``tmdb_tv_id``) already scoped the query.
+    """
+    aliases = {"movie": "movie", "film": "movie",
+               "tv": "tv", "show": "tv", "series": "tv"}
+    value = str(observed or "").strip().lower()
+    wanted = str(requested or "").strip().lower()
+    value = aliases.get(value, value)
+    wanted = aliases.get(wanted, wanted)
+    return not value or value == wanted
+
+
+def _same_title(observed, requested) -> bool:
+    """Case/whitespace-insensitive exact name comparison (name-only fallback)."""
+    def normalize(value):
+        return " ".join(str(value or "").casefold().split())
+
+    return bool(normalize(requested)) and normalize(observed) == normalize(requested)
+
+
+def _as_source_quota_error(exc: WatchmodeQuotaExceeded) -> SourceQuotaExceeded:
+    """Translate the transport's quota exception without losing its evidence.
+
+    The scheduler needs ``kind`` (plan vs rate), ``retry_after`` and the quota
+    headers to choose between a terminal block and a retryable deferral. Those
+    fields are copied explicitly rather than flattened into a message string.
+    """
+    return SourceQuotaExceeded(
+        str(exc),
+        kind=getattr(exc, "kind", "unknown"),
+        retry_after=getattr(exc, "retry_after", None),
+        status_code=getattr(exc, "status_code", None),
+        quota=getattr(exc, "quota", None),
+        detail=getattr(exc, "detail", "") or str(exc),
+    )
 
 
 class WatchmodeSource:
@@ -197,6 +272,11 @@ class WatchmodeSource:
             )
         except WatchmodeRegionUnsupported:
             raise
+        except WatchmodeQuotaExceeded as exc:
+            # Keep the quota *kind* intact. Wrapping it in a generic
+            # SourceFetchError is what made the scheduler record a spent plan
+            # as a transient failure and retry it three times.
+            raise _as_source_quota_error(exc) from exc
         except WatchmodeError as exc:
             raise SourceFetchError(f"watchmode search failed: {exc}") from exc
 
@@ -205,17 +285,91 @@ class WatchmodeSource:
                         request.title, request.tmdb_id)
             return SourceFetchResult(sync_mode=SyncMode.TARGETED)
 
-        title = matches[0]
+        title = self._select_title(
+            matches, request=request, tmdb_type=tmdb_type
+        )
+        if title is None:
+            # The search answered, but no result could be proven to be the
+            # requested title. Writing offers from a guessed result would
+            # attach them to the wrong content, so this is an unresolved
+            # title, not a licence to use ``matches[0]``.
+            return SourceFetchResult(sync_mode=SyncMode.TARGETED)
         try:
             rows = self.client.title_sources(title.id, regions)
         except WatchmodeRegionUnsupported:
             raise
+        except WatchmodeQuotaExceeded as exc:
+            raise _as_source_quota_error(exc) from exc
         except WatchmodeError as exc:
             raise SourceFetchError(f"watchmode title_sources failed: {exc}") from exc
 
         return self._to_result(rows, request=request, content_type=content_type)
 
     # -- translation ------------------------------------------------------
+    def _select_title(self, matches, *, request, tmdb_type):
+        """Return the single search result provably belonging to the request.
+
+        ``find_title`` performs a search, not a lookup: the live API can answer
+        a ``tmdb_movie_id`` query with a *different* title. Trusting
+        ``matches[0]`` then fetched that other title's sources and wrote its
+        offers under the requested content, silently attaching wrong rows.
+
+        A result is usable only when an external id from the request matches it
+        exactly (TMDb id in the searched namespace, or the requested IMDb id)
+        and exactly one result corroborates. A name-only lookup is accepted
+        only when it is the sole result *and* the name matches exactly. Every
+        other outcome is reported and produces no offers.
+        """
+        if not matches:
+            return None
+
+        tmdb_id = _as_int(getattr(request, "tmdb_id", None))
+        imdb_id = str(getattr(request, "imdb_id", "") or "").strip().lower()
+
+        if tmdb_id is not None or imdb_id:
+            corroborated = [
+                match for match in matches
+                if (
+                    tmdb_id is not None
+                    and _as_int(getattr(match, "tmdb_id", None)) == tmdb_id
+                    and _type_agrees(getattr(match, "tmdb_type", None), tmdb_type)
+                ) or (
+                    bool(imdb_id)
+                    and str(getattr(match, "imdb_id", "") or "").strip().lower()
+                    == imdb_id
+                )
+            ]
+            if len(corroborated) == 1:
+                return corroborated[0]
+            logger.warning(
+                "watchmode_identity_unverified title=%r tmdb_id=%s imdb_id=%s "
+                "results=%d corroborated=%d reason=%s",
+                getattr(request, "title", None), tmdb_id, imdb_id or None,
+                len(matches), len(corroborated),
+                "ambiguous_exact_ids" if corroborated else "no_exact_id",
+            )
+            return None
+
+        # No external id was supplied: this is the documented weak fallback.
+        # Only a unique, exactly-named result may be used.
+        if len(matches) != 1:
+            logger.warning(
+                "watchmode_identity_unverified title=%r results=%d reason="
+                "ambiguous_name_only",
+                getattr(request, "title", None), len(matches),
+            )
+            return None
+        if not _same_title(getattr(matches[0], "name", ""),
+                           getattr(request, "title", "")):
+            logger.warning(
+                "watchmode_identity_unverified title=%r result_name=%r "
+                "reason=name_mismatch",
+                getattr(request, "title", None),
+                getattr(matches[0], "name", ""),
+            )
+            return None
+        return matches[0]
+
     def _to_result(self, rows, *, request, content_type):
         contents: list[DiscoveredContent] = []
         offers: list[ProviderOffer] = []

@@ -156,6 +156,25 @@ class CollapsedRow:
     old_content_id: str
 
 
+@dataclass(frozen=True)
+class RetainedRow:
+    """A collapsed row that a filtered plan deliberately leaves in place.
+
+    A verification-filtered repair may move only externally corroborated
+    offers.  Anything not selected -- an unresolved offer, its mapping, or an
+    entire title group containing an unresolved offer -- stays on the original
+    collapsed row.  The row therefore cannot be retired, and the plan records
+    exactly what remains so the omission is reviewable rather than silent.
+    """
+
+    content_id: int
+    provider_slug: str
+    old_content_id: str
+    offer_ids: tuple[int, ...]
+    mapping_ids: tuple[int, ...]
+    reasons: tuple[str, ...]
+
+
 @dataclass
 class RepairPlan:
     contents: tuple[NewContent, ...] = ()
@@ -164,16 +183,21 @@ class RepairPlan:
     prices: tuple[PriceMove, ...] = ()
     retire: tuple[CollapsedRow, ...] = ()
     blocked: tuple[dict, ...] = ()
+    retained: tuple[RetainedRow, ...] = ()
+    #: ``None`` means the ordinary all-offers repair.  A tuple is an explicit
+    #: verification allowlist; only those offers may move, and everything else
+    #: remains on its collapsed row.
+    selected_offer_ids: Optional[tuple[int, ...]] = None
     generated_at: datetime = field(default_factory=timezone.now)
 
     # ------------------------------------------------------------------ views
     @property
     def is_empty(self) -> bool:
         return not (self.contents or self.offers or self.evidence
-                    or self.prices or self.retire)
+                    or self.prices or self.retire or self.retained)
 
     def counts(self) -> dict:
-        return {
+        counts = {
             "collapsed_rows": len({row.content_id for row in self.retire}),
             "content_rows_to_create_or_update": len(self.contents),
             "offers_to_move": len(self.offers),
@@ -183,6 +207,12 @@ class RepairPlan:
             "price_rows_to_move": len(self.prices),
             "blocked_rows": len(self.blocked),
         }
+        if self.selected_offer_ids is not None:
+            counts["offers_retained"] = sum(
+                len(row.offer_ids) for row in self.retained
+            )
+            counts["rows_retained"] = len(self.retained)
+        return counts
 
     def digest_payload(self) -> dict:
         """Canonical, timestamp-free projection used for the review digest.
@@ -193,7 +223,7 @@ class RepairPlan:
         retire, and any blocked rows. Collections that are semantically
         unordered are sorted so an equivalent plan hashes identically.
         """
-        return {
+        payload = {
             "contents": sorted(
                 (
                     {
@@ -263,6 +293,26 @@ class RepairPlan:
                 ),
             ),
         }
+        if self.selected_offer_ids is not None:
+            # Keep the ordinary all-offers digest byte-for-byte unchanged.
+            # A filtered plan commits to both the allowlist and the rows it
+            # deliberately leaves behind.
+            payload["selection"] = sorted(self.selected_offer_ids)
+            payload["retained"] = sorted(
+                (
+                    {
+                        "content_row": row.content_id,
+                        "provider": row.provider_slug,
+                        "content_id": row.old_content_id,
+                        "offers": sorted(row.offer_ids),
+                        "mappings": sorted(row.mapping_ids),
+                        "reasons": list(row.reasons),
+                    }
+                    for row in self.retained
+                ),
+                key=lambda row: row["content_row"],
+            )
+        return payload
 
     def digest(self) -> str:
         payload = json.dumps(
@@ -282,8 +332,25 @@ class RepairPlan:
 # --------------------------------------------------------------------- plan
 
 
-def build_plan() -> RepairPlan:
-    """Read-only plan for every collapsed Watchmode content identity."""
+def build_plan(
+    include_offer_ids: Optional[Iterable[int]] = None,
+) -> RepairPlan:
+    """Read-only plan for collapsed Watchmode content identities.
+
+    ``include_offer_ids=None`` is the ordinary all-offers repair.  Passing an
+    explicit iterable enables a verification-filtered plan: only those offers
+    may move.  A title group containing any unselected offer is retained in
+    full, and a collapsed row is retired only when nothing remains on it.
+    """
+    selected_offer_ids = (
+        None
+        if include_offer_ids is None
+        else tuple(sorted({int(value) for value in include_offer_ids}))
+    )
+    selected_set = (
+        None if selected_offer_ids is None else set(selected_offer_ids)
+    )
+
     collapsed_rows = [
         row
         for row in ProviderContent.objects.select_related("provider").filter(
@@ -292,14 +359,27 @@ def build_plan() -> RepairPlan:
         if is_collapsed_watchmode_content_id(row.provider_content_id)
     ]
     if not collapsed_rows:
-        return RepairPlan()
+        blocked = []
+        if selected_set:
+            blocked.append({
+                "reasons": [
+                    "selection includes offers not on a collapsed row: "
+                    + ", ".join(str(value) for value in sorted(selected_set))
+                ],
+            })
+        return RepairPlan(
+            blocked=tuple(blocked),
+            selected_offer_ids=selected_offer_ids,
+        )
 
     contents: list[NewContent] = []
     offer_moves: list[OfferMove] = []
     evidence_moves: list[EvidenceMove] = []
     price_moves: list[PriceMove] = []
     retire: list[CollapsedRow] = []
+    retained: list[RetainedRow] = []
     blocked: list[dict] = []
+    selected_seen: set[int] = set()
 
     for row in collapsed_rows:
         provider_key = collapsed_provider_key(row.provider_content_id)
@@ -315,6 +395,8 @@ def build_plan() -> RepairPlan:
                 provider_content_id=row.provider_content_id,
             ).order_by("id")
         )
+        if selected_set is not None:
+            selected_seen.update({offer.id for offer in offers} & selected_set)
 
         row_blocked = _blocking_reasons(row, offers, mappings)
         if row_blocked:
@@ -335,15 +417,40 @@ def build_plan() -> RepairPlan:
                 offer.episode_number,
             )].append(offer)
 
+        if selected_set is not None:
+            # A group is atomic.  If even one offer in it is unverified, keep
+            # the whole title on the collapsed row rather than split a title
+            # between a reviewed identity and an undispositioned one.
+            groups = {
+                key: group
+                for key, group in groups.items()
+                if all(offer.id in selected_set for offer in group)
+            }
+            if not groups:
+                retained.append(RetainedRow(
+                    content_id=row.id,
+                    provider_slug=row.provider.slug,
+                    old_content_id=row.provider_content_id,
+                    offer_ids=tuple(offer.id for offer in offers),
+                    mapping_ids=tuple(mapping.id for mapping in mappings),
+                    reasons=(
+                        "no title group is fully selected for the filtered plan",
+                    ),
+                ))
+                continue
+
         mapping_by_target = {}
         for mapping in mappings:
             mapping_by_target[(mapping.content_type, mapping.tmdb_id, None, None)] = mapping
 
-        # A collapsed mapping with no observed offer is still evidence of which
-        # title the identity was created for; split it from the mapping alone.
-        for key, mapping in list(mapping_by_target.items()):
-            if key not in groups:
-                groups[key] = []
+        if selected_set is None:
+            # A collapsed mapping with no observed offer is still evidence of
+            # which title the identity was created for; split it from the
+            # mapping alone.  A filtered plan must not invent a verified title
+            # from a mapping whose offers were all excluded.
+            for key, mapping in list(mapping_by_target.items()):
+                if key not in groups:
+                    groups[key] = []
 
         movies = _movies_for({key[1] for key in groups})
 
@@ -430,7 +537,7 @@ def build_plan() -> RepairPlan:
             continue
 
         leftover = sorted(mapping_by_target.values(), key=lambda m: m.id)
-        if leftover:
+        if selected_set is None and leftover:
             blocked.append({
                 "content_row": row.id,
                 "content_id": row.provider_content_id,
@@ -454,11 +561,73 @@ def build_plan() -> RepairPlan:
         offer_moves.extend(row_moves)
         evidence_moves.extend(row_evidence)
         price_moves.extend(row_prices)
-        retire.append(CollapsedRow(
-            content_id=row.id,
-            provider_slug=row.provider.slug,
-            old_content_id=row.provider_content_id,
-        ))
+
+        if selected_set is None:
+            retire.append(CollapsedRow(
+                content_id=row.id,
+                provider_slug=row.provider.slug,
+                old_content_id=row.provider_content_id,
+            ))
+            continue
+
+        moved_ids = {move.offer_id for move in row_moves}
+        retained_offers = [offer for offer in offers if offer.id not in moved_ids]
+        if retained_offers or leftover:
+            reasons = []
+            if retained_offers:
+                reasons.append(
+                    "offers not selected or in a fully selected title group: "
+                    + ", ".join(str(offer.id) for offer in retained_offers)
+                )
+            if leftover:
+                reasons.append(
+                    "mapping(s) retained because their title has no selected "
+                    "offer: " + ", ".join(str(mapping.id) for mapping in leftover)
+                )
+            retained.append(RetainedRow(
+                content_id=row.id,
+                provider_slug=row.provider.slug,
+                old_content_id=row.provider_content_id,
+                offer_ids=tuple(offer.id for offer in retained_offers),
+                mapping_ids=tuple(mapping.id for mapping in leftover),
+                reasons=tuple(reasons),
+            ))
+        else:
+            retire.append(CollapsedRow(
+                content_id=row.id,
+                provider_slug=row.provider.slug,
+                old_content_id=row.provider_content_id,
+            ))
+
+    if selected_set is not None:
+        # A second filtered dry run must be clean.  Selected offers that are
+        # already on a split Watchmode row are completed work, not unknown
+        # input.  Missing offers, native identities and still-collapsed rows
+        # remain hard errors so a typo cannot silently shrink the repair.
+        completed = selected_set - selected_seen
+        unexpected: list[int] = []
+        if completed:
+            content_ids = dict(
+                Offer.objects.filter(pk__in=completed).values_list(
+                    "id", "provider_content_id"
+                )
+            )
+            for offer_id in sorted(completed):
+                content_id = content_ids.get(offer_id)
+                if (
+                    content_id is None
+                    or not content_id.startswith("wm:")
+                    or is_collapsed_watchmode_content_id(content_id)
+                ):
+                    unexpected.append(offer_id)
+        if unexpected:
+            blocked.append({
+                "reasons": [
+                    "selection includes offers not on a collapsed or "
+                    "already-split Watchmode row: "
+                    + ", ".join(str(value) for value in sorted(unexpected))
+                ],
+            })
 
     # Duplicate collapse rows for the same provider id (e.g. a manual retry
     # created a second row) would target the same new identity. Refuse rather
@@ -482,6 +651,8 @@ def build_plan() -> RepairPlan:
         prices=tuple(price_moves),
         retire=tuple(retire),
         blocked=tuple(blocked),
+        retained=tuple(retained),
+        selected_offer_ids=selected_offer_ids,
     )
 
 
@@ -619,7 +790,7 @@ def apply_plan(plan: RepairPlan, *, expected_digest: str,
         if len(locked) != len({row.content_id for row in plan.retire}):
             raise RepairError("a planned content row disappeared before apply")
 
-        current = build_plan()
+        current = build_plan(include_offer_ids=plan.selected_offer_ids)
         if current.blocked:
             raise RepairError(
                 "refusing to apply: plan now has blocked rows: "
@@ -892,3 +1063,23 @@ def _verify(plan: RepairPlan):
         ]
         if missing:
             raise RepairError(f"split content rows missing after apply: {missing}")
+
+    for row in plan.retained:
+        if not ProviderContent.objects.filter(pk=row.content_id).exists():
+            raise RepairError(
+                f"retained collapsed row {row.old_content_id} disappeared during apply"
+            )
+        for offer_id in row.offer_ids:
+            offer = Offer.objects.filter(pk=offer_id).first()
+            if offer is None or offer.provider_content_id != row.old_content_id:
+                raise RepairError(
+                    f"retained offer {offer_id} is no longer on "
+                    f"{row.old_content_id}"
+                )
+        for mapping_id in row.mapping_ids:
+            mapping = ContentMapping.objects.filter(pk=mapping_id).first()
+            if mapping is None or mapping.provider_content_id != row.old_content_id:
+                raise RepairError(
+                    f"retained mapping {mapping_id} is no longer on "
+                    f"{row.old_content_id}"
+                )

@@ -124,6 +124,7 @@ from ..sources import DEFAULT_SOURCE_SLUG, ContentRequest, source_registry
 from ..sources.base import accepts_kwarg
 from .matching import match_local_catalog
 from .normalize import normalize_content_type
+from .write_barrier import writer_barrier
 
 logger = logging.getLogger(__name__)
 
@@ -582,6 +583,22 @@ class AvailabilityRefreshService:
         )
 
     def _persist(self, result, *, tmdb_id=None, persist_cursor=True) -> RefreshResult:
+        """Persist one refresh unit behind the shared availability write barrier.
+
+        All canonical availability writes (ProviderContent, ContentMapping,
+        Offer, OfferEvidence, OfferPrice) happen inside this method.  The shared
+        advisory lock held here is what lets the remediation command prove that
+        no refresh writer can start (or finish) around its mutation;
+        ``write_barrier`` documents the protocol and its deployment limits.
+        """
+        with writer_barrier(f"availability refresh for {self.source.slug}"):
+            return self._persist_locked(
+                result, tmdb_id=tmdb_id, persist_cursor=persist_cursor
+            )
+
+    def _persist_locked(
+        self, result, *, tmdb_id=None, persist_cursor=True
+    ) -> RefreshResult:
         capabilities = self.source.capabilities
 
         source, _ = Source.objects.get_or_create(

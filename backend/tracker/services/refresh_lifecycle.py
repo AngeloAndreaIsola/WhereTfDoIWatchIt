@@ -719,22 +719,20 @@ def settle_unexecutable_requests(refresh: AvailabilityRefresh) -> dict[str, int]
 
 
 def _is_out_of_budget(source_slug: str) -> bool:
-    """Whether this source has no daily budget left today.
+    """Whether this source has no daily or monthly budget left.
 
     Delegates to the same limiter the drain consults, so "out of budget" means
-    one thing in the two places that act on it.
-
-    ``remaining()`` returns ``None`` for a source that declares no quota, which
-    means unlimited rather than exhausted — treating ``None`` as zero would
-    block every request from every unmetered source.
+    one thing in the two places that act on it. ``is_exhausted()`` returns
+    ``False`` for a source that declares no quota, which means unlimited rather
+    than exhausted — treating ``None`` as zero would block every request from
+    every unmetered source.
     """
     from .rate_limit import rate_limiter_for
 
     limiter = rate_limiter_for(source_slug or "")
-    if limiter is None or limiter.daily_limit is None:
+    if limiter is None:
         return False
-    remaining = limiter.remaining()
-    return remaining is not None and remaining <= 0
+    return limiter.is_exhausted()
 
 
 def _outstanding_request_count(refresh: AvailabilityRefresh) -> int:

@@ -55,7 +55,11 @@ from tracker.services.bulk_refresh import (
     stale_catalogue_sources,
     title_level_source_slugs,
 )
-from tracker.services.rate_limit import SOURCE_DAILY_LIMITS, RateLimiter
+from tracker.services.rate_limit import (
+    SOURCE_DAILY_LIMITS,
+    SOURCE_MONTHLY_LIMITS,
+    RateLimiter,
+)
 from tracker.services.refresh_requests import (
     process_refresh_queue,
     refresh_states_for,
@@ -682,30 +686,39 @@ class RefreshStatusQuotaTests(TestCase):
         self.assertEqual(quotas[DEFAULT_SOURCE_SLUG]["limit"], 100)
         self.assertEqual(quotas[DEFAULT_SOURCE_SLUG]["remaining"], 100)
         self.assertFalse(quotas[DEFAULT_SOURCE_SLUG]["exhausted"])
+        self.assertEqual(quotas[DEFAULT_SOURCE_SLUG]["monthly_limit"], 1000)
+        self.assertEqual(quotas[DEFAULT_SOURCE_SLUG]["monthly_remaining"], 1000)
+        self.assertEqual(quotas[DEFAULT_SOURCE_SLUG]["monthly_used"], 0)
+        self.assertEqual(quotas[DEFAULT_SOURCE_SLUG]["monthly_window_days"], 31)
+        self.assertIsNone(
+            quotas[DEFAULT_SOURCE_SLUG]["monthly_accounting_since"]
+        )
 
     def test_unmetered_sources_get_no_quota_invented(self):
         resp = self._get()
 
         quotas = resp.data["source_quotas"]
         for slug in title_level_source_slugs():
-            if slug not in SOURCE_DAILY_LIMITS:
+            if slug not in SOURCE_DAILY_LIMITS and slug not in SOURCE_MONTHLY_LIMITS:
                 self.assertNotIn(
                     slug, quotas, f"{slug} has no declared quota to report"
                 )
 
     def test_exhausted_quota_names_only_that_source(self):
-        """Only the metered source is reported blocked.
+        """Only the exhausted source is reported blocked.
 
         Unmetered sources answer ``remaining() is None``; mocking a flat 0
         for every source would falsely report unmetered collectors as
         quota-limited, so the fake mirrors the real per-source contract.
+        Watchmode declares only a monthly budget, so it is *reported* but not
+        named as exhausted by this daily-only fake.
         """
         real_remaining = RateLimiter.remaining
 
         def fake_remaining(self):
             if self.daily_limit is None:
-                return None  # unmetered source: no declared quota
-            return 0  # the metered source has spent today's budget
+                return None  # no declared daily budget (Watchmode: monthly only)
+            return 0  # the daily-metered source has spent today's budget
 
         with patch.object(RateLimiter, "remaining", fake_remaining):
             resp = self._get()
@@ -715,8 +728,9 @@ class RefreshStatusQuotaTests(TestCase):
         self.assertEqual(
             resp.data["rate_limited_sources"], [DEFAULT_SOURCE_SLUG]
         )
-        self.assertEqual(
-            list(resp.data["source_quotas"]), [DEFAULT_SOURCE_SLUG]
+        self.assertCountEqual(
+            list(resp.data["source_quotas"]),
+            [DEFAULT_SOURCE_SLUG, "watchmode"],
         )
 
 

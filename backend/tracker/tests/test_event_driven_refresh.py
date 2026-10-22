@@ -22,6 +22,8 @@ from unittest.mock import MagicMock, patch
 from django.test import TestCase
 from django.utils import timezone
 
+from availability.sources.base import SourceQuotaExceeded
+
 from tracker.models import (
     BlockedReason,
     CatalogueRefreshRequest,
@@ -1167,6 +1169,139 @@ class DrainTests(TestCase):
             "the settled row must record why it could not run",
         )
 
+    def test_terminal_plan_quota_trips_the_tick_circuit_but_other_sources_run(self):
+        """One spent Watchmode plan suppresses the rest of the tick only.
+
+        The first Watchmode request raises a terminal plan-quota refusal. The
+        second must settle blocked with the same diagnostic and **no** second
+        Watchmode call, while the default source still executes. A stale
+        Watchmode scope reached by the background sweep in the same run is also
+        suppressed, proving the circuit is shared by both paths.
+        """
+        first = Movie.objects.create(tmdb_id=941, title="WM One", year=2020)
+        second = Movie.objects.create(tmdb_id=942, title="WM Two", year=2021)
+        other = Movie.objects.create(tmdb_id=943, title="Other", year=2022)
+        sweep_only = Movie.objects.create(tmdb_id=944, title="Sweep", year=2023)
+        self._request(first, RefreshPriority.NEW, source="watchmode")
+        self._request(second, RefreshPriority.NEW, source="watchmode")
+        self._request(other, RefreshPriority.WATCHLIST, source="")
+        WatchlistItem.objects.create(user_id=1, movie=other)
+        WatchlistItem.objects.create(user_id=1, movie=sweep_only)
+
+        scoped = MagicMock()
+        scoped.refresh_content.side_effect = SourceQuotaExceeded(
+            "Watchmode plan quota exhausted",
+            kind="plan_quota",
+            status_code=429,
+            retry_after=60,
+            quota={"x-ratelimit-remaining": "0"},
+            detail="Over plan quota on this API Key.",
+        )
+
+        with patch(
+            "tracker.services.refresh_requests.AvailabilityRefreshService",
+            return_value=scoped,
+        ), patch(
+            "tracker.services.bulk_refresh.AvailabilityRefreshService",
+            return_value=scoped,
+        ), patch(
+            "tracker.services.bulk_refresh.stale_refresh_scopes",
+            return_value=["watchmode"],
+        ), patch(
+            "tracker.services.bulk_refresh.permanently_absent_scopes",
+            return_value=set(),
+        ):
+            summary = self._run(budget=10)
+
+        # One Watchmode probe, then the circuit suppresses the second request
+        # and the sweep's stale Watchmode scope.
+        self.assertEqual(scoped.refresh_content.call_count, 1)
+        self.assertEqual(scoped.refresh_content.call_args.args[0].tmdb_id, 941)
+        # The unrelated default source still runs.
+        self.assertEqual(self.refresh_service.refresh_content.call_count, 1)
+        self.assertEqual(summary["refreshed"], 1)
+        self.assertEqual(summary["errors"], 0)
+        self.assertEqual(
+            summary["blocked_by_reason"][BlockedReason.QUOTA_EXHAUSTED], 2
+        )
+        self.assertIn("watchmode", summary["rate_limited_sources"])
+        self.assertEqual(
+            summary["skipped_rate_limited"],
+            3,
+            "first refusal + suppressed request + suppressed sweep scope",
+        )
+
+        for movie in (first, second):
+            blocked = RefreshRequest.objects.get(movie=movie)
+            self.assertEqual(blocked.status, RefreshRequestStatus.BLOCKED)
+            self.assertEqual(blocked.blocked_reason, BlockedReason.QUOTA_EXHAUSTED)
+            self.assertIn("kind=plan_quota", blocked.last_error)
+        self.assertEqual(
+            RefreshRequest.objects.get(movie=other).status,
+            RefreshRequestStatus.DONE,
+        )
+
+    def test_retryable_rate_limit_does_not_trip_the_terminal_circuit(self):
+        """A short 429 is retryable, not proof that the monthly plan is spent."""
+        first = Movie.objects.create(tmdb_id=945, title="WM Rate One", year=2020)
+        second = Movie.objects.create(tmdb_id=946, title="WM Rate Two", year=2021)
+        self._request(first, RefreshPriority.NEW, source="watchmode")
+        self._request(second, RefreshPriority.NEW, source="watchmode")
+
+        scoped = MagicMock()
+        scoped.refresh_content.side_effect = SourceQuotaExceeded(
+            "Watchmode rate limit",
+            kind="rate_limit",
+            status_code=429,
+            retry_after=60,
+            detail="too many requests",
+        )
+
+        with patch(
+            "tracker.services.refresh_requests.AvailabilityRefreshService",
+            return_value=scoped,
+        ):
+            summary = self._run(budget=10)
+
+        self.assertEqual(scoped.refresh_content.call_count, 2)
+        self.assertEqual(summary["errors"], 0)
+        self.assertEqual(
+            summary["blocked_by_reason"].get(BlockedReason.QUOTA_EXHAUSTED, 0),
+            0,
+        )
+        self.assertEqual(summary["requests_drained"], 0)
+        for request in RefreshRequest.objects.all():
+            self.assertEqual(request.status, RefreshRequestStatus.PENDING)
+            self.assertIn("kind=rate_limit", request.last_error)
+
+    def test_terminal_circuit_is_tick_scoped_and_reprobes_next_tick(self):
+        """A new tick gets one fresh probe; no permanent in-memory disable."""
+        first = Movie.objects.create(tmdb_id=947, title="WM Tick One", year=2020)
+        self._request(first, RefreshPriority.NEW, source="watchmode")
+        scoped = MagicMock()
+        scoped.refresh_content.side_effect = SourceQuotaExceeded(
+            "Watchmode plan quota exhausted",
+            kind="plan_quota",
+            status_code=429,
+            detail="Over plan quota on this API Key.",
+        )
+
+        with patch(
+            "tracker.services.refresh_requests.AvailabilityRefreshService",
+            return_value=scoped,
+        ), patch(
+            "tracker.services.bulk_refresh.stale_refresh_scopes",
+            return_value=[],
+        ):
+            self._run(budget=10)
+            second = Movie.objects.create(
+                tmdb_id=948, title="WM Tick Two", year=2021
+            )
+            self._request(second, RefreshPriority.NEW, source="watchmode")
+            self._run(budget=10)
+
+        self.assertEqual(scoped.refresh_content.call_count, 2)
+
     def test_upfront_exhausted_quota_blocks_the_drain(self):
         self.limiter.remaining.return_value = 0
         movie = Movie.objects.create(tmdb_id=923, title="C", year=2020)
@@ -1314,3 +1449,147 @@ class DrainTests(TestCase):
         scoped_service.refresh_content.assert_called_once_with(scoped_movie, country=None)
         self.refresh_service.refresh_content.assert_called_once_with(default_movie, country=None)
         self.assertEqual(summary["requests_drained"], 2)
+
+    @staticmethod
+    def _quota_error(kind, *, retry_after, detail):
+        return SourceQuotaExceeded(
+            f"Watchmode quota refusal: {detail}",
+            kind=kind,
+            retry_after=retry_after,
+            status_code=429,
+            quota={
+                "x-ratelimit-limit": "120",
+                "x-ratelimit-remaining": "0",
+            },
+            detail=detail,
+        )
+
+    def test_upstream_plan_quota_settles_blocked_with_the_diagnostic(self):
+        """A spent *upstream plan* is terminal, not a transient failure.
+
+        The live Watchmode 429 says ``Over plan quota on this API Key.`` and
+        carries a misleading ``Retry-After: 60``. Before classification it was
+        wrapped as a generic fetch error, retried ``MAX_ATTEMPTS`` times and
+        recorded as ``failed`` — an outage-shaped fact for a budget one. It must
+        settle ``blocked``/``quota_exhausted`` immediately, keep ``attempts``
+        untouched and persist the evidence (body, status, headers) so the cause
+        is auditable later.
+        """
+        movie = Movie.objects.create(tmdb_id=981, title="PlanSpent", year=2020)
+        self._request(movie, RefreshPriority.NEW)
+        self.refresh_service.refresh_content.side_effect = self._quota_error(
+            "plan_quota",
+            retry_after=60,
+            detail="Over plan quota on this API Key.",
+        )
+
+        summary = self._run()
+
+        request = RefreshRequest.objects.get()
+        self.assertEqual(request.status, RefreshRequestStatus.BLOCKED)
+        self.assertEqual(request.blocked_reason, BlockedReason.QUOTA_EXHAUSTED)
+        self.assertEqual(request.attempts, 0)
+        self.assertIsNotNone(request.completed_at)
+        self.assertIn("kind=plan_quota", request.last_error)
+        self.assertIn("status=429", request.last_error)
+        self.assertIn("retry_after=60", request.last_error)
+        self.assertIn("Over plan quota on this API Key.", request.last_error)
+        # A budget fact is not a run failure.
+        self.assertEqual(summary["errors"], 0)
+        self.assertEqual(summary["refreshed"], 0)
+        self.assertEqual(
+            summary["blocked_by_reason"][BlockedReason.QUOTA_EXHAUSTED], 1
+        )
+        self.assertEqual(summary["requests_drained"], 1)
+        self.assertEqual(summary["requests_pending"], 0)
+
+    def test_upstream_rate_limit_defers_without_consuming_an_attempt(self):
+        """A short rate window is retryable: stay pending, do not fail.
+
+        Treating every 429 as terminal would permanently block perfectly good
+        work on a one-minute window, so the retryable half of the contract is
+        asserted explicitly: no attempt is consumed, no quota block is recorded,
+        and the row is eligible on the next tick with the diagnostic retained.
+        """
+        movie = Movie.objects.create(tmdb_id=982, title="RateWindow", year=2020)
+        self._request(movie, RefreshPriority.NEW)
+        self.refresh_service.refresh_content.side_effect = self._quota_error(
+            "rate_limit",
+            retry_after=30,
+            detail="Rate limit exceeded. Try again later.",
+        )
+
+        summary = self._run()
+
+        request = RefreshRequest.objects.get()
+        self.assertEqual(request.status, RefreshRequestStatus.PENDING)
+        self.assertEqual(request.blocked_reason, "")
+        self.assertEqual(request.attempts, 0)
+        self.assertIsNone(request.completed_at)
+        self.assertIn("kind=rate_limit", request.last_error)
+        self.assertIn("retry_after=30", request.last_error)
+        self.assertEqual(summary["errors"], 0)
+        self.assertEqual(
+            summary["blocked_by_reason"].get(BlockedReason.QUOTA_EXHAUSTED, 0), 0
+        )
+        self.assertEqual(summary["requests_pending"], 1)
+        self.assertTrue(summary["rate_limited"])
+
+
+class RefreshQueueCircuitTests(TestCase):
+    """The worker's queue-only tick owns the same terminal-quota circuit."""
+
+    def test_terminal_plan_quota_suppresses_second_request_in_one_worker_tick(self):
+        """``process_refresh_queue`` is a Watchmode path in its own right.
+
+        The request drain is shared with the watchlist tick, but the worker
+        calls ``process_refresh_queue`` directly. This test drives that public
+        entrypoint so a future refactor cannot leave the worker lane without the
+        circuit while the watchlist tick keeps passing.
+        """
+        first = Movie.objects.create(tmdb_id=991, title="WM Queue One", year=2020)
+        second = Movie.objects.create(tmdb_id=992, title="WM Queue Two", year=2021)
+        RefreshRequest.objects.create(
+            movie=first, priority=RefreshPriority.NEW, source="watchmode"
+        )
+        RefreshRequest.objects.create(
+            movie=second, priority=RefreshPriority.WATCHLIST, source="watchmode"
+        )
+
+        scoped = MagicMock()
+        scoped.refresh_content.side_effect = SourceQuotaExceeded(
+            "Watchmode plan quota exhausted",
+            kind="plan_quota",
+            status_code=429,
+            retry_after=60,
+            quota={"x-ratelimit-remaining": "0"},
+            detail="Over plan quota on this API Key.",
+        )
+        limiter = MagicMock(spec=RateLimiter)
+        limiter.remaining.return_value = 100
+        limiter.monthly_remaining.return_value = 1000
+
+        with patch(
+            "tracker.services.refresh_requests.AvailabilityRefreshService",
+            return_value=scoped,
+        ):
+            summary = process_refresh_queue(
+                budget=10, service=MagicMock(), limiter=limiter
+            )
+
+        self.assertEqual(scoped.refresh_content.call_count, 1)
+        self.assertEqual(scoped.refresh_content.call_args.args[0].tmdb_id, 991)
+        self.assertEqual(summary["requests_drained"], 2)
+        self.assertEqual(summary["skipped_rate_limited"], 2)
+        self.assertEqual(summary["refreshed"], 0)
+        self.assertEqual(
+            summary["blocked_by_reason"][BlockedReason.QUOTA_EXHAUSTED], 2
+        )
+
+        for movie in (first, second):
+            request = RefreshRequest.objects.get(movie=movie)
+            self.assertEqual(request.status, RefreshRequestStatus.BLOCKED)
+            self.assertEqual(
+                request.blocked_reason, BlockedReason.QUOTA_EXHAUSTED
+            )
+            self.assertIn("kind=plan_quota", request.last_error)

@@ -60,6 +60,7 @@ from django.utils import timezone
 from availability.models import Offer
 from availability.services.refresh import AvailabilityRefreshService
 from availability.sources import DEFAULT_SOURCE_SLUG, source_registry
+from availability.sources.base import SourceQuotaExceeded
 
 from ..models import (
     AvailabilityRefresh,
@@ -83,7 +84,13 @@ from .bulk_refresh import (
 from .preferences import resolve_source_country
 from .refresh_attribution import (attribute_catalogue_marker,
                                   attribute_refresh_run)
-from .rate_limit import RateLimitExceeded, RateLimiter, rate_limiter_for
+from .rate_limit import (
+    RateLimitExceeded,
+    RateLimiter,
+    SourceQuotaCircuit,
+    rate_limiter_for,
+    source_budget,
+)
 from .streaming_api import UpstreamTitleNotFound
 from .watchability import RefreshState
 
@@ -695,6 +702,7 @@ def _drain_one(
     limiter,
     rate_limit_hit: bool,
     limiter_overrides: dict[str, RateLimiter] | None = None,
+    quota_circuit: SourceQuotaCircuit | None = None,
 ) -> bool:
     """Process one pending request under the run's guards.
 
@@ -717,10 +725,14 @@ def _drain_one(
     - refreshed / already fresh -> ``done``;
     - refresh raised -> ``attempts`` + ``last_error`` recorded, retried on a
       later run up to ``MAX_ATTEMPTS`` times, then ``failed`` permanently;
-    - budget or rate limit exhausted -> stays ``pending`` for the next run.
-      A rate-limited request has **not** failed: it is waiting for its
+    - local daily/monthly budget exhausted -> stays ``pending`` for the next run.
+      A local rate-limited request has **not** failed: it is waiting for its
       source's quota to reset, and it is the only reason that source appears
-      in ``summary.rate_limited_sources``.
+      in ``summary.rate_limited_sources``;
+    - upstream terminal plan quota -> ``blocked``/``quota_exhausted`` with the
+      captured diagnostic, and the tick-scoped circuit suppresses further
+      requests to that source this tick. A retryable upstream rate window stays
+      ``pending`` and does not trip the terminal circuit.
 
     ``rate_limit_hit`` refers to the *default* source's limiter only (the
     caller's injected limiter): it may short-circuit default-scope requests,
@@ -805,6 +817,34 @@ def _drain_one(
         summary.requests_drained += 1
         return rate_limit_hit
 
+    # A terminal upstream plan quota already observed this tick. The source
+    # cannot succeed again before its plan resets, so settle this request as
+    # the same blocked/quota_exhausted fact the first refusal recorded, without
+    # issuing another request. The captured diagnostic is copied so the row is
+    # still auditable; no credential ever reaches it. Other sources are not
+    # affected, and a fresh tick gets one new probe (the circuit is in-memory
+    # and tick-scoped, never a permanent disable).
+    if quota_circuit is not None and quota_circuit.is_tripped(source):
+        diagnostic = quota_circuit.diagnostic(source)
+        if diagnostic:
+            request.settle(
+                RefreshRequestStatus.BLOCKED,
+                blocked_reason=BlockedReason.QUOTA_EXHAUSTED,
+                error=diagnostic,
+            )
+        else:
+            request.settle(
+                RefreshRequestStatus.BLOCKED,
+                blocked_reason=BlockedReason.QUOTA_EXHAUSTED,
+            )
+        summary.note_rate_limited_source(source)
+        summary.skipped_rate_limited += 1
+        summary.blocked_by_reason[BlockedReason.QUOTA_EXHAUSTED] = (
+            summary.blocked_by_reason.get(BlockedReason.QUOTA_EXHAUSTED, 0) + 1
+        )
+        summary.requests_drained += 1
+        return rate_limit_hit
+
     # This source's own budget. A blocked source defers only its own
     # requests; the caller keeps scanning for sources that can still run.
     if _is_spent(scope_limiter):
@@ -863,17 +903,61 @@ def _drain_one(
         return rate_limit_hit
 
     try:
-        scope_limiter.acquire()
-        # The user's selected market travels with the request. Sources that
-        # answer per country (JustWatch) cannot be called without it, and ones
-        # that answer globally (Streaming Availability) ignore it.
-        _service_for_scope(request.source, service).refresh_content(
-            movie, country=resolve_source_country()
-        )
+        with source_budget(scope_limiter, source=source):
+            # The user's selected market travels with the request. Sources that
+            # answer per country (JustWatch) cannot be called without it, and
+            # ones that answer globally (Streaming Availability) ignore it.
+            _service_for_scope(request.source, service).refresh_content(
+                movie, country=resolve_source_country()
+            )
     except RateLimitExceeded:
         summary.note_rate_limited_source(source)
         summary.skipped_rate_limited += 1
         return source == DEFAULT_SOURCE_SLUG or rate_limit_hit
+    except SourceQuotaExceeded as exc:
+        # An *upstream* quota refusal, classified by the source itself. This is
+        # deliberately not the same branch as ``RateLimitExceeded`` above
+        # (which is our own local daily guard) and not the generic failure
+        # branch below (which retries a transient fault):
+        #
+        # - a spent plan is terminal until the plan resets. Settle it as
+        #   ``blocked``/``quota_exhausted`` so it cannot masquerade as a
+        #   failed source after MAX_ATTEMPTS.
+        # - a short rate window is retryable. Leave the row ``pending`` and do
+        #   not consume an attempt: a burst of 429s is not a broken title.
+        #
+        # The diagnostic carries the body, status, Retry-After and quota
+        # headers, so a monthly plan exhaustion can be told apart from a
+        # one-minute rate limit after the fact.
+        summary.note_rate_limited_source(source)
+        summary.skipped_rate_limited += 1
+        diagnostic = exc.diagnostic()
+        if exc.terminal:
+            if quota_circuit is not None:
+                quota_circuit.trip(source, diagnostic)
+            request.settle(
+                RefreshRequestStatus.BLOCKED,
+                blocked_reason=BlockedReason.QUOTA_EXHAUSTED,
+                error=diagnostic,
+            )
+            summary.blocked_by_reason[BlockedReason.QUOTA_EXHAUSTED] = (
+                summary.blocked_by_reason.get(BlockedReason.QUOTA_EXHAUSTED, 0) + 1
+            )
+            summary.requests_drained += 1
+            logger.warning(
+                "refresh_request_quota_blocked tmdb_id=%s source=%s kind=%s "
+                "retry_after=%s quota=%s",
+                movie.tmdb_id, source, exc.kind, exc.retry_after, exc.quota,
+            )
+        else:
+            request.last_error = diagnostic
+            request.save(update_fields=["last_error"])
+            logger.warning(
+                "refresh_request_rate_limited tmdb_id=%s source=%s kind=%s "
+                "retry_after=%s quota=%s",
+                movie.tmdb_id, source, exc.kind, exc.retry_after, exc.quota,
+            )
+        return rate_limit_hit
     except UpstreamTitleNotFound as exc:
         # The upstream catalogue has no such title: a permanent answer, not a
         # fault. Fail on the first attempt — retrying can only re-earn the same
@@ -984,6 +1068,7 @@ def drain_refresh_requests(
     service: AvailabilityRefreshService,
     limiter,
     represented_batches=None,
+    quota_circuit: SourceQuotaCircuit | None = None,
 ) -> set[int]:
     """Process pending refresh requests in priority order, budget permitting.
 
@@ -1024,6 +1109,7 @@ def drain_refresh_requests(
     sweep's).
     """
     excluded: set[int] = set()
+    quota_circuit = quota_circuit or SourceQuotaCircuit()
     rate_limit_hit = summary.rate_limited
     # Batches actually *processed* by this tick. Attribution must reflect the
     # requests this execution really drained - not every batch that happened to
@@ -1049,7 +1135,7 @@ def drain_refresh_requests(
     # Sources discovered to be out of budget during this tick. Seeded with the
     # default source when the caller handed us an already-spent limiter, so
     # the very first candidate query already excludes it.
-    blocked: set[str] = set()
+    blocked: set[str] = set(quota_circuit.tripped_sources())
     if _is_spent(limiters[DEFAULT_SOURCE_SLUG]):
         blocked.add(DEFAULT_SOURCE_SLUG)
 
@@ -1094,6 +1180,7 @@ def drain_refresh_requests(
                 limiter=limiter,
                 rate_limit_hit=rate_limit_hit,
                 limiter_overrides=limiters,
+                quota_circuit=quota_circuit,
             )
             # A source that just refused stops offering candidates on the next
             # page; the ones already in hand are drained by name below.
@@ -1206,6 +1293,9 @@ def process_refresh_queue(
     limiter = limiter or rate_limiter_for(DEFAULT_SOURCE_SLUG)
 
     summary = BulkRefreshSummary(budget=budget, remaining_budget=budget)
+    # One terminal-quota circuit per worker tick. It suppresses only the source
+    # that proved plan exhaustion, and only for this drain.
+    quota_circuit = SourceQuotaCircuit()
 
     # The default limiter is the run's own injected/quota-bearing guard: when
     # it is spent up front we still drain other sources, so this no longer
@@ -1241,6 +1331,7 @@ def process_refresh_queue(
             service=service,
             limiter=limiter,
             represented_batches=drained_batches,
+            quota_circuit=quota_circuit,
         )
     finally:
         release_title_drain_lock()

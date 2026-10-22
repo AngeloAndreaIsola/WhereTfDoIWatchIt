@@ -295,7 +295,12 @@ Verified against the local Docker stack and a scratch copy restored from a
 | Cross-source corroboration | 141 / 183 offers corroborated by another source with an active offer; 0 contradicted; 42 uncorroborated (absence is not evidence). Deferred recheck list: `docs/WATCHMODE_UNCORROBORATED_OFFERS.md` |
 
 **Remaining gap:** upstream re-verification through the Watchmode API was
-attempted and **blocked by the account quota** (`HTTP 429`). The 183 offers are
+attempted and **blocked by the account's spent monthly plan quota** (`HTTP 429`,
+body `{"errorMessage": "Over plan quota on this API Key."}`; a retry after 70
+seconds returned the same answer, so the `Retry-After: 60` is not a short
+window). The 183 offers are
 therefore attributable to the TMDb id each refresh requested (by construction),
 corroborated as above, but not re-checked against Watchmode in this session.
 This is why the F4 claim is “code and repair verified”, not “upstream-verified”.
+See `docs/WATCHMODE_UNCORROBORATED_OFFERS.md` for the quota arithmetic and the
+deferred recheck procedure.

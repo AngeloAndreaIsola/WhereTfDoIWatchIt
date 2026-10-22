@@ -46,7 +46,7 @@ from availability.persistence.repositories import (
 )
 from availability.services.refresh import AvailabilityRefreshService
 from availability.sources import SourceFetchError, source_registry
-from availability.sources.base import ContentRequest
+from availability.sources.base import ContentRequest, SourceQuotaExceeded
 from availability.sources.justwatch import JustWatchSource
 from availability.sources.justwatch_client import (
     MAX_TITLES_PER_REQUEST,
@@ -546,7 +546,7 @@ class WatchmodeTransportTests(SimpleTestCase):
             return item
 
         return WatchmodeClient(http_get=http_get, api_key="test-key",
-                               sleeper=sleeper), seen
+                               sleeper=sleeper, budget=lambda: None), seen
 
     def test_search_response_is_a_dict_with_title_results(self):
         client, seen = self.build(fx.FakeResponse(payload=fx.WM_SEARCH_MOVIE))
@@ -583,6 +583,83 @@ class WatchmodeTransportTests(SimpleTestCase):
         with self.assertRaises(WatchmodeQuotaExceeded):
             client.title_sources(1, ["NL"])
 
+    def test_live_plan_quota_429_is_terminal_and_keeps_the_evidence(self):
+        """The measured exhausted-plan answer must not read as a rate window.
+
+        Live 2026-10-21: HTTP 429, body
+        ``{"errorMessage": "Over plan quota on this API Key."}``,
+        ``Retry-After: 60`` and ``x-ratelimit-remaining: 0``. The ``Retry-After``
+        is misleading (a retry 70s later returned the same answer), so the body
+        has to decide the classification — and the ``errorMessage`` must survive
+        into the exception instead of collapsing to "429".
+        """
+        client, _ = self.build(fx.FakeResponse(
+            status_code=429,
+            payload=fx.WM_ERROR_PLAN_QUOTA,
+            headers=fx.WM_PLAN_QUOTA_HEADERS,
+        ))
+        with self.assertRaises(WatchmodeQuotaExceeded) as ctx:
+            client.title_sources(1, ["NL"])
+        exc = ctx.exception
+        self.assertEqual(exc.kind, "plan_quota")
+        self.assertTrue(exc.terminal)
+        self.assertEqual(exc.status_code, 429)
+        self.assertEqual(exc.retry_after, 60)
+        self.assertIn("Over plan quota on this API Key.", exc.detail)
+        self.assertEqual(exc.quota["x-ratelimit-limit"], "120")
+        self.assertEqual(exc.quota["x-ratelimit-remaining"], "0")
+        self.assertEqual(exc.quota["retry-after"], "60")
+
+    def test_rate_limit_429_stays_retryable(self):
+        """A real short window keeps ``terminal`` false so work is not failed."""
+        client, _ = self.build(fx.FakeResponse(
+            status_code=429,
+            payload=fx.WM_ERROR_RATE_LIMIT,
+            headers=fx.WM_RATE_LIMIT_HEADERS,
+        ))
+        with self.assertRaises(WatchmodeQuotaExceeded) as ctx:
+            client.title_sources(1, ["NL"])
+        exc = ctx.exception
+        self.assertEqual(exc.kind, "rate_limit")
+        self.assertFalse(exc.terminal)
+        self.assertEqual(exc.retry_after, 30)
+        self.assertIn("Rate limit exceeded", exc.detail)
+
+    def test_exhausted_account_headers_classify_as_plan_quota(self):
+        """Account headers win over a body that carries no marker."""
+        client, _ = self.build(fx.FakeResponse(
+            status_code=429,
+            payload={"success": False},
+            headers=fx.WM_ACCOUNT_EXHAUSTED_HEADERS,
+        ))
+        with self.assertRaises(WatchmodeQuotaExceeded) as ctx:
+            client.title_sources(1, ["NL"])
+        self.assertEqual(ctx.exception.kind, "plan_quota")
+        self.assertTrue(ctx.exception.terminal)
+
+    def test_unclassified_429_is_not_assumed_terminal(self):
+        """Without evidence of a spent plan the refusal stays retryable."""
+        client, _ = self.build(fx.FakeResponse(
+            status_code=429,
+            payload={"success": False},
+            headers={"retry-after": "10"},
+        ))
+        with self.assertRaises(WatchmodeQuotaExceeded) as ctx:
+            client.title_sources(1, ["NL"])
+        self.assertEqual(ctx.exception.kind, "unknown")
+        self.assertFalse(ctx.exception.terminal)
+
+    def test_429_is_not_retried_inside_the_client(self):
+        """One refusal is enough: retrying a spent budget only hides the fact."""
+        client, seen = self.build(fx.FakeResponse(
+            status_code=429,
+            payload=fx.WM_ERROR_PLAN_QUOTA,
+            headers=fx.WM_PLAN_QUOTA_HEADERS,
+        ))
+        with self.assertRaises(WatchmodeQuotaExceeded):
+            client.title_sources(1, ["NL"])
+        self.assertEqual(len(seen), 1)
+
     def test_401_is_an_auth_error_not_retried(self):
         client, seen = self.build(fx.FakeResponse(status_code=401, payload={}))
         from availability.sources.watchmode_client import WatchmodeAuthError
@@ -618,7 +695,7 @@ class WatchmodeTransportTests(SimpleTestCase):
     def test_missing_api_key_is_an_auth_error(self):
         client = WatchmodeClient(
             http_get=lambda *a, **k: fx.FakeResponse(),
-            api_key="", sleeper=sleeper)
+            api_key="", sleeper=sleeper, budget=lambda: None)
         client.api_key = ""
         from availability.sources.watchmode_client import WatchmodeAuthError
         with self.assertRaises(WatchmodeAuthError):
@@ -634,7 +711,9 @@ class WatchmodeSourceTests(SimpleTestCase):
             seen.append(url)
             return queue.pop(0) if queue else fx.FakeResponse()
 
-        client = WatchmodeClient(http_get=http_get, api_key="k", sleeper=sleeper)
+        client = WatchmodeClient(
+            http_get=http_get, api_key="k", sleeper=sleeper,
+            budget=lambda: None)
         return WatchmodeSource(client=client), seen
 
     def test_registered_as_aggregator_not_catalogue(self):
@@ -697,6 +776,70 @@ class WatchmodeSourceTests(SimpleTestCase):
         )
         with self.assertRaises(SourceFetchError):
             source.fetch(ContentRequest(tmdb_id=550), country="NL")
+
+    def test_plan_quota_becomes_a_typed_source_quota_error(self):
+        """The adapter must preserve kind/retry_after/quota, not flatten them.
+
+        Wrapping the transport refusal in a generic ``SourceFetchError`` is what
+        previously made the scheduler retry a spent monthly plan three times and
+        then record it as a failed source.
+        """
+        source, _ = self.build(fx.FakeResponse(
+            status_code=429,
+            payload=fx.WM_ERROR_PLAN_QUOTA,
+            headers=fx.WM_PLAN_QUOTA_HEADERS,
+        ))
+        with self.assertRaises(SourceQuotaExceeded) as ctx:
+            source.fetch(ContentRequest(tmdb_id=550), country="NL")
+        exc = ctx.exception
+        self.assertEqual(exc.kind, "plan_quota")
+        self.assertTrue(exc.terminal)
+        self.assertEqual(exc.status_code, 429)
+        self.assertEqual(exc.retry_after, 60)
+        self.assertEqual(exc.quota["x-ratelimit-remaining"], "0")
+        self.assertIn("Over plan quota", exc.detail)
+
+    def test_plan_quota_on_the_sources_call_is_also_typed(self):
+        """The second upstream call must classify exactly like the first."""
+        source, _ = self.build(
+            fx.FakeResponse(payload=fx.WM_SEARCH_MOVIE),
+            fx.FakeResponse(
+                status_code=429,
+                payload=fx.WM_ERROR_PLAN_QUOTA,
+                headers=fx.WM_PLAN_QUOTA_HEADERS,
+            ),
+        )
+        with self.assertRaises(SourceQuotaExceeded) as ctx:
+            source.fetch(ContentRequest(tmdb_id=550), country="NL")
+        self.assertEqual(ctx.exception.kind, "plan_quota")
+        self.assertTrue(ctx.exception.terminal)
+
+    def test_rate_limit_becomes_a_retryable_source_quota_error(self):
+        source, _ = self.build(fx.FakeResponse(
+            status_code=429,
+            payload=fx.WM_ERROR_RATE_LIMIT,
+            headers=fx.WM_RATE_LIMIT_HEADERS,
+        ))
+        with self.assertRaises(SourceQuotaExceeded) as ctx:
+            source.fetch(ContentRequest(tmdb_id=550), country="NL")
+        self.assertEqual(ctx.exception.kind, "rate_limit")
+        self.assertFalse(ctx.exception.terminal)
+        self.assertEqual(ctx.exception.retry_after, 30)
+
+    def test_diagnostic_is_stable_and_credential_free(self):
+        source, _ = self.build(fx.FakeResponse(
+            status_code=429,
+            payload=fx.WM_ERROR_PLAN_QUOTA,
+            headers=fx.WM_PLAN_QUOTA_HEADERS,
+        ))
+        with self.assertRaises(SourceQuotaExceeded) as ctx:
+            source.fetch(ContentRequest(tmdb_id=550), country="NL")
+        diagnostic = ctx.exception.diagnostic()
+        self.assertIn("kind=plan_quota", diagnostic)
+        self.assertIn("status=429", diagnostic)
+        self.assertIn("retry_after=60", diagnostic)
+        self.assertIn("Over plan quota", diagnostic)
+        self.assertNotIn("test-key", diagnostic)
 
 
 # =============================================================================
@@ -852,7 +995,7 @@ class AggregatorPipelineTests(TestCase):
             return fx.FakeResponse(payload=[])
 
         source = WatchmodeSource(client=WatchmodeClient(
-            http_get=http_get, api_key="k", sleeper=sleeper))
+            http_get=http_get, api_key="k", sleeper=sleeper, budget=lambda: None))
         AvailabilityRefreshService(source=source).refresh_content(
             _movie(550))
 
@@ -908,7 +1051,7 @@ class AggregatorPipelineTests(TestCase):
             return fx.FakeResponse(payload=fx.WM_SOURCES_NL)
 
         source = WatchmodeSource(client=WatchmodeClient(
-            http_get=http_get, api_key="k", sleeper=sleeper))
+            http_get=http_get, api_key="k", sleeper=sleeper, budget=lambda: None))
         AvailabilityRefreshService(source=source).refresh_content(_movie(550))
 
         offer = Offer.objects.get(provider=self.netflix, tmdb_id=550,

@@ -150,6 +150,23 @@ from .base import (
 
 logger = logging.getLogger(__name__)
 
+
+class TubiPageGone(SourceFetchError):
+    """A detail page answered HTTP 404/410 — the sitemap entry is stale.
+
+    This is a permanent per-page fact, not a retrieval failure: the page will
+    not come back within the run, and aborting the batch would leave the
+    checkpoint stuck on it forever (the historical 2026-10-21 failure). The
+    caller skips exactly this URL and lets the checkpoint advance; transient
+    failures (5xx, timeouts, transport errors) remain plain
+    :class:`SourceFetchError` and still abort the batch.
+    """
+
+    def __init__(self, message, *, status_code=None):
+        super().__init__(message)
+        self.status_code = status_code
+
+
 BASE_URL = "https://tubitv.com"
 SITEMAP_INDEX_URL = f"{BASE_URL}/sitemap.xml"
 COUNTRY = "US"
@@ -243,6 +260,10 @@ class TubiClient:
             try:
                 return _xml_locs(self._get(url), expect=expect, url=url)
             except SourceFetchError as exc:
+                if isinstance(exc, TubiPageGone):
+                    # Retrying a 404/410 cannot succeed and only wastes
+                    # requests; the sitemap is still fatal to the run.
+                    raise
                 if attempt >= attempts:
                     logger.error(
                         "tubi_sitemap_failed url=%s attempts=%d error=%s",
@@ -286,11 +307,14 @@ class TubiClient:
             # Diagnostic only: status/content type/size plus a short,
             # whitespace-collapsed prefix. Never cookies or auth headers.
             body = _diagnostic_prefix(response.text)
-            raise SourceFetchError(
+            message = (
                 f"Tubi returned HTTP {response.status_code} for {url} "
                 f"(content_type={response.headers.get('Content-Type', '')!r}, "
                 f"bytes={len(response.content)}, prefix={body!r})"
             )
+            if response.status_code in (404, 410):
+                raise TubiPageGone(message, status_code=response.status_code)
+            raise SourceFetchError(message)
         return response.text
 
 
@@ -385,6 +409,16 @@ class TubiSource:
                 html = self.client.detail_page(url)
                 page_state = _state_from_html(html, url=url)
             except SourceFetchError as exc:
+                if isinstance(exc, TubiPageGone):
+                    # Permanent stale sitemap entry. Skipping it advances the
+                    # checkpoint past a URL that can never render; it writes no
+                    # content and is not evidence about availability.
+                    logger.warning(
+                        "tubi_page_gone url=%s status=%s",
+                        url, getattr(exc, "status_code", None),
+                    )
+                    skipped += 1
+                    continue
                 if url not in priority_set or url in traversal_set:
                     # A traversal page failing must leave the checkpoint where
                     # it is: the batch is retried instead of silently skipping

@@ -40,6 +40,7 @@ from availability.sources import (
 )
 from availability.sources.tubi import (
     TubiClient,
+    TubiPageGone,
     _priority_urls,
     _state_from_html,
     _xml_locs,
@@ -592,6 +593,11 @@ class CatalogueParsingTests(SimpleTestCase):
 
 
 class FailureVsEmptyTests(SimpleTestCase):
+    def _walk(self, source, api, cursor=None):
+        before = len(api.detail_requests)
+        result = source.fetch(cursor=cursor)
+        return result, api.detail_requests[before:]
+
     def test_a_shell_page_is_skipped_without_failing_the_walk(self):
         source, api = build_source()
         with self.assertLogs("availability.sources.tubi", level="INFO") as logs:
@@ -631,6 +637,64 @@ class FailureVsEmptyTests(SimpleTestCase):
         source, _api = build_source()
         with self.assertRaisesMessage(SourceFetchError, "fixture missing"):
             source.client.detail_page("https://tubitv.com/movies/1/nope")
+
+    def test_a_permanently_gone_traversal_page_is_skipped_and_the_batch_advances(self):
+        """The 2026-10-21 deadlock: a stale 404 must not block the checkpoint."""
+        source, api = build_source(max_contents=2)
+        api.failures["i-robot"] = TubiPageGone(
+            "Tubi returned HTTP 404 for i-robot", status_code=404
+        )
+
+        with self.assertLogs("availability.sources.tubi", level="WARNING") as logs:
+            first, first_batch = self._walk(source, api)
+
+        self.assertIn("tubi_page_gone", "\n".join(logs.output))
+        self.assertEqual(first_batch, [I_ROBOT, BLUE_WATER_HIGH])
+        self.assertEqual(
+            {c.provider_content_id for c in first.contents}, {"2185"},
+            "the rest of the batch is still collected",
+        )
+        self.assertIsNotNone(first.cursor, "the checkpoint must still advance")
+
+        second, second_batch = self._walk(source, api, first.cursor)
+        self.assertEqual(second_batch, [CLEARCUT, ONE_EIGHT_HUNDRED])
+        self.assertNotEqual(first.cursor, second.cursor)
+        self.assertTrue(second.contents, "later pages are still collected")
+
+    def test_a_410_page_is_also_treated_as_permanently_gone(self):
+        source, api = build_source(max_contents=1)
+        api.failures["i-robot"] = TubiPageGone(
+            "Tubi returned HTTP 410 for i-robot", status_code=410
+        )
+        with self.assertLogs("availability.sources.tubi", level="WARNING") as logs:
+            result, batch = self._walk(source, api)
+        self.assertIn("tubi_page_gone", "\n".join(logs.output))
+        self.assertEqual(batch, [I_ROBOT])
+        self.assertIsNotNone(result.cursor)
+
+    def test_a_404_is_classified_as_gone_but_a_5xx_is_not(self):
+        class Response:
+            headers = {"Content-Type": "text/html"}
+            text = "<html>gone</html>"
+            content = b"<html>gone</html>"
+
+            def __init__(self, status_code):
+                self.status_code = status_code
+
+        from unittest.mock import patch
+
+        client = TubiClient(delay=0, retries=0)
+        with patch("availability.sources.tubi.requests.get",
+                   return_value=Response(404)):
+            with self.assertRaises(TubiPageGone) as ctx:
+                client.detail_page(I_ROBOT)
+        self.assertEqual(ctx.exception.status_code, 404)
+
+        with patch("availability.sources.tubi.requests.get",
+                   return_value=Response(503)):
+            with self.assertRaises(SourceFetchError) as ctx:
+                client.detail_page(I_ROBOT)
+        self.assertNotIsInstance(ctx.exception, TubiPageGone)
 
     def test_a_title_missing_from_the_state_is_skipped(self):
         source, api = build_source()

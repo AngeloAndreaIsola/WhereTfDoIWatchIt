@@ -195,15 +195,26 @@ def has_configured_rate_limit(slug: str) -> bool:
 
 
 def source_quota(slug: str) -> dict | None:
-    """Remaining budget for a metered source, or ``None`` when unmetered."""
+    """Daily and monthly budget for a metered source, or ``None`` when unmetered."""
     limiter = rate_limiter_for(slug)
     remaining = limiter.remaining()
-    if remaining is None:
+    monthly_remaining = limiter.monthly_remaining()
+    if remaining is None and monthly_remaining is None:
         return None
+    accounting_since = limiter.monthly_accounting_since()
+    resets_at = limiter.monthly_resets_at()
     return {
         "remaining": remaining,
         "limit": limiter.daily_limit,
-        "exhausted": remaining <= 0,
+        "exhausted": limiter.is_exhausted(),
+        "monthly_used": limiter.monthly_used(),
+        "monthly_remaining": monthly_remaining,
+        "monthly_limit": limiter.monthly_limit,
+        "monthly_window_days": limiter.monthly_window_days,
+        "monthly_accounting_since": (
+            accounting_since.isoformat() if accounting_since else None
+        ),
+        "monthly_resets_at": resets_at.isoformat() if resets_at else None,
     }
 
 

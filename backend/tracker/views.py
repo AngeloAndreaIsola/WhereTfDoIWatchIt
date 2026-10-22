@@ -65,6 +65,7 @@ from tracker.services.watchability import (
 )
 from tracker.services.access import SubscriptionAccessMode
 from availability.services.legacy_ingest import ingest_scraped_mapping
+from availability.services.write_barrier import MaintenanceInProgress, writer_barrier
 from availability.sources import DEFAULT_SOURCE_SLUG
 import math
 
@@ -1027,14 +1028,28 @@ def provider_delete(request, slug: str):
 
     # The availability tables PROTECT their provider, so the canonical rows
     # this provider owns are removed first (the legacy mappings cascade away
-    # with the provider itself).
-    with transaction.atomic():
-        ContentMapping.objects.filter(provider=provider).delete()
-        ProviderContent.objects.filter(provider=provider).delete()
-        AvailabilityOffer.objects.filter(provider=provider).delete()
-        SyncRun.objects.filter(provider=provider).delete()
-        SyncCursor.objects.filter(provider=provider).delete()
-        provider.delete()
+    # with the provider itself).  The shared writer barrier is acquired before
+    # the transaction opens and held through its commit, so this deletion can
+    # never race an availability refresh or the remediation.  The nested
+    # projection deletion fired by the ``ScrapedContentMapping`` cascade reuses
+    # this acquisition (``writer_barrier`` is re-entrant); it never takes a
+    # second session lock.
+    try:
+        with writer_barrier(f"provider deletion for {provider.slug}"):
+            with transaction.atomic():
+                ContentMapping.objects.filter(provider=provider).delete()
+                ProviderContent.objects.filter(provider=provider).delete()
+                AvailabilityOffer.objects.filter(provider=provider).delete()
+                SyncRun.objects.filter(provider=provider).delete()
+                SyncCursor.objects.filter(provider=provider).delete()
+                provider.delete()
+    except MaintenanceInProgress as exc:
+        logger.warning(
+            "provider_delete_refused provider=%s reason=%s", provider.slug, exc
+        )
+        return Response(
+            {"error": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE
+        )
     return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -1776,12 +1791,26 @@ def watchlist_refresh_status(request):
     for slug in title_level_source_slugs():
         limiter = rate_limiter_for(slug)
         remaining = limiter.remaining()
-        if remaining is None:
+        monthly_remaining = limiter.monthly_remaining()
+        if remaining is None and monthly_remaining is None:
             continue  # unmetered: no quota to report, none invented
+        monthly_resets_at = limiter.monthly_resets_at()
+        accounting_since = limiter.monthly_accounting_since()
         source_quotas[slug] = {
+            # Kept for existing clients: this is the daily headroom.
             "remaining": remaining,
             "limit": limiter.daily_limit,
-            "exhausted": remaining <= 0,
+            "exhausted": limiter.is_exhausted(),
+            "monthly_used": limiter.monthly_used(),
+            "monthly_remaining": monthly_remaining,
+            "monthly_limit": limiter.monthly_limit,
+            "monthly_window_days": limiter.monthly_window_days,
+            "monthly_accounting_since": (
+                accounting_since.isoformat() if accounting_since else None
+            ),
+            "monthly_resets_at": (
+                monthly_resets_at.timestamp() if monthly_resets_at else None
+            ),
         }
     rate_limited_sources = sorted(
         slug for slug, quota in source_quotas.items() if quota["exhausted"]

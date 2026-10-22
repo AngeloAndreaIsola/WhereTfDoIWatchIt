@@ -508,6 +508,32 @@ class ApiCallCounter(models.Model):
         return f"{self.service}: {self.count} on {self.call_date}"
 
 
+class ApiCallLedger(models.Model):
+    """Per-source, per-UTC-day reservation counts for rolling budgets.
+
+    ``ApiCallCounter`` stores only the current day, so it cannot answer a
+    monthly question. This ledger keeps one row per ``(service, day)`` and is
+    summed over a rolling window. The unique constraint is the concurrency
+    backstop; reservations are serialised by locking the corresponding
+    ``ApiCallCounter`` row first.
+    """
+
+    service = models.CharField(max_length=50)
+    day = models.DateField()
+    count = models.IntegerField(default=0)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["service", "day"],
+                name="uniq_apicallledger_service_day",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.service}: {self.count} on {self.day}"
+
+
 class RefreshRun(models.Model):
     service = models.CharField(max_length=50, default="streaming_availability")
     started_at = models.DateTimeField(default=timezone.now)

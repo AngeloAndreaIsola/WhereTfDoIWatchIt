@@ -299,3 +299,31 @@ WM_ERROR_REGION = {"success": False, "statusCode": 400,
                    "statusMessage": "US is not enabled for your current plan."}
 WM_ERROR_QUOTA = {"success": False, "statusCode": 429,
                   "statusMessage": "Quota exceeded for the current month."}
+
+# Measured live on 2026-10-21, when the monthly plan was spent. The body uses
+# ``errorMessage`` (not ``statusMessage``) and the response carries a
+# misleading ``Retry-After: 60`` that does not clear the block.
+WM_ERROR_PLAN_QUOTA = {
+    "success": False,
+    "errorMessage": "Over plan quota on this API Key.",
+}
+WM_PLAN_QUOTA_HEADERS = {
+    "retry-after": "60",
+    "x-ratelimit-limit": "120",
+    "x-ratelimit-remaining": "0",
+}
+WM_ERROR_RATE_LIMIT = {
+    "success": False,
+    "errorMessage": "Rate limit exceeded. Try again later.",
+}
+WM_RATE_LIMIT_HEADERS = {
+    "retry-after": "30",
+    "x-ratelimit-limit": "120",
+    "x-ratelimit-remaining": "0",
+}
+WM_ACCOUNT_EXHAUSTED_HEADERS = {
+    "x-account-quota": "2500",
+    "x-account-quota-used": "2500",
+    "x-ratelimit-limit": "120",
+    "x-ratelimit-remaining": "0",
+}

@@ -37,6 +37,7 @@ from availability.services.watchmode_identity_repair import (
     apply_plan,
     build_plan,
 )
+from availability.sources import ContentRequest
 from availability.sources.watchmode import WatchmodeSource
 from availability.sources.watchmode_client import WatchmodeClient
 from availability.tests import aggregator_fixtures as fx
@@ -64,6 +65,7 @@ class WatchmodeIdentityFormatTests(SimpleTestCase):
         source = WatchmodeSource(client=WatchmodeClient(
             http_get=lambda *a, **k: fx.FakeResponse(payload=fx.WM_SOURCES_MULTI),
             api_key="k", sleeper=lambda s: None,
+            budget=lambda: None,
         ))
         row = SimpleNamespace(source_id=203, name="Netflix", type="sub",
                               region="NL", web_url="u", format="HD")
@@ -137,6 +139,116 @@ class WatchmodeIdentityFormatTests(SimpleTestCase):
 
 
 # =============================================================================
+# Search-result verification
+# =============================================================================
+class WatchmodeSearchVerificationTests(SimpleTestCase):
+    """``/search/`` is a search, so its first result is not an identity.
+
+    Live defect: a ``tmdb_movie_id`` query returned a different title, the
+    adapter fetched *that* title's sources, and the offers were persisted under
+    the requested content. No result may be used unless an exact requested
+    external id corroborates it.
+    """
+
+    def _source(self, results, sources=None):
+        seen = []
+
+        def http_get(url, headers=None, timeout=None):
+            seen.append(url)
+            if "/search/" in url:
+                return fx.FakeResponse(payload={
+                    "success": True,
+                    "title_results": results,
+                    "people_results": [],
+                })
+            return fx.FakeResponse(
+                payload=fx.WM_SOURCES_NL if sources is None else sources
+            )
+
+        return WatchmodeSource(client=WatchmodeClient(
+            http_get=http_get, api_key="k", sleeper=lambda s: None,
+            budget=lambda: None,
+        )), seen
+
+    @staticmethod
+    def _result(**overrides):
+        base = dict(fx.WM_SEARCH_MOVIE["title_results"][0])
+        base.update(overrides)
+        return base
+
+    def test_a_search_result_for_another_tmdb_id_is_rejected_unfetched(self):
+        source, seen = self._source([self._result()])  # TMDb 550
+        result = source.fetch(
+            ContentRequest(tmdb_id=5, title="Four Rooms"), country="NL"
+        )
+        self.assertEqual(result.offers, [])
+        self.assertEqual(result.contents, [])
+        self.assertEqual(len(seen), 1, "sources must not be fetched from a guess")
+
+    def test_two_results_claiming_the_requested_id_are_ambiguous(self):
+        results = [
+            self._result(id=1, tmdb_id=5, name="Four Rooms"),
+            self._result(id=2, tmdb_id=5, name="Four Rooms"),
+        ]
+        source, seen = self._source(results)
+        result = source.fetch(
+            ContentRequest(tmdb_id=5, title="Four Rooms"), country="NL"
+        )
+        self.assertEqual(result.offers, [])
+        self.assertEqual(len(seen), 1)
+
+    def test_a_result_without_a_tmdb_id_is_not_verifiable(self):
+        source, seen = self._source([self._result(tmdb_id=None)])
+        result = source.fetch(
+            ContentRequest(tmdb_id=550, title="Fight Club"), country="NL"
+        )
+        self.assertEqual(result.offers, [])
+        self.assertEqual(len(seen), 1)
+
+    def test_a_numeric_id_in_the_other_tmdb_namespace_is_rejected(self):
+        source, seen = self._source([self._result(tmdb_id=5, tmdb_type="tv")])
+        result = source.fetch(
+            ContentRequest(tmdb_id=5, title="Four Rooms"), country="NL"
+        )
+        self.assertEqual(result.offers, [])
+        self.assertEqual(len(seen), 1)
+
+    def test_an_exact_result_is_used(self):
+        source, seen = self._source([self._result()])
+        result = source.fetch(
+            ContentRequest(tmdb_id=550, title="Fight Club"), country="NL"
+        )
+        self.assertTrue(result.offers)
+        self.assertIn("/title/1132806/sources/", seen[1])
+
+    def test_series_tmdb_type_aliases_are_accepted(self):
+        source, seen = self._source([self._result(
+            id=82, tmdb_id=1399, tmdb_type="show", type="tv",
+            name="Game of Thrones",
+        )])
+        result = source.fetch(
+            ContentRequest(tmdb_id=1399, content_type="series",
+                           title="Game of Thrones"),
+            country="NL",
+        )
+        self.assertTrue(result.offers)
+        self.assertIn("/title/82/sources/", seen[1])
+
+    def test_name_only_lookup_requires_one_exact_name(self):
+        source, seen = self._source([
+            self._result(id=1, tmdb_id=None),
+            self._result(id=2, tmdb_id=None),
+        ])
+        result = source.fetch(
+            SimpleNamespace(tmdb_id=None, imdb_id=None, title="Fight Club",
+                            content_type="movie"),
+            country="NL",
+        )
+        self.assertEqual(result.offers, [])
+        self.assertEqual(len(seen), 1)
+
+
+# =============================================================================
 # Source -> persistence
 # =============================================================================
 class WatchmodePersistenceIdentityTests(TestCase):
@@ -163,6 +275,7 @@ class WatchmodePersistenceIdentityTests(TestCase):
 
         return WatchmodeSource(client=WatchmodeClient(
             http_get=http_get, api_key="k", sleeper=lambda s: None,
+            budget=lambda: None,
         ))
 
     def test_two_titles_create_two_distinct_provider_content_rows(self):
@@ -182,6 +295,37 @@ class WatchmodePersistenceIdentityTests(TestCase):
         for movie in Movie.objects.filter(tmdb_id__in=(5, 550)):
             offer = Offer.objects.get(provider=self.tubi, tmdb_id=movie.tmdb_id)
             self.assertIn(f"tmdb-{movie.tmdb_id}", offer.provider_content_id)
+
+    def test_reingesting_the_same_title_is_idempotent(self):
+        """A duplicate refresh must update, never duplicate, content/offers."""
+        service = AvailabilityRefreshService(source=self._source())
+        movie = Movie.objects.get(tmdb_id=550)
+        service.refresh_content(movie)
+
+        content = ProviderContent.objects.get(
+            provider=self.tubi, provider_content_id="wm:13:movie:tmdb-550"
+        )
+        offer = Offer.objects.get(provider=self.tubi, tmdb_id=550)
+        offer_pk = offer.pk
+
+        service.refresh_content(movie)
+
+        self.assertEqual(
+            ProviderContent.objects.filter(
+                provider=self.tubi, provider_content_id="wm:13:movie:tmdb-550"
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            Offer.objects.filter(provider=self.tubi, tmdb_id=550).count(), 1
+        )
+        self.assertEqual(
+            Offer.objects.get(provider=self.tubi, tmdb_id=550).pk, offer_pk,
+            "the same offer identity must be updated in place",
+        )
+        self.assertTrue(
+            ProviderContent.objects.filter(pk=content.pk).exists()
+        )
 
     def test_each_title_has_its_own_mapping_and_no_mapping_doubt(self):
         service = AvailabilityRefreshService(source=self._source())
@@ -297,6 +441,79 @@ class WatchmodeIdentityRepairTests(TestCase):
              "wm:296:movie:tmdb-550"},
         )
         self.assertEqual(plan.digest(), build_plan().digest())
+
+    def test_filtered_plan_moves_only_selected_offers_and_retains_the_rest(self):
+        selected = {self.offers[5].id, self.offers[550].id}
+        plan = build_plan(include_offer_ids=selected)
+
+        self.assertEqual(plan.blocked, ())
+        self.assertEqual(plan.counts()["offers_to_move"], 2)
+        self.assertEqual(plan.counts()["offers_retained"], 1)
+        self.assertEqual(plan.counts()["rows_retained"], 1)
+        self.assertEqual(plan.retire, ())
+        self.assertEqual(
+            {content.new_content_id for content in plan.contents},
+            {"wm:296:movie:tmdb-5", "wm:296:movie:tmdb-550"},
+        )
+        self.assertEqual(len(plan.retained), 1)
+        self.assertEqual(plan.retained[0].offer_ids, (self.offers[391].id,))
+        self.assertEqual(plan.retained[0].mapping_ids, (self.mapping.id,))
+        self.assertNotEqual(plan.digest(), build_plan().digest())
+
+    def test_filtered_apply_leaves_unselected_offers_and_mapping_untouched(self):
+        selected = {self.offers[5].id, self.offers[550].id}
+        plan = build_plan(include_offer_ids=selected)
+        apply_plan(plan, expected_digest=plan.digest(), workers_paused=True)
+
+        self.assertTrue(
+            ProviderContent.objects.filter(pk=self.collapsed.pk).exists()
+        )
+        self.offers[391].refresh_from_db()
+        self.assertEqual(self.offers[391].provider_content_id, "wm:296")
+        self.mapping.refresh_from_db()
+        self.assertEqual(self.mapping.provider_content_id, "wm:296")
+        for tmdb_id in (5, 550):
+            self.offers[tmdb_id].refresh_from_db()
+            self.assertEqual(
+                self.offers[tmdb_id].provider_content_id,
+                f"wm:296:movie:tmdb-{tmdb_id}",
+            )
+            self.assertTrue(ProviderContent.objects.filter(
+                provider_content_id=f"wm:296:movie:tmdb-{tmdb_id}"
+            ).exists())
+
+        rerun = build_plan(include_offer_ids=selected)
+        self.assertEqual(rerun.blocked, ())
+        self.assertEqual(rerun.contents, ())
+        self.assertEqual(rerun.offers, ())
+        self.assertEqual(rerun.retire, ())
+        self.assertEqual(len(rerun.retained), 1)
+
+    def test_filtered_plan_can_retire_a_fully_selected_row(self):
+        selected = {offer.id for offer in self.offers.values()}
+        plan = build_plan(include_offer_ids=selected)
+        self.assertEqual(plan.blocked, ())
+        self.assertEqual(len(plan.retire), 1)
+        self.assertEqual(plan.retained, ())
+        apply_plan(plan, expected_digest=plan.digest(), workers_paused=True)
+        self.assertFalse(
+            ProviderContent.objects.filter(pk=self.collapsed.pk).exists()
+        )
+
+    def test_filtered_plan_refuses_unknown_offer_ids(self):
+        plan = build_plan(
+            include_offer_ids={self.offers[5].id, self.offers[550].id, 999999}
+        )
+        self.assertTrue(plan.blocked)
+        with self.assertRaises(RepairError):
+            apply_plan(plan, expected_digest=plan.digest(), workers_paused=True)
+
+    def test_filtered_digest_covers_the_selection(self):
+        first = build_plan(include_offer_ids={self.offers[5].id})
+        second = build_plan(
+            include_offer_ids={self.offers[5].id, self.offers[550].id}
+        )
+        self.assertNotEqual(first.digest(), second.digest())
 
     # -- digest ------------------------------------------------------------
     def test_digest_is_stable_across_generation_times(self):

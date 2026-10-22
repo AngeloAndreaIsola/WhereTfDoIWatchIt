@@ -464,6 +464,9 @@ class QuotaMetricsTests(MetricsBase):
         self.assertEqual(entry["limit"], 100)
         self.assertEqual(entry["remaining"], 60)
         self.assertFalse(entry["exhausted"])
+        self.assertEqual(entry["monthly_limit"], 1000)
+        self.assertEqual(entry["monthly_used"], 40)
+        self.assertEqual(entry["monthly_remaining"], 960)
         self.assertEqual(quota["sources_exhausted"], [])
 
     def test_exhaustion_events_are_declared_unavailable_not_empty(self):

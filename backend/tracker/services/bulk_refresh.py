@@ -54,7 +54,11 @@ from availability.services.refresh import (
     RefreshResult,
 )
 from availability.sources import DEFAULT_SOURCE_SLUG, source_registry
-from availability.sources.base import SourceFetchError, accepts_kwarg
+from availability.sources.base import (
+    SourceFetchError,
+    SourceQuotaExceeded,
+    accepts_kwarg,
+)
 
 from ..models import (
     CatalogueRefreshRequest,
@@ -66,7 +70,13 @@ from ..models import (
     WatchlistItem,
 )
 from .preferences import resolve_source_country
-from .rate_limit import RateLimitExceeded, RateLimiter, rate_limiter_for
+from .rate_limit import (
+    RateLimitExceeded,
+    RateLimiter,
+    SourceQuotaCircuit,
+    rate_limiter_for,
+    source_budget,
+)
 from .refresh_attribution import (attribute_refresh_run, attribute_sync_runs,
                                   refreshes_for_marker)
 from .streaming_api import UpstreamTitleNotFound
@@ -216,19 +226,25 @@ def permanently_absent_scopes(tmdb_id) -> set[str]:
 
 
 def _is_spent(limiter) -> bool:
-    """True when *limiter* has no capacity left for today.
+    """True when *limiter* has no daily or monthly capacity left.
 
-    ``remaining()`` is the primary answer: ``None`` means the source declares
-    no quota (unmetered), which is never spent. An injected test double that
-    does not answer a real number falls back to the explicit ``is_exhausted()``
-    predicate, and only trusts it when it is an actual ``bool`` — a mock's
-    truthiness must never decide that a queue is blocked.
+    ``remaining()`` is the primary daily answer: ``None`` means the source
+    declares no daily quota, which then falls through to the explicit
+    ``is_exhausted()`` predicate so a monthly-only budget is still honoured.
+    An injected test double that answers neither real number nor a real bool
+    is never treated as spent — a mock's truthiness must not decide that a
+    queue is blocked.
     """
     remaining = limiter.remaining()
-    if remaining is None:
-        return False
     if isinstance(remaining, int):
-        return remaining <= 0
+        if remaining <= 0:
+            return True
+        monthly_remaining = getattr(limiter, "monthly_remaining", None)
+        if callable(monthly_remaining):
+            monthly = monthly_remaining()
+            if isinstance(monthly, int) and monthly <= 0:
+                return True
+        return False
     is_exhausted = getattr(limiter, "is_exhausted", None)
     if callable(is_exhausted):
         return is_exhausted() is True
@@ -311,8 +327,9 @@ class BulkRefreshSummary:
     # legacy single-source callers, and the source-specific truth lives in
     # ``rate_limited_sources``.
     rate_limited: bool = False
-    # Sources whose own daily budget is spent, so their requests are waiting
-    # (not failing). Empty means nothing is quota-blocked, which is the
+    # Sources whose own daily/monthly budget is spent or whose terminal
+    # upstream plan quota was observed, so their requests are waiting or
+    # blocked (not failing). Empty means nothing is quota-blocked, which is the
     # normal case for every unmetered source.
     rate_limited_sources: list = field(default_factory=list)
     # Event-driven refresh requests (Phase B): how many pending
@@ -377,8 +394,9 @@ def process_watchlist_refresh(
     - budget: input budget for the run
     - remaining_budget: unused live-refresh budget after the run
     - rate_limited: boolean indicating whether quota/rate limiting stopped the run
-    - rate_limited_sources: sources whose own daily budget is spent (their
-      titles are *waiting*, not failed); empty when nothing is blocked
+    - rate_limited_sources: sources whose own daily/monthly budget is spent or
+      whose terminal upstream plan quota was observed (their titles are
+      *waiting*, not failed); empty when nothing is blocked
     - blocked_by_reason: settled ``BLOCKED`` rows by reason — the only home for
       *genuine* source-quota exhaustion (``BlockedReason.QUOTA_EXHAUSTED``),
       which is terminal and not retried aggressively
@@ -403,9 +421,15 @@ def process_watchlist_refresh(
 
     summary = BulkRefreshSummary(budget=budget, remaining_budget=budget)
 
-    # Check upfront if rate limit is already exhausted
-    if limiter.remaining() is not None and limiter.remaining() <= 0:
-        summary.rate_limited = True
+    # A tick-scoped terminal-quota circuit. It is created here, shared by the
+    # request drain and the stale sweep, and discarded when the tick returns.
+    # Nothing is persisted: a future quota reset must never be masked by a
+    # stale in-memory or database flag.
+    quota_circuit = SourceQuotaCircuit()
+
+    # Check upfront if the daily or monthly budget is already exhausted.
+    if _is_spent(limiter):
+        summary.note_rate_limited_source(DEFAULT_SOURCE_SLUG)
 
     run = RefreshRun.objects.create(
         service=DEFAULT_SOURCE_SLUG,
@@ -424,6 +448,7 @@ def process_watchlist_refresh(
         summary=summary,
         service=service,
         limiter=limiter,
+        quota_circuit=quota_circuit,
     )
 
     pairs = _order_candidates(_candidate_pairs(user_id, content_types))
@@ -482,6 +507,13 @@ def process_watchlist_refresh(
             if summary.remaining_budget <= 0:
                 summary.skipped_budget_exhausted += 1
                 continue
+            if quota_circuit.is_tripped(slug):
+                # A terminal upstream plan quota was already proven this tick.
+                # Do not issue another request to this source; other scopes
+                # for this title and every other source remain eligible.
+                summary.note_rate_limited_source(slug)
+                summary.skipped_rate_limited += 1
+                continue
             scope_limiter = (
                 limiter if slug == DEFAULT_SOURCE_SLUG
                 else rate_limiter_for(slug)
@@ -496,17 +528,37 @@ def process_watchlist_refresh(
                 else AvailabilityRefreshService(source=source_registry.get(slug))
             )
             try:
-                scope_limiter.acquire()
-                # Same as the request-drain path: the selected market is
-                # explicit, never inferred.
-                scope_service.refresh_content(
-                    movie, country=resolve_source_country()
-                )
+                with source_budget(scope_limiter, source=slug):
+                    # Same as the request-drain path: the selected market is
+                    # explicit, never inferred.
+                    scope_service.refresh_content(
+                        movie, country=resolve_source_country()
+                    )
                 summary.refreshed += 1
                 summary.remaining_budget -= 1
             except RateLimitExceeded:
                 summary.note_rate_limited_source(slug)
                 summary.skipped_rate_limited += 1
+            except SourceQuotaExceeded as exc:
+                # An upstream refusal, not our local limiter. Plan exhaustion
+                # is terminal for the rest of this tick and costs no offer
+                # write; a short rate window stays retryable and never trips
+                # the terminal circuit.
+                summary.note_rate_limited_source(slug)
+                summary.skipped_rate_limited += 1
+                if exc.terminal:
+                    quota_circuit.trip(slug, exc.diagnostic())
+                    logger.warning(
+                        "refresh_sweep_quota_blocked tmdb_id=%s source=%s kind=%s "
+                        "retry_after=%s quota=%s",
+                        movie.tmdb_id, slug, exc.kind, exc.retry_after, exc.quota,
+                    )
+                else:
+                    logger.warning(
+                        "refresh_sweep_rate_limited tmdb_id=%s source=%s kind=%s "
+                        "retry_after=%s quota=%s",
+                        movie.tmdb_id, slug, exc.kind, exc.retry_after, exc.quota,
+                    )
             except UpstreamTitleNotFound as exc:
                 # Not a fault: the upstream catalogue simply does not carry this
                 # title. Counted separately from real errors so a permanently

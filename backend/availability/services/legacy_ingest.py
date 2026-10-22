@@ -31,9 +31,12 @@ from __future__ import annotations
 from datetime import date
 from typing import Optional
 
+from django.db import transaction
+
 from ..domain.enums import ContentType, MatchMethod, SourceType
 from ..models import LEGACY_SCRAPER_SOURCE_SLUG, ContentMapping, ProviderContent, Source
 from ..persistence.repositories import MappingRepository, ProviderContentRepository
+from .write_barrier import writer_barrier
 
 _SERIES_VALUES = {"series", "show", "tv"}
 
@@ -128,7 +131,22 @@ def ingest_scraped_mapping(mapping) -> ProviderContent:
     Idempotent: re-ingesting the same row (after a re-scrape or a manual
     confirmation) upserts the same ``ProviderContent``/``ContentMapping``
     identities. Returns the canonical ``ProviderContent`` row.
+
+    Every canonical mutation (the ``Source`` provenance row, the
+    ``ProviderContent`` upsert and the optional ``ContentMapping``) runs in one
+    transaction behind the shared writer barrier.  The barrier is acquired
+    *before* the transaction opens and released after it commits or rolls back;
+    if it cannot be acquired nothing is written.  ``writer_barrier`` is
+    re-entrant, so a caller that already holds it (provider deletion) does not
+    take the session advisory lock twice.
     """
+    with writer_barrier("legacy scraper ingestion"):
+        with transaction.atomic():
+            return _ingest_scraped_mapping_locked(mapping)
+
+
+def _ingest_scraped_mapping_locked(mapping) -> ProviderContent:
+    """The mutating body of :func:`ingest_scraped_mapping`, barrier held."""
     payload = mapping.raw_payload if isinstance(mapping.raw_payload, dict) else {}
     movie = mapping.movie
     content_type = _content_type(payload, movie)
@@ -185,7 +203,20 @@ def delete_scraped_mapping(mapping) -> None:
     ever remove rows this bridge wrote. Called from the ``post_delete``
     receiver on ``ScrapedContentMapping`` (admin deletions, dedupe cleanups)
     so no orphaned ``legacy-<pk>`` catalogue row survives its source row.
+
+    Both deletions run in one transaction behind the shared writer barrier,
+    acquired before the transaction.  If the barrier is unavailable the
+    deletion is refused instead of leaving the canonical tables unprotected.
+    The barrier is re-entrant: when the receiver fires inside provider
+    deletion, the endpoint's existing acquisition covers this work too.
     """
+    with writer_barrier("legacy scraper projection deletion"):
+        with transaction.atomic():
+            _delete_scraped_mapping_locked(mapping)
+
+
+def _delete_scraped_mapping_locked(mapping) -> None:
+    """The deleting body of :func:`delete_scraped_mapping`, barrier held."""
     provider_content_id = _provider_content_id(mapping)
     ContentMapping.objects.filter(
         provider=mapping.provider, provider_content_id=provider_content_id
@@ -201,6 +232,13 @@ def ingest_all() -> int:
     Used once when a deployment switches its read paths to the canonical
     models (and after the fact for rows created before this bridge existed).
     Returns the number of legacy rows ingested.
+
+    The barrier is acquired **per item** by :func:`ingest_scraped_mapping`, not
+    around the whole batch.  Each item commits independently (the historical
+    behaviour), so a failing row rolls back only its own canonical projection
+    and the already-ingested rows stay committed.  A batch-wide lock would hold
+    the shared advisory lock for the whole backfill and would change those
+    failure semantics for no correctness gain.
     """
     from tracker.models import ScrapedContentMapping
 

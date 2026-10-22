@@ -21,13 +21,22 @@ Measured API shape (probed against the live account, September 2026)
   current account: ``NL``, ``CA``, ``JP``. This must surface as an explicit
   unsupported-region error, never as an empty availability result.
 - Quota is advertised in headers: ``x-account-quota``, ``x-account-quota-used``,
-  ``x-ratelimit-limit``, ``x-ratelimit-remaining``.
+  ``x-ratelimit-limit``, ``x-ratelimit-remaining``. Measured 2026-10-21 on the
+  exhausted account: ``x-ratelimit-limit: 120``, ``x-ratelimit-remaining: 0``,
+  ``retry-after: 60`` and body
+  ``{"success": false, "errorMessage": "Over plan quota on this API Key."}``.
+  The account headers were absent. A retry 70 seconds later returned the same
+  answer, so ``retry-after`` is **not** a reliable indicator that a 429 is a
+  short rate window: the monthly plan quota can produce the same header.
 
 Failure taxonomy, keeping "failed" distinguishable from "empty":
 
-- :class:`WatchmodeTransportError` — network/5xx/408/429. Retryable within a
-  bounded budget; a spent *quota* raises :class:`WatchmodeQuotaExceeded`, which
-  is a distinct condition because it must stop a run rather than retry.
+- :class:`WatchmodeTransportError` — network/5xx/408/425. Retryable within a
+  bounded budget.
+- :class:`WatchmodeQuotaExceeded` — HTTP 429 or an explicit quota message. It
+  carries ``kind`` so the caller can tell a spent **plan** (terminal until the
+  plan resets) from a short **rate limit** (retryable) without guessing from
+  the status code alone.
 - :class:`WatchmodeAuthError` — 401/403. Not retried: the key is wrong or the
   plan lacks access.
 - :class:`WatchmodeRegionUnsupported` — a region the plan does not include.
@@ -59,6 +68,21 @@ AUTH_STATUS = frozenset({401, 403})
 QUOTA_HEADERS = ("x-account-quota", "x-account-quota-used")
 RATELIMIT_HEADERS = ("x-ratelimit-limit", "x-ratelimit-remaining")
 
+#: Body markers that identify a *spent plan* rather than a short window.
+#: ``"over plan quota"`` is the measured live wording (2026-10-21).
+PLAN_QUOTA_MARKERS = (
+    "over plan quota",
+    "plan quota",
+    "monthly quota",
+    "current month",
+)
+#: Body markers that identify a short rate window.
+RATE_LIMIT_MARKERS = (
+    "rate limit",
+    "too many requests",
+    "throttl",
+)
+
 
 class WatchmodeError(Exception):
     """Base for every Watchmode failure."""
@@ -69,12 +93,46 @@ class WatchmodeTransportError(WatchmodeError):
 
 
 class WatchmodeQuotaExceeded(WatchmodeError):
-    """Account quota or hourly rate limit is spent.
+    """Account quota or rate limit refused the request.
 
-    Distinct from a generic transport failure because it must **stop** the run
-    and be recorded as such — retrying a spent quota cannot succeed, and
-    treating it as "no availability" would silently erase evidence.
+    ``kind`` is the part that matters to the scheduler:
+
+    - ``"plan_quota"`` — the plan's request allowance is spent (measured body:
+      ``"Over plan quota on this API Key."``). Terminal until the plan resets;
+      retrying cannot succeed.
+    - ``"local_budget"`` — the local pre-request guard refused before any HTTP
+      call. Terminal for the same reason: retrying cannot spend anything until
+      the local window moves.
+    - ``"rate_limit"`` — a short window (``Retry-After``/rate headers) without
+      evidence that the plan is exhausted. Retryable on a later tick.
+    - ``"unknown"`` — a 429 we cannot classify. Callers treat it as retryable.
+
+    ``quota`` is the response's quota/rate header snapshot, so the recorded
+    error can distinguish the two conditions later. It never contains the API
+    key.
     """
+
+    def __init__(
+        self,
+        message,
+        *,
+        kind: str = "unknown",
+        retry_after: int | None = None,
+        status_code: int | None = None,
+        quota: dict | None = None,
+        detail: str = "",
+    ):
+        super().__init__(message)
+        self.kind = kind
+        self.retry_after = retry_after
+        self.status_code = status_code
+        self.quota = dict(quota or {})
+        self.detail = detail or str(message)
+
+    @property
+    def terminal(self) -> bool:
+        """True for a spent plan or a local budget stop, never a rate window."""
+        return self.kind in ("plan_quota", "local_budget")
 
 
 class WatchmodeAuthError(WatchmodeError):
@@ -147,7 +205,7 @@ class WatchmodeClient:
 
     def __init__(self, http_get=None, *, base_url=API_BASE, api_key=None,
                  timeout=DEFAULT_TIMEOUT, retries=DEFAULT_RETRIES,
-                 backoff=DEFAULT_BACKOFF, sleeper=None):
+                 backoff=DEFAULT_BACKOFF, sleeper=None, budget=None):
         # ``http_get`` is the seam every test injects: callable
         # ``(url, headers, timeout)`` returning a requests-like response.
         self._http_get = http_get or requests.get
@@ -163,7 +221,15 @@ class WatchmodeClient:
         self.retries = retries
         self.backoff = backoff
         self._sleep = sleeper or time.sleep
+        #: Pre-request budget seam, called once per outbound attempt. ``None``
+        #: uses the persistent local Watchmode guard; tests inject a no-op or
+        #: a fake so ``SimpleTestCase`` never touches the database.
+        self._budget = budget
         self.last_quota: dict[str, Optional[str]] = {}
+        #: Every response header, lower-cased, for the *last* response. Kept
+        #: separately from ``last_quota`` so diagnostics can include
+        #: ``Retry-After`` without changing the documented quota snapshot.
+        self.last_headers: dict[str, str] = {}
 
     # -- operations -------------------------------------------------------
     def sources(self) -> list[dict]:
@@ -220,6 +286,7 @@ class WatchmodeClient:
                 raise WatchmodeAuthError(
                     "WATCHMODE_API_KEY is not configured; refusing to call Watchmode"
                 )
+            self._reserve_call()
             response = self._http_get(
                 url, headers=self._headers(), timeout=self.timeout
             )
@@ -237,14 +304,19 @@ class WatchmodeClient:
 
             message = self._status_message(response)
 
+            if status == 429:
+                # A 429 is a budget answer, not a transient fault: raise it
+                # immediately with its headers and body intact. Retrying inside
+                # this client cannot help (a plan quota lasts until the plan
+                # resets, and a rate window is longer than our bounded retry
+                # budget), and it would hide the distinction the caller needs.
+                raise self._quota_error(status, message)
+
             if status in RETRYABLE_STATUS:
-                # A spent quota/rate limit will not fix itself within our retry
-                # budget: surface it distinctly so the caller records the
-                # condition instead of burning attempts.
-                if status == 429 or "quota" in message.lower() or "rate limit" in message.lower():
-                    raise WatchmodeQuotaExceeded(
-                        f"Watchmode quota/rate limit reached: {message or status}"
-                    )
+                # Some upstreams signal quota in a non-429 retryable status.
+                # Preserve that signal rather than retrying a spent budget.
+                if "quota" in message.lower() or "rate limit" in message.lower():
+                    raise self._quota_error(status, message)
                 last_error = WatchmodeTransportError(
                     f"Watchmode HTTP {status} (attempt {attempt}/{self.retries}): {message}"
                 )
@@ -270,6 +342,31 @@ class WatchmodeClient:
             f"Watchmode transport failed after {self.retries} attempts: {last_error}"
         )
 
+    def _reserve_call(self):
+        """Reserve one outbound attempt, failing closed when the budget is spent.
+
+        The reservation happens **before** the HTTP call and inside the retry
+        loop, so every attempted request — including retries — is accounted
+        for. A local refusal is translated into a Watchmode quota error with
+        ``kind="local_budget"``; the source then exposes it as a terminal
+        :class:`~.base.SourceQuotaExceeded`.
+        """
+        from tracker.services.rate_limit import (
+            RateLimitExceeded,
+            reserve_watchmode_call,
+        )
+
+        reserve = self._budget or reserve_watchmode_call
+        try:
+            reserve()
+        except RateLimitExceeded as exc:
+            detail = exc.diagnostic() if hasattr(exc, "diagnostic") else str(exc)
+            raise WatchmodeQuotaExceeded(
+                f"Watchmode local budget refused the request: {detail}",
+                kind="local_budget",
+                detail=detail,
+            ) from exc
+
     def _headers(self):
         return {"X-Api-Key": self.api_key, "Accept": "application/json"}
 
@@ -280,9 +377,58 @@ class WatchmodeClient:
         lowered = {}
         for key, value in dict(headers or {}).items():
             lowered[str(key).lower()] = value
+        self.last_headers = lowered
         self.last_quota = {
             key: lowered.get(key) for key in QUOTA_HEADERS + RATELIMIT_HEADERS
         }
+
+    def _quota_error(self, status, message):
+        """Classify a quota/rate refusal from the body *and* the headers.
+
+        The status code alone is not enough: the live account answers a spent
+        monthly plan with the same 429 and a misleading ``Retry-After: 60``.
+        The body (``"Over plan quota on this API Key."``) is the decisive
+        evidence, and the account headers are checked first when present.
+        """
+        headers = dict(getattr(self, "last_headers", {}) or {})
+        kind = self._classify_quota(message, headers)
+        retry_after = _retry_after(headers)
+        quota = {
+            key: value for key, value in (self.last_quota or {}).items()
+            if value is not None
+        }
+        if retry_after is not None:
+            quota["retry-after"] = str(retry_after)
+        detail = message or f"HTTP {status}"
+        label = {
+            "plan_quota": "plan quota exhausted",
+            "rate_limit": "rate limit",
+        }.get(kind, "quota refusal")
+        return WatchmodeQuotaExceeded(
+            f"Watchmode {label}: {detail}",
+            kind=kind,
+            retry_after=retry_after,
+            status_code=status,
+            quota=quota,
+            detail=detail,
+        )
+
+    @staticmethod
+    def _classify_quota(message, headers):
+        text = str(message or "").lower()
+
+        # Account quota headers are authoritative when the plan exposes them.
+        limit = _as_int(headers.get("x-account-quota"))
+        used = _as_int(headers.get("x-account-quota-used"))
+        if limit is not None and used is not None and used >= limit:
+            return "plan_quota"
+
+        # The live 429 body is the only signal the exhausted account gives.
+        if any(marker in text for marker in PLAN_QUOTA_MARKERS):
+            return "plan_quota"
+        if any(marker in text for marker in RATE_LIMIT_MARKERS):
+            return "rate_limit"
+        return "unknown"
 
     @staticmethod
     def _status_message(response):
@@ -291,7 +437,16 @@ class WatchmodeClient:
         except Exception:  # noqa: BLE001 - any decode failure is the same class
             return str(getattr(response, "text", "") or "")[:200]
         if isinstance(body, dict):
-            return str(body.get("statusMessage") or body.get("error") or "")[:200]
+            # ``errorMessage`` is the field the live API uses for quota
+            # refusals; ``statusMessage``/``error`` are kept for the other
+            # measured shapes. Dropping ``errorMessage`` is why the persisted
+            # error used to read only "429".
+            return str(
+                body.get("errorMessage")
+                or body.get("statusMessage")
+                or body.get("error")
+                or ""
+            )[:200]
         return str(body)[:200]
 
     @staticmethod
@@ -309,6 +464,28 @@ class WatchmodeClient:
             raise WatchmodeResponseError(
                 f"Watchmode returned undecodable JSON: {exc}"
             ) from exc
+
+
+def _retry_after(headers):
+    """``Retry-After`` in seconds, or ``None`` when absent/malformed.
+
+    Only the integer-seconds form is used; an HTTP-date is deliberately not
+    guessed at. The value is diagnostic, not a sleep instruction: the caller
+    decides whether the refusal is terminal or retryable.
+    """
+    value = str((headers or {}).get("retry-after") or "").strip()
+    try:
+        seconds = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    return seconds if seconds >= 0 else None
+
+
+def _as_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _django_setting(name):

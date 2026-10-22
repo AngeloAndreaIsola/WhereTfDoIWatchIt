@@ -76,6 +76,25 @@ class MatchLocalCatalogTests(TestCase):
         self.assertEqual(match.tmdb_id, 7000)
         self.assertEqual(match.confidence, 0.7)
 
+    def test_two_local_rows_with_the_same_title_and_year_are_ambiguous(self):
+        """Equal title+year evidence cannot pick a winner; leave it unmapped."""
+        Movie.objects.create(
+            tmdb_id=990001, title="Fight Club", year=1999, content_type="movie"
+        )
+        self.assertIsNone(match_local_catalog(movie("Fight Club", 1999)))
+
+    def test_a_conflicting_year_still_picks_the_matching_remake(self):
+        Movie.objects.create(
+            tmdb_id=1091, title="The Thing", year=1982, content_type="movie"
+        )
+        Movie.objects.create(
+            tmdb_id=60935, title="The Thing", year=2011, content_type="movie"
+        )
+        match = match_local_catalog(movie("The Thing", 1982))
+        self.assertIsNotNone(match)
+        self.assertEqual(match.tmdb_id, 1091)
+        self.assertEqual(match.confidence, 0.9)
+
 
 class Tubi1997PersistenceTests(TestCase):
     """The real Tubi 1997 page must be discoverable but produce no offer."""

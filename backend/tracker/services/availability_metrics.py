@@ -46,7 +46,11 @@ from tracker.models import (
     RefreshRequestStatus,
 )
 from tracker.services import source_policy
-from tracker.services.rate_limit import SOURCE_DAILY_LIMITS
+from tracker.services.rate_limit import (
+    SOURCE_DAILY_LIMITS,
+    SOURCE_MONTHLY_LIMITS,
+    rate_limiter_for,
+)
 
 #: Rolling window length. 7x24h from now, inclusive of now.
 WINDOW_DAYS = 7
@@ -397,53 +401,58 @@ def _source_metrics(start: dt.datetime) -> list[dict[str, Any]]:
 
 
 def _quota_metrics(start: dt.datetime, requests: dict[str, Any]) -> dict[str, Any]:
-    """Current quota state, kept visibly separate from generic failures."""
-    counters = {
-        row["service"]: {"count": row["count"], "limit": SOURCE_DAILY_LIMITS.get(row["service"])}
-        for row in ApiCallCounter.objects.values("service", "count")
-    }
+    """Current daily + monthly quota state, kept separate from failures."""
+    counter_services = set(
+        ApiCallCounter.objects.values_list("service", flat=True)
+    )
+    services = (
+        counter_services
+        | set(SOURCE_DAILY_LIMITS)
+        | set(SOURCE_MONTHLY_LIMITS)
+    )
 
-    exhausted = []
-    for service, data in sorted(counters.items()):
-        limit = data["limit"]
-        if limit is None:
+    quotas = []
+    for service in sorted(services):
+        limiter = rate_limiter_for(service)
+        if not limiter.metered:
             continue
-        if data["count"] >= limit:
-            exhausted.append(
-                {
-                    "source": service,
-                    "limit": limit,
-                    "used": data["count"],
-                    "remaining": 0,
-                    "exhausted": True,
-                }
-            )
-        else:
-            exhausted.append(
-                {
-                    "source": service,
-                    "limit": limit,
-                    "used": data["count"],
-                    "remaining": limit - data["count"],
-                    "exhausted": False,
-                }
-            )
+        daily_remaining = limiter.remaining()
+        monthly_remaining = limiter.monthly_remaining()
+        quotas.append(
+            {
+                "source": service,
+                "limit": limiter.daily_limit,
+                "used": (
+                    limiter.daily_limit - daily_remaining
+                    if limiter.daily_limit is not None
+                    and daily_remaining is not None
+                    else None
+                ),
+                "remaining": daily_remaining,
+                "exhausted": limiter.is_exhausted(),
+                "monthly_limit": limiter.monthly_limit,
+                "monthly_used": limiter.monthly_used(),
+                "monthly_remaining": monthly_remaining,
+                "monthly_window_days": limiter.monthly_window_days,
+            }
+        )
 
     return {
-        "sources": exhausted,
-        "sources_exhausted": [e["source"] for e in exhausted if e["exhausted"]],
+        "sources": quotas,
+        "sources_exhausted": [e["source"] for e in quotas if e["exhausted"]],
         "blocked_requests": requests.get("blocked_by_reason", {}).get(
             "quota_exhausted", 0
         ),
-        # `ApiCallCounter` keeps one daily count per service. It records no
-        # event when a limit is reached, so exhaustion *events* and their
-        # timestamps are not derivable. Said plainly rather than returned as an
-        # empty list that would read as "never exhausted".
+        # The counters record reservations, not an event when a cap is crossed,
+        # so exhaustion *events* and their timestamps are not derivable. Said
+        # plainly rather than returned as an empty list that would read as
+        # "never exhausted".
         "events_available": False,
         "events_unavailable_reason": (
-            "ApiCallCounter stores a single daily count per service and records "
-            "no event when the limit is reached, so exhaustion events and their "
-            "timestamps cannot be derived from persisted state."
+            "ApiCallCounter stores a single daily count per service and "
+            "ApiCallLedger stores per-day counts; neither records an event when "
+            "a limit is reached, so exhaustion events and their timestamps "
+            "cannot be derived from persisted state."
         ),
         "window_start": start,
     }
