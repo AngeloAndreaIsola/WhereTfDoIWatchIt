@@ -334,12 +334,34 @@ class AvailabilityRefreshService:
         # market the walk never touched — and for a source that declares many
         # countries the configured scope resolves to nothing at all, so the
         # checkpoint would be neither read nor written.
+        #
+        # The declaration is only trusted when it names a market the source is
+        # actually allowed to serve. Without that check an unexpected value could
+        # silently redirect checkpoint persistence to an unrelated country's row
+        # (and, for a resumable source, resume one market's walk with another's
+        # progress). An out-of-scope declaration is logged and ignored: the
+        # configured scope stands.
         declared_country = str(getattr(result, "country", "") or "").strip().upper()
         if declared_country and declared_country != (resolved_country or ""):
-            declared_row = Country.objects.filter(
-                code=declared_country, enabled=True
-            ).first()
-            if declared_row is not None:
+            supported = capabilities.supported_countries
+            in_scope = (
+                supported is None
+                or declared_country in {str(c).upper() for c in supported}
+            )
+            declared_row = (
+                Country.objects.filter(code=declared_country, enabled=True).first()
+                if in_scope
+                else None
+            )
+            if not in_scope:
+                logger.warning(
+                    "availability_catalogue_country_rejected source=%s declared=%s "
+                    "reason=not_a_supported_market supported=%s "
+                    "checkpoint_not_redirected",
+                    self.source.slug, declared_country,
+                    ",".join(sorted(str(c).upper() for c in (supported or ()))) or "any",
+                )
+            elif declared_row is not None:
                 logger.info(
                     "availability_catalogue_country_declared source=%s "
                     "declared=%s configured=%s",
@@ -347,23 +369,11 @@ class AvailabilityRefreshService:
                 )
                 resolved_country = declared_country
                 country_row = declared_row
-                # The checkpoint belongs to the market just walked, so read it
-                # from there too: a cursor left by an earlier walk of *this*
-                # market is what makes the walk resumable at all.
-                if not explicit_cursor:
-                    stored = self.cursors.get(
-                        provider=provider_row, source=source_row, country=country_row
-                    )
-                    if stored is not None and stored.cursor:
-                        cursor = stored.cursor
-                        logger.info(
-                            "availability_cursor_resumed source=%s country=%s",
-                            self.source.slug, declared_country,
-                        )
             else:
                 logger.warning(
                     "availability_catalogue_country_declared source=%s "
-                    "declared=%s reason=no_enabled_country_row checkpoint_not_persisted",
+                    "declared=%s reason=no_enabled_country_row "
+                    "checkpoint_not_persisted",
                     self.source.slug, declared_country,
                 )
         refresh_result = self._persist(result, tmdb_id=None, persist_cursor=False)
