@@ -202,6 +202,23 @@ class SourceCapabilities:
     # to prioritise discovery candidates. Hints only select candidates; the
     # source still decides identity through its normal payload/mapping path.
     supports_priority_hints: bool = False
+    # The catalogue walk is *resumable*: a truncated fetch hands back a durable
+    # checkpoint that the refresh service persists, and the next fetch continues
+    # from it instead of re-walking from the top.
+    #
+    # Deliberately a separate property from ``supports_incremental_sync``, and
+    # neither implies the other:
+    #
+    # - ``supports_incremental_sync`` is about *offers*: the upstream serves a
+    #   delta, so a visit may observe only what changed. Only JustWatch does.
+    # - ``supports_resumable_catalogue_sync`` is about *traversal*: a visit may
+    #   stop early and be continued later. Every catalogue collector does this,
+    #   including the four that declare ``supports_incremental_sync=False``.
+    #
+    # Conflating the two is what made the earlier flag read as its own opposite
+    # (a resumable walker declaring "not incremental"). Consumers that need to
+    # know whether a *checkpoint* exists must read this one.
+    supports_resumable_catalogue_sync: bool = False
 
 
 @dataclass(frozen=True)

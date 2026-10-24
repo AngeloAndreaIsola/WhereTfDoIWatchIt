@@ -31,6 +31,22 @@ API contract (public endpoints, no auth, ``device=web``):
   repeated-page guard; a mid-pagination transport/HTTP failure raises
   :class:`SourceFetchError` (failure is never reported as an empty catalogue).
 
+Bounded, checkpointed traversal:
+
+- One fetch walks at most ``DEFAULT_BATCH_CARDS`` detail payloads and returns a
+  ``{"v": 1, "parts": {category: last-slug}}`` checkpoint for the next one, so a
+  late failure cannot discard a whole catalogue's worth of work. The anchor is
+  the last *card* the walk inspected inside each category — CBC's own stable
+  identity (the URL slug) — never a page number: ``pageNumber`` is a position in
+  a list that shifts as the catalogue changes, whereas the slug itself does not.
+- The checkpoint is written only when the walk is genuinely truncated; an
+  exhausted walk returns ``cursor=None`` so the refresh service drops the row
+  instead of resuming a finished catalogue.
+- ``supports_resumable_catalogue_sync=True``: this is resumable *traversal*
+  progress. ``supports_incremental_sync`` stays ``False`` and means something
+  else entirely — the upstream offers no delta feed, so every visit re-reads the
+  window it walks.
+
 Product semantics behind ``permission.tier`` (verified against CBC's own copy
 and help centre, not guessed):
 
@@ -89,6 +105,7 @@ from .base import (
     SourceFetchError,
     SourceFetchResult,
 )
+from . import checkpoints
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +116,13 @@ DEFAULT_PAGE_SIZE = 100
 DEFAULT_TIMEOUT = 30
 # Safety net against a runaway category (real indices are far smaller).
 MAX_PAGES_PER_CATEGORY = 500
+# Detail payloads walked per fetch before the checkpoint is handed back. One
+# detail request per catalogue card is the expensive part of this walk (the
+# index pages are cheap), so this — not the page cap — is what bounds a run.
+DEFAULT_BATCH_CARDS = 400
+#: Bump when the traversal algorithm changes: a stored checkpoint from another
+#: version restarts every category instead of resuming a stale anchor.
+CURSOR_VERSION = 1
 SOURCE_VERSION = "ott-catalog-v2"
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -208,6 +232,8 @@ class CBCGemSource:
         ),
         supports_incremental_sync=False,
         supports_catalogue_sync=True,
+        # Bounded, checkpointed traversal (see module docstring).
+        supports_resumable_catalogue_sync=True,
         # The category indices cannot be proven complete and CBC exposes no
         # per-item removal signal: absence must never deactivate offers.
         supports_authoritative_snapshots=False,
@@ -218,8 +244,9 @@ class CBCGemSource:
         supports_languages=True,
     )
 
-    def __init__(self, client=None):
+    def __init__(self, client=None, batch_size=DEFAULT_BATCH_CARDS):
         self.client = client or CBCGemClient()
+        self.batch_size = max(1, int(batch_size))
 
     def fetch(self, content=None, *, provider=None, country=None, cursor=None) -> SourceFetchResult:
         if content is not None:
@@ -228,15 +255,45 @@ class CBCGemSource:
                 "content=None (no title-targeted lookup exists)"
             )
         # provider/country are the caller's scope hints (CBC only ever reports
-        # CA/cbc_gem); cursor is accepted but unused — CBC exposes page numbers,
-        # not a resumable server-side cursor, so one fetch walks the whole
-        # configured catalogue instead of inventing a cursor token.
+        # CA/cbc_gem). ``cursor`` is the durable walk checkpoint: the last card
+        # slug a previous fetch inspected inside each category. One fetch walks
+        # at most ``batch_size`` detail payloads and hands the next checkpoint
+        # back, so a late failure cannot discard the whole catalogue's work.
+        resume = checkpoints.decode(
+            cursor, version=CURSOR_VERSION, parts=DEFAULT_CATEGORIES,
+            log_prefix="cbc_gem",
+        )
+
         contents: list[DiscoveredContent] = []
         offers: list[ProviderOffer] = []
         seen_slugs: set[str] = set()
-        seen_pages: set[tuple[str, ...]] = set()
+        details_fetched = 0
+        truncated = False
+        # Per-category anchors carried forward as each card is inspected, plus
+        # the set of categories this walk finished. A category the walk never
+        # reaches keeps the anchor it was resumed with, so progress in one index
+        # is never lost to a stall in another.
+        anchors = dict(resume.anchors)
+        done = set(resume.done)
 
         for category in DEFAULT_CATEGORIES:
+            if truncated:
+                break
+            if category in done:
+                # Finished by an earlier run: skipping it is what keeps repeated
+                # batches from re-walking a completed index forever.
+                continue
+            seen_pages: set[tuple[str, ...]] = set()
+            after = resume.anchor(category)
+            # The anchor names the last card *inspected* in this category, so
+            # resuming skips every card up to and including it. If the card left
+            # the index the walk restarts this category, which only repeats
+            # already-persisted work — it never skips ahead.
+            resuming = bool(after)
+            if resuming:
+                logger.info(
+                    "cbc_gem_walk_resume category=%s after=%s", category, after
+                )
             page_number = 1
             while True:
                 items = self.client.category_page(category, page_number)
@@ -264,17 +321,74 @@ class CBCGemSource:
                         # Editorial cards deep-link into live events / external
                         # surfaces, not stable catalogue items.
                         continue
+                    if resuming:
+                        # Still seeking the anchor. An editorial slug can never
+                        # be an anchor (it is skipped above), so this is exactly
+                        # the set of cards the previous fetch already inspected.
+                        if slug == after:
+                            resuming = False
+                        continue
+                    if details_fetched >= self.batch_size:
+                        truncated = True
+                        break
                     seen_slugs.add(slug)
+                    details_fetched += 1
+                    # A transport/parse failure here propagates: a catalogue
+                    # batch that cannot be completed is a failed fetch, never a
+                    # smaller successful one. The caller keeps the checkpoint it
+                    # passed in, so the retry re-reads at most this one batch.
                     detail = self.client.item_detail(slug)
+                    # The anchor moves as soon as the card is inspected, so an
+                    # inspected-but-unplayable card (trailer-only film, live
+                    # event) is still progress rather than an infinite re-read.
+                    anchors[category] = slug
                     parsed_content, parsed_offers = self._parse_item(slug, card, detail)
                     if parsed_content is not None:
                         contents.append(parsed_content)
                     offers.extend(parsed_offers)
 
+                if truncated:
+                    break
+                if resuming:
+                    # The anchor was never found in this category: the whole
+                    # index was walked without meeting it. The category is
+                    # therefore complete, so it is recorded as *done* — clearing
+                    # the anchor alone would re-walk it on every later batch.
+                    logger.warning(
+                        "cbc_gem_cursor_checkpoint_missing category=%s after=%s "
+                        "reason=category_completed", category, after,
+                    )
+                    anchors[category] = ""
+                    done.add(category)
+                    resuming = False
+                    break
                 total_pages = _as_int(items.get("totalPages"), default=1)
                 if page_number >= total_pages or page_number >= MAX_PAGES_PER_CATEGORY:
+                    # Index exhausted: this category is finished, not merely
+                    # unparked. Recording it as done is what stops the next batch
+                    # from restarting it.
+                    anchors[category] = ""
+                    done.add(category)
                     break
                 page_number += 1
+
+        # A checkpoint is emitted while any category is unfinished. When the
+        # batch filled up with work still left, the anchors say where to resume;
+        # when every category is simply done, the checkpoint still has to be
+        # carried so the next run knows the *other* categories were finished —
+        # and once nothing at all is left, the walk is complete and returns None
+        # so the refresh service drops the row instead of resuming a finished
+        # catalogue.
+        remaining = [c for c in DEFAULT_CATEGORIES if c not in done]
+        if truncated:
+            logger.warning(
+                "cbc_gem_catalogue_truncated cards=%d batch_size=%d remaining_categories=%d",
+                details_fetched, self.batch_size, len(remaining),
+            )
+        if remaining:
+            next_cursor = checkpoints.encode(CURSOR_VERSION, anchors, done)
+        else:
+            next_cursor = None
 
         return SourceFetchResult(
             contents=contents,
@@ -282,7 +396,7 @@ class CBCGemSource:
             authoritative=False,
             complete_snapshot=False,
             sync_mode=SyncMode.FULL,
-            cursor=None,
+            cursor=next_cursor,
         )
 
     # ------------------------------------------------------------------ parse
