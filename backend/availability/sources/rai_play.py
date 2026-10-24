@@ -139,6 +139,15 @@ Product semantics, all documented rather than papered over:
   (~1-2 minutes at 0.1 s politeness delay) and the truncation is logged; a
   full walk needs ~6 daily runs, which the non-authoritative semantics make
   safe (no offer is ever lost to a missing observation).
+- **Bounded, checkpointed walk across runs**: the walk is *resumable*, so the
+  ~840-request window is not re-read from the top after an interruption. A
+  checkpoint records the last programme URL the walk completed and the next run
+  resumes immediately after it. Without this, a restart at 90% discarded ~750
+  requests and the effective coverage rate was set by restart frequency rather
+  than by the run bound. The anchor is the programme's own URL — the sitemap
+  entry's stable identity — so a sitemap re-order cannot shift the resume point.
+  ``supports_resumable_catalogue_sync=True`` describes this traversal progress;
+  ``supports_incremental_sync`` stays ``False`` (RaiPlay serves no offer delta).
 """
 from __future__ import annotations
 
@@ -168,6 +177,7 @@ from .base import (
     SourceFetchError,
     SourceFetchResult,
 )
+from . import checkpoints
 
 logger = logging.getLogger(__name__)
 
@@ -185,6 +195,11 @@ DEFAULT_DELAY = 0.1
 # interleaving the 36 monthly sitemaps keeps a capped walk spread across
 # months. ``None`` disables the bound (tests use it; production must not).
 DEFAULT_MAX_CONTENTS = 400
+#: Bump when the traversal algorithm changes: a stored checkpoint from another
+#: version restarts the walk instead of resuming a stale anchor.
+CURSOR_VERSION = 1
+#: The single part this walk checkpoints (it has one traversal dimension).
+PART_PROGRAMMES = "programmes"
 SOURCE_VERSION = "rai-play-ssr-v1"
 STATE_MARKER = "window.WashiContext"
 USER_AGENT = (
@@ -300,6 +315,8 @@ class RaiPlaySource:
         supported_content_types=frozenset({ContentType.MOVIE, ContentType.SERIES}),
         supports_incremental_sync=False,
         supports_catalogue_sync=True,
+        # Bounded, checkpointed traversal (see module docstring).
+        supports_resumable_catalogue_sync=True,
         # Sitemap entries go stale, the walk is bounded, and RaiPlay publishes
         # no per-item removal signal: absence can never be evidence.
         supports_authoritative_snapshots=False,
@@ -324,23 +341,55 @@ class RaiPlaySource:
             )
         # provider/country are the caller's scope hints, already validated
         # against ``capabilities`` by the refresh service; RaiPlay only ever
-        # reports its own (raiplay, IT). cursor is accepted but unused: the
-        # sitemaps expose no resumable server-side cursor, so one fetch reports
-        # the whole configured window instead of inventing a token.
+        # reports its own (raiplay, IT).
+        #
+        # ``cursor`` is the durable walk checkpoint: the last programme URL a
+        # previous fetch completed. One fetch walks at most ``max_contents``
+        # entries and hands the next checkpoint back, so an interruption does
+        # not discard the whole window and re-request it from the top.
+        resume = checkpoints.decode(
+            cursor, version=CURSOR_VERSION, parts=(PART_PROGRAMMES,),
+            log_prefix="rai_play",
+        )
         entries = self._entries()
+        after = resume.anchor(PART_PROGRAMMES)
+        if after:
+            # Resume immediately after the checkpointed programme. If it is no
+            # longer in the sitemaps the walk restarts from the top, which only
+            # repeats already-persisted work — it never skips ahead.
+            for position, url in enumerate(entries):
+                if url == after:
+                    entries = entries[position + 1:]
+                    logger.info(
+                        "rai_play_walk_resume after=%s remaining=%d",
+                        after, len(entries),
+                    )
+                    break
+            else:
+                logger.warning(
+                    "rai_play_cursor_checkpoint_missing after=%s reason=restarting",
+                    after,
+                )
+        total = len(entries)
         scanned = entries if self.max_contents is None else entries[: self.max_contents]
-        if len(scanned) < len(entries):
+        truncated = len(scanned) < total
+        if truncated:
             logger.warning(
                 "rai_play_catalogue_truncated entries=%d scanned=%d max_contents=%d",
-                len(entries), len(scanned), self.max_contents,
+                total, len(scanned), self.max_contents,
             )
 
         contents: list[DiscoveredContent] = []
         offers: list[ProviderOffer] = []
         observed = 0
         skipped = 0
+        last_url = after
         for url in scanned:
             path = urlparse(url).path
+            # The anchor moves as soon as the entry is inspected, so a stale or
+            # unsupported entry is still progress rather than an infinite
+            # re-read.
+            last_url = url or last_url
             if path.startswith(LIVE_PATH):
                 # Never present in a programme sitemap today; a live channel is
                 # not an on-demand movie/series and must not become an offer.
@@ -385,7 +434,14 @@ class RaiPlaySource:
             logger.warning("rai_play_catalogue_no_offers contents=%d", len(contents))
         logger.info(
             "rai_play_catalogue_completed entries=%d contents=%d offers=%d skipped=%d",
-            len(entries), len(contents), len(offers), skipped,
+            total, len(contents), len(offers), skipped,
+        )
+        # A checkpoint is only emitted while entries remain unwalked; an
+        # exhausted walk returns None so the refresh service drops the row rather
+        # than resuming a finished catalogue.
+        next_cursor = (
+            checkpoints.encode(CURSOR_VERSION, {PART_PROGRAMMES: last_url})
+            if truncated else None
         )
         return SourceFetchResult(
             contents=contents,
@@ -393,7 +449,7 @@ class RaiPlaySource:
             authoritative=False,
             complete_snapshot=False,
             sync_mode=SyncMode.FULL,
-            cursor=None,
+            cursor=next_cursor,
         )
 
     # ------------------------------------------------------------------ walk
