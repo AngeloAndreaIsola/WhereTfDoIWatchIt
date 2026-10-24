@@ -284,6 +284,33 @@ class AvailabilityRefreshService:
             )
             if stored is not None and stored.cursor:
                 cursor = stored.cursor
+        elif cursor is None and capabilities.country_from_result \
+                and source_row is not None and provider_row is not None:
+            # A source that can only learn its market from the response cannot
+            # be handed one checkpoint. Hand it every enabled market's
+            # checkpoint, keyed by country code, and let it select by the region
+            # it actually observes. Passing a single row here would risk
+            # resuming one market's walk with another market's progress; passing
+            # nothing (the previous behaviour) meant such a source never resumed
+            # at all, which is the bug this exists to prevent.
+            candidates = {}
+            for code in sorted(capabilities.supported_countries or ()):
+                row = Country.objects.filter(
+                    code=str(code).upper(), enabled=True
+                ).first()
+                if row is None:
+                    continue
+                stored = self.cursors.get(
+                    provider=provider_row, source=source_row, country=row
+                )
+                if stored is not None and stored.cursor:
+                    candidates[str(code).upper()] = stored.cursor
+            if candidates:
+                cursor = candidates
+                logger.info(
+                    "availability_cursor_candidates source=%s markets=%d",
+                    self.source.slug, len(candidates),
+                )
         fetch_kwargs = {
             "provider": resolved_provider,
             "country": resolved_country,

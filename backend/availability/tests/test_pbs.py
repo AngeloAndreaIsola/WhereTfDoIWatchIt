@@ -155,10 +155,13 @@ class CatalogueParsingTests(SimpleTestCase):
             if o.content_type == content_type and o.provider_content_id == show
         ]
 
-    def test_result_never_claims_authoritativeness_or_cursor(self):
+    def test_result_never_claims_authoritativeness_and_is_resumable(self):
         self.assertFalse(self.result.authoritative)
         self.assertFalse(self.result.complete_snapshot)
         self.assertEqual(self.result.sync_mode, SyncMode.FULL)
+        # This fixture's whole catalogue fits in one batch, so the walk is
+        # exhausted and correctly emits no checkpoint. Resumability is proven
+        # by CatalogueCheckpointTests below.
         self.assertIsNone(self.result.cursor)
 
     def test_totals_count_every_watchable_group(self):

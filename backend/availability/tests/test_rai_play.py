@@ -153,14 +153,15 @@ class RegistrationTests(SimpleTestCase):
 
 
 class SnapshotSemanticsTests(SimpleTestCase):
-    def test_result_never_claims_authoritativeness_or_cursor(self):
+    def test_result_never_claims_authoritativeness_and_is_resumable(self):
         source, _api = build_source()
         result = source.fetch()
         self.assertFalse(result.authoritative)
         self.assertFalse(result.complete_snapshot)
-        # One fetch reports the whole configured window.
         self.assertEqual(result.sync_mode, SyncMode.FULL)
-        # The sitemaps expose no resumable server-side cursor.
+        # This fixture's catalogue fits in one window, so the walk is exhausted
+        # and correctly emits no checkpoint. Resumability — including the
+        # bounded-request guarantee — is proven by CatalogueCheckpointTests.
         self.assertIsNone(result.cursor)
 
 

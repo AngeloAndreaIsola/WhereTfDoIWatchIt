@@ -133,13 +133,15 @@ class RegistrationTests(SimpleTestCase):
 
 
 class SnapshotSemanticsTests(SimpleTestCase):
-    def test_result_never_claims_authoritativeness_or_cursor(self):
+    def test_result_never_claims_authoritativeness_and_is_resumable(self):
         source, _api = build_source()
         result = source.fetch()
         self.assertFalse(result.authoritative)
         self.assertFalse(result.complete_snapshot)
         self.assertEqual(result.sync_mode, SyncMode.FULL)
-        # Offset paging inside fetch(): no resumable cursor token.
+        # This fixture's grids fit in one batch, so the walk is exhausted and
+        # correctly emits no checkpoint. Resumability is proven by
+        # CatalogueCheckpointTests below.
         self.assertIsNone(result.cursor)
 
 

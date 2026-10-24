@@ -62,7 +62,8 @@ class FakePlutoTvApi:
     - Every call is recorded as ``(operation, variables)`` in ``requests``.
     """
 
-    def __init__(self, collections=None, grids=None):
+    def __init__(self, collections=None, grids=None, pad_past_end=False):
+        self.pad_past_end = pad_past_end
         self.collections = copy.deepcopy(collections) if collections is not None else {
             MOVIES_HUB: collection_payload(MOVIES_HUB),
             SHOWS_HUB: collection_payload(SHOWS_HUB),
@@ -95,6 +96,17 @@ class FakePlutoTvApi:
         start = str(variables["carouselParams"]["start"])
         pages = self.grids.get(token)
         payload = pages.get(start) if pages else None
+        if payload is None and self.pad_past_end:
+            # The real grid answers past its last page with an empty result set
+            # (``hasMore: false``), not an HTTP error. Some code paths only
+            # reach that state — a checkpoint whose anchor sits at the end of
+            # the grid, or an offset advanced past it — so the recorded fixture
+            # cannot exercise them without this. Off by default: a test that
+            # over-probes should still fail loudly.
+            return {"data": {"carouselData": {"success": True, "result": {
+                "title": "", "total": 0, "rows": 24, "skipped": 0,
+                "hasMore": False, "data": [],
+            }}}}
         if payload is None:
             raise SourceFetchError(
                 f"Simulated upstream rejection for grid {token!r} start={start}"

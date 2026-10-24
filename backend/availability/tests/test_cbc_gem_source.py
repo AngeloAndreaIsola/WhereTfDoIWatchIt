@@ -82,13 +82,15 @@ class RegistrationTests(SimpleTestCase):
 
 
 class SnapshotSemanticsTests(SimpleTestCase):
-    def test_result_never_claims_authoritativeness_or_cursor(self):
+    def test_result_never_claims_authoritativeness_and_is_resumable(self):
         source, _api = build_source()
         result = source.fetch()
         self.assertFalse(result.authoritative)
         self.assertFalse(result.complete_snapshot)
         self.assertEqual(result.sync_mode, SyncMode.FULL)
-        # CBC exposes page numbers, not a resumable cursor token.
+        # CBC's traversal is checkpointed, but the checkpoint is *progress*, not
+        # a completeness claim: an exhausted walk (this fixture fits in one
+        # batch) emits none, and authoritativeness stays False either way.
         self.assertIsNone(result.cursor)
 
 

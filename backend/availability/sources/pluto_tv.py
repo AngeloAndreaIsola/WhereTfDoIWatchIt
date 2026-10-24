@@ -362,6 +362,11 @@ class PlutoTvSource:
         supports_catalogue_sync=True,
         # Bounded, checkpointed traversal (see module docstring).
         supports_resumable_catalogue_sync=True,
+        # The market is read off the egress region, so this source cannot be
+        # told one and cannot be handed a single checkpoint: it selects its own
+        # market's checkpoint from the per-market mapping the refresh service
+        # provides, keyed by country code.
+        country_from_result=True,
         # Declared totals drift between runs and Pluto has no removal
         # signal: absence must never deactivate offers.
         supports_authoritative_snapshots=False,
@@ -390,10 +395,14 @@ class PlutoTvSource:
         #
         # ``cursor`` is the durable walk checkpoint, one entry per hub, so a
         # failure in the second hub cannot discard the first hub's work.
-        resume = checkpoints.decode(
-            cursor, version=CURSOR_VERSION, parts=HUBS,
-            log_prefix="pluto_tv",
-        )
+        #
+        # The market is only knowable after the collection call below, so a
+        # caller that fetched *before* knowing the region cannot have chosen the
+        # right checkpoint. It therefore hands every enabled market's checkpoint
+        # keyed by country code (``capabilities.country_from_result``), and the
+        # selection happens here — once the observed region is known. A plain
+        # string cursor is still accepted for direct callers.
+        candidates = cursor if isinstance(cursor, dict) else None
         movies = self.client.collection(MOVIES_HUB)
         region = str(movies.get("region") or "").strip()
         if not region:
@@ -408,6 +417,18 @@ class PlutoTvSource:
             )
             return SourceFetchResult(sync_mode=SyncMode.FULL)
         country_code, path_region = resolved
+
+        # Select *this* market's checkpoint. Never another market's: a walk of
+        # one region must not be resumed with progress made in a different one.
+        selected = ""
+        if candidates is not None:
+            selected = str(candidates.get(country_code) or "")
+        elif isinstance(cursor, str):
+            selected = cursor
+        resume = checkpoints.decode(
+            selected, version=CURSOR_VERSION, parts=HUBS,
+            log_prefix="pluto_tv",
+        )
 
         items: list[dict] = []
         anchors: dict = dict(resume.anchors)
@@ -501,89 +522,111 @@ class PlutoTvSource:
         # Offset of the page that last contributed items, i.e. where the anchor
         # lives. Distinct from ``start`` (which advances past it).
         anchor_page_start = start
-        while True:
-            page_start = start
-            result = self.client.grid_page(token, page_start)
-            page = result.get("data")
-            if not isinstance(page, list):
-                raise SourceFetchError(
-                    f"Unexpected Pluto TV grid items for {hub!r} at start={page_start}"
-                )
-            page = [item for item in page if isinstance(item, dict)]
-            if not page:
-                break
-            signature = tuple(str(item.get("id") or "") for item in page)
-            if signature in seen_pages:
-                # Declared totals drift, so the paging window can shift and
-                # replay a page; stop instead of looping forever.
-                logger.warning(
-                    "pluto_tv_repeated_page hub=%s start=%s", hub, page_start
-                )
-                break
-            seen_pages.add(signature)
+        # An anchor that is never found must NOT end as "hub finished": the hub
+        # would be marked complete having observed nothing. It restarts instead,
+        # which repeats work but can never lose entries. Bounded to one restart
+        # so a pathological cursor cannot loop for ever.
+        for attempt in range(2):
+            start = int(state.get("start") or 0) if attempt == 0 else 0
+            after = str(state.get("after") or "") if attempt == 0 else ""
+            pages = 0
+            seen_pages = set()
+            anchor_page_start = start
+            next_state = None
+            while True:
+                page_start = start
+                result = self.client.grid_page(token, page_start)
+                page = result.get("data")
+                if not isinstance(page, list):
+                    raise SourceFetchError(
+                        f"Unexpected Pluto TV grid items for {hub!r} at start={page_start}"
+                    )
+                page = [item for item in page if isinstance(item, dict)]
+                if not page:
+                    break
+                signature = tuple(str(item.get("id") or "") for item in page)
+                if signature in seen_pages:
+                    # Declared totals drift, so the paging window can shift and
+                    # replay a page; stop instead of looping forever.
+                    logger.warning(
+                        "pluto_tv_repeated_page hub=%s start=%s", hub, page_start
+                    )
+                    break
+                seen_pages.add(signature)
 
-            if after:
-                # Still seeking the anchor: skip by identity. A page consumed
-                # entirely before the anchor is reached contributes nothing.
-                found = False
-                consumed = 0
-                for item in page:
-                    consumed += 1
-                    if str(item.get("id") or "") == after:
-                        found = True
-                        break
-                if found:
-                    # ``page[consumed:]`` may be empty when the anchor is the
-                    # last item on its page — that is a legitimate resume point,
-                    # not a failure to find it. Tracking found-ness explicitly
-                    # (rather than comparing ``consumed`` to the page length) is
-                    # what stops the walk from treating "anchor at the end of a
-                    # page" as "anchor absent" and skipping forward for ever.
-                    items.extend(page[consumed:])
+                if after:
+                    # Still seeking the anchor: skip by identity. A page consumed
+                    # entirely before the anchor is reached contributes nothing.
+                    found = False
+                    consumed = 0
+                    for item in page:
+                        consumed += 1
+                        if str(item.get("id") or "") == after:
+                            found = True
+                            break
+                    if found:
+                        # ``page[consumed:]`` may be empty when the anchor is the
+                        # last item on its page — that is a legitimate resume
+                        # point, not a failure to find it. Tracking found-ness
+                        # explicitly (rather than comparing ``consumed`` to the
+                        # page length) is what stops the walk from treating
+                        # "anchor at the end of a page" as "anchor absent" and
+                        # skipping forward for ever.
+                        items.extend(page[consumed:])
+                        anchor_page_start = page_start
+                        after = ""
+                    else:
+                        # Anchor not on this page: keep seeking, recording the
+                        # page as consumed so the next fetch resumes past it.
+                        start += self.client.page_rows
+                        pages += 1
+                        if pages >= self.batch_pages:
+                            next_state = {"start": start, "after": after}
+                            break
+                        continue
+                else:
+                    items.extend(page)
                     anchor_page_start = page_start
-                    after = ""
-                else:
-                    # Anchor not on this page: keep seeking, recording the page
-                    # as consumed so the next fetch resumes past it.
-                    start += self.client.page_rows
-                    pages += 1
-                    if pages >= self.batch_pages:
-                        next_state = {"start": start, "after": after}
-                        break
-                    continue
-            else:
-                items.extend(page)
-                anchor_page_start = page_start
 
-            pages += 1
-            start += self.client.page_rows
-            if not result.get("hasMore"):
+                pages += 1
+                start += self.client.page_rows
+                if not result.get("hasMore"):
+                    break
+                if pages >= self.batch_pages:
+                    logger.warning(
+                        "pluto_tv_page_limit hub=%s pages=%s items=%s",
+                        hub, pages, len(items),
+                    )
+                    # The hub is not finished, only this fetch's budget for it.
+                    #
+                    # The next state depends on whether this fetch contributed
+                    # anything, and getting that wrong makes the walk oscillate:
+                    #
+                    # - items walked -> resume on the page that held the last
+                    #   one, anchored on it, so the identity filter re-finds it
+                    #   and continues after it.
+                    # - nothing walked -> the anchor was consumed at the very end
+                    #   of a page, so there is no new anchor to record. Carrying
+                    #   the old anchor here would re-read the same page for ever,
+                    #   and blanking it while resetting the offset to that page
+                    #   would restart the hub. Advancing past the consumed pages
+                    #   with no anchor is the only state that makes progress.
+                    if items:
+                        last = str((items[-1] or {}).get("id") or "")
+                        next_state = {"start": anchor_page_start, "after": last}
+                    else:
+                        next_state = {"start": start, "after": ""}
+                    break
+
+            if not (after and next_state is None and not items):
+                # Either the anchor was met, or the hub ran out of pages with
+                # real progress — both are legitimate ends.
                 break
-            if pages >= self.batch_pages:
-                logger.warning(
-                    "pluto_tv_page_limit hub=%s pages=%s items=%s",
-                    hub, pages, len(items),
-                )
-                # The hub is not finished, only this fetch's budget for it.
-                #
-                # The next state depends on whether this fetch contributed
-                # anything, and getting that wrong makes the walk oscillate:
-                #
-                # - items walked -> resume on the page that held the last one,
-                #   anchored on it, so the identity filter re-finds it and
-                #   continues after it.
-                # - nothing walked -> the anchor was consumed at the very end of
-                #   a page, so there is no new anchor to record. Carrying the old
-                #   anchor here would re-read the same page for ever, and
-                #   blanking it while resetting the offset to that page would
-                #   restart the hub. Advancing past the consumed pages with no
-                #   anchor is the only state that makes progress.
-                if items:
-                    last = str((items[-1] or {}).get("id") or "")
-                    next_state = {"start": anchor_page_start, "after": last}
-                else:
-                    next_state = {"start": start, "after": ""}
-                break
+            logger.warning(
+                "pluto_tv_cursor_checkpoint_missing hub=%s after=%s "
+                "reason=restarting_hub",
+                hub, after,
+            )
 
         deduped: dict[str, dict] = {}
         for item in items:

@@ -202,6 +202,14 @@ class SourceCapabilities:
     # to prioritise discovery candidates. Hints only select candidates; the
     # source still decides identity through its normal payload/mapping path.
     supports_priority_hints: bool = False
+    # The market a catalogue walk covers is only knowable from the *response*,
+    # not from configuration: Pluto TV reads its country off the egress region
+    # and cannot be told one. Such a source cannot be handed a single
+    # checkpoint, because the checkpoint belongs to a market the caller cannot
+    # name before fetching. It is given every enabled market's checkpoint
+    # instead (keyed by country code) and selects the one matching the region it
+    # observes — so one market's progress can never be applied to another.
+    country_from_result: bool = False
     # The catalogue walk is *resumable*: a truncated fetch hands back a durable
     # checkpoint that the refresh service persists, and the next fetch continues
     # from it instead of re-walking from the top.
