@@ -242,6 +242,10 @@ class BBCIPlayerSource:
         ),
         supports_incremental_sync=False,
         supports_catalogue_sync=True,
+        # Bounded, checkpointed traversal: this walk is resumable, which is a
+        # *different* property from supports_incremental_sync (see base.py).
+        # BBC iPlayer resumes from its {letter, after} checkpoint (see module docstring).
+        supports_resumable_catalogue_sync=True,
         # The A-Z index is capped at 200 entries per letter and iPlayer exposes
         # no per-item removal signal: absence must never deactivate offers.
         supports_authoritative_snapshots=False,

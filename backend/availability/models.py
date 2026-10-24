@@ -607,13 +607,42 @@ class ContentMapping(models.Model):
 
 
 class SyncCursor(models.Model):
+    """Where a catalogue walk stopped, and how healthy it is.
+
+    Two timestamps, deliberately distinct because they answer different
+    questions and conflating them is what made the old single field useless:
+
+    - ``last_successful_sync`` — the last time this walk reached its **terminal
+      state**: every part of the catalogue was traversed, or (for a cycling
+      source such as Tubi) a full cycle completed. This is the *completion*
+      timestamp, and it is the one a freshness/staleness policy should read.
+    - ``progress_at`` — the last time the walk **advanced** (a batch committed
+      and its checkpoint moved forward). This is the *liveness* timestamp.
+
+    The distinction is load-bearing for stall detection. A long walk makes
+    forward progress on every run for hours while ``last_successful_sync``
+    correctly stays old; and a walk that has stopped advancing keeps
+    ``last_successful_sync`` at its last real completion. Reading completion as
+    liveness would call a healthy in-progress walk stalled, and reading
+    liveness as completion would call a stalled walk fresh.
+
+    ``progress_at`` is only stamped when the checkpoint value actually *moves*:
+    a replayed batch that re-reads the same window must not look like progress,
+    or a walk stuck re-reading one page would never be detected.
+    """
+
     provider = models.ForeignKey(
         "tracker.Provider", on_delete=models.PROTECT, related_name="sync_cursors"
     )
     source = models.ForeignKey(Source, on_delete=models.PROTECT, related_name="sync_cursors")
     country = models.ForeignKey(Country, on_delete=models.PROTECT, related_name="sync_cursors")
     cursor = models.TextField(blank=True, default="")
+    #: Last completed traversal (see the class docstring). Nullable: a walk that
+    #: has never completed has no completion time — and ``null`` is not ``0``,
+    #: so "never completed" stays distinguishable from "completed long ago".
     last_successful_sync = models.DateTimeField(null=True, blank=True)
+    #: Last forward progress. Nullable for the same reason.
+    progress_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -627,3 +656,20 @@ class SyncCursor(models.Model):
 
     def __str__(self):
         return f"{self.provider.slug}/{self.source.slug}/{self.country.code}"
+
+    @property
+    def is_stalled(self) -> bool:
+        """Whether this walk has stopped advancing for longer than the threshold.
+
+        Only meaningful for a walk that is *supposed* to be progressing: a
+        checkpoint row exists precisely because there is more to walk, so a row
+        whose ``progress_at`` is older than :data:`STALL_AFTER` is a walk that
+        has stopped moving. A row with no ``progress_at`` at all has never
+        advanced and is stalled by definition.
+        """
+        from .freshness import STALL_AFTER
+
+        reference = self.progress_at
+        if reference is None:
+            return True
+        return (timezone.now() - reference) > STALL_AFTER

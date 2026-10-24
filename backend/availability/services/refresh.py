@@ -409,6 +409,16 @@ class AvailabilityRefreshService:
             # source itself owns is cleared: a caller that supplied its own
             # cursor (JustWatch's partition coordinator, whose cursor row also
             # carries *other* partitions' offsets) keeps what it passed.
+            #
+            # Note where completion is *observable*: deleting the row removes
+            # the only place a per-row timestamp could live, so this path
+            # deliberately does not pretend to stamp one. Per-source completion
+            # is recorded durably on the run audit row instead —
+            # ``RefreshRun(service=slug, error="", finished_at=...)`` — which is
+            # what ``stale_catalogue_sources`` already reads to decide
+            # freshness. ``last_successful_sync`` therefore means "the last
+            # completed traversal of a walk whose checkpoint row still exists",
+            # which is the cycling and multi-partition case (see the model).
             try:
                 if source_row is None:
                     source_row = Source.objects.get(slug=self.source.slug)
@@ -422,6 +432,10 @@ class AvailabilityRefreshService:
                     self.source.slug, resolved_provider, resolved_country, exc,
                 )
                 raise
+            logger.info(
+                "availability_catalogue_completed source=%s provider=%s country=%s",
+                self.source.slug, resolved_provider, resolved_country,
+            )
         return refresh_result
 
     @staticmethod

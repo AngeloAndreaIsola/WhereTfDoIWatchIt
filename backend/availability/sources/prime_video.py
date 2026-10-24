@@ -323,6 +323,10 @@ class PrimeVideoSource:
         ),
         supports_incremental_sync=False,
         supports_catalogue_sync=True,
+        # Bounded, checkpointed traversal: this walk is resumable, which is a
+        # *different* property from supports_incremental_sync (see base.py).
+        # Prime Video resumes from its pending detail window (see module docstring).
+        supports_resumable_catalogue_sync=True,
         # Index pages are editorially ordered, genre pages do not chain, the
         # walk is bounded, and Prime publishes no removal signal: absence can
         # never be evidence of unavailability.

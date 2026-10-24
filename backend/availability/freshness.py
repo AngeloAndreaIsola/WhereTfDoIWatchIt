@@ -39,6 +39,19 @@ FRESHNESS_INTERVAL_KEY = "expected_refresh_interval_seconds"
 #: source the application can write offers under is listed below.
 DEFAULT_FRESHNESS = timedelta(hours=24)
 
+#: How long a catalogue walk may go without *forward progress* before it counts
+#: as stalled. Deliberately separate from ``SOURCE_FRESHNESS``: that answers
+#: "is this observation still good enough to skip a refresh", this answers "has
+#: a walk that is supposed to be moving actually stopped".
+#:
+#: Sized from the slowest documented cadence: the catalogue cron runs daily
+#: (``docs/CRON.md``) and the longest walks are bounded per run (RaiPlay ~840
+#: requests, Prime/Tubi 500 pages), so a healthy walk advances on every daily
+#: run. Two missed runs' worth of slack is enough to absorb a skipped tick or a
+#: transient upstream outage without crying wolf, while still catching a walk
+#: that has genuinely wedged well inside a day.
+STALL_AFTER = timedelta(hours=48)
+
 #: Declared freshness window per source slug. Values follow the crontab
 #: cadence documented in ``docs/CRON.md`` — at or above the slowest
 #: *recommended* slot for that source, so a scheduled run never lands after

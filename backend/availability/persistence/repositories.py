@@ -1118,12 +1118,55 @@ class CursorRepository:
         ).first()
 
     def set(self, provider, source, country, cursor, now=None):
+        """Record forward progress for one walk.
+
+        ``progress_at`` moves **only when the stored checkpoint value actually
+        changes**. That is what makes stall detection honest: a replayed batch
+        that re-reads the same window (an interrupted run retrying, or a
+        deliberately repeated batch) persists the same value and must not look
+        like progress — otherwise a walk wedged re-reading one page would keep
+        resetting its own liveness clock and never be reported as stalled.
+
+        ``last_successful_sync`` is deliberately **not** touched here. This call
+        records that a walk *moved*, not that it *finished*; only
+        :meth:`complete` may claim completion, so a partial run can never look
+        complete.
+        """
+        now = now or timezone.now()
+        existing = self.get(provider=provider, source=source, country=country)
+        advanced = existing is None or existing.cursor != cursor
+        obj, _created = SyncCursor.objects.update_or_create(
+            provider=provider,
+            source=source,
+            country=country,
+            defaults={
+                "cursor": cursor,
+                **({"progress_at": now} if advanced else {}),
+            },
+        )
+        return obj
+
+    def complete(self, provider, source, country, now=None):
+        """Record that one walk reached its terminal state.
+
+        Called only when the traversal is genuinely exhausted or a full cycle
+        completed, and only for a walk whose checkpoint row **survives**
+        completion — the cycling and multi-partition cases. It stamps both
+        timestamps, because finishing is also the strongest evidence of
+        progress.
+
+        A walk whose row is deleted on completion cannot be stamped here (the
+        write would be removed with it); per-source completion for those is
+        recorded on the run audit row instead. See the ``SyncCursor`` docstring
+        and ``AvailabilityRefreshService.refresh_catalogue``.
+        """
         now = now or timezone.now()
         obj, _created = SyncCursor.objects.update_or_create(
             provider=provider,
             source=source,
             country=country,
-            defaults={"cursor": cursor, "last_successful_sync": now},
+            defaults={"cursor": "", "progress_at": now,
+                      "last_successful_sync": now},
         )
         return obj
 

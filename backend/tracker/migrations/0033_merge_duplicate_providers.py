@@ -68,6 +68,20 @@ def _merge_scraped_fields(canonical, alias) -> bool:
     return changed
 
 
+def _provider_ref(model, provider, provider_model) -> object:
+    """The row of *provider* as seen by *model*'s registry.
+
+    A historical model cannot be filtered by a live ``Provider`` instance
+    ("Must be \"Provider\" instance"), so the provider is re-read through the
+    same registry the model came from. Outside a migration (``provider_model``
+    is ``None``) the objects share a registry already and the live instance is
+    returned unchanged.
+    """
+    if provider_model is None:
+        return provider
+    return provider_model.objects.get(pk=provider.pk)
+
+
 def _repoint(queryset, canonical, rebuild_identity: bool) -> None:
     """Move availability rows to the canonical provider.
 
@@ -88,13 +102,6 @@ def _repoint(queryset, canonical, rebuild_identity: bool) -> None:
 
 
 def _merge_provider(canonical, duplicate, apps=None) -> None:
-    from availability.models import (
-        ContentMapping,
-        Offer,
-        ProviderContent,
-        SyncCursor,
-        SyncRun,
-    )
     from availability.services.legacy_ingest import (
         delete_scraped_mapping,
         ingest_scraped_mapping,
@@ -104,6 +111,42 @@ def _merge_provider(canonical, duplicate, apps=None) -> None:
         Region,
         ScrapedContentMapping,
     )
+
+    # Every model queried below is resolved as a *historical* model when
+    # ``apps`` is available (always, in a real migrate). A live-class queryset
+    # SELECTs every column the live model declares, including columns added by
+    # migrations that have not run yet at this point in the chain — so a live
+    # query here makes the chain unextendable: adding a field to any of these
+    # models breaks every fresh database with "column ... does not exist".
+    #
+    # This is not hypothetical. ``availability.0011`` added
+    # ``SyncCursor.progress_at`` and the live ``SyncCursor.objects`` query at the
+    # bottom of this function failed every fresh test database until these were
+    # resolved historically. ``Subscription`` and ``ExternalProviderMapping``
+    # were already fixed this way for the same reason (see below); the rest were
+    # left live and are completed here.
+    #
+    # The live classes are imported only for the no-``apps`` fallback, which
+    # exists because this function's own tests call it directly.
+    if apps is not None:
+        ContentMapping = apps.get_model("availability", "ContentMapping")
+        Offer = apps.get_model("availability", "Offer")
+        ProviderContent = apps.get_model("availability", "ProviderContent")
+        SyncCursor = apps.get_model("availability", "SyncCursor")
+        SyncRun = apps.get_model("availability", "SyncRun")
+        Region = apps.get_model("tracker", "Region")
+        ScrapedContentMapping = apps.get_model("tracker", "ScrapedContentMapping")
+        ProviderRow = apps.get_model("tracker", "Provider")
+    else:
+        from availability.models import (
+            ContentMapping,
+            Offer,
+            ProviderContent,
+            SyncCursor,
+            SyncRun,
+        )
+        from tracker.models import Region, ScrapedContentMapping
+        ProviderRow = None
 
     # Resolved as a *historical* model when available: later migrations add
     # columns to ``Subscription`` (e.g. 0041's ``access_mode``), so a live-class
@@ -165,11 +208,18 @@ def _merge_provider(canonical, duplicate, apps=None) -> None:
     # with no twin, move the row over. Only rows that changed are re-ingested
     # at the end — ingestion is idempotent, but there is no point re-writing
     # the untouched majority.
+    #
+    # ``ScrapedContentMapping`` is a historical model here, so it cannot be
+    # filtered by a live ``Provider`` instance; ``_scraped_*_ref`` resolves the
+    # matching historical row (falling back to the live object outside a
+    # migration, where the model is live too).
+    scraped_duplicate = _provider_ref(ScrapedContentMapping, duplicate, ProviderRow)
+    scraped_canonical = _provider_ref(ScrapedContentMapping, canonical, ProviderRow)
     reingest = []
-    for row in ScrapedContentMapping.objects.filter(provider=duplicate).order_by("pk"):
+    for row in ScrapedContentMapping.objects.filter(provider=scraped_duplicate).order_by("pk"):
         twin = (
             ScrapedContentMapping.objects.filter(
-                provider=canonical,
+                provider=scraped_canonical,
                 scraped_title=row.scraped_title,
                 scraped_year=row.scraped_year,
             )
@@ -181,7 +231,7 @@ def _merge_provider(canonical, duplicate, apps=None) -> None:
             # provider — the projection must be moved first, while the row
             # still points at the alias, because identity is provider-scoped.
             delete_scraped_mapping(row)
-            row.provider = canonical
+            row.provider = scraped_canonical
             row.save()
             ingest_scraped_mapping(row)
             continue
@@ -194,18 +244,26 @@ def _merge_provider(canonical, duplicate, apps=None) -> None:
 
     # Projections whose tracker rows are gone (orphans) must not survive the
     # alias provider; everything non-legacy follows the provider below.
+    legacy_duplicate = _provider_ref(ContentMapping, duplicate, ProviderRow)
     ContentMapping.objects.filter(
-        provider=duplicate, provider_content_id__startswith="legacy-"
+        provider=legacy_duplicate, provider_content_id__startswith="legacy-"
     ).delete()
     ProviderContent.objects.filter(
-        provider=duplicate, provider_content_id__startswith="legacy-"
+        provider=_provider_ref(ProviderContent, duplicate, ProviderRow),
+        provider_content_id__startswith="legacy-",
     ).delete()
 
-    _repoint(ProviderContent.objects.filter(provider=duplicate), canonical, True)
-    _repoint(ContentMapping.objects.filter(provider=duplicate), canonical, False)
-    _repoint(Offer.objects.filter(provider=duplicate), canonical, True)
-    _repoint(SyncRun.objects.filter(provider=duplicate), canonical, False)
-    _repoint(SyncCursor.objects.filter(provider=duplicate), canonical, False)
+    # ``_repoint`` filters and assigns through these historical models, so the
+    # provider instances it receives must be historical rows too: passing the
+    # live ``Provider`` raises 'Cannot query "X": Must be "Provider" instance'.
+    canonical_row = _provider_ref(ProviderContent, canonical, ProviderRow)
+    duplicate_row = _provider_ref(ProviderContent, duplicate, ProviderRow)
+
+    _repoint(ProviderContent.objects.filter(provider=duplicate_row), canonical_row, True)
+    _repoint(ContentMapping.objects.filter(provider=duplicate_row), canonical_row, False)
+    _repoint(Offer.objects.filter(provider=duplicate_row), canonical_row, True)
+    _repoint(SyncRun.objects.filter(provider=duplicate_row), canonical_row, False)
+    _repoint(SyncCursor.objects.filter(provider=duplicate_row), canonical_row, False)
 
     for region in Region.objects.filter(provider=duplicate.slug):
         if Region.objects.filter(provider=canonical.slug, country=region.country).exists():
@@ -214,7 +272,10 @@ def _merge_provider(canonical, duplicate, apps=None) -> None:
             region.provider = canonical.slug
             region.save()
 
-    duplicate.delete()
+    if ProviderRow is not None:
+        ProviderRow.objects.filter(pk=duplicate.pk).delete()
+    else:
+        duplicate.delete()
 
     for pk in reingest:
         ingest_scraped_mapping(ScrapedContentMapping.objects.get(pk=pk))

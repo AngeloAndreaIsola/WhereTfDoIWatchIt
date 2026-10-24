@@ -247,6 +247,10 @@ class AbcIviewSource:
         # position, not an incremental offer sync (see module docstring).
         supports_incremental_sync=False,
         supports_catalogue_sync=True,
+        # Bounded, checkpointed traversal: this walk is resumable, which is a
+        # *different* property from supports_incremental_sync (see base.py).
+        # ABC iview resumes from its last-walked series slug (see module docstring).
+        supports_resumable_catalogue_sync=True,
         # A series that 404s mid-run must not read as a removal: absence
         # never deactivates offers.
         supports_authoritative_snapshots=False,

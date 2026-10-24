@@ -332,6 +332,10 @@ class TubiSource:
         ),
         supports_incremental_sync=False,
         supports_catalogue_sync=True,
+        # Bounded, checkpointed traversal: this walk is resumable, which is a
+        # *different* property from supports_incremental_sync (see base.py).
+        # Tubi's traversal is a checkpointed cycle (see module docstring).
+        supports_resumable_catalogue_sync=True,
         # Sitemap entries go stale, shell pages hide titles, the walk is
         # bounded: absence can never be evidence of unavailability.
         supports_authoritative_snapshots=False,

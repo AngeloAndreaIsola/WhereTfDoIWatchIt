@@ -137,6 +137,10 @@ class JustWatchSource:
         # out of per-title scheduling; the two capabilities are independent.
         supports_title_fetch=True,
         supports_catalogue_sync=True,
+        # Bounded, checkpointed traversal: this walk is resumable, which is a
+        # *different* property from supports_incremental_sync (see base.py).
+        # JustWatch resumes each partition from its stored offset (see module docstring).
+        supports_resumable_catalogue_sync=True,
         # Permanently non-authoritative: an aggregator's silence is not
         # evidence, so this source can never deactivate an unseen offer. This
         # is what guarantees a JustWatch run cannot delete a collector's row.
