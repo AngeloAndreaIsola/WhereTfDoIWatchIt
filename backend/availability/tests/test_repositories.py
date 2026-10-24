@@ -921,7 +921,12 @@ class CursorRepositoryTests(TestCase):
         self.repo.set(self.provider, self.source, self.country, "cursor-1", now=now)
         cursor = self.repo.get(self.provider, self.source, self.country)
         self.assertEqual(cursor.cursor, "cursor-1")
-        self.assertEqual(cursor.last_successful_sync, now)
+        # A checkpoint write is *progress*, not *completion*: it must not claim
+        # the walk finished. This assertion previously required
+        # ``last_successful_sync`` here, which made every partial run look like
+        # a completed traversal.
+        self.assertEqual(cursor.progress_at, now)
+        self.assertIsNone(cursor.last_successful_sync)
 
     def test_set_overwrites_existing_cursor(self):
         self.repo.set(self.provider, self.source, self.country, "cursor-1")
@@ -929,5 +934,6 @@ class CursorRepositoryTests(TestCase):
         self.repo.set(self.provider, self.source, self.country, "cursor-2", now=updated)
         cursor = self.repo.get(self.provider, self.source, self.country)
         self.assertEqual(cursor.cursor, "cursor-2")
-        self.assertEqual(cursor.last_successful_sync, updated)
+        self.assertEqual(cursor.progress_at, updated)
+        self.assertIsNone(cursor.last_successful_sync)
         self.assertEqual(SyncCursor.objects.count(), 1)

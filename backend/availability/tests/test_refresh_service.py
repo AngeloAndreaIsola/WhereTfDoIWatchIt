@@ -535,7 +535,11 @@ class CursorPersistenceTests(RefreshServiceTestCase):
         self.assertEqual(cursor.country, self.country)
         self.assertEqual(cursor.source.slug, "stub_source")
         self.assertEqual(cursor.cursor, "page-2")
-        self.assertIsNotNone(cursor.last_successful_sync)
+        # Persisting a checkpoint records progress, not completion. This
+        # previously asserted ``last_successful_sync``, which conflated the two
+        # and let a partial run look like a finished traversal.
+        self.assertIsNotNone(cursor.progress_at)
+        self.assertIsNone(cursor.last_successful_sync)
 
     def test_results_without_a_cursor_write_no_cursor_rows(self):
         service, _source = self._service(_response(_normalized()))
