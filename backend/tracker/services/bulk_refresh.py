@@ -43,7 +43,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Optional
 
 from django.db import connection
-from django.db.models import Max
+from django.db.models import Max, Q
 from django.utils import timezone
 
 from availability.domain.enums import ContentType
@@ -65,6 +65,7 @@ from ..models import (
     CatalogueRefreshStatus,
     Movie,
     RefreshRequest,
+    RefreshRequestOutcome,
     RefreshRequestStatus,
     RefreshRun,
     WatchlistItem,
@@ -193,9 +194,9 @@ def permanently_absent_scopes(tmdb_id) -> set[str]:
 
     A title that answered **404** to a source has produced a *permanent*
     negative answer, not a stale one: the provider does not carry it, and no
-    amount of waiting will change that. Those ``RefreshRequest`` rows are
-    ``failed`` with an :class:`~tracker.services.streaming_api.UpstreamTitleNotFound`
-    error, so they are the durable evidence — and that is exactly the point:
+    amount of waiting will change that. Those ``RefreshRequest`` rows carry a
+    successful ``title_not_found`` outcome, so they are durable evidence — and
+    that is exactly the point:
 
     an absent title writes **no** ``Offer`` row, so ``stale_sources`` keeps
     reporting its scope as stale forever. Without this exclusion the background
@@ -204,9 +205,8 @@ def permanently_absent_scopes(tmdb_id) -> set[str]:
     cannot change. Excluding them here is what makes the 404 never-retry
     behaviour real for the sweep, not just for the queue drain.
 
-    Only requests that exhausted their attempts *and* failed with the
-    permanent signal count. A transient failure (5xx/timeout/429) leaves the
-    request ``pending`` or retryable, so the title stays refreshable.
+    Only a successful permanent-negative outcome counts. A transient failure
+    (5xx/timeout/429) has no outcome, so the title stays refreshable.
 
     **The legacy ``source=""`` spelling is normalized to the default slug
     here.** ``""`` and ``"streaming_availability"`` are the same logical scope
@@ -216,10 +216,18 @@ def permanently_absent_scopes(tmdb_id) -> set[str]:
     silently never match, reintroducing the very retry loop it exists to stop.
     """
     slugs = set(
-        RefreshRequest.objects.filter(
-            movie__tmdb_id=tmdb_id,
-            status=RefreshRequestStatus.FAILED,
-            last_error__startswith="UpstreamTitleNotFound",
+        RefreshRequest.objects.filter(movie__tmdb_id=tmdb_id).filter(
+            Q(
+                status=RefreshRequestStatus.DONE,
+                outcome=RefreshRequestOutcome.TITLE_NOT_FOUND,
+            )
+            # Pre-migration rows remain readable until the data migration has
+            # run in every environment. This is compatibility, never a new
+            # write format.
+            | Q(
+                status=RefreshRequestStatus.FAILED,
+                last_error__startswith="UpstreamTitleNotFound",
+            )
         ).values_list("source", flat=True)
     )
     return {slug or DEFAULT_SOURCE_SLUG for slug in slugs}

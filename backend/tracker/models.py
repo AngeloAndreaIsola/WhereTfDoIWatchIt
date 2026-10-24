@@ -617,6 +617,20 @@ class RefreshRequestStatus(models.TextChoices):
     BLOCKED = "blocked", "Blocked"
 
 
+class RefreshRequestOutcome(models.TextChoices):
+    """What an attempted source check established.
+
+    Request status answers whether execution succeeded; outcome answers what a
+    successful execution learned.  Keeping those facts separate prevents a
+    definitive upstream miss from masquerading as a transport failure.
+    """
+
+    UNKNOWN = "", "Not recorded / legacy row"
+    OFFERS_FOUND = "offers_found", "Offers found"
+    NO_OFFER = "no_offer", "Checked — no offer"
+    TITLE_NOT_FOUND = "title_not_found", "Upstream title not found"
+
+
 class BlockedReason(models.TextChoices):
     """Why a request was settled without being attempted.
 
@@ -699,6 +713,14 @@ class RefreshRequest(models.Model):
     )
     attempts = models.IntegerField(default=0)
     last_error = models.TextField(blank=True, default="")
+    outcome = models.CharField(
+        max_length=20,
+        choices=RefreshRequestOutcome.choices,
+        blank=True,
+        default=RefreshRequestOutcome.UNKNOWN,
+        db_index=True,
+        help_text="Definitive result of a successful source check; blank for failures or legacy rows.",
+    )
     #: Why this row was settled without being attempted. Only meaningful when
     #: ``status`` is ``blocked``, and constrained at the database level so the
     #: two cannot drift:

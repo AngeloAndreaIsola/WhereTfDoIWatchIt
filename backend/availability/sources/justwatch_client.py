@@ -103,6 +103,14 @@ DEFAULT_HEADERS = {
 #: means the request itself is wrong and will stay wrong.
 RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 
+#: Transport faults that are transient by nature. Everything else in
+#: ``requests.RequestException`` (invalid URL/schema) is permanent and is
+#: wrapped without a retry.
+RETRYABLE_TRANSPORT_ERRORS = (
+    requests.exceptions.Timeout,
+    requests.exceptions.ConnectionError,
+)
+
 #: GraphQL error messages that mean "this page size is too big", not "no
 #: results". Detected so a pagination plan that overshoots can be clamped
 #: instead of being reported as an empty catalogue.
@@ -734,12 +742,38 @@ class JustWatchClient:
 
     # -- transport ---------------------------------------------------------
     def _execute(self, payload, label):
-        """POST *payload* and return the ``data`` payload, retrying transport faults."""
-        last_error: Optional[Exception] = None
+        """POST *payload* and return the ``data`` payload, retrying transport faults.
+
+        Connection failures and timeouts are transport faults just like a 503:
+        retrying them is safe for these read-only GraphQL queries, and leaving
+        them as raw ``requests`` exceptions would bypass every source-level
+        ``except JustWatchError`` boundary (where a failed fetch must stay
+        distinguishable from an empty one).
+        """
+        last_error: Optional[BaseException] = None
         for attempt in range(1, self.retries + 1):
-            response = self._http_post(
-                self.url, json=payload, headers=self.headers, timeout=self.timeout
-            )
+            try:
+                response = self._http_post(
+                    self.url, json=payload, headers=self.headers, timeout=self.timeout
+                )
+            except RETRYABLE_TRANSPORT_ERRORS as exc:
+                # Transient by construction: timeouts and connection failures
+                # (including resets and DNS hiccups) are worth another attempt.
+                last_error = exc
+                logger.warning(
+                    "justwatch_retry label=%s reason=transport attempt=%s/%s error=%s",
+                    label, attempt, self.retries, exc,
+                )
+                if attempt < self.retries:
+                    self._sleep_backoff(attempt)
+                continue
+            except requests.RequestException as exc:
+                # Invalid URL/schema and other permanent request problems: the
+                # same call would fail identically, so do not burn the budget.
+                raise JustWatchTransportError(
+                    f"JustWatch transport failed for {label}: {exc}"
+                ) from exc
+
             try:
                 status = int(getattr(response, "status_code", 0))
             except (TypeError, ValueError):
@@ -752,7 +786,10 @@ class JustWatchClient:
                 )
                 logger.warning("justwatch_retry label=%s status=%s attempt=%s",
                                label, status, attempt)
-                self._sleep_backoff(attempt)
+                # No pointless sleep after the last attempt: the retry budget
+                # is exhausted and the caller is about to see the failure.
+                if attempt < self.retries:
+                    self._sleep_backoff(attempt)
                 continue
 
             if status >= 400:
@@ -767,7 +804,7 @@ class JustWatchClient:
         raise JustWatchTransportError(
             f"JustWatch transport failed for {label} after {self.retries} attempts: "
             f"{last_error}"
-        )
+        ) from last_error
 
     def _sleep_backoff(self, attempt):
         # Exponential with jitter: bounded, and not synchronised across

@@ -48,6 +48,7 @@ from ..models import (
     AvailabilityRefreshStatus,
     Movie,
     RefreshRequest,
+    RefreshRequestOutcome,
     RefreshRequestStatus,
     RefreshRun,
     ScrapedContentMapping,
@@ -326,11 +327,17 @@ def _permanent_miss_sources(movie_ids: list[int]) -> dict[int, set[str]]:
     is what keeps a transient network 404 from being written off forever.
     """
     out: dict[int, set[str]] = defaultdict(set)
-    for movie_id, src, err in RefreshRequest.objects.filter(
-        movie_id__in=movie_ids, status=RefreshRequestStatus.FAILED
-    ).values_list("movie_id", "source", "last_error"):
-        if "UpstreamTitleNotFound" not in (err or ""):
-            continue
+    for movie_id, src in RefreshRequest.objects.filter(movie_id__in=movie_ids).filter(
+        Q(
+            status=RefreshRequestStatus.DONE,
+            outcome=RefreshRequestOutcome.TITLE_NOT_FOUND,
+        )
+        # Compatibility for database rows created before migration 0044.
+        | Q(
+            status=RefreshRequestStatus.FAILED,
+            last_error__startswith="UpstreamTitleNotFound",
+        )
+    ).values_list("movie_id", "source"):
         out[movie_id].add(src or DEFAULT_SOURCE_SLUG)
     return out
 
@@ -1113,14 +1120,16 @@ def stale_failure_breakdown(movie_ids) -> dict[str, int]:
     if not unknown_ids:
         return {"permanent": 0, "transient": 0}
     counts = {"permanent": 0, "transient": 0}
-    for movie_id, source, err in RefreshRequest.objects.filter(
-        movie_id__in=unknown_ids, status=RefreshRequestStatus.FAILED
-    ).values_list("movie_id", "source", "last_error"):
+    for movie_id, source, status, outcome, err in RefreshRequest.objects.filter(
+        movie_id__in=unknown_ids,
+    ).values_list("movie_id", "source", "status", "outcome", "last_error"):
         current = newest.get(movie_id, {}).get(source or DEFAULT_SOURCE_SLUG)
-        if current == RefreshRequestStatus.FAILED:
+        if current == status:
             continue  # already the headline; not stale
         key = (
-            "permanent" if "UpstreamTitleNotFound" in (err or "")
+            "permanent"
+            if outcome == RefreshRequestOutcome.TITLE_NOT_FOUND
+            or "UpstreamTitleNotFound" in (err or "")
             else "transient"
         )
         counts[key] += 1

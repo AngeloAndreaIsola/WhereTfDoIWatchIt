@@ -40,7 +40,9 @@ services:
       # reversible deployment decision rather than a side effect of a redeploy.
       AVAILABILITY_CONSULT_METERED_ONLY_WHEN_UNRESOLVED: ${AVAILABILITY_CONSULT_METERED_ONLY_WHEN_UNRESOLVED:-0}
     ports:
-      - "8000:8000"
+      # v1 has no authentication boundary; local Compose must never publish
+      # refresh/admin mutations to the LAN by default.
+      - "127.0.0.1:8000:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -52,7 +54,7 @@ services:
     environment:
       BACKEND_URL: ${BACKEND_URL}
     ports:
-      - "3001:3000"
+      - "127.0.0.1:3001:3000"
     depends_on:
       backend:
         condition: service_started

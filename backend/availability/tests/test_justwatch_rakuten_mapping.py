@@ -16,10 +16,11 @@ from availability.domain.enums import OfferType
 from availability.models import Country, Offer
 from availability.services.normalize import normalize_justwatch_offer_type
 from availability.services.refresh import AvailabilityRefreshService
+from availability.sources.base import ContentRequest
 from availability.sources.justwatch import JustWatchSource
 from availability.sources.justwatch_client import JustWatchClient
 from availability.sources.justwatch_providers import provider_slug_for_package
-from tracker.models import Movie
+from tracker.models import Movie, Provider, ProviderCategory
 from tracker.services import availability_report as ar
 
 from . import aggregator_fixtures as fx
@@ -69,6 +70,16 @@ class RakutenTitleFetchTests(TestCase):
         cls.nl, _ = Country.objects.get_or_create(
             code="NL", defaults={"name": "Netherlands"}
         )
+        # Test databases are flushed between cases, so the data migration that
+        # seeds this canonical provider is not a fixture dependency here.
+        Provider.objects.get_or_create(
+            slug="rakuten_tv",
+            defaults={
+                "name": "Rakuten TV",
+                "category": ProviderCategory.AVOD,
+                "domain": "rakuten.tv",
+            },
+        )
 
     def _refresh(self):
         return AvailabilityRefreshService(source=_source(fx.JW_SEARCH_RAKUTEN_NL))
@@ -100,10 +111,16 @@ class RakutenTitleFetchTests(TestCase):
     def test_an_unmapped_package_is_logged_at_warning(self):
         """A dropped provider must be observable, never silently lost."""
         source = _source(fx.JW_CATALOGUE_UNMAPPED_ONLY)
+        # The fixture title is "Obscure" / TMDb 550; the request must identify
+        # it, or the (correct) identity check returns no match before offers
+        # are ever inspected.
+        request = ContentRequest(
+            tmdb_id=550, title="Obscure", year=2025, content_type="movie",
+        )
         with self.assertLogs(
             "availability.sources.justwatch", level="WARNING"
         ) as captured:
-            source.fetch(self.movie, country="NL")
+            source.fetch(request, country="NL")
 
         self.assertTrue(
             any("justwatch_provider_unmapped" in line for line in captured.output),

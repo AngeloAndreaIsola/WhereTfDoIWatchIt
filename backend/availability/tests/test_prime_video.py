@@ -53,6 +53,8 @@ from availability.sources.prime_video import (
     STORE_MARKER,
     PrimeVideoClient,
     PrimeVideoSource,
+    _decode_cursor,
+    _encode_cursor,
 )
 from tracker.models import Movie, Provider
 
@@ -91,10 +93,29 @@ EUPHORIA_SHOW = "0SZVDKRFOUWD9URJ7OF2BP9GC6"
 MAXTON_SHOW = "0PNRI6RQY7CIO04HACV89WK5I3"
 
 
-def build_source(api=None, **source_kwargs):
+def build_source(api=None, *, delay=0.0, **source_kwargs):
     api = api or FakePrimeApi()
-    source = PrimeVideoSource(client=PrimeVideoClient(requester=api), **source_kwargs)
+    source = PrimeVideoSource(
+        client=PrimeVideoClient(requester=api, delay=delay), **source_kwargs
+    )
     return source, api
+
+
+def detail_path(gti: str) -> str:
+    """The path form the source records in a checkpoint (not the full URL)."""
+    return f"/detail/{gti}"
+
+
+def _offer_key(offer):
+    """A comparable identity for a :class:`ProviderOffer` (it has no ``eq`` key)."""
+    return (
+        offer.provider_content_id,
+        offer.content_type,
+        offer.season_number,
+        offer.episode_number,
+        offer.offer_type,
+        offer.provider_url,
+    )
 
 
 # ---------------------------------------------------------------- fixture edits
@@ -798,6 +819,124 @@ class CueTests(SimpleTestCase):
 # ------------------------------------------------------------------- persistence
 
 
+class CheckpointWalkTests(SimpleTestCase):
+    """A bounded batch resumes inside the discovered window."""
+
+    def test_bounded_batch_checkpoints_and_resumes_without_rediscovery(self):
+        source, api = build_source(max_contents=FIXTURE_WINDOW, batch_size=2)
+        first = source.fetch()
+        self.assertEqual(len(first.contents), 2)
+        checkpoint = _decode_cursor(first.cursor)
+        self.assertEqual(len(checkpoint["paths"]), FIXTURE_WINDOW - 2)
+        self.assertEqual(checkpoint["paths"][0], detail_path(STERLING_POINT))
+
+        index_requests = len(api.index_requests)
+        second = source.fetch(cursor=first.cursor)
+        self.assertEqual(len(second.contents), 2)
+        # Resuming skips discovery entirely: the storefront is not re-walked.
+        self.assertEqual(len(api.index_requests), index_requests)
+        self.assertEqual(
+            api.detail_requests[2:4],
+            [detail_url(STERLING_POINT), detail_url(HANDMAIDS_TALE)],
+        )
+
+    def test_resumption_sums_to_the_full_window_without_duplicates(self):
+        full_source, _ = build_source(max_contents=FIXTURE_WINDOW)
+        full = full_source.fetch()
+
+        source, _ = build_source(max_contents=FIXTURE_WINDOW, batch_size=3)
+        contents, offers, cursor = [], [], None
+        for _ in range(10):
+            result = source.fetch(cursor=cursor)
+            contents.extend(result.contents)
+            offers.extend(result.offers)
+            cursor = result.cursor
+            if cursor is None:
+                break
+
+        self.assertEqual(
+            [c.provider_content_id for c in contents],
+            [c.provider_content_id for c in full.contents],
+        )
+        self.assertEqual(
+            sorted(_offer_key(o) for o in offers),
+            sorted(_offer_key(o) for o in full.offers),
+        )
+
+    def test_a_late_detail_failure_fails_the_batch_and_is_retried(self):
+        source, api = build_source(max_contents=FIXTURE_WINDOW, batch_size=2)
+        first = source.fetch()  # MINIONS, LOVE_HYPOTHESIS
+        self.assertEqual(len(first.contents), 2)
+        self.assertEqual(_decode_cursor(first.cursor)["paths"][0],
+                         detail_path(STERLING_POINT))
+
+        # A detail page that cannot be read fails the whole fetch: never a
+        # smaller successful run.
+        api.failures[detail_url(STERLING_POINT)] = SourceFetchError("outage")
+        with self.assertRaises(SourceFetchError):
+            source.fetch(cursor=first.cursor)
+
+        # Retrying the same checkpoint re-reads the failing page (it was never
+        # skipped) and continues the window.
+        del api.failures[detail_url(STERLING_POINT)]
+        retry = source.fetch(cursor=first.cursor)
+        self.assertEqual(
+            api.detail_requests[-2:],
+            [detail_url(STERLING_POINT), detail_url(HANDMAIDS_TALE)],
+        )
+        self.assertIsNotNone(retry.cursor, "the window is not finished yet")
+
+    def test_a_failure_before_any_progress_is_still_a_failure(self):
+        source, api = build_source(
+            max_contents=FIXTURE_WINDOW, batch_size=FIXTURE_WINDOW
+        )
+        api.failures[detail_url(MINIONS)] = SourceFetchError("outage")
+        with self.assertRaises(SourceFetchError):
+            source.fetch()
+
+    def test_a_stale_or_unreadable_checkpoint_rediscovers(self):
+        source, api = build_source(max_contents=FIXTURE_WINDOW, batch_size=2)
+        result = source.fetch(cursor="not json")
+        self.assertIsNotNone(result.cursor)
+        self.assertEqual(
+            api.detail_requests[:2],
+            [detail_url(MINIONS), detail_url(LOVE_HYPOTHESIS)],
+        )
+
+    def test_the_final_window_batch_completes_with_no_cursor(self):
+        source, _ = build_source(max_contents=FIXTURE_WINDOW, batch_size=3)
+        cursor = None
+        seen = 0
+        for _ in range(10):
+            result = source.fetch(cursor=cursor)
+            seen += len(result.contents)
+            cursor = result.cursor
+            if cursor is None:
+                break
+        self.assertIsNone(cursor, "a finished window leaves no checkpoint")
+        self.assertEqual(seen, TOTAL_CONTENTS)
+
+    def test_the_checkpoint_payload_stays_bounded(self):
+        """The window rides in one cursor, so pin its realistic upper bound.
+
+        Defaults are ``max_contents=500`` / ``batch_size=100``: the largest
+        default checkpoint carries 400 unread paths plus their card cues. A
+        ``/detail/<compactGTI>`` path is 34 bytes and a real cue ~65, so the
+        encoded blob must stay well under a quarter megabyte — comfortably
+        inside ``SyncCursor.cursor`` (an unbounded ``TextField``).
+        """
+        cue = "Watch with a 30 day free Prime trial, auto renews at €4.99/month"
+        # A compact GTI is 26 alphanumerics, so a path is always 34 bytes.
+        pending = [f"/detail/{index:026d}" for index in range(400)]
+        cues = {item: cue for item in pending}
+
+        blob = _encode_cursor(pending, cues)
+        self.assertLess(len(blob.encode("utf-8")), 256 * 1024)
+        checkpoint = _decode_cursor(blob)
+        self.assertEqual(checkpoint["paths"], pending)
+        self.assertEqual(checkpoint["cues"], cues)
+
+
 class PrimeVideoRefreshTests(TestCase):
     """prime_video through AvailabilityRefreshService (fixture API, no network)."""
 
@@ -977,3 +1116,55 @@ class PrimeVideoRefreshTests(TestCase):
             self.service.refresh_catalogue(provider="netflix")
         with self.assertRaisesMessage(ValueError, "country"):
             self.service.refresh_catalogue(country="US")
+
+
+class PrimeVideoCheckpointPersistenceTests(TestCase):
+    """Bounded detail batches persist durably; a failed batch is retried."""
+
+    def setUp(self):
+        self.api = FakePrimeApi()
+        self.source = PrimeVideoSource(
+            client=PrimeVideoClient(requester=self.api, delay=0.0),
+            max_contents=FIXTURE_WINDOW,
+            batch_size=2,
+        )
+        self.service = AvailabilityRefreshService(source=self.source)
+        self.provider = Provider.objects.get(slug="prime")
+        self.minions = Movie.objects.create(
+            tmdb_id=9101, title="Minions & Monsters", year=2026, content_type="movie"
+        )
+        self.hangover = Movie.objects.create(
+            tmdb_id=9102, title="The Hangover", year=2009, content_type="movie"
+        )
+        self.sterling = Movie.objects.create(
+            tmdb_id=9103, title="Sterling Point", content_type="series"
+        )
+
+    def test_a_failed_batch_keeps_the_window_and_earlier_rows(self):
+        self.service.refresh_catalogue()   # MINIONS, LOVE_HYPOTHESIS
+        first = _decode_cursor(SyncCursor.objects.get().cursor)
+        self.assertEqual(first["paths"][0], detail_path(STERLING_POINT))
+        first_offers = Offer.objects.count()
+        self.assertEqual(ProviderContent.objects.count(), 2)
+
+        # The failing page is first in the next batch: the fetch must fail
+        # rather than silently publish a short window, and the checkpoint and
+        # the rows the previous batch wrote must survive untouched.
+        self.api.failures[detail_url(STERLING_POINT)] = SourceFetchError("outage")
+        with self.assertRaises(SourceFetchError):
+            self.service.refresh_catalogue()
+        self.assertEqual(
+            _decode_cursor(SyncCursor.objects.get().cursor)["paths"][0],
+            detail_path(STERLING_POINT),
+        )
+        self.assertEqual(Offer.objects.count(), first_offers)
+        self.assertEqual(ProviderContent.objects.count(), 2)
+
+        # The retry resumes at the unread page and finishes the window; a
+        # finished window drops its checkpoint instead of leaving it behind.
+        del self.api.failures[detail_url(STERLING_POINT)]
+        while SyncCursor.objects.exists():
+            self.service.refresh_catalogue()
+        self.assertEqual(ProviderContent.objects.count(), TOTAL_CONTENTS)
+        self.assertEqual(Offer.objects.count(), 13)
+        self.assertFalse(SyncCursor.objects.exists())

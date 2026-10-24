@@ -27,6 +27,13 @@ QUALITY_MAPPINGS = {
     "sd": "480p",
 }
 
+#: Minimum confidence for an automatic scrape -> TMDb association. Confidence
+#: is necessary but no longer sufficient: ``ContentMatcher.match_item`` also
+#: demands identity-grade title evidence and a unique winning candidate, so a
+#: weak title signal can never buy an association just by accumulating points
+#: (notably the old substring 0.4 + missing-year 0.2 = 0.6 path).
+AUTO_MATCH_CONFIDENCE = 0.6
+
 
 def normalize_quality(raw_quality: Optional[str]) -> Optional[str]:
     """Normalize raw quality string into canonical representations (4K, 1080p, 720p, 480p)."""
@@ -180,6 +187,7 @@ class ContentMatcher:
 
         # Score candidates
         candidate_list = []
+        scored_candidates = []
         best_movie = None
         best_score = 0.0
 
@@ -192,14 +200,28 @@ class ContentMatcher:
                 "confidence_score": score,
             }
             candidate_list.append(cand_dict)
+            scored_candidates.append((score, cand))
             if score > best_score:
                 best_score = score
                 best_movie = cand
 
-        # Auto-associate if confidence is reasonable (>= 0.6)
-        # Scraped items often lack year info, capping score at ~0.8 even for exact title matches.
+        # Auto-associate only when the evidence is identity-grade. The score
+        # alone is not enough: a weak title relation plus a missing year can
+        # still add up to the threshold, and a tied best score means the
+        # search did not identify one title at all. Either case is persisted
+        # as an unresolved mapping instead (``movie=None``), which keeps the
+        # scrape visible for review without attaching availability to a guess.
+        distinct_winners = {
+            cand.tmdb_id for score, cand in scored_candidates
+            if score == best_score
+        }
         matched_movie_obj = None
-        if best_score >= 0.6 and best_movie:
+        if (
+            best_score >= AUTO_MATCH_CONFIDENCE
+            and best_movie
+            and len(distinct_winners) == 1
+            and self._is_confident_title_match(item, best_movie)
+        ):
             matched_movie_obj, _ = Movie.objects.get_or_create(
                 tmdb_id=best_movie.tmdb_id,
                 defaults={
@@ -236,74 +258,105 @@ class ContentMatcher:
         catalogue (which reads only the canonical tables) never lags behind a
         scrape or a manual confirmation.
         """
-        from availability.services.legacy_ingest import ingest_scraped_mapping
+        # Imported lazily to keep the scraper base independent of the service
+        # package during Django app initialization.
+        from tracker.services.scraped_mapping import persist_scraped_item
 
-        payload = dict(item.raw_payload) if isinstance(item.raw_payload, dict) else {}
-        payload.setdefault("content_type", item.content_type)
-        try:
-            mapping, _created = ScrapedContentMapping.objects.update_or_create(
-                provider=provider,
-                scraped_title=item.title,
-                scraped_year=item.year,
-                defaults={
-                    "scraped_url": item.source_url,
-                    "movie": movie,
-                    "is_confirmed": False,
-                    "confidence_score": confidence,
-                    "raw_payload": payload,
-                },
-            )
-        except ScrapedContentMapping.MultipleObjectsReturned:
-            ScrapedContentMapping.objects.filter(
-                provider=provider,
-                scraped_title=item.title,
-                scraped_year=item.year,
-            ).exclude(id=ScrapedContentMapping.objects.filter(
-                provider=provider,
-                scraped_title=item.title,
-                scraped_year=item.year,
-            ).values_list('id', flat=True).first()).delete()
-            mapping, _created = ScrapedContentMapping.objects.update_or_create(
-                provider=provider,
-                scraped_title=item.title,
-                scraped_year=item.year,
-                defaults={
-                    "scraped_url": item.source_url,
-                    "movie": movie,
-                    "is_confirmed": False,
-                    "confidence_score": confidence,
-                    "raw_payload": payload,
-                },
-            )
-        ingest_scraped_mapping(mapping)
+        persist_scraped_item(
+            provider=provider,
+            item=item,
+            movie=movie,
+            confidence=confidence,
+            apply_match=True,
+        )
+
+    @staticmethod
+    def _normalize_title(value) -> str:
+        """Case/punctuation/whitespace-insensitive title form."""
+        return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+
+    @staticmethod
+    def _is_token_run(shorter: list[str], longer: list[str]) -> bool:
+        """True when *shorter* appears as a contiguous word run in *longer*.
+
+        Character-level containment is what let ``Her`` match ``Hereditary``:
+        a five-letter title is a substring of hundreds of unrelated words. A
+        word-run comparison keeps legitimate variants (``Matrix`` in ``The
+        Matrix``) while refusing accidental character overlaps.
+        """
+        if not shorter or len(shorter) > len(longer):
+            return False
+        return any(
+            longer[start:start + len(shorter)] == shorter
+            for start in range(len(longer) - len(shorter) + 1)
+        )
+
+    @classmethod
+    def _title_relation(cls, left, right) -> str:
+        """Strongest title relation between two raw titles.
+
+        ``exact`` is the only relation strong enough to confirm a mapping on
+        its own; the weaker relations only contribute to the review score.
+        """
+        normalized_left = cls._normalize_title(left)
+        normalized_right = cls._normalize_title(right)
+        if not normalized_left or not normalized_right:
+            return "none"
+        if normalized_left == normalized_right:
+            return "exact"
+        left_words = normalized_left.split()
+        right_words = normalized_right.split()
+        if cls._is_token_run(left_words, right_words) or cls._is_token_run(
+            right_words, left_words
+        ):
+            return "contains"
+        overlap = len(set(left_words) & set(right_words)) / max(
+            len(set(left_words)), len(set(right_words))
+        )
+        if overlap >= 0.5:
+            return "overlap"
+        if overlap > 0:
+            return "weak_overlap"
+        return "none"
+
+    @classmethod
+    def _is_confident_title_match(cls, item: ScrapedItem, candidate: TMDbMovie) -> bool:
+        """Whether the title evidence justifies an automatic association.
+
+        Only normalized equality qualifies. A known conflicting year
+        disqualifies a movie (a remake is a different TMDb identity); series
+        keep the established policy where the provider year can be a catalogue
+        re-add date rather than a first-air year. Containment/overlap title
+        relations stay unresolved for review no matter how the score adds up.
+        """
+        if cls._title_relation(item.title, candidate.title) != "exact":
+            return False
+        if item.content_type == "series":
+            return True
+        if item.year and candidate.year and abs(item.year - candidate.year) > 1:
+            return False
+        return True
 
     @staticmethod
     def calculate_confidence(item: ScrapedItem, candidate: TMDbMovie) -> float:
-        """Calculate confidence score between 0.0 and 1.0."""
+        """Calculate confidence score between 0.0 and 1.0.
+
+        The score is review evidence, not the acceptance decision: weak title
+        relations are intentionally capped below :data:`AUTO_MATCH_CONFIDENCE`
+        so a missing year cannot lift a substring/word-overlap match over the
+        line, and :meth:`match_item` additionally requires an exact normalized
+        title (and, for movies, compatible years).
+        """
         score = 0.0
-        import re
-        def normalize(t):
-            return re.sub(r'[^a-z0-9]', ' ', t.lower()).strip()
-            
-        s_title = normalize(item.title)
-        c_title = normalize(candidate.title)
-        
-        s_words = set(s_title.split())
-        c_words = set(c_title.split())
-        
-        if s_title == c_title:
+        relation = ContentMatcher._title_relation(item.title, candidate.title)
+        if relation == "exact":
             score += 0.6
-        elif s_title in c_title or c_title in s_title:
+        elif relation == "contains":
             score += 0.4
-        elif s_words and c_words:
-            overlap = len(s_words.intersection(c_words))
-            max_len = max(len(s_words), len(c_words))
-            if overlap / max_len >= 0.5:
-                score += 0.35
-            elif overlap > 0:
-                score += 0.2
-        else:
-            score += 0.1
+        elif relation == "overlap":
+            score += 0.35
+        elif relation == "weak_overlap":
+            score += 0.2
 
         if item.year and candidate.year:
             if item.year == candidate.year:

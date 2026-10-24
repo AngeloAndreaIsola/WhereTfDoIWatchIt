@@ -60,12 +60,18 @@ Product semantics:
 
 Deliberate limitations, documented rather than papered over:
 
-- **Politeness delay + cap**: one run is 1 list + ~1613 detail requests;
-  the client sleeps ``DEFAULT_DELAY`` (0.18s) between detail fetches (~5
-  minutes per run) and the walk stops at ``MAX_SERIES`` with a warning so a
-  runaway index can never burn an unbounded number of requests.
-- **No incremental cursor across runs**: the walk starts from the top each
-  run (``supports_incremental_sync=False``).
+- **Politeness delay + batched walk**: one run walks the 1-request index plus
+  at most ``DEFAULT_BATCH_SERIES`` detail requests, sleeping
+  ``DEFAULT_DELAY`` (0.18s) between them, and stops at ``MAX_SERIES`` with a
+  warning so a runaway index can never burn an unbounded number of requests.
+- **Resumable checkpoint**: the walk returns the last successfully inspected
+  slug in ``cursor``; the refresh service persists it after the batch's rows
+  are committed, and the next run resumes after it. A late detail failure
+  fails only that bounded batch — previous batches are already persisted and
+  the checkpoint is not advanced, so the retry re-reads at most one batch
+  instead of the whole catalogue. A complete walk returns no cursor
+  (``supports_incremental_sync=False``: this is a bounded traversal, not an
+  incremental offer sync).
 - **Never authoritative**: absence in one run never deactivates offers
   (``supports_authoritative_snapshots=False``) — a 404'd series or a
   half-fetched run must not read as removals.
@@ -75,6 +81,7 @@ Deliberate limitations, documented rather than papered over:
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
@@ -112,6 +119,14 @@ MAX_SERIES = 3000
 #: Politeness delay between detail requests: ~1613 requests x 0.18s ~= 5
 #: minutes per catalogue refresh (live endpoints tolerate this rate).
 DEFAULT_DELAY = 0.18
+#: Series detail pages one fetch walks before returning a resumable
+#: checkpoint. 1613 pages in one request chain means a failure at page 1600
+#: threw away the 1599 pages before it; a bounded batch persists what it
+#: observed, and the next run continues from the checkpoint.
+DEFAULT_BATCH_SERIES = 250
+#: Bump when the checkpoint shape changes; an unknown version is ignored and
+#: the walk restarts from the top instead of resuming from garbage.
+CURSOR_VERSION = 1
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
@@ -228,8 +243,8 @@ class AbcIviewSource:
         supported_content_types=frozenset(
             {ContentType.SERIES, ContentType.SEASON, ContentType.EPISODE}
         ),
-        # The walk starts from the top every run; no cursor persists across
-        # runs (see module docstring).
+        # The walk resumes from its own checkpoint; that is a traversal
+        # position, not an incremental offer sync (see module docstring).
         supports_incremental_sync=False,
         supports_catalogue_sync=True,
         # A series that 404s mid-run must not read as a removal: absence
@@ -244,8 +259,9 @@ class AbcIviewSource:
         supports_languages=True,
     )
 
-    def __init__(self, client=None):
+    def __init__(self, client=None, batch_size=DEFAULT_BATCH_SERIES):
         self.client = client or AbcIviewClient()
+        self.batch_size = max(1, int(batch_size))
 
     def fetch(self, content=None, *, provider=None, country=None, cursor=None) -> SourceFetchResult:
         if content is not None:
@@ -255,15 +271,38 @@ class AbcIviewSource:
             )
         # provider/country are the caller's scope hints: this source has one
         # provider and one fixed market (see module docstring), so both are
-        # accepted and not acted on. cursor is unused — pagination is an
-        # internal walk inside fetch().
+        # accepted and not acted on.
+        #
+        # ``cursor`` is the durable walk checkpoint: the last series slug a
+        # previous fetch persisted. One fetch walks at most ``batch_size``
+        # detail pages and returns the checkpoint for the next one, so a late
+        # request failure cannot discard a whole catalogue's worth of work.
 
         contents: list[DiscoveredContent] = []
         offers: list[ProviderOffer] = []
         seen_slugs: set[str] = set()
         details_fetched = 0
+        after_slug = _decode_cursor(cursor)
 
-        for entry in self.client.series_list():
+        entries = self.client.series_list()
+        start = 0
+        if after_slug:
+            for index, entry in enumerate(entries):
+                if isinstance(entry, dict) and _entry_slug(entry) == after_slug:
+                    start = index + 1
+                    break
+            else:
+                # The checkpointed series left the index. Restarting re-reads
+                # a window that was already persisted; it never skips ahead.
+                logger.warning(
+                    "abc_iview_cursor_checkpoint_missing after=%s reason=restarting",
+                    after_slug,
+                )
+
+        window = entries[start:]
+        last_slug = ""
+        truncated = False
+        for entry in window:
             if not isinstance(entry, dict):
                 logger.info(
                     "abc_iview_entry_skipped reason=non_mapping value=%r", entry
@@ -279,18 +318,25 @@ class AbcIviewSource:
                 continue
             if slug in seen_slugs:
                 continue
-            if details_fetched >= MAX_SERIES:
-                logger.warning(
-                    "abc_iview_series_cap cap=%s series=%s",
-                    MAX_SERIES, len(seen_slugs),
-                )
+            if details_fetched >= min(self.batch_size, MAX_SERIES):
+                truncated = True
+                if self.batch_size >= MAX_SERIES:
+                    logger.warning(
+                        "abc_iview_series_cap cap=%s series=%s",
+                        MAX_SERIES, len(seen_slugs),
+                    )
                 break
             seen_slugs.add(slug)
             details_fetched += 1
+            # A transport/parse failure here propagates: a catalogue batch that
+            # cannot be completed is a failed fetch, never a smaller successful
+            # one. The caller keeps the checkpoint it passed in, so the retry
+            # re-reads at most this one bounded batch.
             detail = self.client.series_detail(slug)
+            # A 404 is an observed absence, not a failure: it still advances
+            # the checkpoint because the series was genuinely inspected.
+            last_slug = slug
             if detail is None:
-                # The series vanished between index and detail: an observed
-                # absence, not an error.
                 logger.info("abc_iview_show_gone slug=%s", slug)
                 continue
             parsed_content, parsed_offers = self._show_rows(slug, title, detail)
@@ -299,13 +345,18 @@ class AbcIviewSource:
             contents.append(parsed_content)
             offers.extend(parsed_offers)
 
+        # A checkpoint is only emitted while there is more to walk; a complete
+        # walk returns None so the refresh service can drop a stale checkpoint
+        # rather than resume a finished catalogue.
+        next_cursor = _encode_cursor(last_slug) if (truncated and last_slug) else None
+
         return SourceFetchResult(
             contents=contents,
             offers=offers,
             authoritative=False,
             complete_snapshot=False,
             sync_mode=SyncMode.FULL,
-            cursor=None,
+            cursor=next_cursor,
         )
 
     # ------------------------------------------------------------------ rows
@@ -487,3 +538,31 @@ def _parse_pub_date(value) -> Optional[datetime]:
     except (TypeError, ValueError):
         return None
     return naive.replace(tzinfo=_PUB_DATE_TZ).astimezone(timezone.utc)
+
+
+def _decode_cursor(cursor) -> str:
+    """The last successfully walked slug from a stored checkpoint, else ``""``.
+
+    Any unreadable or foreign checkpoint means "start from the top": a broken
+    cursor is never a reason to look like a finished walk.
+    """
+    if not cursor:
+        return ""
+    data = cursor
+    if not isinstance(cursor, dict):
+        try:
+            data = json.loads(str(cursor))
+        except (TypeError, ValueError):
+            logger.warning("abc_iview_cursor_invalid cursor=%r", str(cursor)[:160])
+            return ""
+    if not isinstance(data, dict) or data.get("v") != CURSOR_VERSION:
+        logger.warning("abc_iview_cursor_reset version=%r", data.get("v") if isinstance(data, dict) else None)
+        return ""
+    after = data.get("after")
+    return str(after) if after else ""
+
+
+def _encode_cursor(after: str) -> str:
+    """Durable checkpoint: the last slug this walk observed successfully."""
+    return json.dumps({"v": CURSOR_VERSION, "after": after}, sort_keys=True,
+                      separators=(",", ":"))

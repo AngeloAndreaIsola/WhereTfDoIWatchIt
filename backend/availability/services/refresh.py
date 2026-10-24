@@ -276,6 +276,7 @@ class AvailabilityRefreshService:
         # never writes a cursor is unaffected: its row is absent or empty.
         # No Source row means no checkpoint can exist; the row is created by
         # the persistence step only after a successful fetch.
+        explicit_cursor = cursor is not None
         if cursor is None and source_row is not None and provider_row is not None \
                 and country_row is not None:
             stored = self.cursors.get(
@@ -325,6 +326,27 @@ class AvailabilityRefreshService:
                 "availability_cursor_advanced source=%s provider=%s country=%s",
                 self.source.slug, resolved_provider, resolved_country,
             )
+        elif not explicit_cursor and provider_row is not None and country_row is not None:
+            # The source reported no further checkpoint, so its traversal is
+            # complete. Dropping a leftover checkpoint is what stops the next
+            # run from resuming a finished walk (and from resurrecting a
+            # cursor written by an older, longer catalogue). Only a walk the
+            # source itself owns is cleared: a caller that supplied its own
+            # cursor (JustWatch's partition coordinator, whose cursor row also
+            # carries *other* partitions' offsets) keeps what it passed.
+            try:
+                if source_row is None:
+                    source_row = Source.objects.get(slug=self.source.slug)
+                self.cursors.delete(
+                    provider=provider_row, source=source_row, country=country_row,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "availability_cursor_clear_failed source=%s provider=%s "
+                    "country=%s error=%s",
+                    self.source.slug, resolved_provider, resolved_country, exc,
+                )
+                raise
         return refresh_result
 
     @staticmethod

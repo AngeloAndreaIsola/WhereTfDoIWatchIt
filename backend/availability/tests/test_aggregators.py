@@ -21,6 +21,7 @@ What is asserted, and why each matters:
 """
 from __future__ import annotations
 
+import requests
 from django.test import SimpleTestCase, TestCase
 
 from availability.domain.enums import (
@@ -189,6 +190,75 @@ class JustWatchTransportTests(SimpleTestCase):
         with self.assertRaises(JustWatchTransportError):
             client.catalogue_titles(country="NL", count=10)
         self.assertEqual(len(seen), 1, "a 400 will stay a 400; do not burn budget")
+
+    # -- transient transport faults ---------------------------------------
+    def build_with_sleeps(self, *responses):
+        queue = list(responses)
+        seen, sleeps = [], []
+
+        def http_post(url, json=None, headers=None, timeout=None):
+            seen.append(json)
+            item = queue.pop(0) if queue else fx.FakeResponse()
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+        client = JustWatchClient(http_post=http_post, sleeper=sleeps.append)
+        return client, seen, sleeps
+
+    def test_connection_error_is_retried_then_succeeds(self):
+        client, seen, sleeps = self.build_with_sleeps(
+            requests.exceptions.ConnectionError("reset"),
+            fx.FakeResponse(payload=fx.JW_CATALOGUE_EMPTY),
+        )
+        page = client.catalogue_titles(country="NL", count=10)
+        self.assertEqual(len(page), 0)
+        self.assertEqual(len(seen), 2, "a connection error must be retried")
+        self.assertEqual(len(sleeps), 1, "one bounded backoff before the retry")
+
+    def test_timeout_is_retried_then_succeeds(self):
+        client, seen, _ = self.build_with_sleeps(
+            requests.exceptions.Timeout("slow"),
+            fx.FakeResponse(payload=fx.JW_CATALOGUE_EMPTY),
+        )
+        page = client.catalogue_titles(country="NL", count=10)
+        self.assertEqual(len(page), 0)
+        self.assertEqual(len(seen), 2, "a timeout must be retried")
+
+    def test_exhausted_connection_errors_raise_with_cause(self):
+        error = requests.exceptions.ConnectionError("still down")
+        client, seen, sleeps = self.build_with_sleeps(error, error, error)
+        with self.assertRaises(JustWatchTransportError) as ctx:
+            client.catalogue_titles(country="NL", count=10)
+        self.assertEqual(len(seen), 3, "the retry budget is bounded at 3")
+        self.assertEqual(len(sleeps), 2, "no sleep after the final attempt")
+        self.assertIs(ctx.exception.__cause__, error)
+
+    def test_retryable_status_exhaustion_keeps_a_cause(self):
+        client, seen, _ = self.build_with_sleeps(
+            fx.FakeResponse(status_code=503),
+            fx.FakeResponse(status_code=503),
+            fx.FakeResponse(status_code=503),
+        )
+        with self.assertRaises(JustWatchTransportError) as ctx:
+            client.catalogue_titles(country="NL", count=10)
+        self.assertEqual(len(seen), 3)
+        self.assertIsNotNone(ctx.exception.__cause__)
+
+    def test_permanent_request_error_is_not_retried(self):
+        error = requests.exceptions.InvalidURL("bad url")
+        client, seen, sleeps = self.build_with_sleeps(error)
+        with self.assertRaises(JustWatchTransportError) as ctx:
+            client.catalogue_titles(country="NL", count=10)
+        self.assertEqual(len(seen), 1, "a permanent request error must not retry")
+        self.assertEqual(sleeps, [])
+        self.assertIs(ctx.exception.__cause__, error)
+
+    def test_connection_error_does_not_become_an_empty_catalogue(self):
+        error = requests.exceptions.ConnectionError("down")
+        client, _, _ = self.build_with_sleeps(error, error, error)
+        with self.assertRaises(JustWatchTransportError):
+            client.catalogue_titles(country="NL", count=10)
 
     def test_malformed_non_json_response(self):
         client, _ = self.build(fx.FakeResponse(
@@ -458,6 +528,19 @@ class JustWatchSourceFetchTests(SimpleTestCase):
         with self.assertRaises(SourceFetchError):
             source.fetch(ContentRequest(tmdb_id=1, title="X"), country="NL")
 
+    def test_transport_connection_failure_is_a_source_fetch_error(self):
+        """A raw requests error must not escape the source boundary."""
+        def http_post(url, json=None, headers=None, timeout=None):
+            raise requests.exceptions.ConnectionError("network down")
+
+        source = JustWatchSource(
+            client=JustWatchClient(http_post=http_post, sleeper=sleeper)
+        )
+        with self.assertRaises(SourceFetchError):
+            source.fetch(ContentRequest(tmdb_id=1, title="X"), country="NL")
+        with self.assertRaises(SourceFetchError):
+            source.fetch(None, country="NL")
+
     def test_no_match_is_a_successful_empty_result(self):
         source, _ = self.movie_source(
             fx.FakeResponse(payload=fx.JW_CATALOGUE_EMPTY))
@@ -525,7 +608,12 @@ class JustWatchCatalogueTests(SimpleTestCase):
         )
         source.page_size = 100
         result = source.fetch(None, provider="netflix", country="NL")
-        self.assertEqual(source.page_size, 50)
+        # Halved in the retry request, not by mutating shared source state.
+        firsts = [
+            payload["variables"]["first"] for payload in seen
+        ]
+        self.assertEqual(firsts, [100, 50])
+        self.assertEqual(source.page_size, 100)
         self.assertEqual(len(seen), 2)
         self.assertTrue(result.contents)
 

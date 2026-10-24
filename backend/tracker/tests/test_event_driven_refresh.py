@@ -1381,20 +1381,22 @@ class DrainTests(TestCase):
         self.assertEqual(first["skipped_upstream_missing"], 1)
         self.assertEqual(first["requests_drained"], 1)
         request = RefreshRequest.objects.get()
-        # Failed immediately, having attempted exactly once — not MAX_ATTEMPTS.
+        # Successful negative immediately, having attempted exactly once — not
+        # MAX_ATTEMPTS. A missing upstream title is not a transport failure.
         self.assertEqual(request.attempts, 1)
-        self.assertEqual(request.status, RefreshRequestStatus.FAILED)
-        self.assertIn("UpstreamTitleNotFound", request.last_error)
+        self.assertEqual(request.status, RefreshRequestStatus.DONE)
+        self.assertEqual(request.outcome, "title_not_found")
+        self.assertEqual(request.last_error, "")
 
         calls_so_far = self.refresh_service.refresh_content.call_count
         second = self._run()
         # Dead on arrival: the request is never picked up again...
         self.assertEqual(second["requests_drained"], 0)
         self.assertEqual(
-            RefreshRequest.objects.get().status, RefreshRequestStatus.FAILED
+            RefreshRequest.objects.get().status, RefreshRequestStatus.DONE
         )
         # ...and the title costs no further metered calls. The permanent 404 is
-        # remembered as evidence (a failed UpstreamTitleNotFound request), so
+        # remembered as a successful negative observation, so
         # neither the queue drain nor the background sweep re-fetches it — an
         # absent title writes no Offer row and would otherwise read as stale
         # forever, burning one call per sweep run, every run.

@@ -69,6 +69,7 @@ from ..domain.enums import ContentType, SourceType, SyncMode
 from ..domain.models import DiscoveredContent, ProviderOffer
 from ..services.normalize import (
     normalize_country,
+    normalize_content_type,
     normalize_justwatch_offer_type,
     normalize_justwatch_quality,
     normalize_languages,
@@ -194,9 +195,10 @@ class JustWatchSource:
 
         JustWatch is keyed by its own node ids, so the entry point is a search:
         the title is matched on TMDb id when it is already known (the exact
-        external id the source was asked about), falling back to the title/year
-        search. An ambiguous search is *not* guessed — the first exact TMDb
-        match wins, and no match is an honest empty result.
+        external id the source was asked about), falling back to conservative
+        exact title/year evidence. A media-namespace mismatch, a conflicting
+        TMDb id, an ambiguous result or no result at all is an honest empty
+        result — never the first search hit.
         """
         request = content if isinstance(content, ContentRequest) else ContentRequest.from_content(content)
         titles = self._search_titles(request, country=country)
@@ -232,7 +234,24 @@ class JustWatchSource:
         )
 
     def _search_titles(self, request, *, country):
-        """Find the JustWatch node(s) for a content request."""
+        """Find the JustWatch node(s) that provably match a content request.
+
+        Identity is established by evidence, never by result order:
+
+        1. candidates are restricted to the request's media namespace, so a
+           movie request can never accept a show's numerically identical TMDb
+           id (TMDb movie and TV ids are separate namespaces);
+        2. when the request states a TMDb id, only that id matches; a candidate
+           stating a *different* id is a different title and is discarded even
+           if its title/year look similar;
+        3. otherwise exact normalized title (+ year, when the request has one)
+           must identify exactly one distinct node.
+
+        An unresolved or ambiguous search returns ``[]`` — the caller turns
+        that into an honest empty result. ``candidates[:1]`` used to make the
+        first search hit the requested title, which is how a remake or an
+        unrelated same-name result inherited another film's offers.
+        """
         try:
             page = self.client.search_titles(
                 request.title or "",
@@ -247,15 +266,70 @@ class JustWatchSource:
         candidates = list(page.titles)
         if not candidates:
             return []
+
+        expected_type = self._requested_content_type(request)
+        if expected_type is not None:
+            candidates = [
+                title for title in candidates
+                if self._content_type(title) == expected_type
+            ]
+            if not candidates:
+                return []
+
         if request.tmdb_id:
             exact = [t for t in candidates if t.tmdb_id_int == request.tmdb_id]
             if exact:
                 return exact
-        if request.year:
-            same_year = [t for t in candidates if t.year == request.year]
-            if same_year:
-                return same_year
-        return candidates[:1]
+            # No candidate carries the requested id. Only candidates that state
+            # *no* id may still be resolved on title/year evidence; one that
+            # states a conflicting id is a different identity.
+            candidates = [t for t in candidates if t.tmdb_id_int is None]
+            if not candidates:
+                return []
+
+        return self._title_evidence_matches(request, candidates)
+
+    @staticmethod
+    def _requested_content_type(request):
+        """Canonical movie/series type the request declares, or ``None``."""
+        raw = getattr(request, "content_type", None)
+        if not raw:
+            return None
+        try:
+            value = normalize_content_type(raw)
+        except ValueError:
+            return None
+        return value if value in (ContentType.MOVIE, ContentType.SERIES) else None
+
+    @staticmethod
+    def _normalized_title(value):
+        return " ".join(str(value or "").casefold().split())
+
+    def _title_evidence_matches(self, request, candidates):
+        """Exact title (+ year) fallback for candidates without a usable id."""
+        if not request.title:
+            return []
+        wanted = self._normalized_title(request.title)
+        matches = [
+            title for title in candidates
+            if self._normalized_title(title.title) == wanted
+        ]
+        if not matches:
+            return []
+        if request.year is not None:
+            matches = [title for title in matches if title.year == request.year]
+            if not matches:
+                return []
+
+        # Equal title/year on two distinct identities is ambiguous, not a win
+        # for whichever result the search happened to return first.
+        identities = {
+            title.tmdb_id_int if title.tmdb_id_int is not None else ("node", title.id)
+            for title in matches
+        }
+        if len(identities) != 1:
+            return []
+        return matches
 
     def _seasons(self, node_id, country):
         try:
@@ -306,6 +380,12 @@ class JustWatchSource:
         all_contents, all_offers = [], []
         next_offset = offset
         exhausted = False
+        # Page-size clamp state is local to *this* walk. Mutating
+        # ``self.page_size`` here used to leak a halved size into every later
+        # partition, and recursing started a fresh result list that discarded
+        # the titles/offers already collected. Both are why the retry below is
+        # a ``continue`` in one iterative loop.
+        page_size = self.page_size
 
         while remaining_pages > 0:
             if next_offset >= self.max_offset:
@@ -319,7 +399,7 @@ class JustWatchSource:
                 page = self.client.catalogue_titles(
                     country=country,
                     language=self.language,
-                    count=self.page_size,
+                    count=page_size,
                     offset=next_offset,
                     packages=packages or None,
                     object_types=object_types,
@@ -328,20 +408,18 @@ class JustWatchSource:
                     best_only=self.best_only,
                 )
             except JustWatchGraphQLError as exc:
-                if exc.page_too_large and self.page_size > 1:
+                if exc.page_too_large and page_size > 1:
                     # Measured: the page ceiling is a server-side complexity
                     # budget (~800/title, limit 350000). Halving and retrying
-                    # once keeps a catalogue walk working if the endpoint
-                    # tightens it.
-                    self.page_size = max(1, self.page_size // 2)
+                    # the *same* offset keeps a catalogue walk working if the
+                    # endpoint tightens it. Accumulated pages, the page budget
+                    # and the partition context all survive because this does
+                    # not restart the walk.
+                    page_size = max(1, page_size // 2)
                     logger.warning("justwatch_page_clamped country=%s offset=%s "
                                    "new_page_size=%s", country, next_offset,
-                                   self.page_size)
-                    return self._fetch_catalogue(
-                        country=country, provider=provider,
-                        content_type=content_type, offset=next_offset,
-                        pages=1, min_year=min_year, max_year=max_year,
-                    )
+                                   page_size)
+                    continue
                 # A GraphQL rejection is a failed fetch, never an empty page.
                 raise self._as_fetch_error("catalogue", exc) from exc
             except JustWatchError as exc:
@@ -361,7 +439,13 @@ class JustWatchSource:
                 resolved_type = self._content_type(title)
                 if resolved_type is None:
                     continue
-                all_contents.append(self._content(title, resolved_type, country))
+                # The partition's provider owns the catalogue row. Falling
+                # back to the title's first mapped package attributed a
+                # Netflix-walked title to Prime Video whenever Prime's offer
+                # happened to come first in the payload.
+                all_contents.append(self._content(
+                    title, resolved_type, country, provider=provider,
+                ))
                 # Client-side offer filtering: the `packages` filter selects
                 # *titles*, so the offers inside each node still span every
                 # provider carrying that title. Filtering to the requested
@@ -374,7 +458,7 @@ class JustWatchSource:
                     only_provider=provider,
                 ))
 
-            next_offset += self.page_size
+            next_offset += page_size
             remaining_pages -= 1
             if next_offset >= self.max_offset:
                 exhausted = True
@@ -479,12 +563,18 @@ class JustWatchSource:
             price_error=price.error,
         )
 
-    def _content(self, title, content_type, country):
+    def _content(self, title, content_type, country, *, provider=None):
         """Provider-native content entry, identified by JustWatch's node id.
 
         ``external_ids`` carries the TMDb/IMDb ids when present, so a later
         refresh can resolve the mapping without re-querying; the refresh
         service's matching step prefers them over title/year.
+
+        ``provider`` is the partition's provider when a catalogue walk supplies
+        one. A title's offers span several providers, but a provider-filtered
+        catalogue row belongs to the provider whose partition discovered it —
+        the first mapped package on the node is not a substitute for that
+        context.
         """
         external_ids = {}
         if title.tmdb_id_int:
@@ -492,7 +582,7 @@ class JustWatchSource:
         if title.imdb_id:
             external_ids["imdb"] = str(title.imdb_id)
         return DiscoveredContent(
-            provider_id=self._dominant_provider_slug(title),
+            provider_id=provider or self._dominant_provider_slug(title),
             provider_content_id=str(title.id or ""),
             content_type=content_type,
             title=title.title,

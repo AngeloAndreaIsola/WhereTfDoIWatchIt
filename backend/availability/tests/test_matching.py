@@ -41,6 +41,14 @@ class MatchLocalCatalogTests(TestCase):
             tmdb_id=7000, title="Known Show", year=2020, content_type="series"
         )
 
+    def test_a_short_title_is_not_a_substring_match(self):
+        """`Her` must never map to `Hereditary`: title matching is exact."""
+        Movie.objects.create(
+            tmdb_id=530385, title="Hereditary", year=2018, content_type="movie"
+        )
+        self.assertIsNone(match_local_catalog(movie("Her", None)))
+        self.assertIsNone(match_local_catalog(movie("Her", 2018)))
+
     def test_1997_12_angry_men_does_not_fall_back_to_the_1957_film(self):
         self.assertIsNone(match_local_catalog(movie("12 Angry Men", 1997)))
 

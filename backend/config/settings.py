@@ -7,8 +7,24 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-insecure-secret")
-DEBUG = os.environ.get("DJANGO_DEBUG", "1") == "1"
+_DEV_SECRET_KEY = "dev-insecure-secret"
+
+
+def validate_security_settings(*, secret_key: str, debug: bool) -> None:
+    """Reject an accidental production process with a public placeholder key."""
+    if not debug and secret_key in ("", _DEV_SECRET_KEY, "change-me-in-production"):
+        raise RuntimeError(
+            "DJANGO_SECRET_KEY must be set to a non-placeholder value when DJANGO_DEBUG=0"
+        )
+
+
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", _DEV_SECRET_KEY)
+DEBUG = os.environ.get("DJANGO_DEBUG", "0") == "1"
+
+# A missing key is acceptable only for an explicitly local debug process.  A
+# deployment that accidentally omits its environment file must fail at startup
+# rather than serve sessions, CSRF tokens, and signed values with a public key.
+validate_security_settings(secret_key=SECRET_KEY, debug=DEBUG)
 
 ALLOWED_HOSTS = [
     host.strip()

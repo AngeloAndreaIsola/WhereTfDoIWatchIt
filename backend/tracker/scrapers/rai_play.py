@@ -4,6 +4,7 @@ import json
 import logging
 import re
 from typing import Optional, Any
+from urllib.parse import urlencode
 
 from tracker.scrapers.base import BaseScraper, ScrapedItem
 
@@ -39,7 +40,7 @@ class RaiPlayScraper(BaseScraper):
     def _execute_run(self, query: Optional[str] = None) -> list[ScrapedItem]:
         urls = [RAIPLAY_FILM_URL, RAIPLAY_SERIE_URL]
         if query:
-            urls = [f"https://www.raiplay.it/ricerca?search={query}"]
+            urls = [f"https://www.raiplay.it/ricerca?{urlencode({'search': query})}"]
 
         items: list[ScrapedItem] = []
         seen_weblinks: set[str] = set()

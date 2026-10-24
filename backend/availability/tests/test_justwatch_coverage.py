@@ -447,5 +447,10 @@ class PageTooLargeIsClampedNotFatalTests(SimpleTestCase):
                               cursor={"offset": 0})
 
         self.assertGreaterEqual(len(post.payloads), 2)
-        self.assertEqual(source.page_size, 50, "page size must be halved")
+        # The retry is observable in the request itself: same offset, halved
+        # page. The clamp is local to the walk, so it must NOT mutate the
+        # source's configured size and leak into later partitions.
+        self.assertEqual(post.firsts(), [100, 50])
+        self.assertEqual(source.page_size, 100,
+                         "a walk-local clamp must not mutate the source")
         self.assertGreaterEqual(len(result.contents), 0)

@@ -33,23 +33,45 @@ def get_local_offers(movie, *, season: Optional[int] = None, country: Optional[s
         )
 
     return [
-        Offer(
-            country=offer.country,
-            service=offer.provider,
-            offer_type=offer.offer_type,
-            quality=offer.quality,
-            url=offer.provider_url,
-            audio_languages=_as_list(offer.audio_languages),
-            subtitle_languages=_as_list(offer.subtitle_languages),
-            price=(
-                _price_dict(offer.price, is_from=offer.price_is_from)
-                if offer.price is not None else None
-            ),
-            prices=[_price_dict(price) for price in offer.prices],
-        )
+        _tracker_offer(offer)
         for offer in result.offers
         if offer.currently_available
     ]
+
+
+def get_local_offers_bulk(movies) -> dict[int, list[Offer]]:
+    """Read reconciled offers for many list/report titles in bounded queries.
+
+    This deliberately supports only title-level rows; season detail pages keep
+    using :func:`get_local_offers`, whose season boundary is distinct.
+    """
+    movie_list = list(movies)
+    by_movie = {movie.id: [] for movie in movie_list}
+    pairs = [(movie.tmdb_id, movie.content_type or "movie") for movie in movie_list]
+    reconciled = AvailabilityQueryService().get_reconciled_for_contents(pairs)
+    for movie in movie_list:
+        by_movie[movie.id] = [
+            _tracker_offer(offer)
+            for offer in reconciled.get((movie.tmdb_id, movie.content_type or "movie"), [])
+        ]
+    return by_movie
+
+
+def _tracker_offer(offer) -> Offer:
+    return Offer(
+        country=offer.country,
+        service=offer.provider,
+        offer_type=offer.offer_type,
+        quality=offer.quality,
+        url=offer.provider_url,
+        audio_languages=_as_list(offer.audio_languages),
+        subtitle_languages=_as_list(offer.subtitle_languages),
+        price=(
+            _price_dict(offer.price, is_from=offer.price_is_from)
+            if offer.price is not None else None
+        ),
+        prices=[_price_dict(price) for price in offer.prices],
+    )
 
 
 def _as_list(values):

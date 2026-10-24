@@ -172,3 +172,33 @@ class AvailabilityQueryService:
             season_number=season_number,
             now=now,
         )
+
+    def get_reconciled_for_contents(self, contents, *, now=None):
+        """Return effective offers for many title identities in fixed queries.
+
+        List/report surfaces need only offers, not per-title diagnostics.  By
+        reconciling all selected raw observations in one pass, the mapping,
+        cross-content claim, sync-state, and price lookups remain bounded
+        instead of repeating for every title.
+        """
+        pairs = {
+            (int(tmdb_id), str(content_type or ContentType.MOVIE))
+            for tmdb_id, content_type in contents
+        }
+        if not pairs:
+            return {}
+        invalid = {kind for _tmdb_id, kind in pairs if kind not in ContentType.values}
+        if invalid:
+            raise ValueError(f"Invalid content types: {sorted(invalid)!r}")
+        rows = list(self.repo.observations_for_contents(pairs))
+        result = {pair: [] for pair in pairs}
+        if not rows:
+            return result
+        offers, _conflicts, _statuses = self.reconciliation._reconcile_rows(
+            rows, now=self.reconciliation._now(now)
+        )
+        for offer in offers:
+            key = (offer.tmdb_id, offer.content_type)
+            if key in result and offer.currently_available:
+                result[key].append(offer)
+        return result

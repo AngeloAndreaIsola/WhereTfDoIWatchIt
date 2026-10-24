@@ -1,6 +1,17 @@
-# Production Deployment Guide
+# Local Docker Compose Operations Guide
 
-This guide describes how to deploy, manage, and maintain **WhereTfDoIWatchIt** on a self-hosted Linux VPS using Docker Compose.
+This repository currently provides and verifies a local Docker Compose
+development environment. It does **not** contain evidence of a deployed VPS,
+reverse proxy, authentication service, or production database. The Compose
+ports bind to `127.0.0.1` because v1 is intentionally a single-user,
+unauthenticated application.
+
+Publishing this stack outside localhost is a separate deployment design: it
+requires an authentication/authorization boundary for mutation and
+quota-consuming endpoints, TLS/reverse-proxy configuration, an explicit host
+allow-list, a non-placeholder `DJANGO_SECRET_KEY`, and `DJANGO_DEBUG=0`. Those
+controls are not supplied by this repository and this document must not be
+read as a production runbook.
 
 ---
 

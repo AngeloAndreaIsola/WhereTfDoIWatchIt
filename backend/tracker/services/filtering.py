@@ -6,7 +6,9 @@ from typing import Optional
 
 from django.db.models import Q, QuerySet
 from tracker.models import Movie, Preference
-from tracker.services.availability_reads import get_local_offers
+from tracker.services.availability_reads import get_local_offers, get_local_offers_bulk
+from tracker.services.access import build_explicit_access, build_user_access
+from tracker.models import Provider
 from tracker.services.watchability import (
     WatchabilityStatus,
     evaluate_watchability,
@@ -170,9 +172,30 @@ def apply_composable_filters(
         if values and "all" not in values:
             access_filter_set = values
 
+    # The canonical reconciliation read has four bulk lookups behind it.  Run
+    # it once for the title set, and share entitlement/provider context across
+    # every classification instead of issuing the same two queries per title.
+    try:
+        offers_by_movie = get_local_offers_bulk(movie_list)
+    except Exception:  # noqa: BLE001 - a report must degrade to per-title reads
+        logger.exception("Bulk canonical offer read failed; falling back to isolated reads")
+        offers_by_movie = {}
+        for movie in movie_list:
+            try:
+                offers_by_movie[movie.id] = get_local_offers(movie)
+            except Exception:  # noqa: BLE001 - one corrupt title must not hide peers
+                logger.exception("Offer read failed for movie %s", movie.tmdb_id)
+                offers_by_movie[movie.id] = []
+    access = (
+        build_explicit_access(user_subscriptions)
+        if user_subscriptions is not None
+        else build_user_access(getattr(preference, "user_id", 1) or 1)
+    )
+    provider_map = {provider.slug: provider for provider in Provider.objects.all()}
+
     evaluated_items = []
     for m in movie_list:
-        offers = get_local_offers(m)
+        offers = offers_by_movie.get(m.id, [])
         watch_res = evaluate_watchability(
             m,
             offers,
@@ -180,6 +203,8 @@ def apply_composable_filters(
             current_country=current_country,
             user_subscriptions=user_subscriptions,
             refresh_state=(refresh_states or {}).get(m.id),
+            access=access,
+            provider_map=provider_map,
         )
 
         # Apply Provider Filter
@@ -240,6 +265,10 @@ def apply_composable_filters(
 
         evaluated_items.append({
             "movie": m,
+            # Kept internal to list/report callers; it is the exact offer set
+            # used for the verdict, so a caller never needs to reconcile the
+            # same title a second time just to build summary fields.
+            "offers": offers,
             "watchability": watch_res,
         })
 

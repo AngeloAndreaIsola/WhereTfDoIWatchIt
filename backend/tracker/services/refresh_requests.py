@@ -70,6 +70,7 @@ from ..models import (
     BlockedReason,
     RefreshPriority,
     RefreshRequest,
+    RefreshRequestOutcome,
     RefreshRequestStatus,
     RefreshRun,
     WatchlistItem,
@@ -618,11 +619,37 @@ def _limiter_for_scope(
     return rate_limiter_for(source)
 
 
-def _finish(request: RefreshRequest, status: RefreshRequestStatus) -> None:
+def _finish(
+    request: RefreshRequest,
+    status: RefreshRequestStatus,
+    *,
+    outcome: str = RefreshRequestOutcome.UNKNOWN,
+) -> None:
     request.status = status
     request.completed_at = timezone.now()
     request.last_error = ""
-    request.save(update_fields=["status", "completed_at", "last_error"])
+    request.outcome = outcome
+    request.save(update_fields=["status", "completed_at", "last_error", "outcome"])
+
+
+def _successful_outcome(request: RefreshRequest, source: str) -> str:
+    """Return the durable result of a successful title-level fetch.
+
+    A refresh can complete without creating an offer.  That is a negative
+    observation, not an error, and must not be reconstructed later from a
+    missing row.  We query only this source's active canonical observations so
+    an offer from another source cannot turn this source's negative into a
+    false positive.
+    """
+    return (
+        RefreshRequestOutcome.OFFERS_FOUND
+        if Offer.objects.filter(
+            tmdb_id=request.movie.tmdb_id,
+            source__slug=source,
+            currently_available=True,
+        ).exists()
+        else RefreshRequestOutcome.NO_OFFER
+    )
 
 
 def _metered_source_is_unnecessary(
@@ -805,13 +832,15 @@ def _drain_one(
         and resolve_request_source(request) in permanently_absent_scopes(movie.tmdb_id)
     ):
         request.attempts += 1
-        request.last_error = (
-            f"UpstreamTitleNotFound: {request.last_error or 'title absent upstream'}"
-        )
-        request.status = RefreshRequestStatus.FAILED
+        # The source already supplied a definitive negative answer.  This is
+        # not a new failed transport attempt; preserving it as a successful
+        # cached observation keeps error metrics and retry policy truthful.
+        request.last_error = ""
+        request.status = RefreshRequestStatus.DONE
+        request.outcome = RefreshRequestOutcome.TITLE_NOT_FOUND
         request.completed_at = timezone.now()
         request.save(
-            update_fields=["attempts", "last_error", "status", "completed_at"]
+            update_fields=["attempts", "last_error", "status", "outcome", "completed_at"]
         )
         summary.skipped_upstream_missing += 1
         summary.requests_drained += 1
@@ -972,11 +1001,12 @@ def _drain_one(
         # ``bulk_refresh.permanently_absent_scopes``).
         summary.skipped_upstream_missing += 1
         request.attempts += 1
-        request.last_error = f"{type(exc).__name__}: {exc}"
-        request.status = RefreshRequestStatus.FAILED
+        request.last_error = ""
+        request.status = RefreshRequestStatus.DONE
+        request.outcome = RefreshRequestOutcome.TITLE_NOT_FOUND
         request.completed_at = timezone.now()
         request.save(
-            update_fields=["attempts", "last_error", "status", "completed_at"]
+            update_fields=["attempts", "last_error", "status", "outcome", "completed_at"]
         )
         summary.requests_drained += 1
         logger.warning(
@@ -1001,7 +1031,11 @@ def _drain_one(
             exc_info=True,
         )
         return rate_limit_hit
-    _finish(request, RefreshRequestStatus.DONE)
+    _finish(
+        request,
+        RefreshRequestStatus.DONE,
+        outcome=_successful_outcome(request, source),
+    )
     summary.refreshed += 1
     summary.remaining_budget -= 1
     summary.requests_drained += 1

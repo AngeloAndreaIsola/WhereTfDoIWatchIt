@@ -124,11 +124,19 @@ Product semantics, all documented rather than papered over:
   only, so mapping happens in the refresh service by local title/year
   matching — series resolve title-only (no first-air year is observable), the
   ``TITLE_ONLY`` tier.
-- **Runtime bound**: ``/store``, ``/movie``, ``/tv`` and every genre index
-  paginate far past what one run should scan, and each detail page ships
-  140 kB..1 MB of hydration JSON. ``DEFAULT_MAX_CONTENTS`` bounds one run
-  (index pages are round-robined so a capped run still mixes movies, series
-  and genres) and the truncation is logged; see ``docs/CRON.md``.
+- **Runtime bound and resumable window**: ``/store``, ``/movie``, ``/tv`` and
+  every genre index paginate far past what one run should scan, and each
+  detail page ships 140 kB..1 MB of hydration JSON. ``DEFAULT_MAX_CONTENTS``
+  bounds the discovered window (index pages are round-robined so a capped run
+  still mixes movies, series and genres) and the truncation is logged; see
+  ``docs/CRON.md``. One fetch reads at most ``DEFAULT_BATCH_DETAILS`` of that
+  window and returns the unread paths as a checkpoint; the refresh service
+  persists it only after the batch's rows are committed, so a late detail
+  failure fails only that bounded batch — earlier batches are already
+  persisted and the checkpoint is not advanced — and the retry re-reads the
+  unread pages instead of rediscovering and re-reading hundreds of them. A
+  finished window returns no cursor (``supports_incremental_sync=False``: a
+  traversal window, not an offer sync).
 """
 from __future__ import annotations
 
@@ -181,6 +189,22 @@ DEFAULT_DELAY = 0.2
 # series and genres because the seeds are round-robined. ``None`` disables the
 # bound (tests use it; production must not).
 DEFAULT_MAX_CONTENTS = 500
+#: Detail pages one fetch reads before returning a resumable checkpoint. The
+#: discovered window (``max_contents``) is carried in the cursor, so a late
+#: detail failure resumes inside the same window instead of rediscovering and
+#: re-reading hundreds of pages.
+#:
+#: Payload bound (measured): a ``/detail/<compactGTI>`` path is 34 bytes and a
+#: real card cue is ~65 bytes, so the worst default checkpoint — 400 unread
+#: paths + cues after one batch of ``DEFAULT_BATCH_DETAILS`` — encodes to
+#: ~57 KiB of compact JSON; the absolute worst (``batch_size=1``, 499 pending)
+#: is ~140 KiB. ``SyncCursor.cursor`` is an unbounded ``TextField``, so this is
+#: comfortable — but it is why the checkpoint is one JSON blob, not one row per
+#: pending page.
+DEFAULT_BATCH_DETAILS = 100
+#: Bump when the checkpoint shape changes; a foreign checkpoint is ignored and
+#: the storefront is rediscovered.
+CURSOR_VERSION = 1
 SOURCE_VERSION = "prime-ssr-v1"
 HYDRATION_MARKER = "dv-web-page-hydration-data"
 STORE_MARKER = "dv-web-global-store-data"
@@ -311,9 +335,11 @@ class PrimeVideoSource:
         supports_languages=True,
     )
 
-    def __init__(self, client=None, max_contents=DEFAULT_MAX_CONTENTS):
+    def __init__(self, client=None, max_contents=DEFAULT_MAX_CONTENTS,
+                 batch_size=DEFAULT_BATCH_DETAILS):
         self.client = client or PrimeVideoClient()
         self.max_contents = max_contents
+        self.batch_size = max(1, int(batch_size))
 
     def fetch(self, content=None, *, provider=None, country=None, cursor=None) -> SourceFetchResult:
         if content is not None:
@@ -324,44 +350,87 @@ class PrimeVideoSource:
         # provider/country are the caller's scope hints, already validated
         # against ``capabilities`` by the refresh service; Prime Video only ever
         # reports its own (prime, NL) — and says so loudly when the page it
-        # fetched belongs to another territory. cursor is accepted but unused:
-        # the storefront exposes no resumable server-side cursor, so one fetch
-        # reports the whole configured window instead of inventing a token.
-        discovered, cues = self._discover()
+        # fetched belongs to another territory.
+        #
+        # ``cursor`` carries the discovered detail window forward: a previous
+        # fetch that failed part-way leaves the pages it had not read in the
+        # checkpoint, and the next fetch resumes there instead of re-walking
+        # the storefront and every already-read detail page.
+        checkpoint = _decode_cursor(cursor)
+        pending = list(checkpoint.get("paths") or [])
+        cues = dict(checkpoint.get("cues") or {})
+
+        if pending:
+            logger.info("prime_video_walk_resume pending=%d", len(pending))
+        else:
+            discovered, cues = self._discover()
+            pending = list(discovered)
+
         contents: list[DiscoveredContent] = []
         offers: list[ProviderOffer] = []
         observed = 0
         skipped = 0
-        for path in discovered:
+        processed = 0
+
+        while pending:
+            if processed >= self.batch_size:
+                break
+            path = pending[0]
             url = f"{BASE_URL}{path}"
+            # A detail page that cannot be read propagates: a batch that cannot
+            # be completed is a failed fetch, never a smaller successful one.
+            # The caller's checkpoint (the unread window) is untouched, so the
+            # retry re-reads at most this one bounded batch.
             html = self.client.detail(url)
             _check_territory(html, url=url)
             page = _detail_page(html, url=url)
+            pending.pop(0)
+            processed += 1
             if page is None:
                 skipped += 1
                 continue
-            page_contents, page_offers = self._from_detail(page, cue=cues.get(path, ""))
+            page_contents, page_offers = self._from_detail(
+                page, cue=cues.get(path, "")
+            )
             contents.extend(page_contents)
             offers.extend(page_offers)
             observed += 1
 
-        if discovered and observed == 0:
+        if not pending:
+            logger.info(
+                "prime_video_catalogue_complete contents=%d offers=%d",
+                len(contents), len(offers),
+            )
+        else:
+            logger.warning(
+                "prime_video_catalogue_truncated remaining_detail_pages=%d "
+                "max_contents=%s batch_size=%d",
+                len(pending), self.max_contents, self.batch_size,
+            )
+
+        if processed and observed == 0 and skipped == processed:
             # Everything came back as an unrecognised page type: that reads
             # like a broken fetch path (consent interstitial, template change)
             # rather than an empty catalogue. Log it loudly; still never raise,
             # because the walk itself succeeded and nothing gets deactivated
             # either way.
             logger.warning(
-                "prime_video_catalogue_nothing_observed fetched=%d skipped=%d",
-                len(discovered), skipped,
+                "prime_video_catalogue_nothing_observed fetched=%d skipped=%d "
+                "remaining=%d", processed, skipped, len(pending),
             )
+
+        next_cursor = None
+        if pending:
+            remaining_cues = {p: cues[p] for p in pending if p in cues}
+            next_cursor = _encode_cursor(pending, remaining_cues)
+
         return SourceFetchResult(
             contents=contents,
             offers=offers,
             authoritative=False,
             complete_snapshot=False,
             sync_mode=SyncMode.FULL,
-            cursor=None,
+            cursor=next_cursor,
         )
 
     # ------------------------------------------------------------------ walk
@@ -1040,3 +1109,42 @@ def _as_int(value) -> Optional[int]:
     if isinstance(value, str) and value.strip().lstrip("-").isdigit():
         return int(value)
     return None
+
+
+def _decode_cursor(cursor) -> dict:
+    """Decode a stored walk window, tolerating old or garbage values.
+
+    An unreadable checkpoint means "rediscover the storefront": losing the
+    window is only rework, never a silently skipped title.
+    """
+    if not cursor:
+        return {}
+    data = cursor
+    if not isinstance(cursor, dict):
+        try:
+            data = json.loads(str(cursor))
+        except (TypeError, ValueError):
+            logger.warning("prime_video_cursor_invalid cursor=%r", str(cursor)[:160])
+            return {}
+    if not isinstance(data, dict) or data.get("v") != CURSOR_VERSION:
+        logger.warning(
+            "prime_video_cursor_reset version=%r",
+            data.get("v") if isinstance(data, dict) else None,
+        )
+        return {}
+    paths = [str(path) for path in (data.get("paths") or []) if path]
+    cues = data.get("cues") if isinstance(data.get("cues"), dict) else {}
+    return {"paths": paths, "cues": {str(k): str(v) for k, v in cues.items()}}
+
+
+def _encode_cursor(paths: list[str], cues: dict) -> str:
+    """Durable checkpoint: the detail paths not yet read, with their card cues."""
+    return json.dumps(
+        {
+            "v": CURSOR_VERSION,
+            "paths": list(paths),
+            "cues": dict(cues),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )

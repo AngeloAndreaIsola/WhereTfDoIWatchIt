@@ -20,11 +20,10 @@ from __future__ import annotations
 
 from django.utils import timezone
 
-from availability.services.legacy_ingest import ingest_scraped_mapping
-
-from ..models import Provider, ScrapedContentMapping
+from ..models import Provider
 from ..scrapers import resolve_scraper_class
 from ..scrapers.adapters import GenericURLAdapter
+from .scraped_mapping import persist_scraped_item
 
 
 def run_provider_scraper(provider: Provider, query: str | None = None) -> list:
@@ -47,20 +46,6 @@ def run_provider_scraper(provider: Provider, query: str | None = None) -> list:
     provider.save()
 
     for item in items:
-        payload = dict(item.raw_payload) if isinstance(item.raw_payload, dict) else {}
-        payload.setdefault("content_type", item.content_type)
-        mapping, _created = ScrapedContentMapping.objects.get_or_create(
-            provider=provider,
-            scraped_title=item.title,
-            scraped_year=item.year,
-            defaults={
-                "scraped_url": item.source_url,
-                "raw_payload": payload,
-                "is_available": item.availability,
-            },
-        )
-        # Bridge every saved row onto the canonical catalogue (the unified
-        # endpoint reads only those tables).
-        ingest_scraped_mapping(mapping)
+        persist_scraped_item(provider=provider, item=item)
 
     return items

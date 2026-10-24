@@ -623,6 +623,8 @@ def resolve_title(
     current_country: Optional[str] = None,
     user_subscriptions: Optional[set[str]] = None,
     refresh_state: Optional[str] = None,
+    access: Optional[UserAccess] = None,
+    provider_map: Optional[dict[str, Provider]] = None,
 ) -> AccessResult:
     """Resolve one title's overall access verdict from its canonical offers.
 
@@ -639,13 +641,16 @@ def resolve_title(
     if not offer_list:
         return _empty_result(movie, refresh_state)
 
-    if user_subscriptions is not None:
+    if access is not None:
+        pass
+    elif user_subscriptions is not None:
         access = build_explicit_access(user_subscriptions)
     else:
         access = build_user_access(getattr(preference, "user_id", 1) or 1)
 
     reach = build_reach(preference, current_country)
-    provider_map = {p.slug: p for p in Provider.objects.all()}
+    if provider_map is None:
+        provider_map = {p.slug: p for p in Provider.objects.all()}
 
     classified = [
         classify_offer(

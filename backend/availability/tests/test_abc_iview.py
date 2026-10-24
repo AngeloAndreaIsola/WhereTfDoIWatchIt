@@ -11,6 +11,7 @@ all-unnumbered news show, a show with no video id, an empty detail, a
 from __future__ import annotations
 
 import datetime as dt
+from unittest.mock import patch
 
 from django.test import SimpleTestCase, TestCase
 
@@ -22,15 +23,18 @@ from availability.models import (
     Offer,
     ProviderContent,
     Source,
+    SyncCursor,
     SyncRun,
 )
 from availability.services.refresh import AvailabilityRefreshService
 from availability.sources import SourceFetchError, source_registry
 from availability.sources.abc_iview import (
+    DEFAULT_BATCH_SERIES,
     DEFAULT_DELAY,
     SERIES_LIST_URL,
     AbcIviewClient,
     AbcIviewSource,
+    _decode_cursor,
 )
 from availability.sources.base import ContentRequest
 from tracker.models import Movie, Provider
@@ -45,9 +49,23 @@ MAPPED_OFFERS = 6    # culture (7-30 is never seeded -> unresolved)
 DETAIL_REQUESTS = 6  # junk + ghost + duplicate index rows fetch no detail
 
 
-def make_source(api, *, delay: float = 0.0, sleeper=None) -> AbcIviewSource:
+def make_source(api, *, delay: float = 0.0, sleeper=None,
+                batch_size: int = DEFAULT_BATCH_SERIES) -> AbcIviewSource:
     return AbcIviewSource(
-        client=AbcIviewClient(requester=api, delay=delay, sleeper=sleeper)
+        client=AbcIviewClient(requester=api, delay=delay, sleeper=sleeper),
+        batch_size=batch_size,
+    )
+
+
+def _offer_key(offer):
+    """A comparable identity for a :class:`ProviderOffer` (it has no ``eq`` key)."""
+    return (
+        offer.provider_content_id,
+        offer.content_type,
+        offer.season_number,
+        offer.episode_number,
+        offer.offer_type,
+        offer.provider_url,
     )
 
 
@@ -320,6 +338,114 @@ class FailureContractTests(SimpleTestCase):
             make_source(api).fetch()
 
 
+class CheckpointWalkTests(SimpleTestCase):
+    """A bounded batch resumes from its checkpoint instead of restarting."""
+
+    def test_a_bounded_batch_checkpoints_and_the_rest_resumes(self):
+        api = FakeAbcIviewApi()
+        source = make_source(api, batch_size=2)
+
+        first = source.fetch()
+        self.assertIsNotNone(first.cursor, "a bounded walk leaves a checkpoint")
+        self.assertEqual(_decode_cursor(first.cursor), "7-30")
+        self.assertEqual(len(first.contents) + 0, 2)
+        self.assertEqual(len(first.offers), 7)
+        # Only the first two detail pages were fetched: the batch is bounded.
+        details = [u for u in api.requests if u.startswith(SERIES_LIST_URL + "/")]
+        self.assertEqual(len(details), 2)
+
+        second = source.fetch(cursor=first.cursor)
+        self.assertEqual(_decode_cursor(second.cursor), "empty-show")
+        # The resumed walk did not refetch the persisted window.
+        details = [u for u in api.requests if u.startswith(SERIES_LIST_URL + "/")]
+        self.assertEqual(len(details), 4)
+
+        third = source.fetch(cursor=second.cursor)
+        self.assertIsNone(third.cursor, "the final batch completes the walk")
+        details = [u for u in api.requests if u.startswith(SERIES_LIST_URL + "/")]
+        self.assertEqual(len(details), 6)
+
+    def test_resumption_loses_nothing_and_duplicates_nothing(self):
+        full_source = make_source(FakeAbcIviewApi())
+        full = full_source.fetch()
+
+        source = make_source(FakeAbcIviewApi(), batch_size=2)
+        contents, offers = [], []
+        cursor = None
+        for _ in range(6):  # bounded safety net against a looping walk
+            result = source.fetch(cursor=cursor)
+            contents.extend(result.contents)
+            offers.extend(result.offers)
+            cursor = result.cursor
+            if cursor is None:
+                break
+
+        self.assertEqual(
+            {c.provider_content_id for c in contents},
+            {c.provider_content_id for c in full.contents},
+        )
+        self.assertNotIn(None, [c.provider_content_id for c in contents])
+        self.assertEqual(
+            sorted(_offer_key(o) for o in offers),
+            sorted(_offer_key(o) for o in full.offers),
+        )
+
+    def test_a_late_detail_failure_fails_the_batch_and_is_retried(self):
+        api = FakeAbcIviewApi(
+            failures={"9-11-stories": SourceFetchError("outage")}
+        )
+        source = make_source(api, batch_size=4)
+
+        # The failing series is inside the batch: the fetch is a failure
+        # (never a smaller successful run) rather than a silent short result.
+        with self.assertRaises(SourceFetchError):
+            source.fetch()
+
+        # Retrying the same batch re-reads it from the top and now reaches the
+        # end of the batch, checkpointing past the series that failed.
+        del api.failures["9-11-stories"]
+        retry = source.fetch()
+        self.assertEqual(_decode_cursor(retry.cursor), "empty-show")
+        self.assertEqual(len(retry.contents), 2)
+
+    def test_a_failure_before_any_progress_is_still_a_failure(self):
+        api = FakeAbcIviewApi(
+            failures={"culture-by-design": SourceFetchError("outage")}
+        )
+        with self.assertRaises(SourceFetchError):
+            make_source(api, batch_size=3).fetch()
+
+    def test_a_missing_checkpoint_restarts_rather_than_resuming_garbage(self):
+        api = FakeAbcIviewApi()
+        source = make_source(api, batch_size=2)
+        result = source.fetch(cursor='{"v": 1, "after": "gone-from-index"}')
+        # Restarted from the top: the first two series are walked again.
+        self.assertEqual(_decode_cursor(result.cursor), "7-30")
+
+    def test_an_empty_final_batch_completes_the_walk(self):
+        api = FakeAbcIviewApi()
+        source = make_source(api, batch_size=2)
+        cursor = None
+        while True:
+            result = source.fetch(cursor=cursor)
+            cursor = result.cursor
+            if cursor is None:
+                break
+        # Resuming past the final series finds nothing and stays complete.
+        final = source.fetch(cursor='{"v": 1, "after": "gone-show"}')
+        self.assertEqual(final.contents, [])
+        self.assertIsNone(final.cursor)
+
+    def test_unreadable_cursor_starts_from_the_top(self):
+        source = make_source(FakeAbcIviewApi(), batch_size=2)
+        result = source.fetch(cursor="not json at all")
+        self.assertEqual(_decode_cursor(result.cursor), "7-30")
+
+    def test_default_batch_is_bounded_below_the_full_catalogue(self):
+        self.assertGreaterEqual(DEFAULT_BATCH_SERIES, 1)
+        self.assertLess(DEFAULT_BATCH_SERIES, 3000)
+
+
 class RefreshPathTests(TestCase):
     """End-to-end catalogue refresh: fixture API -> Offer/ProviderContent rows."""
 
@@ -426,3 +552,71 @@ class RefreshPathTests(TestCase):
         self.assertEqual(SyncRun.objects.count(), 0)
         self.assertEqual(ProviderContent.objects.count(), 0)
         self.assertFalse(Source.objects.filter(slug="abc_iview").exists())
+
+    def test_checkpoint_persists_only_after_a_batch_is_written(self):
+        source = make_source(self.api, batch_size=2)
+        service = AvailabilityRefreshService(source=source)
+
+        service.refresh_catalogue()
+        stored = SyncCursor.objects.get()
+        self.assertEqual(_decode_cursor(stored.cursor), "7-30")
+        self.assertEqual(Offer.objects.count(), MAPPED_OFFERS)
+
+        # A run whose batch fails must not move the checkpoint or lose the rows
+        # the previous batch persisted.
+        self.api.failures["9-11-stories"] = SourceFetchError("outage")
+        with self.assertRaises(SourceFetchError):
+            service.refresh_catalogue()
+        self.assertEqual(_decode_cursor(SyncCursor.objects.get().cursor), "7-30")
+        self.assertEqual(Offer.objects.count(), MAPPED_OFFERS)
+
+        # The retry resumes at the failing series and finishes the walk; the
+        # completed crawl drops its checkpoint instead of leaving it behind.
+        del self.api.failures["9-11-stories"]
+        while SyncCursor.objects.exists():
+            service.refresh_catalogue()
+        self.assertEqual(ProviderContent.objects.count(), TOTAL_CONTENTS)
+        self.assertEqual(Offer.objects.count(), MAPPED_OFFERS)
+        self.assertFalse(SyncCursor.objects.exists())
+
+    def test_a_crash_between_the_offer_commit_and_the_cursor_write_reprocesses(self):
+        """The checkpoint write is a separate step *after* the rows commit.
+
+        A crash in that gap must never advance the checkpoint, so the batch is
+        simply reprocessed. Reprocessing is safe because every canonical write
+        is idempotent: no offer, content or mapping is duplicated.
+        """
+        source = make_source(self.api, batch_size=2)
+        service = AvailabilityRefreshService(source=source)
+
+        with patch.object(
+            service.cursors, "set",
+            side_effect=RuntimeError("crash after commit, before cursor write"),
+        ):
+            with self.assertRaises(RuntimeError):
+                service.refresh_catalogue()
+
+        # The batch's rows are already committed ...
+        self.assertEqual(ProviderContent.objects.count(), TOTAL_CONTENTS)
+        self.assertEqual(Offer.objects.count(), MAPPED_OFFERS)
+        self.assertEqual(ContentMapping.objects.count(), 1)
+        # ... but the write never landed, so the walk restarts from the top.
+        self.assertFalse(SyncCursor.objects.exists())
+
+        # Re-reading the same window is safe: identical counts, no duplicates.
+        service.refresh_catalogue()
+        self.assertEqual(ProviderContent.objects.count(), TOTAL_CONTENTS)
+        self.assertEqual(Offer.objects.count(), MAPPED_OFFERS)
+        self.assertEqual(ContentMapping.objects.count(), 1)
+        self.assertEqual(_decode_cursor(SyncCursor.objects.get().cursor), "7-30")
+
+    def test_partial_crawl_is_not_marked_complete(self):
+        source = make_source(self.api, batch_size=2)
+        service = AvailabilityRefreshService(source=source)
+        result = service.refresh_catalogue()
+        self.assertFalse(result.deactivated)
+        run = SyncRun.objects.get()
+        self.assertEqual(run.mode, "full")
+        # The batch is a real, persisted observation set, but the crawl is
+        # explicitly incomplete: a checkpoint still exists.
+        self.assertTrue(SyncCursor.objects.exists())

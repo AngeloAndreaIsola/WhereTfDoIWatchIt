@@ -145,22 +145,12 @@ class WatchlistReportNonBlockingTests(TestCase):
         self.assertIn("report", data)
         self.assertEqual(len(data["report"]), 3)
 
-    def test_partial_cache_failure_does_not_crash_report(self):
-        """A failure on one movie's read should not crash the entire report."""
-        from tracker.services.availability_reads import get_local_offers as real_get_local_offers
-
-        self._create_fresh_availability(self.movie1)
-
-        # First call succeeds, second fails, third succeeds
-        call_count = [0]
-
-        def side_effect(movie, **kwargs):
-            call_count[0] += 1
-            if call_count[0] == 2:
-                raise Exception("Cache read failure")
-            return real_get_local_offers(movie, **kwargs)
-
-        with patch("tracker.views.get_local_offers", side_effect=side_effect):
+    def test_bulk_cache_failure_does_not_crash_report(self):
+        """A failed batched read falls back safely to isolated local reads."""
+        with patch(
+            "tracker.services.filtering.get_local_offers_bulk",
+            side_effect=Exception("Cache read failure"),
+        ):
             resp = self.client.get("/api/watchlist/report/")
 
         self.assertEqual(resp.status_code, 200)
@@ -168,4 +158,3 @@ class WatchlistReportNonBlockingTests(TestCase):
         # Report should still be generated for every movie
         self.assertIn("report", data)
         self.assertEqual(len(data["report"]), 3)
-        self.assertEqual(call_count[0], 3)

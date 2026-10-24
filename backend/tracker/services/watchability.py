@@ -22,6 +22,7 @@ from tracker.services.access import (
     ClassifiedOffer,
     RefreshState,
     classify_offer,
+    UserAccess,
     resolve_title,
 )
 from tracker.services.offers import Offer
@@ -228,6 +229,8 @@ def evaluate_watchability(
     current_country: Optional[str] = None,
     user_subscriptions: Optional[set[str]] = None,
     refresh_state: Optional[str] = None,
+    access: Optional[UserAccess] = None,
+    provider_map: Optional[dict[str, Provider]] = None,
 ) -> WatchabilityResult:
     """Evaluate full watchability status and best way to watch for a movie/series.
 
@@ -247,6 +250,8 @@ def evaluate_watchability(
         current_country=current_country,
         user_subscriptions=user_subscriptions,
         refresh_state=refresh_state,
+        access=access,
+        provider_map=provider_map,
     )
     return _to_watchability_result(result)
 

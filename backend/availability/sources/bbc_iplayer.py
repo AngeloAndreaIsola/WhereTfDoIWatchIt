@@ -52,6 +52,15 @@ Deliberate limitations, all documented rather than papered over:
   never a ``complete_snapshot``, so unseen offers are never deactivated —
   absence is not evidence, exactly as with CBC Gem. Adding pagination is a
   non-breaking change if the route starts honouring the parameter.
+- **The walk is bounded and resumable.** One fetch consumes at most
+  ``DEFAULT_BATCH_ENTITIES`` index entries and returns a ``{letter, after}``
+  checkpoint; the refresh service persists it only after the batch's rows are
+  committed, and the next run resumes at the entry after it. A late
+  brand/episode page failure fails only that bounded batch: earlier batches
+  are already persisted and the checkpoint is not advanced, so the retry
+  re-reads at most one batch rather than the whole catalogue. A completed walk
+  returns no cursor (``supports_incremental_sync=False``: a traversal
+  position, not an offer sync).
 - **No external ids**: iPlayer publishes no TMDb ids
   (``supports_tmdb_ids=False``), so mapping happens in the refresh service via
   local title/year matching; an unmapped title yields no ``Offer`` rows
@@ -127,6 +136,12 @@ DEFAULT_TIMEOUT = 30
 # Politeness gap between live requests only (tests route through ``requester``
 # and never sleep): one catalogue refresh walks thousands of detail pages.
 DEFAULT_DELAY = 0.1
+#: Index entries one fetch walks before returning a resumable checkpoint.
+#: Each entity may cost several detail requests, so this bounds both the run
+#: length and the work a late failure can discard.
+DEFAULT_BATCH_ENTITIES = 60
+#: Bump when the checkpoint shape changes; a foreign checkpoint restarts.
+CURSOR_VERSION = 1
 # Revision of the embedded-state contract this parser is written against.
 SOURCE_VERSION = "iplayer-state-v1"
 # iPlayer image URLs carry a ``{recipe}`` placeholder; 16:9 is what the
@@ -238,8 +253,9 @@ class BBCIPlayerSource:
         supports_languages=False,
     )
 
-    def __init__(self, client=None):
+    def __init__(self, client=None, batch_size=DEFAULT_BATCH_ENTITIES):
         self.client = client or BBCIPlayerClient()
+        self.batch_size = max(1, int(batch_size))
 
     def fetch(self, content=None, *, provider=None, country=None, cursor=None) -> SourceFetchResult:
         if content is not None:
@@ -248,13 +264,34 @@ class BBCIPlayerSource:
                 "content=None (no title-targeted lookup exists)"
             )
         # provider/country are the caller's scope hints (iPlayer only ever
-        # reports bbc_iplayer/GB); cursor is accepted but unused — the pages
-        # expose letter and slice coordinates, not a resumable cursor token.
+        # reports bbc_iplayer/GB).
+        #
+        # ``cursor`` is the durable walk checkpoint: ``{letter, after}`` names
+        # the last index entry a previous fetch persisted. One fetch walks at
+        # most ``batch_size`` entries and hands back the next checkpoint, so a
+        # late detail-page failure cannot discard a whole catalogue's work.
+        checkpoint = _decode_cursor(cursor)
+        start_letter = checkpoint.get("letter") or LETTERS[0]
+        resume_pid = checkpoint.get("after") or ""
+        start_index = LETTERS.index(start_letter) if start_letter in LETTERS else 0
+        if start_letter not in LETTERS and cursor:
+            logger.warning("bbc_iplayer_cursor_reset letter=%r", start_letter)
+
         contents: list[DiscoveredContent] = []
         offers: list[ProviderOffer] = []
         seen_pids: set[str] = set()
+        processed = 0
+        truncated = False
+        checkpoint_letter = LETTERS[start_index]
+        checkpoint_after = ""
+        index = start_index
 
-        for letter in LETTERS:
+        while index < len(LETTERS):
+            letter = LETTERS[index]
+            # A page that cannot be read propagates: a batch that cannot be
+            # completed is a failed fetch, never a smaller successful one. The
+            # caller's checkpoint is untouched, so the retry re-reads at most
+            # this one bounded batch.
             store = self.client.atoz(letter)
             bucket = (store.get("programmes") or {}).get(letter)
             if not isinstance(bucket, dict):
@@ -272,7 +309,26 @@ class BBCIPlayerSource:
                     "bbc_iplayer_letter_truncated letter=%s page=1 of %s per_page=%s",
                     letter, total_pages, _as_int(pagination.get("perPage"), default=None),
                 )
-            for entity in bucket.get("entities") or []:
+            entities = bucket.get("entities") or []
+            offset = 0
+            if resume_pid:
+                for position, entity in enumerate(entities):
+                    if _index_entity_pid(entity) == resume_pid:
+                        offset = position + 1
+                        break
+                else:
+                    # The checkpointed entry left the index: restart this
+                    # letter, which only repeats persisted work.
+                    logger.warning(
+                        "bbc_iplayer_cursor_checkpoint_missing letter=%s after=%s "
+                        "reason=restarting_letter", letter, resume_pid,
+                    )
+                resume_pid = ""
+
+            for entity in entities[offset:]:
+                if processed >= self.batch_size:
+                    truncated = True
+                    break
                 props = entity.get("props") if isinstance(entity, dict) else None
                 props = props if isinstance(props, dict) else {}
                 href = str(props.get("href") or "").strip()
@@ -290,9 +346,30 @@ class BBCIPlayerSource:
                     parsed_content, parsed_offers = self._parse_brand(pid, href, props)
                 else:
                     parsed_content, parsed_offers = self._parse_single(pid, href, props)
+                processed += 1
+                checkpoint_letter = letter
+                checkpoint_after = pid
                 if parsed_content is not None:
                     contents.append(parsed_content)
                 offers.extend(parsed_offers)
+
+            if truncated:
+                break
+            index += 1
+            if index < len(LETTERS):
+                checkpoint_letter = LETTERS[index]
+                checkpoint_after = ""
+        else:
+            # Every letter was consumed: the walk is complete, so no cursor is
+            # returned and a stale checkpoint can be dropped by the caller.
+            return SourceFetchResult(
+                contents=contents,
+                offers=offers,
+                authoritative=False,
+                complete_snapshot=False,
+                sync_mode=SyncMode.FULL,
+                cursor=None,
+            )
 
         return SourceFetchResult(
             contents=contents,
@@ -300,7 +377,7 @@ class BBCIPlayerSource:
             authoritative=False,
             complete_snapshot=False,
             sync_mode=SyncMode.FULL,
-            cursor=None,
+            cursor=_encode_cursor(checkpoint_letter, checkpoint_after),
         )
 
     # ------------------------------------------------------------------ parse
@@ -687,3 +764,47 @@ def _as_int(value, *, default):
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _index_entity_pid(entity) -> str:
+    """The PID an A-Z index entity points at, or ``""`` for a non-result."""
+    if not isinstance(entity, dict):
+        return ""
+    props = entity.get("props") if isinstance(entity.get("props"), dict) else {}
+    match = _HREF_RE.match(str(props.get("href") or "").strip())
+    return match.group(2) if match else ""
+
+
+def _decode_cursor(cursor) -> dict:
+    """Decode a stored walk checkpoint, tolerating old or garbage values.
+
+    An unreadable checkpoint restarts the letter walk from the top: it is
+    never a reason to look like a finished catalogue.
+    """
+    if not cursor:
+        return {}
+    data = cursor
+    if not isinstance(cursor, dict):
+        try:
+            data = json.loads(str(cursor))
+        except (TypeError, ValueError):
+            logger.warning("bbc_iplayer_cursor_invalid cursor=%r", str(cursor)[:160])
+            return {}
+    if not isinstance(data, dict) or data.get("v") != CURSOR_VERSION:
+        logger.warning(
+            "bbc_iplayer_cursor_reset version=%r",
+            data.get("v") if isinstance(data, dict) else None,
+        )
+        return {}
+    return {
+        "letter": str(data.get("letter") or ""),
+        "after": str(data.get("after") or ""),
+    }
+
+
+def _encode_cursor(letter: str, after: str) -> str:
+    """Durable checkpoint: the last index entry this walk persisted."""
+    return json.dumps(
+        {"v": CURSOR_VERSION, "letter": letter, "after": after},
+        sort_keys=True, separators=(",", ":"),
+    )

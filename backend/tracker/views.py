@@ -1378,21 +1378,26 @@ def watchlist_report(request):
     country_movie_sets: dict[str, set[int]] = {}
     service_movie_sets: dict[str, set[int]] = {}
     available_movies_count = 0
+    user_data_by_movie = {
+        row.movie_id: row
+        for row in UserMovieData.objects.filter(
+            user_id=1,
+            movie_id__in=[item["movie"].id for item in evaluated_filtered],
+        )
+    }
 
     for eval_item in evaluated_filtered:
         movie = eval_item["movie"]
         watch_res = eval_item["watchability"]
 
         # Check if movie is marked as watched for watchlist status
-        user_data = UserMovieData.objects.filter(user_id=1, movie=movie).first()
+        user_data = user_data_by_movie.get(movie.id)
         is_watched = bool(user_data and user_data.is_watched)
 
-        # A single corrupt/failing read must not take down the whole report.
-        try:
-            raw_offers = get_local_offers(movie)
-        except Exception:
-            logger.exception("Offer read failed for movie %s", movie.tmdb_id)
-            raw_offers = []
+        # ``apply_composable_filters`` already performed one bulk canonical
+        # read for this report.  Reusing that same list keeps report summaries
+        # in lockstep with the badge and avoids a second N+1 reconciliation.
+        raw_offers = eval_item["offers"]
         ranked = rank_offers(raw_offers, preference, current_country=curr_country)
 
         countries = sorted(list({r.country.upper() for r in ranked if r.country}))

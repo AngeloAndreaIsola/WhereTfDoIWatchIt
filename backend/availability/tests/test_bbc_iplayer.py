@@ -60,7 +60,12 @@ from availability.sources import (
     SourceFetchError,
     source_registry,
 )
-from availability.sources.bbc_iplayer import BBCIPlayerClient, SOURCE_VERSION, STATE_MARKER
+from availability.sources.bbc_iplayer import (
+    BBCIPlayerClient,
+    SOURCE_VERSION,
+    STATE_MARKER,
+    _decode_cursor,
+)
 from tracker.models import Movie, Provider
 from tracker.services.bulk_refresh import (
     _catalogue_source_slugs,
@@ -81,9 +86,25 @@ PAGE_NICKEL = "/iplayer/episode/m00327ht"
 FOLK_PAGE_2 = f"{PAGE_FOLK}?seriesId=m000ffff1-structural-1&page=2"
 
 
-def build_source(api=None):
+def build_source(api=None, *, batch_size=None, delay=0.0):
     api = api or FakeBBCIPlayer()
-    return BBCIPlayerSource(client=BBCIPlayerClient(requester=api)), api
+    kwargs = {} if batch_size is None else {"batch_size": batch_size}
+    source = BBCIPlayerSource(
+        client=BBCIPlayerClient(requester=api, delay=delay), **kwargs
+    )
+    return source, api
+
+
+def _offer_key(offer):
+    """A comparable identity for a :class:`ProviderOffer` (it has no ``eq`` key)."""
+    return (
+        offer.provider_content_id,
+        offer.content_type,
+        offer.season_number,
+        offer.episode_number,
+        offer.offer_type,
+        offer.provider_url,
+    )
 
 
 class RegistrationTests(SimpleTestCase):
@@ -515,6 +536,100 @@ class DeduplicationTests(SimpleTestCase):
         self.assertEqual(len(result.offers), TOTAL_OFFERS)
 
 
+class CheckpointWalkTests(SimpleTestCase):
+    """A bounded batch checkpoints and resumes instead of restarting the A-Z."""
+
+    def test_bounded_batch_checkpoints_and_resumes(self):
+        api = FakeBBCIPlayer()
+        source = build_source(api, batch_size=2)[0]
+
+        first = source.fetch()
+        checkpoint = _decode_cursor(first.cursor)
+        self.assertEqual(checkpoint["letter"], "c")
+        self.assertEqual(len(first.contents), 2)
+        # The walk stopped long before the later letters were reached.
+        self.assertFalse(api.urls_containing(PAGE_EE))
+        self.assertFalse(api.urls_containing(PAGE_FOLK))
+
+        second = source.fetch(cursor=first.cursor)
+        self.assertEqual(
+            _decode_cursor(second.cursor)["letter"], "f",
+            "resuming continues past the checkpointed entry into later letters",
+        )
+        # Resuming continued into eastenders without refetching a..b.
+        self.assertTrue(api.urls_containing(PAGE_EE))
+        self.assertNotIn(
+            "b01qm16p", {c.provider_content_id for c in second.contents}
+        )
+
+    def test_resumption_sums_to_the_full_catalogue_without_duplicates(self):
+        full = build_source(FakeBBCIPlayer())[0].fetch()
+
+        source = build_source(FakeBBCIPlayer(), batch_size=2)[0]
+        contents, offers, cursor = [], [], None
+        for _ in range(30):
+            result = source.fetch(cursor=cursor)
+            contents.extend(result.contents)
+            offers.extend(result.offers)
+            cursor = result.cursor
+            if cursor is None:
+                break
+
+        self.assertEqual(
+            [c.provider_content_id for c in contents],
+            [c.provider_content_id for c in full.contents],
+        )
+        self.assertEqual(
+            sorted(_offer_key(o) for o in offers),
+            sorted(_offer_key(o) for o in full.offers),
+        )
+
+    def test_a_late_detail_failure_fails_the_batch_and_is_retried(self):
+        api = FakeBBCIPlayer()
+        api.failures[PAGE_FOLK] = SourceFetchError("outage")
+        source = build_source(api, batch_size=6)[0]
+
+        # A page that cannot be read mid-batch fails the whole fetch: never a
+        # smaller successful run.
+        with self.assertRaises(SourceFetchError):
+            source.fetch()
+
+        # The retry resumes at the letter that failed and completes the walk.
+        del api.failures[PAGE_FOLK]
+        retry = source.fetch(cursor='{"v": 1, "letter": "f", "after": ""}')
+        self.assertIn("m000ffff1", {c.provider_content_id for c in retry.contents})
+        self.assertIsNone(retry.cursor)
+
+    def test_a_failure_before_any_progress_is_still_a_failure(self):
+        api = FakeBBCIPlayer()
+        api.failures[BRAND_ABADAS] = SourceFetchError("outage")
+        with self.assertRaises(SourceFetchError):
+            build_source(api, batch_size=6)[0].fetch()
+
+    def test_unreadable_or_stale_cursor_restarts_safely(self):
+        api = FakeBBCIPlayer()
+        source = build_source(api, batch_size=2)[0]
+        self.assertIsNotNone(source.fetch(cursor="not json").cursor)
+        # A checkpoint entry that vanished from the letter restarts that
+        # letter rather than skipping ahead.
+        stale = source.fetch(cursor='{"v": 1, "letter": "e", "after": "gone"}')
+        self.assertIsNotNone(stale.cursor)
+
+    def test_a_completed_walk_returns_no_cursor(self):
+        api = FakeBBCIPlayer()
+        source = build_source(api, batch_size=3)[0]
+        cursor = None
+        for _ in range(30):
+            result = source.fetch(cursor=cursor)
+            cursor = result.cursor
+            if cursor is None:
+                break
+        self.assertIsNone(cursor)
+        final = source.fetch(cursor='{"v": 1, "letter": "z", "after": ""}')
+        self.assertEqual(final.contents, [])
+        self.assertIsNone(final.cursor)
+
+
 class BBCIPlayerRefreshTestCase(TestCase):
     def setUp(self):
         self.api = FakeBBCIPlayer()
@@ -760,3 +875,41 @@ class SchedulingIntegrationTests(BBCIPlayerRefreshTestCase):
             any("catalogue_refresh_country_initialized" in line
                 and "source=bbc_iplayer" in line for line in logs.output)
         )
+
+
+class CheckpointPersistenceTests(BBCIPlayerRefreshTestCase):
+    """Bounded batches persist durably, and a failed batch is retried in full."""
+
+    def setUp(self):
+        super().setUp()
+        self.api = FakeBBCIPlayer()
+        self.source = BBCIPlayerSource(
+            client=BBCIPlayerClient(requester=self.api, delay=0.0), batch_size=2
+        )
+        self.service = AvailabilityRefreshService(source=self.source)
+
+    def test_a_failed_batch_keeps_the_checkpoint_and_earlier_rows(self):
+        self.service.refresh_catalogue()          # letters a, b
+        self.assertEqual(_decode_cursor(SyncCursor.objects.get().cursor)["letter"], "c")
+        first_batch_offers = Offer.objects.count()
+        self.assertEqual(first_batch_offers, 6)   # abadas only
+
+        self.service.refresh_catalogue()          # letters c, e
+        self.assertEqual(_decode_cursor(SyncCursor.objects.get().cursor)["letter"], "f")
+        self.assertEqual(Offer.objects.count(), first_batch_offers)
+
+        # A failing next batch must not move the checkpoint nor lose rows.
+        self.api.failures[PAGE_FOLK] = SourceFetchError("outage")
+        with self.assertRaises(SourceFetchError):
+            self.service.refresh_catalogue()
+        self.assertEqual(_decode_cursor(SyncCursor.objects.get().cursor)["letter"], "f")
+        self.assertEqual(Offer.objects.count(), first_batch_offers)
+
+        # The retry resumes at the failing letter and completes the crawl; a
+        # finished walk drops its checkpoint instead of leaving it behind.
+        del self.api.failures[PAGE_FOLK]
+        while SyncCursor.objects.exists():
+            self.service.refresh_catalogue()
+        self.assertEqual(ProviderContent.objects.count(), TOTAL_CONTENTS)
+        self.assertEqual(Offer.objects.count(), MAPPED_OFFERS)
+        self.assertFalse(SyncCursor.objects.exists())
