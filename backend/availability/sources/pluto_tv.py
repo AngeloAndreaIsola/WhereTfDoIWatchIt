@@ -67,9 +67,36 @@ Product semantics, deliberate limitations (all observed, none guessed):
   page signature (declared-total drift can shift the window) or a hard
   ``MAX_PAGES`` cap; a transport/shape failure raises
   :class:`SourceFetchError` and is never reported as an empty catalogue.
+
+Bounded, checkpointed traversal:
+
+- One fetch walks at most ``DEFAULT_BATCH_PAGES`` grid pages **per hub** and
+  hands back a checkpoint, so a failure late in the second hub cannot discard
+  the first hub's work. Each hub is checkpointed independently.
+- The per-hub value carries both an **offset** and an **anchor**::
+
+      {"after": "<last item id walked>", "start": <next page offset>}
+
+  The offset is the fast path — the next fetch starts exactly where this one
+  stopped, with no re-reading. The anchor is the correctness guard: resume skips
+  *by identity* until the anchor is met, so if the declared total drifted and
+  inserted items above the offset, the walk re-reads a page or two rather than
+  silently skipping entries. If the anchor is not found at all (a large
+  re-ordering, or an egress change that swapped the market under us) that hub
+  restarts from its head, which only repeats work.
+- ``supports_resumable_catalogue_sync=True`` describes this traversal progress.
+  ``supports_incremental_sync`` stays ``False`` (Pluto serves no offer delta),
+  and the two are deliberately separate properties.
+
+Egress-scoped market: the country this collector reports is derived from the
+response, not from configuration, so it cannot be resolved before the fetch.
+The result therefore declares ``country=<observed ISO code>`` and the refresh
+service attributes the checkpoint to *that* market rather than to a configured
+one.
 """
 from __future__ import annotations
 
+import json
 import logging
 import urllib.parse
 from datetime import date, datetime
@@ -86,17 +113,30 @@ from .base import (
     SourceFetchError,
     SourceFetchResult,
 )
+from . import checkpoints
+from .checkpoints import MAX_IDENTITY_CHARS
 
 logger = logging.getLogger(__name__)
 
 GRAPHQL_URL = "https://pluto.tv/api/tn/hubs/graphql/"
 MOVIES_HUB = "movies-all-movies"
 SHOWS_HUB = "shows-all-shows"
+#: The two grids this collector walks, in order. Each is checkpointed
+#: independently so a failure in the second cannot discard the first's work.
+HUBS = (MOVIES_HUB, SHOWS_HUB)
 DEFAULT_TIMEOUT = 30
 PAGE_ROWS = 24  # verified page size on both grids
 # Safety net: the real grids are ~1000 items (42 pages); a runaway paging
 # loop (shifting windows, server bugs) stops well before this.
 MAX_PAGES = 100
+#: Grid pages walked per hub per fetch before the checkpoint is handed back.
+#: Real grids are ~42 pages, so the default walks a whole hub in one visit;
+#: lowering it (tests, or a deliberately gentle schedule) bounds each fetch
+#: while still making progress across hubs.
+DEFAULT_BATCH_PAGES = 100
+#: Bump when the traversal algorithm changes: a stored checkpoint from another
+#: version restarts both hubs instead of resuming stale offsets.
+CURSOR_VERSION = 1
 SOURCE_VERSION = "pluto-graphql-v1"
 # Pinned to a verified-allowed value: requests' own default UA *is* this
 # string, and Pluto rejects browser-shaped UAs from datacenter IPs.
@@ -320,6 +360,8 @@ class PlutoTvSource:
         supported_content_types=frozenset({ContentType.MOVIE, ContentType.SERIES}),
         supports_incremental_sync=False,
         supports_catalogue_sync=True,
+        # Bounded, checkpointed traversal (see module docstring).
+        supports_resumable_catalogue_sync=True,
         # Declared totals drift between runs and Pluto has no removal
         # signal: absence must never deactivate offers.
         supports_authoritative_snapshots=False,
@@ -332,8 +374,9 @@ class PlutoTvSource:
         supports_languages=False,
     )
 
-    def __init__(self, client=None):
+    def __init__(self, client=None, batch_pages=DEFAULT_BATCH_PAGES):
         self.client = client or PlutoTvClient()
+        self.batch_pages = max(1, int(batch_pages))
 
     def fetch(self, content=None, *, provider=None, country=None, cursor=None) -> SourceFetchResult:
         if content is not None:
@@ -344,7 +387,13 @@ class PlutoTvSource:
         # provider/country are the caller's scope hints: this source has one
         # provider and decides its country from the observed egress region
         # (see module docstring), so both are accepted and not acted on.
-        # cursor is unused — pagination is a plain offset walk inside fetch().
+        #
+        # ``cursor`` is the durable walk checkpoint, one entry per hub, so a
+        # failure in the second hub cannot discard the first hub's work.
+        resume = checkpoints.decode(
+            cursor, version=CURSOR_VERSION, parts=HUBS,
+            log_prefix="pluto_tv",
+        )
         movies = self.client.collection(MOVIES_HUB)
         region = str(movies.get("region") or "").strip()
         if not region:
@@ -360,42 +409,105 @@ class PlutoTvSource:
             return SourceFetchResult(sync_mode=SyncMode.FULL)
         country_code, path_region = resolved
 
-        items = self._walk(_grid_token(movies, MOVIES_HUB), hub=MOVIES_HUB)
-
-        shows = self.client.collection(SHOWS_HUB)
-        shows_region = str(shows.get("region") or "").strip()
-        if shows_region.upper() != region.upper():
-            # Same egress, so this should not happen; when it does, keep the
-            # region that scoped the walk we already trusted.
-            logger.warning(
-                "pluto_tv_region_mismatch movies=%s shows=%s", region, shows_region
+        items: list[dict] = []
+        anchors: dict = dict(resume.anchors)
+        # Seeded from the checkpoint, not empty: a hub an earlier run finished
+        # must stay finished, or every later batch re-walks it.
+        done: set = set(resume.done)
+        incomplete = False
+        for hub, collection in ((MOVIES_HUB, movies), (SHOWS_HUB, None)):
+            if hub in done:
+                # Finished by an earlier run: skipping it is what stops repeated
+                # batches from re-walking a completed hub for ever.
+                continue
+            state = _decode_hub_state(resume.anchor(hub), hub=hub)
+            if hub == SHOWS_HUB:
+                shows = self.client.collection(SHOWS_HUB)
+                shows_region = str(shows.get("region") or "").strip()
+                if shows_region.upper() != region.upper():
+                    # Same egress, so this should not happen; when it does, keep
+                    # the region that scoped the walk we already trusted.
+                    logger.warning(
+                        "pluto_tv_region_mismatch movies=%s shows=%s",
+                        region, shows_region,
+                    )
+                collection = shows
+            hub_items, hub_state = self._walk(
+                _grid_token(collection, hub), hub=hub, state=state
             )
-        items.extend(self._walk(_grid_token(shows, SHOWS_HUB), hub=SHOWS_HUB))
+            items.extend(hub_items)
+            if hub_state is None:
+                done.add(hub)
+            else:
+                anchors[hub] = _encode_hub_state(hub_state)
+                incomplete = True
 
         contents, offers = self._parse_items(items, country_code, path_region)
+        if incomplete:
+            logger.warning(
+                "pluto_tv_catalogue_truncated batch_pages=%d remaining_hubs=%s",
+                self.batch_pages,
+                ",".join(h for h in HUBS if h not in done),
+            )
+        # A checkpoint is carried while any hub is unfinished. Once both are
+        # done the walk is complete and returns None, so the refresh service
+        # drops the row instead of resuming a finished catalogue.
+        next_cursor = (
+            checkpoints.encode(CURSOR_VERSION, anchors, done) if incomplete else None
+        )
         return SourceFetchResult(
             contents=contents,
             offers=offers,
             authoritative=False,
             complete_snapshot=False,
             sync_mode=SyncMode.FULL,
-            cursor=None,
+            cursor=next_cursor,
+            # The market is a property of the *observation*: it comes from the
+            # egress region, so the refresh service cannot resolve it before the
+            # fetch. Declaring it lets the service attribute the checkpoint to
+            # the market that was actually walked (see ``refresh_catalogue``).
+            country=country_code,
         )
 
     # ------------------------------------------------------------------ walk
 
-    def _walk(self, token: str, *, hub: str) -> list[dict]:
-        """Page through one grid until exhausted; dedupe by item id."""
+    def _walk(self, token: str, *, hub: str, state: dict):
+        """Page one grid, resuming from *state*.
+
+        Returns ``(items, next_state)`` where ``next_state`` is ``None`` when the
+        hub is exhausted, otherwise ``{"start", "after"}`` for the next fetch.
+
+        ``state`` carries an offset *and* an anchor. The offset is the fast path
+        (start exactly where the last fetch stopped); the anchor is the
+        correctness guard. Resuming by offset alone silently skips entries when
+        the declared total drifts and items are inserted above the offset, so
+        every page from the offset onward is also filtered by identity until the
+        anchor is met — re-reading a page or two is cheap, skipping an entry is
+        not.
+
+        The anchor is the last item walked *and* the resume offset is the page
+        that **contained** it, not the page after it. That pairing is what makes
+        the anchor findable: resuming on the page after the anchor would put the
+        anchor permanently behind the cursor, so the identity filter would skip
+        forward for ever without ever matching. Resuming on the anchor's own
+        page re-reads at most one page and then continues after the anchor.
+        """
+        start = int(state.get("start") or 0)
+        after = str(state.get("after") or "")
         items: list[dict] = []
-        start = 0
         pages = 0
         seen_pages: set[tuple[str, ...]] = set()
+        next_state: Optional[dict] = None
+        # Offset of the page that last contributed items, i.e. where the anchor
+        # lives. Distinct from ``start`` (which advances past it).
+        anchor_page_start = start
         while True:
-            result = self.client.grid_page(token, start)
+            page_start = start
+            result = self.client.grid_page(token, page_start)
             page = result.get("data")
             if not isinstance(page, list):
                 raise SourceFetchError(
-                    f"Unexpected Pluto TV grid items for {hub!r} at start={start}"
+                    f"Unexpected Pluto TV grid items for {hub!r} at start={page_start}"
                 )
             page = [item for item in page if isinstance(item, dict)]
             if not page:
@@ -404,20 +516,74 @@ class PlutoTvSource:
             if signature in seen_pages:
                 # Declared totals drift, so the paging window can shift and
                 # replay a page; stop instead of looping forever.
-                logger.warning("pluto_tv_repeated_page hub=%s start=%s", hub, start)
+                logger.warning(
+                    "pluto_tv_repeated_page hub=%s start=%s", hub, page_start
+                )
                 break
             seen_pages.add(signature)
-            items.extend(page)
+
+            if after:
+                # Still seeking the anchor: skip by identity. A page consumed
+                # entirely before the anchor is reached contributes nothing.
+                found = False
+                consumed = 0
+                for item in page:
+                    consumed += 1
+                    if str(item.get("id") or "") == after:
+                        found = True
+                        break
+                if found:
+                    # ``page[consumed:]`` may be empty when the anchor is the
+                    # last item on its page — that is a legitimate resume point,
+                    # not a failure to find it. Tracking found-ness explicitly
+                    # (rather than comparing ``consumed`` to the page length) is
+                    # what stops the walk from treating "anchor at the end of a
+                    # page" as "anchor absent" and skipping forward for ever.
+                    items.extend(page[consumed:])
+                    anchor_page_start = page_start
+                    after = ""
+                else:
+                    # Anchor not on this page: keep seeking, recording the page
+                    # as consumed so the next fetch resumes past it.
+                    start += self.client.page_rows
+                    pages += 1
+                    if pages >= self.batch_pages:
+                        next_state = {"start": start, "after": after}
+                        break
+                    continue
+            else:
+                items.extend(page)
+                anchor_page_start = page_start
+
             pages += 1
+            start += self.client.page_rows
             if not result.get("hasMore"):
                 break
-            if pages >= MAX_PAGES:
+            if pages >= self.batch_pages:
                 logger.warning(
                     "pluto_tv_page_limit hub=%s pages=%s items=%s",
                     hub, pages, len(items),
                 )
+                # The hub is not finished, only this fetch's budget for it.
+                #
+                # The next state depends on whether this fetch contributed
+                # anything, and getting that wrong makes the walk oscillate:
+                #
+                # - items walked -> resume on the page that held the last one,
+                #   anchored on it, so the identity filter re-finds it and
+                #   continues after it.
+                # - nothing walked -> the anchor was consumed at the very end of
+                #   a page, so there is no new anchor to record. Carrying the old
+                #   anchor here would re-read the same page for ever, and
+                #   blanking it while resetting the offset to that page would
+                #   restart the hub. Advancing past the consumed pages with no
+                #   anchor is the only state that makes progress.
+                if items:
+                    last = str((items[-1] or {}).get("id") or "")
+                    next_state = {"start": anchor_page_start, "after": last}
+                else:
+                    next_state = {"start": start, "after": ""}
                 break
-            start += self.client.page_rows
 
         deduped: dict[str, dict] = {}
         for item in items:
@@ -427,7 +593,7 @@ class PlutoTvSource:
                 "pluto_tv_overlapping_items hub=%s raw=%s unique=%s",
                 hub, len(items), len(deduped),
             )
-        return list(deduped.values())
+        return list(deduped.values()), next_state
 
     # ----------------------------------------------------------------- parse
 
@@ -556,6 +722,47 @@ def _resolve_region(region: str) -> Optional[tuple[str, str]]:
     code = region.strip().upper()
     path = PATH_BY_COUNTRY.get(code)
     return (code, path) if path else None
+
+
+def _encode_hub_state(state: dict) -> str:
+    """Serialise one hub's walk position: the page offset plus its anchor.
+
+    Both are kept because they answer different questions. ``start`` is the fast
+    path — where to resume paging. ``after`` is the correctness guard — which
+    item the last fetch actually consumed, so a resume can detect that the
+    window shifted under it instead of trusting a bare offset.
+    """
+    return json.dumps(
+        {
+            "start": max(0, int(state.get("start") or 0)),
+            "after": str(state.get("after") or "")[:MAX_IDENTITY_CHARS],
+        },
+        sort_keys=True, separators=(",", ":"),
+    )
+
+
+def _decode_hub_state(value, *, hub: str) -> dict:
+    """Decode one hub's stored position, tolerating garbage.
+
+    Anything unreadable restarts that hub from its head: a broken checkpoint is
+    never a reason to skip entries, and never a reason to look finished.
+    """
+    empty = {"start": 0, "after": ""}
+    if not value:
+        return empty
+    try:
+        data = json.loads(str(value))
+    except (TypeError, ValueError):
+        logger.warning("pluto_tv_cursor_invalid hub=%s value=%r", hub, str(value)[:120])
+        return empty
+    if not isinstance(data, dict):
+        logger.warning("pluto_tv_cursor_reset hub=%s reason=shape", hub)
+        return empty
+    try:
+        start = int(data.get("start") or 0)
+    except (TypeError, ValueError):
+        start = 0
+    return {"start": max(0, start), "after": str(data.get("after") or "")}
 
 
 def _grid_token(collection: dict, hub: str) -> str:

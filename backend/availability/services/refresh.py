@@ -301,6 +301,44 @@ class AvailabilityRefreshService:
                 self.source.slug, None, exc,
             )
             raise
+        # A source whose market is only knowable *after* the fetch (Pluto TV
+        # reads it off the egress region) declares it on the result. Honour that
+        # over the configured scope, or the checkpoint would be attributed to a
+        # market the walk never touched — and for a source that declares many
+        # countries the configured scope resolves to nothing at all, so the
+        # checkpoint would be neither read nor written.
+        declared_country = str(getattr(result, "country", "") or "").strip().upper()
+        if declared_country and declared_country != (resolved_country or ""):
+            declared_row = Country.objects.filter(
+                code=declared_country, enabled=True
+            ).first()
+            if declared_row is not None:
+                logger.info(
+                    "availability_catalogue_country_declared source=%s "
+                    "declared=%s configured=%s",
+                    self.source.slug, declared_country, resolved_country or "",
+                )
+                resolved_country = declared_country
+                country_row = declared_row
+                # The checkpoint belongs to the market just walked, so read it
+                # from there too: a cursor left by an earlier walk of *this*
+                # market is what makes the walk resumable at all.
+                if not explicit_cursor:
+                    stored = self.cursors.get(
+                        provider=provider_row, source=source_row, country=country_row
+                    )
+                    if stored is not None and stored.cursor:
+                        cursor = stored.cursor
+                        logger.info(
+                            "availability_cursor_resumed source=%s country=%s",
+                            self.source.slug, declared_country,
+                        )
+            else:
+                logger.warning(
+                    "availability_catalogue_country_declared source=%s "
+                    "declared=%s reason=no_enabled_country_row checkpoint_not_persisted",
+                    self.source.slug, declared_country,
+                )
         refresh_result = self._persist(result, tmdb_id=None, persist_cursor=False)
         # Progress is a property of the *batch*, not of the offers it happened
         # to produce: a successful batch that maps zero titles still advances

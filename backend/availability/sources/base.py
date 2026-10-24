@@ -248,6 +248,12 @@ class SourceFetchResult:
     complete_snapshot: bool = False
     sync_mode: SyncMode = SyncMode.TARGETED
     cursor: Optional[str] = None
+    # The market this result was *observed* in, when the source can only learn
+    # it from the response (Pluto TV reads its market off the egress region and
+    # cannot be told one). ``None`` means "the caller's scope applies" — every
+    # other source. Declaring it lets the refresh service attribute a checkpoint
+    # to the market that was actually walked instead of a configured default.
+    country: Optional[str] = None
 
 
 @runtime_checkable
