@@ -63,10 +63,18 @@ Deliberate limitations, documented rather than papered over:
 - **No playback URLs**: the content API exposes no signed stream; offers
   deep-link to the public watch page (``pbs.org/video/<asset slug>``,
   verified 200) which is what a viewer actually opens.
-- **No incremental cursor across runs**: the catalogue walk starts from the
-  top each run (``supports_incremental_sync=False``); the cursor lives only
-  inside one fetch. ~10 show pages + ~20 batch calls per run, all on the
-  shared rate limiter.
+- **Bounded, checkpointed walk across runs**: the A–Z walk is a ~10-page
+  ``allShows`` cursor walk, but the expensive half is ``showsBatch`` (one call
+  per ``BATCH_SIZE`` shows, ~20 calls for the full catalogue). A fetch walks at
+  most ``DEFAULT_BATCH_SHOWS`` shows and hands back a
+  ``{"v": 1, "parts": {"shows": <last-walked-slug>}}`` checkpoint, so a late
+  batch failure re-reads one bounded batch instead of the whole catalogue. The
+  anchor is the last *show* the batch phase completed — PBS's own slug, never a
+  page or an opaque ``endCursor``: the upstream cursor is only valid inside the
+  paging session that produced it, so it cannot be persisted and replayed.
+  ``supports_resumable_catalogue_sync=True`` describes this traversal progress;
+  ``supports_incremental_sync`` stays ``False`` and means something else (PBS
+  serves no offer delta).
 - **Never authoritative**: absence in one run never deactivates offers
   (``supports_authoritative_snapshots=False``) — a batch that dropped a show
   would otherwise look like a removal.
@@ -95,6 +103,7 @@ from .base import (
     SourceFetchError,
     SourceFetchResult,
 )
+from . import checkpoints
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +127,15 @@ COUNTRY = "US"
 SHOWS_PAGE_SIZE = 100
 MAX_PAGES = 100
 BATCH_SIZE = 50
+#: Shows walked per fetch before the checkpoint is handed back. The
+#: ``showsBatch`` calls are the expensive half of this walk (one per
+#: ``BATCH_SIZE`` shows), so this — not the page cap — is what bounds a run.
+DEFAULT_BATCH_SHOWS = 500
+#: Bump when the traversal algorithm changes: a stored checkpoint from another
+#: version restarts the walk instead of resuming a stale anchor.
+CURSOR_VERSION = 1
+#: The single part this walk checkpoints (it has one traversal dimension).
+PART_SHOWS = "shows"
 
 #: Only these asset states are watchable offers (see module docstring).
 WATCHABLE_VIDEO_TYPE = "FULL_LENGTH"
@@ -251,6 +269,8 @@ class PbsSource:
         # runs (see module docstring).
         supports_incremental_sync=False,
         supports_catalogue_sync=True,
+        # Bounded, checkpointed traversal (see module docstring).
+        supports_resumable_catalogue_sync=True,
         # A batch that dropped a show must not read as a removal: absence
         # never deactivates offers.
         supports_authoritative_snapshots=False,
@@ -262,8 +282,9 @@ class PbsSource:
         supports_languages=True,
     )
 
-    def __init__(self, client=None):
+    def __init__(self, client=None, batch_size=DEFAULT_BATCH_SHOWS):
         self.client = client or PbsClient()
+        self.batch_size = max(1, int(batch_size))
 
     def fetch(self, content=None, *, provider=None, country=None, cursor=None) -> SourceFetchResult:
         if content is not None:
@@ -273,19 +294,58 @@ class PbsSource:
             )
         # provider/country are the caller's scope hints: this source has one
         # provider and one fixed market (see module docstring), so both are
-        # accepted and not acted on. cursor is unused — pagination is an
-        # internal walk inside fetch().
+        # accepted and not acted on.
+        #
+        # ``cursor`` is the durable walk checkpoint: the last show slug the
+        # batch phase completed. One fetch walks at most ``batch_size`` shows
+        # and hands the next checkpoint back, so a late ``showsBatch`` failure
+        # cannot discard the whole catalogue's work.
+        resume = checkpoints.decode(
+            cursor, version=CURSOR_VERSION, parts=(PART_SHOWS,),
+            log_prefix="pbs",
+        )
 
         shows = self._walk_shows()
+        after = resume.anchor(PART_SHOWS)
+        if after:
+            # Skip everything up to and including the checkpointed show. If it
+            # left the catalogue the walk restarts from the top, which only
+            # repeats already-persisted work — it never skips ahead.
+            for position, show in enumerate(shows):
+                if str(show.get("slug") or "") == after:
+                    shows = shows[position + 1:]
+                    logger.info("pbs_walk_resume after=%s remaining=%d",
+                                after, len(shows))
+                    break
+            else:
+                logger.warning(
+                    "pbs_cursor_checkpoint_missing after=%s reason=restarting",
+                    after,
+                )
 
         contents: list[DiscoveredContent] = []
         offers: list[ProviderOffer] = []
-        for start in range(0, len(shows), BATCH_SIZE):
-            chunk = shows[start:start + BATCH_SIZE]
-            payload = self.client.shows_batch([str(s.get("slug") or "") for s in chunk])
+        walked = 0
+        position = 0
+        last_slug = after
+        # The chunk is capped by the remaining budget, not just by BATCH_SIZE:
+        # asking for shows this fetch will not walk wastes a batch request's
+        # worth of payload and makes the request's contents disagree with what
+        # the checkpoint claims was processed.
+        while position < len(shows) and walked < self.batch_size:
+            limit = min(BATCH_SIZE, self.batch_size - walked)
+            chunk = shows[position:position + limit]
+            payload = self.client.shows_batch(
+                [str(s.get("slug") or "") for s in chunk]
+            )
             assets_by_show = _assets_by_show(payload, expected=len(chunk))
             for show in chunk:
                 slug = str(show.get("slug") or "")
+                walked += 1
+                # The anchor moves as soon as the show is walked, so a show with
+                # no watchable assets is still progress rather than an infinite
+                # re-read.
+                last_slug = slug or last_slug
                 assets = assets_by_show.get(slug)
                 if assets is None:
                     # The show dropped out of the catalogue between the walk
@@ -299,6 +359,23 @@ class PbsSource:
                     continue
                 contents.append(content)
                 offers.extend(show_offers)
+            position += len(chunk)
+
+        truncated = position < len(shows)
+
+        if truncated:
+            logger.warning(
+                "pbs_catalogue_truncated shows_walked=%d batch_size=%d "
+                "remaining=%d",
+                walked, self.batch_size, max(0, len(shows) - walked),
+            )
+        # A checkpoint is only emitted while shows remain unwalked; an exhausted
+        # walk returns None so the refresh service drops the row rather than
+        # resuming a finished catalogue.
+        next_cursor = (
+            checkpoints.encode(CURSOR_VERSION, {PART_SHOWS: last_slug})
+            if truncated else None
+        )
 
         return SourceFetchResult(
             contents=contents,
@@ -306,7 +383,7 @@ class PbsSource:
             authoritative=False,
             complete_snapshot=False,
             sync_mode=SyncMode.FULL,
-            cursor=None,
+            cursor=next_cursor,
         )
 
     # ------------------------------------------------------------------ walk

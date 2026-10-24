@@ -73,6 +73,7 @@ class FakePbsApi:
         self.payloads.append(copy.deepcopy(payload))
         operation = str(payload.get("operationName") or "")
         variables = payload.get("variables") or {}
+        slugs: list[str] = []
         if operation == "PbsAllShows":
             cursor = variables.get("after")
             key = None if cursor is None else str(cursor)
@@ -91,11 +92,36 @@ class FakePbsApi:
             if fragment.lower() in str(key).lower() or fragment.lower() in operation.lower():
                 raise exc
         response = table.get(key)
+        if response is None and operation == "PbsShowsBatch":
+            # The recorded fixtures hold one aggregate batch payload for the
+            # whole catalogue. A fetch that walks a bounded window asks for a
+            # *subset* of those slugs, which the exact-key lookup above misses —
+            # so fall back to filtering the recorded batch by the requested
+            # slugs. Real PBS answers any slug list; without this the only
+            # testable batch size would be "all of them", which cannot exercise
+            # a resumed walk.
+            response = self._filter_batch(slugs)
         if response is None:
             raise SourceFetchError(
                 f"Simulated PBS rejection for {operation} key={key!r}"
             )
         return copy.deepcopy(response)
+
+    def _filter_batch(self, slugs: list[str]) -> dict | None:
+        """A recorded batch response narrowed to *slugs*, or ``None``."""
+        wanted = set(slugs)
+        for entry in self.batches.values():
+            records = ((entry or {}).get("data") or {}).get("showsBatch")
+            if not isinstance(records, list):
+                continue
+            selected = [
+                record for record in records
+                if isinstance(record, dict)
+                and str((record.get("show") or {}).get("slug") or "") in wanted
+            ]
+            if selected:
+                return {"data": {"showsBatch": selected}}
+        return None
 
     def requests_matching(self, fragment: str) -> list[str]:
         return [record for record in self.requests if fragment in record]
