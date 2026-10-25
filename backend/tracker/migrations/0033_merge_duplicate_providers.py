@@ -282,7 +282,25 @@ def _merge_provider(canonical, duplicate, apps=None) -> None:
 
 
 def merge_duplicate_providers(apps, schema_editor):
-    from tracker.models import Provider, provider_domain_root
+    # ``provider_domain_root`` is a pure string helper with no ORM access, so
+    # importing it live is safe and is what keeps the grouping rule identical to
+    # the one the model enforces. ``Provider`` itself must NOT be live: this
+    # function queries it, and a live queryset SELECTs every column the live
+    # model declares — including columns added by migrations later than this one.
+    # That made the chain unextendable: adding a field to ``tracker.Provider``
+    # broke every fresh database with
+    #   ProgrammingError: column tracker_provider.<new> does not exist
+    # raised right here. Verified by probe before and after the fix.
+    #
+    # ``apps`` is None only when this function is called directly by a test
+    # (never by the migration framework), so the live model is used then — which
+    # is correct, because a direct call runs against the *current* schema.
+    from tracker.models import provider_domain_root
+
+    if apps is not None:
+        Provider = apps.get_model("tracker", "Provider")
+    else:
+        from tracker.models import Provider
 
     groups = {}
     for provider in Provider.objects.order_by("id"):
