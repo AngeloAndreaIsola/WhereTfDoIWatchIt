@@ -765,6 +765,52 @@ def _catalogue_source_slugs(
     )
 
 
+def last_successful_completions(slugs, now=None) -> dict:
+    """When each catalogue source last *completed* a walk, keyed by slug.
+
+    This is the canonical answer to "when did this source last finish?", and it
+    is derived from the run audit rather than from a cursor field on purpose.
+
+    A checkpoint row cannot hold completion for every source: several walks
+    delete their ``SyncCursor`` row on completion (the ordinary non-cycling
+    case — the row's absence *is* the "nothing left to resume" signal), so a
+    timestamp on that row would be destroyed by the very event it records.
+    ``RefreshRun`` outlives it, so completion is read from there.
+
+    ``SyncCursor.last_successful_sync`` therefore keeps a narrower meaning: the
+    last completed traversal *of a walk whose checkpoint row still exists*
+    (cycling sources such as Tubi, and multi-partition walks). Use this function
+    when the question is about the source as a whole.
+
+    Filters, all of which matter:
+      * ``error=""``            — a failed run is not a completion;
+      * ``finished_at__isnull=False`` — an in-flight run has not completed;
+      * ``abandoned_at__isnull=True`` — a reconciled run records a dead worker,
+        not a finished walk, so it must never count as a successful one.
+
+    One aggregate query for any number of slugs.
+    """
+    slugs = list(slugs)
+    if not slugs:
+        return {}
+    return {
+        row["service"]: row["last"]
+        for row in RefreshRun.objects.filter(
+            service__in=slugs,
+            error="",
+            finished_at__isnull=False,
+            abandoned_at__isnull=True,
+        )
+        .values("service")
+        .annotate(last=Max("finished_at"))
+    }
+
+
+def last_successful_completion(slug, now=None):
+    """The single-source form of :func:`last_successful_completions`."""
+    return last_successful_completions([slug], now=now).get(slug)
+
+
 def stale_catalogue_sources(now=None) -> list[str]:
     """Catalogue-capable slugs whose last successful sync left its window.
 
@@ -781,14 +827,7 @@ def stale_catalogue_sources(now=None) -> list[str]:
     catalogue marker.
     """
     slugs, _disabled = _catalogue_source_slugs()
-    last_success = {
-        row["service"]: row["last"]
-        for row in RefreshRun.objects.filter(
-            service__in=slugs, error="", finished_at__isnull=False
-        )
-        .values("service")
-        .annotate(last=Max("finished_at"))
-    }
+    last_success = last_successful_completions(slugs)
     moment = now or timezone.now()
     return sorted(
         slug
