@@ -144,6 +144,55 @@ REST_FRAMEWORK = {
 
 APPEND_SLASH = False
 
+# Container log visibility.
+#
+# Django's stock logging config puts a RequireDebugTrue filter on the console
+# handler. Deployments run with DJANGO_DEBUG=0, so every application record was
+# dropped: the handler still counted as "found", which also suppressed Python's
+# last-resort WARNING output. Operational events such as RaiPlay's
+# ``rai_play_walk_resume`` therefore never appeared in ``docker compose logs``
+# and could only be captured by attaching a private handler.
+#
+# One explicit config covers every container because the backend, title worker
+# and catalogue worker are all Django processes importing this module. Unrelated
+# components keep the WARNING default; only the RaiPlay source logger is raised
+# to INFO. ``propagate: False`` on that logger keeps each event to a single line
+# rather than emitting it again through the root handler.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "container": {
+            "format": "%(asctime)s %(levelname)s %(name)s %(message)s",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "container",
+        },
+    },
+    "loggers": {
+        # Django installs its own INFO default for this logger before applying
+        # the dict below; state WARNING explicitly so framework chatter stays
+        # out of ordinary logs. Errors still reach the root console handler.
+        "django": {
+            "handlers": [],
+            "level": "WARNING",
+            "propagate": True,
+        },
+        "availability.sources.rai_play": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": "WARNING",
+    },
+}
+
 # External API keys (set via env or docker-compose env_file).
 TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "")
 RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "")
