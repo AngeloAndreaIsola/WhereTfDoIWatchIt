@@ -56,7 +56,7 @@ from .serializers import (
     WatchlistItemSerializer,
     WatchlistReportRowSerializer,
 )
-from tracker.scrapers import SCRAPER_REGISTRY, ContentMatcher, ScrapedItem, resolve_scraper_class
+from tracker.scrapers import ContentMatcher, ScrapedItem
 from tracker.services.filtering import apply_composable_filters
 from tracker.services.unified_catalogue import resolve_catalogue_scope, unofficial_catalogue_items
 from tracker.services.watchability import (
@@ -124,6 +124,10 @@ from .services.refresh_requests import (
     request_watchlist_refresh,
 )
 from .services.scraper_runner import run_provider_scraper
+from .services.scraper_selection import (
+    ScraperExecutionIneligible,
+    select_provider_scraper,
+)
 from .services.letterboxd import (
     LetterboxdFetchError,
     LetterboxdInvalidURLError,
@@ -766,6 +770,8 @@ def provider_refresh(request, slug: str):
     if refresh_kind == SCRAPER:
         try:
             items = run_provider_scraper(provider)
+        except ScraperExecutionIneligible as exc:
+            return Response(exc.payload(), status=status.HTTP_409_CONFLICT)
         except Exception as exc:  # noqa: BLE001 - surface the collector error to the card
             logger.exception(
                 "provider_refresh_scraper_failed provider=%s error=%s",
@@ -792,14 +798,19 @@ def provider_refresh(request, slug: str):
             }
         )
 
+    # A registry entry can disappear between the card read and this request.
+    # Ask the shared selector for the same fail-closed contract instead of
+    # letting a retired named scraper fall through to GenericURLAdapter.
+    try:
+        select_provider_scraper(provider)
+    except ScraperExecutionIneligible as exc:
+        return Response(exc.payload(), status=status.HTTP_409_CONFLICT)
     return Response(
         {
+            "code": "refresh_target_unavailable",
+            "error": f"No refresh target is registered for '{provider.slug}'.",
             "provider": provider.slug,
-            "error": (
-                f"No collector is registered for '{provider.name}'; "
-                "only sources with their own scraper or availability source "
-                "can be refreshed."
-            ),
+            "alternative": None,
         },
         status=status.HTTP_409_CONFLICT,
     )
@@ -899,8 +910,6 @@ def detect_provider_from_url(url: str) -> tuple[Provider, str]:
 @api_view(["POST"])
 def scraper_import_url(request):
     """Import a small provider/source by URL, trigger the scraper, and register source."""
-    from tracker.scrapers.adapters import GenericURLAdapter
-
     data = request.data if isinstance(request.data, dict) else {}
     url = (data.get("url") or "").strip()
     if not url:
@@ -911,11 +920,10 @@ def scraper_import_url(request):
     except Exception as exc:
         return Response({"error": str(exc)}, status=400)
 
-    scraper_cls = resolve_scraper_class(provider.slug)
-    if scraper_cls:
-        scraper = scraper_cls()
-    else:
-        scraper = GenericURLAdapter(provider_slug=provider.slug, domain=provider.domain or "example.com")
+    try:
+        scraper = select_provider_scraper(provider).scraper
+    except ScraperExecutionIneligible as exc:
+        return Response(exc.payload(), status=status.HTTP_409_CONFLICT)
 
     items = scraper.run(query=query)
 
@@ -979,7 +987,10 @@ def scraper_run(request):
 
     # Shared with POST /api/providers/<slug>/refresh/: same scraper
     # execution, same persistence, same bridge onto the canonical catalogue.
-    items = run_provider_scraper(provider, query=query)
+    try:
+        items = run_provider_scraper(provider, query=query)
+    except ScraperExecutionIneligible as exc:
+        return Response(exc.payload(), status=status.HTTP_409_CONFLICT)
 
     matcher = ContentMatcher()
     results = []

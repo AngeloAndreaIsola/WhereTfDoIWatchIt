@@ -31,7 +31,6 @@ from tracker.models import (
     Subscription,
 )
 from tracker.scrapers.base import ScrapedItem, ContentMatcher
-from tracker.scrapers import SCRAPER_REGISTRY, resolve_scraper_class
 from tracker.services.preferences import resolve_preferences
 from tracker.services.ranking import rank_offers
 from tracker.services.scraped_offers import BVOD_CATEGORIES, get_scraped_offers
@@ -43,6 +42,10 @@ from tracker.serializers import (
 
 from availability.domain.enums import MatchMethod
 from availability.services.catalogue_query import ProviderCatalogueQueryService
+from tracker.services.scraper_selection import (
+    ScraperExecutionIneligible,
+    select_provider_scraper,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -72,11 +75,6 @@ def _is_stale_scrape(provider: Provider) -> bool:
     if last is None:
         return True
     return (timezone.now() - last) > UNOFFICIAL_STALE_AFTER
-
-
-def _resolve_scraper(provider_slug: str):
-    """Dynamically resolve a scraper class from the registry."""
-    return resolve_scraper_class(provider_slug)
 
 
 @api_view(["GET"])
@@ -279,15 +277,10 @@ def unofficial_scrape(request):
             {"error": f"Provider '{provider_slug}' not found"}, status=404
         )
 
-    scraper_cls = _resolve_scraper(provider_slug)
-    if not scraper_cls:
-        from tracker.scrapers.adapters import GenericURLAdapter
-        scraper = GenericURLAdapter(
-            provider_slug=provider.slug,
-            domain=provider.domain or "example.com",
-        )
-    else:
-        scraper = scraper_cls()
+    try:
+        scraper = select_provider_scraper(provider).scraper
+    except ScraperExecutionIneligible as exc:
+        return Response(exc.payload(), status=status.HTTP_409_CONFLICT)
 
     items = scraper.run(query=query)
 

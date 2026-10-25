@@ -278,7 +278,7 @@ class ProviderRefreshEndpointTests(TestCase):
         marker = CatalogueRefreshRequest.objects.filter(status=CatalogueRefreshStatus.PENDING)
 
         with patch(
-            "tracker.services.scraper_runner.resolve_scraper_class",
+            "tracker.services.scraper_selection.resolve_scraper_class",
             return_value=_fake_scraper_class([_scraped_item()]),
         ) as mock_resolve:
             resp = self.client.post("/api/providers/kisskh/refresh/")
@@ -302,7 +302,7 @@ class ProviderRefreshEndpointTests(TestCase):
         provider = Provider.objects.get(slug="animeworld")
 
         with patch(
-            "tracker.services.scraper_runner.resolve_scraper_class",
+            "tracker.services.scraper_selection.resolve_scraper_class",
             return_value=_fake_scraper_class(),
         ):
             self.client.post("/api/providers/animeworld/refresh/")
@@ -310,7 +310,7 @@ class ProviderRefreshEndpointTests(TestCase):
 
         Subscription.objects.create(user_id=1, provider=provider, name=provider.name)
         with patch(
-            "tracker.services.scraper_runner.resolve_scraper_class",
+            "tracker.services.scraper_selection.resolve_scraper_class",
             return_value=_fake_scraper_class(),
         ):
             self.client.post("/api/providers/animeworld/refresh/")
@@ -320,7 +320,7 @@ class ProviderRefreshEndpointTests(TestCase):
         provider = Provider.objects.get(slug="kisskh")
 
         with patch(
-            "tracker.services.scraper_runner.resolve_scraper_class",
+            "tracker.services.scraper_selection.resolve_scraper_class",
             return_value=_fake_scraper_class(error=RuntimeError("scrape down")),
         ):
             resp = self.client.post("/api/providers/kisskh/refresh/")

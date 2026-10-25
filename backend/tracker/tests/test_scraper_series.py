@@ -428,7 +428,7 @@ class ScrapePayloadContentTypeTests(TestCase):
             defaults={"name": "KissKH", "category": "scraper", "is_enabled": True},
         )
 
-    @patch("tracker.services.scraper_runner.resolve_scraper_class")
+    @patch("tracker.services.scraper_selection.resolve_scraper_class")
     @patch("tracker.scrapers.base.TMDbClient.search")
     def test_scraper_run_serializes_content_type(self, mock_search, mock_resolve):
         mock_search.return_value = []

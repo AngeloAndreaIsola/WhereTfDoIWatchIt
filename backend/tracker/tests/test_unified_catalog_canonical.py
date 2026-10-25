@@ -364,7 +364,7 @@ class UnifiedCatalogWriteHookTests(UnifiedCatalogCanonicalTestCase):
         self.assertTrue(item["unofficial_details"]["is_confirmed"])
 
     @patch("tracker.views.ContentMatcher")
-    @patch("tracker.services.scraper_runner.resolve_scraper_class")
+    @patch("tracker.services.scraper_selection.resolve_scraper_class")
     def test_scraper_run_bridges_every_saved_row(
         self, resolve_cls, matcher_cls
     ):

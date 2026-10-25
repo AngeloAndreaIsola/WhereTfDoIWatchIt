@@ -21,9 +21,8 @@ from __future__ import annotations
 from django.utils import timezone
 
 from ..models import Provider
-from ..scrapers import resolve_scraper_class
-from ..scrapers.adapters import GenericURLAdapter
 from .scraped_mapping import persist_scraped_item
+from .scraper_selection import select_provider_scraper
 
 
 def run_provider_scraper(provider: Provider, query: str | None = None) -> list:
@@ -32,13 +31,7 @@ def run_provider_scraper(provider: Provider, query: str | None = None) -> list:
     ``query`` narrows the run when the caller has one (the import flow passes
     the URL-derived title); ``None`` runs the scraper's default full pass.
     """
-    scraper_cls = resolve_scraper_class(provider.slug)
-    if scraper_cls:
-        scraper = scraper_cls()
-    else:
-        scraper = GenericURLAdapter(
-            provider_slug=provider.slug, domain=provider.domain or "example.com"
-        )
+    scraper = select_provider_scraper(provider).scraper
 
     items = scraper.run(query=query)
 
