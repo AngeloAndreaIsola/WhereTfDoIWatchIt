@@ -6,7 +6,6 @@ from django.test import TestCase
 from tracker.models import Provider, ProviderCategory
 from tracker.scrapers import (
     BaseScraper,
-    BBCScraper,
     HydraHDScraper,
     NHKScraper,
     RaiPlayScraper,
@@ -14,6 +13,11 @@ from tracker.scrapers import (
     resolve_scraper_class,
 )
 from tracker.scrapers.base import ScrapedItem
+from tracker.serializers import ProviderSerializer
+from tracker.services.scraper_selection import (
+    ScraperExecutionIneligible,
+    select_provider_scraper,
+)
 
 
 # Minimal HTML fixture for BBC Redux state
@@ -80,36 +84,38 @@ RAIPLAY_WASHI_CONTEXT_HTML = """
 """
 
 
-class BBCScraperTest(TestCase):
-    def setUp(self):
-        self.scraper = BBCScraper()
+class BBCScraperRetirementContractTests(TestCase):
+    def test_bbc_iplayer_not_in_scraper_registry(self):
+        self.assertNotIn("bbc_iplayer", SCRAPER_REGISTRY)
+        self.assertIsNone(resolve_scraper_class("bbc_iplayer"))
 
-    @patch.object(BBCScraper, "fetch_url")
-    def test_no_query_returns_empty(self, mock_fetch):
-        mock_fetch.return_value = ""
-        self.assertEqual(self.scraper.run(query=None), [])
-        self.assertEqual(self.scraper.run(query=""), [])
+    def test_select_provider_scraper_rejects_bbc_with_canonical_catalogue(self):
+        provider = Provider.objects.get(slug="bbc_iplayer")
+        with self.assertRaises(ScraperExecutionIneligible) as ctx:
+            select_provider_scraper(provider)
+        self.assertEqual(ctx.exception.code, "canonical_catalogue_provider")
+        self.assertEqual(ctx.exception.provider_slug, "bbc_iplayer")
+        self.assertEqual(ctx.exception.source_slug, "bbc_iplayer")
+        self.assertEqual(
+            ctx.exception.payload(),
+            {
+                "code": "canonical_catalogue_provider",
+                "error": "Scraper execution is unavailable for 'bbc_iplayer'; use canonical catalogue source 'bbc_iplayer'.",
+                "provider": "bbc_iplayer",
+                "alternative": {"kind": "catalogue", "source": "bbc_iplayer"},
+            },
+        )
 
-    @patch.object(BBCScraper, "fetch_url")
-    def test_parses_redux_state(self, mock_fetch):
-        mock_fetch.return_value = BBC_STATE_HTML
-        items = self.scraper.run(query=None)
-        self.assertEqual(len(items), 1)
-        self.assertEqual(items[0].title, "Sherlock")
-        self.assertEqual(items[0].provider_slug, "bbc_iplayer")
-        self.assertIn("bbc.co.uk", items[0].source_url)
-        self.assertIn("EN", items[0].audio_languages)
-        self.assertIn("EN", items[0].subtitle_languages)
+    @patch("tracker.services.scraper_selection.GenericURLAdapter")
+    def test_generic_url_adapter_never_instantiated_for_bbc(self, mock_generic):
+        provider = Provider.objects.get(slug="bbc_iplayer")
+        with self.assertRaises(ScraperExecutionIneligible):
+            select_provider_scraper(provider)
+        mock_generic.assert_not_called()
 
-    @patch.object(BBCScraper, "fetch_url")
-    def test_handles_empty_response(self, mock_fetch):
-        mock_fetch.return_value = ""
-        self.assertEqual(self.scraper.run(query="x"), [])
-
-    @patch.object(BBCScraper, "fetch_url")
-    def test_handles_invalid_json(self, mock_fetch):
-        mock_fetch.return_value = "<html>not json</html>"
-        self.assertEqual(self.scraper.run(query="x"), [])
+    def test_has_scraper_serializer_field_reflects_bbc_retirement(self):
+        provider = Provider.objects.get(slug="bbc_iplayer")
+        self.assertFalse(ProviderSerializer(provider).data["has_scraper"])
 
 
 class NHKScraperTest(TestCase):
@@ -213,19 +219,21 @@ class ScraperRegistryTest(TestCase):
     """The registry drives both the v1 scraper views and the v2/unofficial API."""
 
     def test_priority_sources_registered(self):
-        for slug in ("bbc_iplayer", "nhk_world", "raiplay"):
+        for slug in ("nhk_world", "raiplay"):
             self.assertIn(slug, SCRAPER_REGISTRY)
             # resolve_scraper_class returns an instantiable scraper class
             cls = resolve_scraper_class(slug)
             self.assertIsNotNone(cls)
             self.assertTrue(issubclass(cls, BaseScraper))
+        self.assertNotIn("bbc_iplayer", SCRAPER_REGISTRY)
 
     def test_resolve_returns_none_for_unknown(self):
         self.assertIsNone(resolve_scraper_class("does-not-exist"))
 
     def test_resolved_instance_is_scraper(self):
-        instance = resolve_scraper_class("bbc_iplayer")()
-        self.assertIsInstance(instance, BBCScraper)
+        instance = resolve_scraper_class("raiplay")()
+        self.assertIsInstance(instance, RaiPlayScraper)
+        self.assertIsNone(resolve_scraper_class("bbc_iplayer"))
 
     def test_get_or_create_provider_from_registry_slug(self):
         """Providers referenced by the registry exist or can be created.

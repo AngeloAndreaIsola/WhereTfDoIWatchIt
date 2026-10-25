@@ -9,17 +9,18 @@ from rest_framework.test import APIClient
 from tracker.models import Provider, Subscription
 from tracker.scrapers import SCRAPER_REGISTRY
 from tracker.scrapers.adapters import AnimeWorldScraper, HydraHDScraper, KissKHScraper
-from tracker.scrapers.bbc import BBCScraper
 from tracker.scrapers.nhk import NHKScraper
 from tracker.scrapers.rai_play import RaiPlayScraper
 from tracker.serializers import ProviderSerializer
-from tracker.services.scraper_selection import select_provider_scraper
+from tracker.services.scraper_selection import (
+    ScraperExecutionIneligible,
+    select_provider_scraper,
+)
 
 
 class ScraperSelectionUnitTests(TestCase):
     def test_current_registry_entries_remain_eligible(self):
         expected = {
-            "bbc_iplayer": BBCScraper,
             "nhk_world": NHKScraper,
             "raiplay": RaiPlayScraper,
             "kisskh": KissKHScraper,
@@ -32,10 +33,19 @@ class ScraperSelectionUnitTests(TestCase):
                 self.assertEqual(selection.kind, "registered")
                 self.assertIsInstance(selection.scraper, scraper_class)
 
+    def test_retired_bbc_scraper_raises_canonical_catalogue_ineligible(self):
+        provider = Provider.objects.get(slug="bbc_iplayer")
+        with self.assertRaises(ScraperExecutionIneligible) as ctx:
+            select_provider_scraper(provider)
+        self.assertEqual(ctx.exception.code, "canonical_catalogue_provider")
+        self.assertEqual(ctx.exception.provider_slug, "bbc_iplayer")
+        self.assertEqual(ctx.exception.source_slug, "bbc_iplayer")
+
     def test_existing_named_scrapers_keep_serializer_contract(self):
-        for slug in ("bbc_iplayer", "raiplay", "nhk_world"):
+        for slug in ("raiplay", "nhk_world"):
             with self.subTest(slug=slug):
                 self.assertTrue(ProviderSerializer(Provider.objects.get(slug=slug)).data["has_scraper"])
+        self.assertFalse(ProviderSerializer(Provider.objects.get(slug="bbc_iplayer")).data["has_scraper"])
 
 
 class ScraperSelectionEndpointTests(TestCase):
@@ -59,7 +69,7 @@ class ScraperSelectionEndpointTests(TestCase):
             self.assertEqual(alternative, {"kind": "catalogue", "source": source})
 
     def test_provider_refresh_keeps_bbc_on_canonical_collection_after_registry_removal(self):
-        with self._without_registry_entry("bbc_iplayer"), patch(
+        with patch(
             "tracker.services.scraper_selection.GenericURLAdapter"
         ) as generic:
             response = self.client.post("/api/providers/bbc_iplayer/refresh/")
@@ -70,11 +80,39 @@ class ScraperSelectionEndpointTests(TestCase):
         generic.assert_not_called()
 
     def test_scraper_run_rejects_bbc_without_generic_fallback(self):
-        with self._without_registry_entry("bbc_iplayer"), patch(
+        with patch(
             "tracker.services.scraper_selection.GenericURLAdapter"
         ) as generic:
             response = self.client.post(
                 "/api/scrapers/run/", {"provider_slug": "bbc_iplayer"}, format="json"
+            )
+
+        self._assert_ineligible(
+            response, code="canonical_catalogue_provider", provider="bbc_iplayer", source="bbc_iplayer"
+        )
+        generic.assert_not_called()
+
+    def test_import_url_rejects_bbc_without_generic_fallback(self):
+        with patch(
+            "tracker.services.scraper_selection.GenericURLAdapter"
+        ) as generic:
+            response = self.client.post(
+                "/api/scrapers/import-url/",
+                {"url": "https://www.bbc.co.uk/iplayer/episodes/b006m86d/the-thick-of-it"},
+                format="json",
+            )
+
+        self._assert_ineligible(
+            response, code="canonical_catalogue_provider", provider="bbc_iplayer", source="bbc_iplayer"
+        )
+        generic.assert_not_called()
+
+    def test_v2_scrape_rejects_bbc_without_generic_fallback(self):
+        with patch(
+            "tracker.services.scraper_selection.GenericURLAdapter"
+        ) as generic:
+            response = self.client.post(
+                "/api/v2/unofficial/scrape/", {"provider_slug": "bbc_iplayer"}, format="json"
             )
 
         self._assert_ineligible(

@@ -168,8 +168,9 @@ class ScraperRegistryTests(TestCase):
             self.assertNotIn(slug, SCRAPER_REGISTRY)
 
     def test_registry_covers_canonical_broadcasters(self):
-        for slug in CANONICAL_BROADCASTER_SLUGS:
+        for slug in ("raiplay", "nhk_world"):
             self.assertIn(slug, SCRAPER_REGISTRY)
+        self.assertNotIn("bbc_iplayer", SCRAPER_REGISTRY)
 
 
 class MergeMigrationTests(TestCase):
