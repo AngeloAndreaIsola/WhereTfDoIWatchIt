@@ -33,3 +33,8 @@ yarn-error.log*
 *.log
 .graphify/
 .playwright-mcp/
+
+# Agent tooling — local verification recipe (machine-specific: compose overlay
+# paths, host ports). Kept out of the repo so it cannot be committed as part of
+# unrelated work. Delete this line to share the recipe deliberately.
+.hermes/
