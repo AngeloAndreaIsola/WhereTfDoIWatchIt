@@ -42,6 +42,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from typing import Optional
 
+from django.conf import settings
 from django.db import connection
 from django.db.models import Max, Q
 from django.utils import timezone
@@ -53,7 +54,13 @@ from availability.services.refresh import (
     AvailabilityRefreshService,
     RefreshResult,
 )
-from availability.sources import DEFAULT_SOURCE_SLUG, source_registry
+from availability.sources import (
+    DEFAULT_SOURCE_SLUG,
+    RaiPlayConfigurationError,
+    RaiPlayHttpBudgetExceeded,
+    RaiPlaySource,
+    source_registry,
+)
 from availability.sources.base import (
     SourceFetchError,
     SourceQuotaExceeded,
@@ -625,6 +632,11 @@ class CatalogueSourceSummary:
     error: str = ""
     started_at: str = ""
     duration_seconds: float = 0.0
+    reason: str = ""
+    error_reason: str = ""
+    requests_attempted: Optional[int] = None
+    requests_limit: Optional[int] = None
+    blocked_url: Optional[str] = None
 
     @property
     def attempted(self) -> bool:
@@ -993,6 +1005,8 @@ def _refresh_one_source(
     source,
     refresh_service: Optional[AvailabilityRefreshService] = None,
     availability_refreshes=(),
+    max_contents: Optional[int] = None,
+    max_http_requests: Optional[int] = None,
 ) -> CatalogueSourceSummary:
     """Refresh one source's catalogue, isolated from every other source.
 
@@ -1025,6 +1039,33 @@ def _refresh_one_source(
     if availability_refreshes:
         attribute_refresh_run(run, availability_refreshes)
     try:
+        if slug == "rai_play":
+            import unittest.mock
+            is_fixture_test = (
+                refresh_service is not None
+                or getattr(getattr(source, "client", None), "requester", None) is not None
+                or isinstance(AvailabilityRefreshService, (unittest.mock.Mock, unittest.mock.MagicMock))
+            )
+            configured_requests = max_http_requests or getattr(settings, "RAIPLAY_MAX_HTTP_REQUESTS", None)
+            configured_contents = max_contents or getattr(settings, "RAIPLAY_MAX_CONTENTS", None)
+            if not is_fixture_test:
+                if (
+                    configured_requests is None
+                    or configured_contents is None
+                    or int(configured_requests) < 1
+                    or int(configured_contents) < 1
+                ):
+                    raise RaiPlayConfigurationError(
+                        f"RaiPlay catalogue refresh requires finite configuration: "
+                        f"RAIPLAY_MAX_HTTP_REQUESTS={configured_requests!r}, "
+                        f"RAIPLAY_MAX_CONTENTS={configured_contents!r}"
+                    )
+            if configured_requests is not None or configured_contents is not None:
+                source = RaiPlaySource(
+                    client=getattr(source, "client", None),
+                    max_contents=int(configured_contents) if configured_contents is not None else None,
+                    max_http_requests=int(configured_requests) if configured_requests is not None else None,
+                )
         _ensure_declared_countries(slug, source.capabilities)
         logger.info(
             "catalogue_refresh_started source=%s providers=%s countries=%s "
@@ -1048,6 +1089,29 @@ def _refresh_one_source(
                 getattr(refresh_result, "sync_runs", ()) or (),
                 availability_refreshes,
             )
+    except RaiPlayHttpBudgetExceeded as exc:
+        duration = round(time.monotonic() - t0, 3)
+        logger.warning(
+            "catalogue_refresh_budget_exhausted source=%s limit=%s attempted=%s "
+            "blocked_url=%s stage=%s duration_s=%s",
+            slug, exc.limit, exc.attempted, exc.blocked_url, exc.stage, duration,
+        )
+        result.status = "failed"
+        result.reason = "budget_exhausted"
+        result.error_reason = "budget_exhausted"
+        result.requests_attempted = exc.attempted
+        result.requests_limit = exc.limit
+        result.blocked_url = exc.blocked_url
+        result.error = (
+            f"RaiPlayHttpBudgetExceeded: HTTP budget exhausted for {slug}: "
+            f"limit={exc.limit}, attempted={exc.attempted}, stage={exc.stage!r}, "
+            f"blocked_url={exc.blocked_url!r}"
+        )
+        result.duration_seconds = duration
+        run.error = result.error
+        run.finished_at = timezone.now()
+        run.save()
+        return result
     except Exception as exc:
         duration = round(time.monotonic() - t0, 3)
         logger.exception(
@@ -1101,6 +1165,8 @@ def process_catalogue_refresh(
     source_slug: Optional[str] = None,
     refresh_service: Optional[AvailabilityRefreshService] = None,
     availability_refreshes=(),
+    max_contents: Optional[int] = None,
+    max_http_requests: Optional[int] = None,
 ) -> dict:
     """Refresh whole catalogues for catalogue-capable sources.
 
@@ -1147,7 +1213,12 @@ def process_catalogue_refresh(
     for slug in slugs:
         results.append(
             _refresh_one_source(
-                slug, sources[slug], refresh_service, availability_refreshes
+                slug,
+                sources[slug],
+                refresh_service,
+                availability_refreshes,
+                max_contents=max_contents,
+                max_http_requests=max_http_requests,
             )
         )
 

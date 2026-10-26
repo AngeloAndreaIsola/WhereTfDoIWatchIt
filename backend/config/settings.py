@@ -215,3 +215,15 @@ DEFAULT_PREFERENCE = {
 # The provider the Prime Video endpoints filter on. This is the stable
 # Streaming Availability *service id* ("prime"), not the display name.
 DEFAULT_PREFERENCE_PROVIDER = os.environ.get("DEFAULT_PREFERENCE_PROVIDER", "prime")
+
+# RaiPlay operational bounds (worker/cron default: None = must be explicitly configured)
+RAIPLAY_MAX_CONTENTS = (
+    int(os.environ["RAIPLAY_MAX_CONTENTS"])
+    if os.environ.get("RAIPLAY_MAX_CONTENTS")
+    else None
+)
+RAIPLAY_MAX_HTTP_REQUESTS = (
+    int(os.environ["RAIPLAY_MAX_HTTP_REQUESTS"])
+    if os.environ.get("RAIPLAY_MAX_HTTP_REQUESTS")
+    else None
+)

@@ -44,9 +44,38 @@ class Command(BaseCommand):
             default=None,
             help="Restrict to one source slug (default: all catalogue-capable sources).",
         )
+        parser.add_argument(
+            "--max-contents",
+            type=int,
+            default=None,
+            help="Maximum programme entries to process (RaiPlay only).",
+        )
+        parser.add_argument(
+            "--max-http-requests",
+            type=int,
+            default=None,
+            help="Maximum HTTP dispatch attempts allowed (RaiPlay only).",
+        )
 
     def handle(self, *args, **options):
-        summary = process_catalogue_refresh(source_slug=options["source"])
+        source_slug = options.get("source")
+        max_contents = options.get("max_contents")
+        max_http_requests = options.get("max_http_requests")
+
+        if source_slug != "rai_play" and (max_contents is not None or max_http_requests is not None):
+            raise CommandError("--max-contents and --max-http-requests are only supported for --source rai_play")
+
+        if source_slug == "rai_play":
+            if max_contents is not None and max_contents < 1:
+                raise CommandError("--max-contents must be a positive integer")
+            if max_http_requests is not None and max_http_requests < 1:
+                raise CommandError("--max-http-requests must be a positive integer")
+
+        summary = process_catalogue_refresh(
+            source_slug=source_slug,
+            max_contents=max_contents,
+            max_http_requests=max_http_requests,
+        )
 
         summary_str = json.dumps(summary, indent=2)
         errors = summary.get("errors", 0)

@@ -768,3 +768,192 @@ class CatalogueIdempotencyTests(TestCase):
         self.assertTrue(
             SyncRun.objects.filter(status=SyncStatus.SUCCEEDED).exists()
         )
+
+
+class RaiPlayOperationalBudgetTests(TestCase):
+    """Phase 3.3M: Audit every operational entry point invoking RaiPlay refreshes."""
+
+    def setUp(self):
+        from availability.tests.rai_play_fixtures import FakeRaiPlayApi
+        self.provider = Provider.objects.get(slug="raiplay")
+        self.api = FakeRaiPlayApi()
+
+    def test_command_rejects_budget_flags_for_non_raiplay_source(self):
+        with self.assertRaises(CommandError) as ctx1:
+            call_command("refresh_provider_catalogue", "--source", "cbc_gem", "--max-http-requests", 100)
+        self.assertIn("only supported for --source rai_play", str(ctx1.exception))
+
+        with self.assertRaises(CommandError) as ctx2:
+            call_command("refresh_provider_catalogue", "--source", "cbc_gem", "--max-contents", 25)
+        self.assertIn("only supported for --source rai_play", str(ctx2.exception))
+
+    def test_command_rejects_non_positive_budget_flags(self):
+        with self.assertRaises(CommandError) as ctx1:
+            call_command("refresh_provider_catalogue", "--source", "rai_play", "--max-contents", 0)
+        self.assertIn("--max-contents must be a positive integer", str(ctx1.exception))
+
+        with self.assertRaises(CommandError) as ctx2:
+            call_command("refresh_provider_catalogue", "--source", "rai_play", "--max-http-requests", -5)
+        self.assertIn("--max-http-requests must be a positive integer", str(ctx2.exception))
+
+    def test_operational_entrypoint_1_command_without_budget_fails(self):
+        from django.test import override_settings
+        out = io.StringIO()
+        with override_settings(RAIPLAY_MAX_HTTP_REQUESTS=None, RAIPLAY_MAX_CONTENTS=None):
+            with self.assertRaises(CommandError) as ctx:
+                call_command("refresh_provider_catalogue", "--source", "rai_play", stdout=out)
+            self.assertEqual(ctx.exception.returncode, 1)
+
+        run = RefreshRun.objects.get(service="rai_play")
+        self.assertIn("RaiPlay catalogue refresh requires finite configuration", run.error)
+        self.assertIsNotNone(run.finished_at)
+
+    def test_operational_entrypoint_1_command_with_budget_flags_succeeds(self):
+        from availability.sources.rai_play import RaiPlayClient, RaiPlaySource
+        fake_source = RaiPlaySource(client=RaiPlayClient(requester=self.api))
+        registry = registry_of(fake_source)
+        out = io.StringIO()
+
+        with patch("tracker.services.bulk_refresh.source_registry", registry):
+            call_command(
+                "refresh_provider_catalogue",
+                "--source", "rai_play",
+                "--max-contents", 25,
+                "--max-http-requests", 120,
+                stdout=out,
+            )
+
+        summary = summary_from(out.getvalue())
+        self.assertEqual(summary["attempted"], 1)
+        self.assertEqual(summary["refreshed"], 1)
+        self.assertEqual(summary["errors"], 0)
+        run = RefreshRun.objects.get(service="rai_play")
+        self.assertEqual(run.error, "")
+
+    def test_operational_entrypoint_2_bare_command_fails_raiplay_without_budget(self):
+        from django.test import override_settings
+        from availability.sources.rai_play import RaiPlaySource
+        out = io.StringIO()
+        cbc_stub = StubSource(slug="cbc_gem", capabilities=STUB_CAPABILITIES)
+        registry = registry_of(RaiPlaySource(), cbc_stub)
+
+        with override_settings(RAIPLAY_MAX_HTTP_REQUESTS=None, RAIPLAY_MAX_CONTENTS=None):
+            with patch("tracker.services.bulk_refresh.source_registry", registry):
+                with self.assertRaises(CommandError) as ctx:
+                    call_command("refresh_provider_catalogue", stdout=out)
+                # Partial failure: rai_play failed due to missing budget, cbc_gem succeeded
+                self.assertEqual(ctx.exception.returncode, 2)
+
+        run = RefreshRun.objects.get(service="rai_play")
+        self.assertIn("RaiPlay catalogue refresh requires finite configuration", run.error)
+
+    def test_operational_entrypoint_3_worker_marker_without_budget_fails(self):
+        from django.test import override_settings
+        from tracker.models import CatalogueRefreshRequest, CatalogueRefreshStatus
+        from tracker.services.bulk_refresh import process_pending_catalogue_refresh
+        from tracker.services.refresh_requests import request_catalogue_refresh
+
+        marker = request_catalogue_refresh(["rai_play"])
+        self.assertEqual(marker.status, CatalogueRefreshStatus.PENDING)
+
+        with override_settings(RAIPLAY_MAX_HTTP_REQUESTS=None, RAIPLAY_MAX_CONTENTS=None):
+            process_pending_catalogue_refresh()
+
+        marker.refresh_from_db()
+        self.assertEqual(marker.status, CatalogueRefreshStatus.FAILED)
+        self.assertIn("rai_play", marker.last_error)
+
+    def test_operational_entrypoint_3_worker_marker_with_budget_succeeds(self):
+        from django.test import override_settings
+        from tracker.models import CatalogueRefreshRequest, CatalogueRefreshStatus
+        from tracker.services.bulk_refresh import process_pending_catalogue_refresh
+        from tracker.services.refresh_requests import request_catalogue_refresh
+        from availability.sources.rai_play import RaiPlayClient, RaiPlaySource
+
+        fake_source = RaiPlaySource(client=RaiPlayClient(requester=self.api))
+        registry = registry_of(fake_source)
+        marker = request_catalogue_refresh(["rai_play"])
+
+        with override_settings(RAIPLAY_MAX_HTTP_REQUESTS=120, RAIPLAY_MAX_CONTENTS=25):
+            with patch("tracker.services.bulk_refresh.source_registry", registry):
+                process_pending_catalogue_refresh()
+
+        marker.refresh_from_db()
+        self.assertEqual(marker.status, CatalogueRefreshStatus.DONE)
+
+    def test_operational_entrypoint_4_provider_refresh_endpoint_without_budget_fails_at_worker(self):
+        from django.test import override_settings
+        from rest_framework.test import APIClient
+        from tracker.models import CatalogueRefreshRequest, CatalogueRefreshStatus
+        from tracker.services.bulk_refresh import process_pending_catalogue_refresh
+
+        client = APIClient()
+        response = client.post("/api/providers/raiplay/refresh/")
+        self.assertEqual(response.status_code, 202)
+        self.assertTrue(response.data.get("queued"))
+        marker_id = response.data["marker_id"]
+
+        with override_settings(RAIPLAY_MAX_HTTP_REQUESTS=None, RAIPLAY_MAX_CONTENTS=None):
+            process_pending_catalogue_refresh()
+
+        marker = CatalogueRefreshRequest.objects.get(pk=marker_id)
+        self.assertEqual(marker.status, CatalogueRefreshStatus.FAILED)
+        self.assertIn("rai_play", marker.last_error)
+
+    def test_operational_entrypoint_5_direct_process_catalogue_refresh_without_budget_fails(self):
+        from django.test import override_settings
+        from tracker.services.bulk_refresh import process_catalogue_refresh
+
+        with override_settings(RAIPLAY_MAX_HTTP_REQUESTS=None, RAIPLAY_MAX_CONTENTS=None):
+            summary = process_catalogue_refresh(source_slug="rai_play")
+
+        self.assertEqual(summary["errors"], 1)
+        item = summary["results"][0]
+        self.assertEqual(item["status"], "failed")
+        self.assertIn("RaiPlay catalogue refresh requires finite configuration", item["error"])
+
+    def test_operational_entrypoint_6_direct_source_fetch_without_budget_raises(self):
+        from django.test import override_settings
+        from availability.sources import RaiPlayConfigurationError, RaiPlaySource
+
+        source = RaiPlaySource()
+        with override_settings(RAIPLAY_MAX_HTTP_REQUESTS=None):
+            with self.assertRaises(RaiPlayConfigurationError):
+                source.fetch()
+
+    def test_command_budget_exhaustion_reports_structured_reason(self):
+        from availability.sources import RaiPlayHttpBudgetExceeded
+        from availability.sources.rai_play import RaiPlayClient, RaiPlaySource
+
+        def failing_requester(url):
+            raise RaiPlayHttpBudgetExceeded(
+                limit=120,
+                attempted=120,
+                blocked_url="https://www.raiplay.it/exhausted_here",
+                stage="video",
+            )
+
+        fake_source = RaiPlaySource(client=RaiPlayClient(requester=failing_requester))
+        registry = registry_of(fake_source)
+        out = io.StringIO()
+
+        with patch("tracker.services.bulk_refresh.source_registry", registry):
+            with self.assertRaises(CommandError) as ctx:
+                call_command(
+                    "refresh_provider_catalogue",
+                    "--source", "rai_play",
+                    "--max-contents", 25,
+                    "--max-http-requests", 120,
+                    stdout=out,
+                )
+            self.assertEqual(ctx.exception.returncode, 1)
+
+        summary = summary_from(out.getvalue())
+        self.assertEqual(summary["errors"], 1)
+        item = summary["results"][0]
+        self.assertEqual(item["status"], "failed")
+        self.assertEqual(item["reason"], "budget_exhausted")
+        self.assertEqual(item["error_reason"], "budget_exhausted")
+        self.assertEqual(item["requests_attempted"], 120)
+        self.assertEqual(item["requests_limit"], 120)
+        self.assertEqual(item["blocked_url"], "https://www.raiplay.it/exhausted_here")
