@@ -154,11 +154,12 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
 from datetime import date, datetime, timezone
 from pathlib import PurePosixPath
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 from xml.etree import ElementTree
 
 import requests
@@ -228,6 +229,68 @@ _TIMEZONE_RE = re.compile(r"([+-]\d{2})(\d{2})$")
 # flattened to free.
 CATEGORY_OFFER_TYPES = {"free": "free", "nologinrequired": "free"}
 
+ALLOWED_RAIPLAY_HOSTS = frozenset({"www.raiplay.it", "raiplay.it"})
+MAX_REDIRECT_HOPS = 5
+
+
+class RaiPlayConfigurationError(SourceFetchError):
+    """Raised when RaiPlay is invoked in an operational context without required configuration."""
+
+
+class RaiPlayHttpBudgetExceeded(SourceFetchError):
+    """Raised when RaiPlay HTTP dispatch limit is reached."""
+
+    def __init__(self, *, limit: int, attempted: int, blocked_url: str, stage: str = ""):
+        self.limit = limit
+        self.attempted = attempted
+        self.blocked_url = blocked_url
+        self.stage = stage
+        message = (
+            f"HTTP budget exhausted for rai_play: limit={limit}, "
+            f"attempted={attempted}, stage={stage!r}, blocked_url={blocked_url!r}"
+        )
+        super().__init__(message)
+
+
+class RaiPlayHttpBudget:
+    """Per-invocation HTTP dispatch attempt counter.
+
+    Thread-safe counter created once per catalogue refresh invocation.
+    Owns check-and-reserve semantics before network dispatch:
+    - each initial request attempt consumes one token
+    - each redirect hop consumes one token
+    - if attempted >= limit, raises RaiPlayHttpBudgetExceeded without dispatch
+    """
+
+    def __init__(self, limit: int):
+        if limit is None or not isinstance(limit, int) or limit < 1:
+            raise ValueError(f"limit must be a positive integer, got {limit!r}")
+        self.limit = limit
+        self.attempted = 0
+        self._lock = threading.Lock()
+
+    def reserve(self, url: str, stage: str = "") -> None:
+        with self._lock:
+            if self.attempted >= self.limit:
+                raise RaiPlayHttpBudgetExceeded(
+                    limit=self.limit,
+                    attempted=self.attempted,
+                    blocked_url=url,
+                    stage=stage,
+                )
+            self.attempted += 1
+
+
+def _validate_raiplay_url(url: str) -> None:
+    parsed = urlparse(url)
+    if parsed.scheme != "https":
+        raise SourceFetchError(f"RaiPlay request rejected for insecure scheme: {url!r}")
+    hostname = (parsed.hostname or "").lower()
+    if hostname not in ALLOWED_RAIPLAY_HOSTS:
+        raise SourceFetchError(f"RaiPlay request rejected for disallowed host: {url!r}")
+    if parsed.port not in (None, 443):
+        raise SourceFetchError(f"RaiPlay request rejected for disallowed port: {url!r}")
+
 
 class RaiPlayClient:
     """Thin client for RaiPlay's public sitemaps and server-rendered pages.
@@ -241,39 +304,46 @@ class RaiPlayClient:
     interpretation belongs to :func:`_state_from_html`, not to the client.
     """
 
-    def __init__(self, requester=None, timeout=DEFAULT_TIMEOUT, delay=DEFAULT_DELAY):
+    def __init__(
+        self,
+        requester=None,
+        timeout=DEFAULT_TIMEOUT,
+        delay=DEFAULT_DELAY,
+        budget: Optional[RaiPlayHttpBudget] = None,
+    ):
         self.requester = requester
         self.timeout = timeout
         self.delay = delay
+        self.budget = budget
 
     def sitemap_index(self) -> list[str]:
         """Child ``<loc>`` URLs of the sitemap index."""
-        payload = self._get(SITEMAP_INDEX_URL)
+        payload = self._get(SITEMAP_INDEX_URL, stage="sitemap_index")
         if payload is None:
             raise SourceFetchError(f"RaiPlay sitemap index is gone: {SITEMAP_INDEX_URL}")
         return _xml_locs(payload, expect="sitemapindex", url=SITEMAP_INDEX_URL)
 
     def sitemap_entries(self, url: str) -> list[str]:
         """``<loc>`` URLs of one monthly programme sitemap (provider's order)."""
-        payload = self._get(url)
+        payload = self._get(url, stage="sitemap")
         if payload is None:
             raise SourceFetchError(f"RaiPlay sitemap is gone: {url}")
         return _xml_locs(payload, expect="urlset", url=url)
 
     def programme_page(self, url: str) -> Optional[str]:
         """Raw HTML of one programme page, or ``None`` when it is gone."""
-        return self._get(url)
+        return self._get(url, stage="programme")
 
-    def video_page(self, url: str) -> Optional[str]:
+    def video_page(self, url: str, stage: str = "video") -> Optional[str]:
         """Raw HTML of one video page, or ``None`` when it is gone."""
-        return self._get(url)
+        return self._get(url, stage=stage)
 
-    def _get(self, url: str) -> Optional[str]:
+    def _get(self, url: str, stage: str = "") -> Optional[str]:
         try:
             if self.requester is not None:
                 payload = self.requester(url)
             else:
-                payload = self._http(url)
+                payload = self._http(url, stage=stage)
         except SourceFetchError:
             raise
         except requests.RequestException as exc:
@@ -284,23 +354,61 @@ class RaiPlayClient:
             raise SourceFetchError(f"Unexpected RaiPlay response type for {url}")
         return payload
 
-    def _http(self, url: str) -> Optional[str]:
-        if self.delay:
-            time.sleep(self.delay)
-        response = requests.get(
-            url,
-            headers={"User-Agent": USER_AGENT,
-                     "Accept": "text/html,application/xml;q=0.9,*/*;q=0.8"},
-            timeout=self.timeout,
-        )
-        if response.status_code in (404, 410):
-            # Stale entry, not a retrieval failure: the caller logs it.
-            return None
-        if response.status_code != 200:
-            raise SourceFetchError(
-                f"RaiPlay returned HTTP {response.status_code} for {url}"
+    def _http(self, url: str, stage: str = "") -> Optional[str]:
+        _validate_raiplay_url(url)
+        current_url = url
+        redirect_hops = 0
+        visited = [current_url]
+
+        while True:
+            if self.budget is None and self.requester is None:
+                raise RaiPlayConfigurationError(
+                    "Live RaiPlay HTTP requests require a configured finite HTTP budget"
+                )
+            if self.budget is not None:
+                self.budget.reserve(current_url, stage=stage)
+            if self.delay:
+                time.sleep(self.delay)
+            response = requests.get(
+                current_url,
+                headers={
+                    "User-Agent": USER_AGENT,
+                    "Accept": "text/html,application/xml;q=0.9,*/*;q=0.8",
+                },
+                timeout=self.timeout,
+                allow_redirects=False,
             )
-        return response.text
+            if response.status_code in (301, 302, 303, 307, 308):
+                redirect_hops += 1
+                if redirect_hops > MAX_REDIRECT_HOPS:
+                    raise SourceFetchError(
+                        f"RaiPlay exceeded maximum redirect hops ({MAX_REDIRECT_HOPS}) "
+                        f"starting from {url} at {current_url}"
+                    )
+                location = response.headers.get("Location")
+                if not location:
+                    raise SourceFetchError(
+                        f"RaiPlay redirect missing Location header for {current_url} "
+                        f"(HTTP {response.status_code})"
+                    )
+                next_url = urljoin(current_url, location)
+                _validate_raiplay_url(next_url)
+                if next_url in visited:
+                    raise SourceFetchError(
+                        f"RaiPlay redirect loop detected: {next_url}"
+                    )
+                visited.append(next_url)
+                current_url = next_url
+                continue
+
+            if response.status_code in (404, 410):
+                # Stale entry, not a retrieval failure: the caller logs it.
+                return None
+            if response.status_code != 200:
+                raise SourceFetchError(
+                    f"RaiPlay returned HTTP {response.status_code} for {current_url}"
+                )
+            return response.text
 
 
 class RaiPlaySource:
@@ -329,9 +437,15 @@ class RaiPlaySource:
         supports_languages=True,
     )
 
-    def __init__(self, client=None, max_contents=DEFAULT_MAX_CONTENTS):
+    def __init__(
+        self,
+        client=None,
+        max_contents=DEFAULT_MAX_CONTENTS,
+        max_http_requests=None,
+    ):
         self.client = client or RaiPlayClient()
         self.max_contents = max_contents
+        self.max_http_requests = max_http_requests
 
     def fetch(self, content=None, *, provider=None, country=None, cursor=None) -> SourceFetchResult:
         if content is not None:
@@ -339,6 +453,20 @@ class RaiPlaySource:
                 "rai_play is catalogue-driven: fetch the catalogue with "
                 "content=None (no title-targeted lookup exists)"
             )
+        # Ensure budget is created once per invocation, not once per HTTP request
+        if self.max_http_requests is not None:
+            self.client.budget = RaiPlayHttpBudget(self.max_http_requests)
+        elif getattr(self.client, "budget", None) is not None:
+            pass
+        elif getattr(self.client, "requester", None) is None:
+            from django.conf import settings
+            configured_budget = getattr(settings, "RAIPLAY_MAX_HTTP_REQUESTS", None)
+            if configured_budget is not None and int(configured_budget) >= 1:
+                self.client.budget = RaiPlayHttpBudget(int(configured_budget))
+            else:
+                raise RaiPlayConfigurationError(
+                    "RaiPlay catalogue refresh requires a configured finite HTTP budget"
+                )
         # provider/country are the caller's scope hints, already validated
         # against ``capabilities`` by the refresh service; RaiPlay only ever
         # reports its own (raiplay, IT).
@@ -548,7 +676,7 @@ class RaiPlaySource:
                     provider_content_id, video_url,
                 )
                 return None
-            html = self.client.video_page(player_url)
+            html = self.client.video_page(player_url, stage="player")
             if html is None:
                 logger.info(
                     "rai_play_content_missing content=%s url=%s reason=video_not_found",

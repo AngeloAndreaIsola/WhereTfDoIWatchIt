@@ -20,7 +20,13 @@ from .mediaset_infinity import MediasetInfinitySource
 from .pbs import PbsSource
 from .pluto_tv import PlutoTvSource
 from .prime_video import PrimeVideoSource
-from .rai_play import RaiPlaySource
+from .rai_play import (
+    RaiPlayClient,
+    RaiPlayConfigurationError,
+    RaiPlayHttpBudget,
+    RaiPlayHttpBudgetExceeded,
+    RaiPlaySource,
+)
 from .streaming_availability import StreamingAvailabilitySource
 from .tubi import TubiSource
 from .watchmode import WatchmodeSource
@@ -57,6 +63,10 @@ __all__ = [
     "PbsSource",
     "AbcIviewSource",
     "PrimeVideoSource",
+    "RaiPlayClient",
+    "RaiPlayConfigurationError",
+    "RaiPlayHttpBudget",
+    "RaiPlayHttpBudgetExceeded",
     "RaiPlaySource",
     "SourceCapabilities",
     "SourceFetchError",

@@ -29,6 +29,8 @@ Fixture catalogue (recorded pages):
 """
 import datetime as dt
 import json
+import threading
+from unittest.mock import MagicMock, patch
 
 import requests
 from django.test import SimpleTestCase
@@ -37,16 +39,22 @@ from availability.domain.enums import ContentType, OfferType, SourceType, SyncMo
 from availability.sources import (
     AvailabilitySource,
     ContentRequest,
+    RaiPlayClient,
+    RaiPlayConfigurationError,
+    RaiPlayHttpBudget,
+    RaiPlayHttpBudgetExceeded,
     RaiPlaySource,
     SourceFetchError,
     source_registry,
 )
 from availability.sources.rai_play import (
-    RaiPlayClient,
+    ALLOWED_RAIPLAY_HOSTS,
+    MAX_REDIRECT_HOPS,
     _is_trailer,
     _parse_timestamp,
     _seconds,
     _state_from_payload,
+    _validate_raiplay_url,
 )
 
 from .rai_play_fixtures import (
@@ -878,3 +886,249 @@ class StateDecodingTests(SimpleTestCase):
         self.assertTrue(_is_trailer(trailer))
         self.assertFalse(_is_trailer(clean))
         self.assertFalse(_is_trailer({}))
+
+
+class RaiPlayHttpBudgetUnitTests(SimpleTestCase):
+    def test_limit_must_be_positive_integer(self):
+        for invalid in (0, -1, -100, None, "10", 3.14, []):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(ValueError):
+                    RaiPlayHttpBudget(invalid)
+
+    def test_reserve_increments_attempted_and_exhausts_with_structured_exception(self):
+        budget = RaiPlayHttpBudget(limit=2)
+        self.assertEqual(budget.attempted, 0)
+
+        budget.reserve("https://www.raiplay.it/1", stage="sitemap")
+        self.assertEqual(budget.attempted, 1)
+
+        budget.reserve("https://www.raiplay.it/2", stage="programme")
+        self.assertEqual(budget.attempted, 2)
+
+        with self.assertRaises(RaiPlayHttpBudgetExceeded) as ctx:
+            budget.reserve("https://www.raiplay.it/3", stage="video")
+
+        exc = ctx.exception
+        self.assertEqual(exc.limit, 2)
+        self.assertEqual(exc.attempted, 2)
+        self.assertEqual(exc.blocked_url, "https://www.raiplay.it/3")
+        self.assertEqual(exc.stage, "video")
+        self.assertIn("limit=2", str(exc))
+        self.assertIn("attempted=2", str(exc))
+        self.assertIn("stage='video'", str(exc))
+        # Attempted count does not increment on failed reservation
+        self.assertEqual(budget.attempted, 2)
+
+    def test_thread_safe_reservation(self):
+        limit = 25
+        budget = RaiPlayHttpBudget(limit=limit)
+        successful = []
+        exhausted = []
+
+        def worker(idx):
+            try:
+                budget.reserve(f"https://www.raiplay.it/{idx}")
+                successful.append(idx)
+            except RaiPlayHttpBudgetExceeded:
+                exhausted.append(idx)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(50)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(budget.attempted, limit)
+        self.assertEqual(len(successful), limit)
+        self.assertEqual(len(exhausted), 25)
+
+
+class RaiPlayUrlValidationTests(SimpleTestCase):
+    def test_allowed_raiplay_hosts_and_https_are_accepted(self):
+        _validate_raiplay_url("https://www.raiplay.it/programmi/follemente")
+        _validate_raiplay_url("https://raiplay.it/sitemap.xml")
+
+    def test_insecure_scheme_is_rejected(self):
+        with self.assertRaises(SourceFetchError) as ctx:
+            _validate_raiplay_url("http://www.raiplay.it/programmi/follemente")
+        self.assertIn("insecure scheme", str(ctx.exception))
+
+    def test_arbitrary_external_hosts_are_rejected(self):
+        for bad_url in (
+            "https://attacker.com/evil",
+            "https://raiplay.it.evil.com/fake",
+            "https://google.com/",
+            "https://sub.raiplay.it/foo",
+        ):
+            with self.subTest(bad_url=bad_url):
+                with self.assertRaises(SourceFetchError) as ctx:
+                    _validate_raiplay_url(bad_url)
+                self.assertIn("disallowed host", str(ctx.exception))
+
+    def test_disallowed_ports_are_rejected(self):
+        with self.assertRaises(SourceFetchError) as ctx:
+            _validate_raiplay_url("https://www.raiplay.it:8443/programmi")
+        self.assertIn("disallowed port", str(ctx.exception))
+
+
+class RaiPlayRedirectAndBudgetTests(SimpleTestCase):
+    @patch("requests.get")
+    def test_initial_request_reserves_one_token(self, mock_get):
+        from availability.sources.rai_play import USER_AGENT
+        mock_response = MagicMock(status_code=200, text="<xml></xml>")
+        mock_get.return_value = mock_response
+
+        budget = RaiPlayHttpBudget(limit=5)
+        client = RaiPlayClient(delay=0, budget=budget)
+        client._http("https://www.raiplay.it/sitemap.xml", stage="sitemap_index")
+
+        self.assertEqual(budget.attempted, 1)
+        mock_get.assert_called_once_with(
+            "https://www.raiplay.it/sitemap.xml",
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "text/html,application/xml;q=0.9,*/*;q=0.8",
+            },
+            timeout=client.timeout,
+            allow_redirects=False,
+        )
+
+    @patch("requests.get")
+    def test_each_redirect_hop_consumes_one_token(self, mock_get):
+        r1 = MagicMock(status_code=301, headers={"Location": "/hop1"})
+        r2 = MagicMock(status_code=302, headers={"Location": "https://www.raiplay.it/hop2"})
+        r3 = MagicMock(status_code=200, text="ok")
+        mock_get.side_effect = [r1, r2, r3]
+
+        budget = RaiPlayHttpBudget(limit=5)
+        client = RaiPlayClient(delay=0, budget=budget)
+        text = client._http("https://www.raiplay.it/start", stage="programme")
+
+        self.assertEqual(text, "ok")
+        self.assertEqual(budget.attempted, 3)
+        self.assertEqual(mock_get.call_count, 3)
+
+    @patch("requests.get")
+    def test_redirect_to_external_host_rejected_without_network_dispatch(self, mock_get):
+        r1 = MagicMock(status_code=302, headers={"Location": "https://evil.com/phish"})
+        mock_get.side_effect = [r1]
+
+        budget = RaiPlayHttpBudget(limit=5)
+        client = RaiPlayClient(delay=0, budget=budget)
+
+        with self.assertRaises(SourceFetchError) as ctx:
+            client._http("https://www.raiplay.it/start")
+
+        self.assertIn("disallowed host", str(ctx.exception))
+        # Initial request consumed 1 token, but evil.com was NEVER dispatched
+        self.assertEqual(budget.attempted, 1)
+        self.assertEqual(mock_get.call_count, 1)
+
+    @patch("requests.get")
+    def test_redirect_to_insecure_scheme_rejected_without_dispatch(self, mock_get):
+        r1 = MagicMock(status_code=301, headers={"Location": "http://www.raiplay.it/unencrypted"})
+        mock_get.side_effect = [r1]
+
+        budget = RaiPlayHttpBudget(limit=5)
+        client = RaiPlayClient(delay=0, budget=budget)
+
+        with self.assertRaises(SourceFetchError) as ctx:
+            client._http("https://www.raiplay.it/start")
+
+        self.assertIn("insecure scheme", str(ctx.exception))
+        self.assertEqual(budget.attempted, 1)
+        self.assertEqual(mock_get.call_count, 1)
+
+    @patch("requests.get")
+    def test_redirect_missing_location_header_raises_error(self, mock_get):
+        r1 = MagicMock(status_code=302, headers={})
+        mock_get.side_effect = [r1]
+
+        budget = RaiPlayHttpBudget(limit=5)
+        client = RaiPlayClient(delay=0, budget=budget)
+
+        with self.assertRaises(SourceFetchError) as ctx:
+            client._http("https://www.raiplay.it/start")
+
+        self.assertIn("missing Location header", str(ctx.exception))
+        self.assertEqual(budget.attempted, 1)
+
+    @patch("requests.get")
+    def test_redirect_loop_detected(self, mock_get):
+        r1 = MagicMock(status_code=302, headers={"Location": "https://www.raiplay.it/loop"})
+        r2 = MagicMock(status_code=302, headers={"Location": "https://www.raiplay.it/start"})
+        mock_get.side_effect = [r1, r2]
+
+        budget = RaiPlayHttpBudget(limit=5)
+        client = RaiPlayClient(delay=0, budget=budget)
+
+        with self.assertRaises(SourceFetchError) as ctx:
+            client._http("https://www.raiplay.it/start")
+
+        self.assertIn("redirect loop detected", str(ctx.exception))
+        self.assertEqual(budget.attempted, 2)
+
+    @patch("requests.get")
+    def test_max_redirect_hops_exceeded_raises_error(self, mock_get):
+        responses = [
+            MagicMock(status_code=302, headers={"Location": f"/hop{i}"})
+            for i in range(1, 7)
+        ]
+        mock_get.side_effect = responses
+
+        budget = RaiPlayHttpBudget(limit=10)
+        client = RaiPlayClient(delay=0, budget=budget)
+
+        with self.assertRaises(SourceFetchError) as ctx:
+            client._http("https://www.raiplay.it/start")
+
+        self.assertIn(f"exceeded maximum redirect hops ({MAX_REDIRECT_HOPS})", str(ctx.exception))
+        # 1 initial + 5 hops dispatched = 6 attempts made
+        self.assertEqual(budget.attempted, 6)
+
+    @patch("requests.get")
+    def test_budget_exhaustion_on_redirect_hop_blocks_next_dispatch(self, mock_get):
+        r1 = MagicMock(status_code=301, headers={"Location": "/next_page"})
+        mock_get.side_effect = [r1]
+
+        # Budget allows exactly 1 attempt; initial request consumes it, redirect hop must fail
+        budget = RaiPlayHttpBudget(limit=1)
+        client = RaiPlayClient(delay=0, budget=budget)
+
+        with self.assertRaises(RaiPlayHttpBudgetExceeded) as ctx:
+            client._http("https://www.raiplay.it/start", stage="video")
+
+        self.assertEqual(ctx.exception.limit, 1)
+        self.assertEqual(ctx.exception.attempted, 1)
+        self.assertEqual(ctx.exception.blocked_url, "https://www.raiplay.it/next_page")
+        self.assertEqual(ctx.exception.stage, "video")
+        self.assertEqual(mock_get.call_count, 1)
+
+    def test_live_http_without_budget_and_without_requester_raises_configuration_error(self):
+        client = RaiPlayClient()
+        with self.assertRaises(RaiPlayConfigurationError) as ctx:
+            client._http("https://www.raiplay.it/sitemap.xml")
+        self.assertIn("finite HTTP budget", str(ctx.exception))
+
+
+class RaiPlaySourceBudgetTests(SimpleTestCase):
+    def test_budget_created_once_per_fetch_invocation(self):
+        source = RaiPlaySource(
+            client=RaiPlayClient(requester=FakeRaiPlayApi()),
+            max_http_requests=50,
+        )
+        source.fetch()
+        first_budget = source.client.budget
+        self.assertIsNotNone(first_budget)
+        self.assertEqual(first_budget.limit, 50)
+
+        source.fetch()
+        second_budget = source.client.budget
+        self.assertIsNotNone(second_budget)
+        self.assertEqual(second_budget.limit, 50)
+        self.assertIsNot(first_budget, second_budget)
+
+    def test_fetch_without_configured_budget_in_production_raises_configuration_error(self):
+        source = RaiPlaySource()  # Live client without requester or budget
+        with self.assertRaises(RaiPlayConfigurationError):
+            source.fetch()
