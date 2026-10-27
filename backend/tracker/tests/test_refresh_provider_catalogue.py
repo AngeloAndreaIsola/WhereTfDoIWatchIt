@@ -167,8 +167,12 @@ class RefreshProviderCatalogueCommandTests(TestCase):
     def test_default_runs_every_catalogue_capable_source(self, mock_cls):
         mock_cls.return_value = self._service()
 
+        from django.test import override_settings
+
         country_patch, coordinator_patch = stub_justwatch_coordinator()
-        with country_patch, coordinator_patch:
+        with country_patch, coordinator_patch, override_settings(
+            RAIPLAY_MAX_HTTP_REQUESTS=5, RAIPLAY_MAX_CONTENTS=400
+        ):
             call_command("refresh_provider_catalogue", stdout=io.StringIO())
 
         # Every catalogue-capable source is dispatched. JustWatch reaches its P8
@@ -273,9 +277,13 @@ class SchedulerDiscoveryTests(TestCase):
             self.assertFalse(
                 RefreshRun.objects.filter(service=slug).exists(), slug)
 
+        from django.test import override_settings
+
         out = io.StringIO()
         country_patch, coordinator_patch = stub_justwatch_coordinator()
-        with country_patch, coordinator_patch:
+        with country_patch, coordinator_patch, override_settings(
+            RAIPLAY_MAX_HTTP_REQUESTS=5, RAIPLAY_MAX_CONTENTS=400
+        ):
             call_command("refresh_provider_catalogue", stdout=out)
 
         # Every catalogue-capable source is still attempted. The stub is built
@@ -957,3 +965,51 @@ class RaiPlayOperationalBudgetTests(TestCase):
         self.assertEqual(item["requests_attempted"], 120)
         self.assertEqual(item["requests_limit"], 120)
         self.assertEqual(item["blocked_url"], "https://www.raiplay.it/exhausted_here")
+
+    def test_operational_entrypoint_7_refresh_service_is_not_a_budget_bypass(self):
+        # A direct ``refresh_service=`` invocation runs a LIVE source, so it is
+        # an operational path, not a fixture. With no finite budget configured
+        # it must fail at the operational gate exactly like the CLI / worker /
+        # endpoint paths. This pins the removal of the old ``refresh_service``
+        # bypass clause: the gate keys on the transport, never on "did a caller
+        # pass its own service".
+        from django.test import override_settings
+        from availability.services.refresh import AvailabilityRefreshService
+        from availability.sources import RaiPlaySource
+        from tracker.services.bulk_refresh import process_catalogue_refresh
+
+        live_service = AvailabilityRefreshService(source=RaiPlaySource())
+        with override_settings(RAIPLAY_MAX_HTTP_REQUESTS=None, RAIPLAY_MAX_CONTENTS=None):
+            summary = process_catalogue_refresh(refresh_service=live_service)
+
+        item = summary["results"][0]
+        self.assertEqual(item["status"], "failed")
+        # The operational gate fired (its own message), not the deeper fetch()
+        # backstop ("requires a configured finite HTTP budget") — proving
+        # refresh_service no longer skips the finite-budget gate.
+        self.assertIn("requires finite configuration", item["error"])
+
+    def test_operational_entrypoint_8_live_source_with_baked_budget_is_honored(self):
+        # The flip side of the gate: a LIVE direct caller that bakes a finite
+        # budget into the source is honoured (the effective budget is read from
+        # the constructor args), not refused as unconfigured. refresh_catalogue
+        # is stubbed so the honoured live source completes with no network.
+        from django.test import override_settings
+        from unittest.mock import MagicMock
+        from availability.services.refresh import AvailabilityRefreshService, RefreshResult
+        from availability.sources import RaiPlaySource
+        from tracker.services.bulk_refresh import process_catalogue_refresh
+
+        baked = RaiPlaySource(max_contents=5, max_http_requests=1)  # LIVE client, baked budget
+        service = AvailabilityRefreshService(source=baked)
+        service.refresh_catalogue = MagicMock(
+            return_value=RefreshResult(discovered=0, processed=0, created=0,
+                                       updated=0, deactivated=0, skipped=0, unresolved=0)
+        )
+        with override_settings(RAIPLAY_MAX_HTTP_REQUESTS=None, RAIPLAY_MAX_CONTENTS=None):
+            summary = process_catalogue_refresh(refresh_service=service)
+
+        item = summary["results"][0]
+        # The gate honoured the baked budget (no RaiPlayConfigurationError): the
+        # run reached the (stubbed) fetch and settled as a success.
+        self.assertEqual(item["status"], "succeeded")

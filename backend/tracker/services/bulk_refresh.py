@@ -1040,31 +1040,48 @@ def _refresh_one_source(
         attribute_refresh_run(run, availability_refreshes)
     try:
         if slug == "rai_play":
-            import unittest.mock
-            is_fixture_test = (
-                refresh_service is not None
-                or getattr(getattr(source, "client", None), "requester", None) is not None
-                or isinstance(AvailabilityRefreshService, (unittest.mock.Mock, unittest.mock.MagicMock))
-            )
+            # A fixture-only run injects a fake transport (a ``requester``) and
+            # issues no live request, so it needs no budget. EVERY live path is
+            # operational and must carry a finite HTTP budget: the registry
+            # source, the worker marker, the provider refresh endpoint, and a
+            # direct ``refresh_service=`` operator invocation alike. The
+            # discriminator is the transport, never "does this look like a
+            # test" — there is deliberately no refresh_service / mock-class
+            # clause, so a live operator invocation can never slip past the
+            # gate by simply passing its own service.
+            requester = getattr(getattr(source, "client", None), "requester", None)
+            is_fixture_run = requester is not None
             configured_requests = max_http_requests or getattr(settings, "RAIPLAY_MAX_HTTP_REQUESTS", None)
             configured_contents = max_contents or getattr(settings, "RAIPLAY_MAX_CONTENTS", None)
-            if not is_fixture_test:
-                if (
-                    configured_requests is None
-                    or configured_contents is None
-                    or int(configured_requests) < 1
-                    or int(configured_contents) < 1
-                ):
-                    raise RaiPlayConfigurationError(
-                        f"RaiPlay catalogue refresh requires finite configuration: "
-                        f"RAIPLAY_MAX_HTTP_REQUESTS={configured_requests!r}, "
-                        f"RAIPLAY_MAX_CONTENTS={configured_contents!r}"
-                    )
+            # Explicit CLI/settings config wins; otherwise fall back to the
+            # source's own constructor args, so a direct caller that bakes a
+            # finite budget is honoured rather than refused as unconfigured.
+            effective_requests = (
+                configured_requests
+                if configured_requests is not None
+                else getattr(source, "max_http_requests", None)
+            )
+            effective_contents = (
+                configured_contents
+                if configured_contents is not None
+                else getattr(source, "max_contents", None)
+            )
+            if not is_fixture_run and (
+                effective_requests is None
+                or effective_contents is None
+                or int(effective_requests) < 1
+                or int(effective_contents) < 1
+            ):
+                raise RaiPlayConfigurationError(
+                    f"RaiPlay catalogue refresh requires finite configuration: "
+                    f"RAIPLAY_MAX_HTTP_REQUESTS={effective_requests!r}, "
+                    f"RAIPLAY_MAX_CONTENTS={effective_contents!r}"
+                )
             if configured_requests is not None or configured_contents is not None:
                 source = RaiPlaySource(
                     client=getattr(source, "client", None),
-                    max_contents=int(configured_contents) if configured_contents is not None else None,
-                    max_http_requests=int(configured_requests) if configured_requests is not None else None,
+                    max_contents=int(effective_contents) if effective_contents is not None else None,
+                    max_http_requests=int(effective_requests) if effective_requests is not None else None,
                 )
         _ensure_declared_countries(slug, source.capabilities)
         logger.info(
@@ -1089,6 +1106,27 @@ def _refresh_one_source(
                 getattr(refresh_result, "sync_runs", ()) or (),
                 availability_refreshes,
             )
+    except RaiPlayConfigurationError as exc:
+        # No finite budget configured. This is an operator setup error, not a
+        # source fault and not a budget that ran out mid-walk, so it gets its
+        # own log event (a warning, not a traceback) and a stable structured
+        # reason — the same terminal representation every failed catalogue
+        # source already uses (status "failed", RefreshRun.error set,
+        # finished_at stamped), mirroring the RaiPlayHttpBudgetExceeded handler.
+        duration = round(time.monotonic() - t0, 3)
+        logger.warning(
+            "catalogue_refresh_not_configured source=%s "
+            "max_http_requests=%r max_contents=%r duration_s=%s",
+            slug, max_http_requests, max_contents, duration,
+        )
+        result.status = "failed"
+        result.reason = "not_configured"
+        result.error = str(exc)
+        result.duration_seconds = duration
+        run.error = result.error
+        run.finished_at = timezone.now()
+        run.save()
+        return result
     except RaiPlayHttpBudgetExceeded as exc:
         duration = round(time.monotonic() - t0, 3)
         logger.warning(
