@@ -207,7 +207,7 @@ class TMDbCandidateGateway:
         content_type: str,
     ) -> list[dict[str, Any]]:
         params, headers = self.client._auth()
-        params.update({"query": query, "include_adult": "false"})
+        params.update({"query": query, "include_adult": "false", "language": self.locale})
         if year is not None:
             if content_type == ContentType.SERIES:
                 params["first_air_date_year"] = year
