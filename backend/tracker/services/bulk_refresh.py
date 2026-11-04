@@ -1116,13 +1116,16 @@ def _refresh_one_source(
         duration = round(time.monotonic() - t0, 3)
         logger.warning(
             "catalogue_refresh_not_configured source=%s "
-            "max_http_requests=%r max_contents=%r duration_s=%s",
-            slug, max_http_requests, max_contents, duration,
+            "max_http_requests=%r max_contents=%r duration_s=%s "
+            "requests_attempted=0 requests_limit=%r",
+            slug, max_http_requests, max_contents, duration, locals().get("effective_requests"),
         )
         result.status = "failed"
         result.reason = "not_configured"
         result.error = str(exc)
         result.duration_seconds = duration
+        result.requests_attempted = 0
+        result.requests_limit = locals().get("effective_requests")
         run.error = result.error
         run.finished_at = timezone.now()
         run.save()
@@ -1159,6 +1162,11 @@ def _refresh_one_source(
         result.status = "failed"
         result.error = f"{type(exc).__name__}: {exc}"
         result.duration_seconds = duration
+        if slug == "rai_play":
+            budget = getattr(getattr(source, "client", None), "budget", None)
+            if budget is not None:
+                result.requests_attempted = getattr(budget, "attempted", None)
+                result.requests_limit = getattr(budget, "limit", None)
         run.error = result.error
         run.finished_at = timezone.now()
         run.save()
@@ -1177,10 +1185,21 @@ def _refresh_one_source(
         run.rows_skipped = refresh_result.skipped
         run.finished_at = timezone.now()
         run.save()
+        # Surface the RaiPlay HTTP budget consumption that actually occurred,
+        # from the same budget instance RaiPlayClient._http mutated. Non-RaiPlay
+        # sources leave these as None (backward compatible).
+        if slug == "rai_play":
+            budget = getattr(getattr(source, "client", None), "budget", None)
+            if budget is not None:
+                result.requests_attempted = getattr(budget, "attempted", None)
+                result.requests_limit = getattr(budget, "limit", None)
+            else:
+                result.requests_attempted = 0
+                result.requests_limit = None
         logger.info(
             "catalogue_refresh_completed source=%s discovered=%s mapped=%s "
             "unresolved=%s offers=%s created=%s updated=%s skipped=%s "
-            "duration_s=%s finished_at=%s",
+            "duration_s=%s finished_at=%s requests_attempted=%r requests_limit=%r",
             slug, refresh_result.discovered,
             refresh_result.discovered - refresh_result.unresolved,
             refresh_result.unresolved,
@@ -1188,6 +1207,7 @@ def _refresh_one_source(
             refresh_result.created, refresh_result.updated,
             refresh_result.skipped,
             duration, run.finished_at.isoformat(),
+            result.requests_attempted, result.requests_limit,
         )
         return result
     finally:
