@@ -35,7 +35,7 @@ export function serialiseAccessTypes(selected: string[]): string {
   return unique.join(",");
 }
 
-function summarise(selected: string[], isOpen: boolean): string {
+function summarise(selected: string[]): string {
   if (selected.length === 0) return "Any access";
   if (selected.length === ALL_VALUES.length) return "All access types";
   const labels = ACCESS_TYPE_OPTIONS.filter((o) => selected.includes(o.value)).map(
@@ -76,7 +76,7 @@ export function AccessTypeFilter({ access, onChange }: AccessTypeFilterProps) {
         data-testid="access-type-toggle"
         className="w-full flex items-center justify-between px-3 py-1.5 text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100 font-medium"
       >
-        <span className="truncate">{summarise(selected, isOpen)}</span>
+        <span className="truncate">{summarise(selected)}</span>
         <span className="text-xs text-gray-400">{isOpen ? "▲" : "▼"}</span>
       </button>
 
