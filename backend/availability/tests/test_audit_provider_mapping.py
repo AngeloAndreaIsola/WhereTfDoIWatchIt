@@ -180,10 +180,35 @@ class AuditProviderMappingTests(TestCase):
         SyncCursor.objects.create(provider=self.provider, source=self.source, country=self.country)
         ScrapedContentMapping.objects.create(provider=self.provider, scraped_title="Legacy")
 
-        before = {
-            model: model.objects.count()
-            for model in (ProviderContent, ContentMapping, Offer, OfferEvidence, OfferPrice, SyncCursor, ScrapedContentMapping)
-        }
+        def provider_scoped_rows():
+            return {
+                "provider_content": list(
+                    ProviderContent.objects.filter(provider=self.provider).order_by("pk").values()
+                ),
+                "content_mappings": list(
+                    ContentMapping.objects.filter(provider=self.provider).order_by("pk").values()
+                ),
+                "offers": list(
+                    Offer.objects.filter(provider=self.provider).order_by("pk").values()
+                ),
+                "offer_evidence": list(
+                    OfferEvidence.objects.filter(provider_slug=self.provider.slug).order_by("pk").values()
+                ),
+                "offer_prices": list(
+                    OfferPrice.objects.filter(provider_slug=self.provider.slug).order_by("pk").values()
+                ),
+                "legacy_scraped_content_mappings": list(
+                    ScrapedContentMapping.objects.filter(provider=self.provider).order_by("pk").values()
+                ),
+                "sync_cursors": list(
+                    SyncCursor.objects.filter(provider=self.provider).order_by("pk").values()
+                ),
+            }
+
+        before = provider_scoped_rows()
+        self.audit()
+        self.assertEqual(before, provider_scoped_rows())
+
         snapshot = self.audit(snapshot=True)["snapshot"]
 
         self.assertEqual(
@@ -194,4 +219,4 @@ class AuditProviderMappingTests(TestCase):
             },
         )
         self.assertTrue(all(value["count"] == 1 and len(value["hash"]) == 64 for value in snapshot.values()))
-        self.assertEqual(before, {model: model.objects.count() for model in before})
+        self.assertEqual(before, provider_scoped_rows())
