@@ -88,11 +88,50 @@ class Command(BaseCommand):
             if not has_offer:
                 pc_with_mapping_no_offer += 1
 
-        # Locally matchable without stored mapping: ProviderContent rows whose
-        # title/year would match a Movie? We can't do TMDb here; report count of
-        # unmapped ProviderContent rows as candidates.
         unmapped_pcs = pcs.exclude(provider_content_id__in=mapped_pc_ids)
         locally_matchable_unmapped = unmapped_pcs.count()
+
+        from availability.services.matching import match_local_catalog
+
+        local_exact_year = 0
+        local_title_only = 0
+        local_ambiguous = 0
+        local_year_conflict = 0
+        local_media_type_conflict = 0
+        local_no_candidate = 0
+        local_ineligible = 0
+        for pc in unmapped_pcs:
+            if pc.content_type not in ("movie", "series") or not (pc.title or "").strip():
+                local_ineligible += 1
+                continue
+            # year conflict detection: title exists but year differs
+            from tracker.models import Movie
+            title = pc.title.strip()
+            year = pc.release_date.year if pc.release_date else None
+            candidates = Movie.objects.filter(content_type=pc.content_type, title__iexact=title)
+            if year is not None:
+                same_year = set(candidates.filter(year=year).values_list("tmdb_id", flat=True))
+                if len(same_year) == 1:
+                    local_exact_year += 1
+                    continue
+                if candidates.exists() and pc.content_type == "movie":
+                    local_year_conflict += 1
+                    continue
+            by_title = set(candidates.values_list("tmdb_id", flat=True))
+            if len(by_title) > 1:
+                local_ambiguous += 1
+                continue
+            if len(by_title) == 1:
+                local_title_only += 1
+                continue
+            local_no_candidate += 1
+
+        # media-type conflict: title exists under other content type
+        for pc in unmapped_pcs:
+            if pc.content_type in ("movie", "series") and (pc.title or "").strip():
+                other = "series" if pc.content_type == "movie" else "movie"
+                if Movie.objects.filter(content_type=other, title__iexact=pc.title.strip()).exists():
+                    local_media_type_conflict += 1
 
         # Representative unresolved examples
         unresolved_examples = list(
@@ -126,6 +165,15 @@ class Command(BaseCommand):
             "active_offers": active_offers,
             "records_with_mapping_but_no_offer": pc_with_mapping_no_offer,
             "locally_matchable_without_stored_mapping": locally_matchable_unmapped,
+            "local_match_analysis": {
+                "exact_title_year_matches": local_exact_year,
+                "title_only_matches": local_title_only,
+                "ambiguous_title_matches": local_ambiguous,
+                "year_conflicts": local_year_conflict,
+                "media_type_conflicts": local_media_type_conflict,
+                "no_local_candidate": local_no_candidate,
+                "ineligible_for_matching": local_ineligible,
+            },
             "mismatch_candidates": mismatches[:20],
             "representative_unresolved_examples": unresolved_examples,
             "legacy_scraped_content_mappings": ScrapedContentMapping.objects.filter(
