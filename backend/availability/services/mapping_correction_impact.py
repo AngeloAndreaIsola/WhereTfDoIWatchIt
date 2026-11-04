@@ -94,6 +94,11 @@ def canonical_json_bytes(payload: dict) -> bytes:
     ).encode("utf-8")
 
 
+def _sorted_fingerprint_rows(rows: list[dict]) -> list[dict]:
+    """Canonicalize a row collection without making database ordering significant."""
+    return sorted(rows, key=canonical_json_bytes)
+
+
 def compute_digest(payload: dict) -> str:
     """Compute deterministic SHA-256 digest over non-volatile payload elements."""
     body = {
@@ -470,6 +475,35 @@ class MappingCorrectionImpactPlanner:
         }
 
         # 10. Deterministic Precondition Fingerprints
+        # Include every corroborating query result, rather than just the impact
+        # target's directly associated records. A plan is only safe to apply to
+        # exactly the evidence state used to assess the proposed correction.
+        corroboration_fingerprint = {
+            "other_provider_offers": [
+                _serialize_row_for_fingerprint(offer)
+                for offer in proposed_observations_other_providers
+            ],
+            "same_provider_alternate_offers": [
+                _serialize_row_for_fingerprint(offer)
+                for offer in proposed_observations_same_provider
+            ],
+            "proposed_target_evidence": [
+                {
+                    **_serialize_row_for_fingerprint(evidence),
+                    "source": evidence.source.slug,
+                    "is_present": evidence.is_present,
+                    "authoritative": evidence.authoritative,
+                }
+                for evidence in evidence_for_proposed
+            ],
+            "proposed_target_mappings": [
+                {
+                    **_serialize_row_for_fingerprint(mapping),
+                    "source": mapping.source.slug if mapping.source else None,
+                }
+                for mapping in mappings_for_proposed
+            ],
+        }
         precondition_state = {
             "database": db_id,
             "inputs": {
@@ -485,6 +519,10 @@ class MappingCorrectionImpactPlanner:
             "offers": [_serialize_row_for_fingerprint(o) for o in associated_offers],
             "evidence": [_serialize_row_for_fingerprint(e) for e in associated_evidence],
             "prices": [_serialize_row_for_fingerprint(p) for p in associated_prices],
+            "corroborating_observations": {
+                key: _sorted_fingerprint_rows(rows)
+                for key, rows in corroboration_fingerprint.items()
+            },
             "competing_mappings": [
                 _serialize_row_for_fingerprint(cm) for cm in conflicting_mappings
             ],

@@ -44,6 +44,8 @@ from availability.services.mapping_correction_impact import (
     MANIFEST_SCHEMA,
     MappingCorrectionImpactPlanner,
     MappingCorrectionPlannerError,
+    _sorted_fingerprint_rows,
+    canonical_json_bytes,
     compute_digest,
 )
 
@@ -429,6 +431,141 @@ class PreconditionFingerprintTests(BasePlannerTestCase):
         )
         fp4 = planner.plan()["precondition_fingerprint"]
         self.assertNotEqual(fp3, fp4)
+
+    def test_fingerprint_includes_all_corroboration_sources_and_states(self):
+        """Every corroborating query result must invalidate the plan when changed."""
+        planner = MappingCorrectionImpactPlanner(
+            provider=self.provider_bbc,
+            provider_content_id="bbc-target",
+            proposed_tmdb_id=2002,
+            proposed_content_type="movie",
+        )
+        fingerprints = []
+
+        def fingerprint():
+            value = planner.plan()["precondition_fingerprint"]
+            fingerprints.append(value)
+            return value
+
+        baseline = fingerprint()
+        other_provider_offer = Offer.objects.create(
+            provider=self.provider_tubi,
+            country=self.country_us,
+            source=self.source_tubi,
+            content_type=ContentType.MOVIE,
+            tmdb_id=2002,
+            offer_type=OfferType.FREE_WITH_ADS,
+            provider_content_id="tubi-target",
+            identity=build_offer_identity(
+                "tubi", "US", ContentType.MOVIE, 2002, None, None,
+                OfferType.FREE_WITH_ADS, "tubi-target"
+            ),
+        )
+        after_other_provider = fingerprint()
+        self.assertNotEqual(baseline, after_other_provider)
+
+        same_provider_offer = Offer.objects.create(
+            provider=self.provider_bbc,
+            country=self.country_gb,
+            source=self.source_bbc,
+            content_type=ContentType.MOVIE,
+            tmdb_id=2002,
+            offer_type=OfferType.FREE,
+            provider_content_id="bbc-alternate",
+            identity=build_offer_identity(
+                "bbc_iplayer", "GB", ContentType.MOVIE, 2002, None, None,
+                OfferType.FREE, "bbc-alternate"
+            ),
+        )
+        after_same_provider = fingerprint()
+        self.assertNotEqual(after_other_provider, after_same_provider)
+
+        evidence = OfferEvidence.objects.create(
+            source=self.source_sa,
+            offer_identity=other_provider_offer.identity,
+            provider_slug="tubi",
+            country_code="US",
+            content_type=ContentType.MOVIE,
+            tmdb_id=2002,
+            offer_type=OfferType.FREE_WITH_ADS,
+            provider_content_id="tubi-target",
+            is_present=True,
+            authoritative=False,
+        )
+        after_present_evidence = fingerprint()
+        self.assertNotEqual(after_same_provider, after_present_evidence)
+
+        evidence.is_present = False
+        evidence.authoritative = True
+        evidence.save(update_fields=["is_present", "authoritative", "updated_at"])
+        after_authoritative_removal = fingerprint()
+        self.assertNotEqual(after_present_evidence, after_authoritative_removal)
+
+        proposed_mapping = ContentMapping.objects.create(
+            provider=self.provider_tubi,
+            source=self.source_tubi,
+            provider_content_id="tubi-target",
+            content_type=ContentType.MOVIE,
+            tmdb_id=2002,
+            confidence=0.9,
+            match_method=MatchMethod.TITLE_YEAR,
+        )
+        after_mapping = fingerprint()
+        self.assertNotEqual(after_authoritative_removal, after_mapping)
+
+        proposed_mapping.delete()
+        after_mapping_removal = fingerprint()
+        self.assertNotEqual(after_mapping, after_mapping_removal)
+
+        evidence.delete()
+        after_evidence_removal = fingerprint()
+        self.assertNotEqual(after_mapping_removal, after_evidence_removal)
+
+        self.assertEqual(len(set(fingerprints)), 6)
+        self.assertIsNotNone(same_provider_offer)
+        self.assertIsNotNone(proposed_mapping)
+
+    def test_fingerprint_is_invariant_to_corroboration_query_order(self):
+        planner = MappingCorrectionImpactPlanner(
+            provider=self.provider_bbc,
+            provider_content_id="bbc-order",
+            proposed_tmdb_id=2002,
+            proposed_content_type="movie",
+        )
+        for provider_content_id, source, country, provider in (
+            ("tubi-two", self.source_tubi, self.country_us, self.provider_tubi),
+            ("tubi-one", self.source_tubi, self.country_us, self.provider_tubi),
+        ):
+            Offer.objects.create(
+                provider=provider,
+                country=country,
+                source=source,
+                content_type=ContentType.MOVIE,
+                tmdb_id=2002,
+                offer_type=OfferType.FREE,
+                provider_content_id=provider_content_id,
+                identity=build_offer_identity(
+                    provider.slug, country.code, ContentType.MOVIE, 2002, None, None,
+                    OfferType.FREE, provider_content_id
+                ),
+            )
+        first = planner.plan()["precondition_fingerprint"]
+        Offer.objects.filter(provider_content_id="tubi-two").update(provider_content_id="tubi-zero")
+        Offer.objects.filter(provider_content_id="tubi-zero").update(provider_content_id="tubi-two")
+        second = planner.plan()["precondition_fingerprint"]
+        self.assertEqual(first, second)
+
+    def test_canonical_fingerprint_row_sorting_is_order_invariant(self):
+        first = {"source": "one", "is_present": True, "authoritative": False}
+        second = {"source": "two", "is_present": False, "authoritative": True}
+        self.assertEqual(
+            _sorted_fingerprint_rows([first, second]),
+            _sorted_fingerprint_rows([second, first]),
+        )
+        self.assertEqual(
+            canonical_json_bytes({"rows": _sorted_fingerprint_rows([first, second])}),
+            canonical_json_bytes({"rows": _sorted_fingerprint_rows([second, first])}),
+        )
 
     def test_digest_excludes_volatile_metadata(self):
         pcid = "bbc-prog-digest"
