@@ -435,6 +435,7 @@ class RaiPlaySource:
         supports_seasons=False,
         supports_episodes=False,
         supports_languages=True,
+        supports_targeted_evidence=True,
     )
 
     def __init__(
@@ -447,13 +448,8 @@ class RaiPlaySource:
         self.max_contents = max_contents
         self.max_http_requests = max_http_requests
 
-    def fetch(self, content=None, *, provider=None, country=None, cursor=None) -> SourceFetchResult:
-        if content is not None:
-            raise ValueError(
-                "rai_play is catalogue-driven: fetch the catalogue with "
-                "content=None (no title-targeted lookup exists)"
-            )
-        # Ensure budget is created once per invocation, not once per HTTP request
+    def _ensure_budget(self) -> None:
+        """Ensure budget is initialized for live requests if not already set."""
         if self.max_http_requests is not None:
             self.client.budget = RaiPlayHttpBudget(self.max_http_requests)
         elif getattr(self.client, "budget", None) is not None:
@@ -465,8 +461,116 @@ class RaiPlaySource:
                 self.client.budget = RaiPlayHttpBudget(int(configured_budget))
             else:
                 raise RaiPlayConfigurationError(
-                    "RaiPlay catalogue refresh requires a configured finite HTTP budget"
+                    "RaiPlay requires a configured finite HTTP budget"
                 )
+
+    def fetch_evidence(self, *, provider_content_id: str, url: str) -> SourceFetchResult:
+        """Targeted evidence fetch for one provider-native programme by stored URL and identity.
+
+        Retrieves one programme by stored URL, verifies the returned RaiPlay
+        uniquename against the requested identity, reuses programme/video/player
+        parsing, and returns DiscoveredContent and ProviderOffer source-boundary
+        values only without advancing SyncCursor, calling TMDb, or writing records.
+        """
+        if not isinstance(provider_content_id, str) or not provider_content_id.strip():
+            raise ValueError("provider_content_id must be a non-empty string")
+        if not isinstance(url, str) or not url.strip():
+            raise ValueError("url must be a non-empty string")
+
+        clean_id = provider_content_id.strip()
+        clean_url = url.strip()
+
+        _validate_raiplay_url(clean_url)
+        path = urlparse(clean_url).path
+        if not path.startswith(PROGRAMME_PATH) or path.startswith(LIVE_PATH):
+            logger.warning(
+                "rai_play_targeted_unsupported_path url=%s content=%s",
+                clean_url, clean_id,
+            )
+            return SourceFetchResult(
+                contents=[],
+                offers=[],
+                sync_mode=SyncMode.TARGETED,
+                authoritative=False,
+                complete_snapshot=False,
+                cursor=None,
+            )
+
+        self._ensure_budget()
+
+        html = self.client.programme_page(clean_url)
+        if html is None:
+            logger.info(
+                "rai_play_targeted_content_missing url=%s content=%s reason=not_found",
+                clean_url, clean_id,
+            )
+            return SourceFetchResult(
+                contents=[],
+                offers=[],
+                sync_mode=SyncMode.TARGETED,
+                authoritative=False,
+                complete_snapshot=False,
+                cursor=None,
+            )
+
+        state = _state_from_payload(html, url=clean_url)
+        if str(state.get("data_type") or "").strip() != "program":
+            logger.info(
+                "rai_play_targeted_content_missing url=%s content=%s reason=not_a_programme",
+                clean_url, clean_id,
+            )
+            return SourceFetchResult(
+                contents=[],
+                offers=[],
+                sync_mode=SyncMode.TARGETED,
+                authoritative=False,
+                complete_snapshot=False,
+                cursor=None,
+            )
+
+        returned_id = str(state.get("uniquename") or "").strip()
+        if returned_id != clean_id:
+            logger.warning(
+                "rai_play_targeted_identity_mismatch url=%s expected=%s returned=%s",
+                clean_url, clean_id, returned_id,
+            )
+            return SourceFetchResult(
+                contents=[],
+                offers=[],
+                sync_mode=SyncMode.TARGETED,
+                authoritative=False,
+                complete_snapshot=False,
+                cursor=None,
+            )
+
+        parsed = self._parse_programme(url=clean_url, state=state)
+        if parsed is None:
+            return SourceFetchResult(
+                contents=[],
+                offers=[],
+                sync_mode=SyncMode.TARGETED,
+                authoritative=False,
+                complete_snapshot=False,
+                cursor=None,
+            )
+
+        discovered, offers = parsed
+        return SourceFetchResult(
+            contents=[discovered],
+            offers=offers,
+            sync_mode=SyncMode.TARGETED,
+            authoritative=False,
+            complete_snapshot=False,
+            cursor=None,
+        )
+
+    def fetch(self, content=None, *, provider=None, country=None, cursor=None) -> SourceFetchResult:
+        if content is not None:
+            raise ValueError(
+                "rai_play is catalogue-driven: fetch the catalogue with "
+                "content=None (no title-targeted lookup exists)"
+            )
+        self._ensure_budget()
         # provider/country are the caller's scope hints, already validated
         # against ``capabilities`` by the refresh service; RaiPlay only ever
         # reports its own (raiplay, IT).
