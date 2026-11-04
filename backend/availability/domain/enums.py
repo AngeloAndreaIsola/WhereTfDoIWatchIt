@@ -76,3 +76,19 @@ class FreshnessState(models.TextChoices):
     FRESH = "fresh", "Fresh"
     STALE = "stale", "Stale"
     UNKNOWN = "unknown", "Unknown"
+
+
+class CandidateReviewState(models.TextChoices):
+    PENDING = "pending", "Pending"
+    ACCEPTED = "accepted", "Accepted"
+    REJECTED = "rejected", "Rejected"
+    CONFLICT = "conflict", "Conflict"
+    AMBIGUOUS = "ambiguous", "Ambiguous"
+
+
+class CandidateResolutionCategory(models.TextChoices):
+    UNIQUE_CANDIDATE = "unique_candidate", "Unique candidate"
+    AMBIGUOUS = "ambiguous", "Ambiguous"
+    CONFLICT = "conflict", "Conflict"
+    NO_RESULTS = "no_results", "No results"
+    REJECTED = "rejected", "Rejected"
