@@ -1135,6 +1135,57 @@ class RaiPlaySourceBudgetTests(SimpleTestCase):
 
 
 class RaiPlayTargetedEvidenceTests(SimpleTestCase):
+    @patch("requests.get")
+    def test_fetch_evidence_uses_a_fresh_finite_budget_for_each_invocation(self, mock_get):
+        api = FakeRaiPlayApi()
+        mock_get.side_effect = [
+            MagicMock(status_code=200, text=api.pages[FOLLEMENTE]),
+            MagicMock(status_code=200, text=api.pages[FOLLEMENTE_VIDEO]),
+            MagicMock(status_code=200, text=api.pages[FOLLEMENTE]),
+            MagicMock(status_code=200, text=api.pages[FOLLEMENTE_VIDEO]),
+        ]
+        # A successful evidence retrieval dispatches both programme and video
+        # requests. The same finite limit must be newly available next time.
+        source = RaiPlaySource(max_http_requests=2)
+
+        first = source.fetch_evidence(
+            provider_content_id=FOLLEMENTE_ID,
+            url=FOLLEMENTE,
+        )
+        first_budget = source.client.budget
+        second = source.fetch_evidence(
+            provider_content_id=FOLLEMENTE_ID,
+            url=FOLLEMENTE,
+        )
+        second_budget = source.client.budget
+
+        self.assertIsNotNone(first_budget)
+        self.assertIsNotNone(second_budget)
+        self.assertEqual(len(first.contents), 1)
+        self.assertEqual(len(second.contents), 1)
+        self.assertEqual(first_budget.attempted, 2)
+        self.assertEqual(second_budget.attempted, 2)
+        self.assertIsNot(first_budget, second_budget)
+        self.assertEqual(mock_get.call_count, 4)
+
+    @patch("requests.get")
+    def test_fetch_evidence_redirect_consumes_the_same_invocation_budget(self, mock_get):
+        api = FakeRaiPlayApi()
+        mock_get.side_effect = [
+            MagicMock(status_code=200, text=api.pages[FOLLEMENTE]),
+            MagicMock(status_code=302, headers={"Location": FOLLEMENTE_PLAYER}),
+        ]
+        source = RaiPlaySource(max_http_requests=2)
+
+        with self.assertRaises(RaiPlayHttpBudgetExceeded) as ctx:
+            source.fetch_evidence(provider_content_id=FOLLEMENTE_ID, url=FOLLEMENTE)
+
+        self.assertEqual(ctx.exception.limit, 2)
+        self.assertEqual(ctx.exception.attempted, 2)
+        self.assertEqual(ctx.exception.stage, "video")
+        self.assertEqual(ctx.exception.blocked_url, FOLLEMENTE_PLAYER)
+        self.assertEqual(mock_get.call_count, 2)
+
     def test_capabilities_declare_supports_targeted_evidence(self):
         capabilities = source_registry.get("rai_play").capabilities
         self.assertTrue(capabilities.supports_targeted_evidence)
@@ -1340,19 +1391,21 @@ class RaiPlayTargetedEvidenceTests(SimpleTestCase):
         with self.assertRaises(RaiPlayConfigurationError):
             source.fetch_evidence(provider_content_id=FOLLEMENTE_ID, url=FOLLEMENTE)
 
-    def test_fetch_evidence_budget_exhaustion_raises_budget_exceeded(self):
-        source = RaiPlaySource(
-            client=RaiPlayClient(budget=RaiPlayHttpBudget(limit=1)),
+    @patch("requests.get")
+    def test_fetch_evidence_budget_exhaustion_uses_real_http_accounting(self, mock_get):
+        mock_get.return_value = MagicMock(
+            status_code=200,
+            text=FakeRaiPlayApi().pages[FOLLEMENTE],
         )
-        with patch.object(source.client, "programme_page", return_value=FakeRaiPlayApi().pages[FOLLEMENTE]), \
-             patch.object(source.client, "video_page") as mock_vp:
-            def budget_guard(url, stage="video"):
-                source.client.budget.reserve(url, stage=stage)
-                return None
-            mock_vp.side_effect = budget_guard
-            # 1 token used by programme fetch
-            source.client.budget.reserve(FOLLEMENTE, stage="programme")
-            with self.assertRaises(RaiPlayHttpBudgetExceeded) as ctx:
-                source.fetch_evidence(provider_content_id=FOLLEMENTE_ID, url=FOLLEMENTE)
-            self.assertEqual(ctx.exception.limit, 1)
-            self.assertEqual(ctx.exception.stage, "video")
+        source = RaiPlaySource(max_http_requests=1)
+
+        with self.assertRaises(RaiPlayHttpBudgetExceeded) as ctx:
+            source.fetch_evidence(
+                provider_content_id=FOLLEMENTE_ID,
+                url=FOLLEMENTE,
+            )
+
+        self.assertEqual(ctx.exception.limit, 1)
+        self.assertEqual(ctx.exception.attempted, 1)
+        self.assertEqual(ctx.exception.stage, "video")
+        self.assertEqual(mock_get.call_count, 1)

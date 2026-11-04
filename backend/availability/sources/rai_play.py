@@ -449,20 +449,31 @@ class RaiPlaySource:
         self.max_http_requests = max_http_requests
 
     def _ensure_budget(self) -> None:
-        """Ensure budget is initialized for live requests if not already set."""
-        if self.max_http_requests is not None:
-            self.client.budget = RaiPlayHttpBudget(self.max_http_requests)
-        elif getattr(self.client, "budget", None) is not None:
-            pass
-        elif getattr(self.client, "requester", None) is None:
+        """Start a fresh finite budget for this source invocation.
+
+        The client carries the budget only as per-invocation state. A client
+        supplied budget contributes its finite limit, never its consumed state.
+        """
+        configured_limit = self.max_http_requests
+        if configured_limit is None:
+            existing_budget = getattr(self.client, "budget", None)
+            if existing_budget is not None:
+                configured_limit = existing_budget.limit
+        if configured_limit is None and getattr(self.client, "requester", None) is None:
             from django.conf import settings
-            configured_budget = getattr(settings, "RAIPLAY_MAX_HTTP_REQUESTS", None)
-            if configured_budget is not None and int(configured_budget) >= 1:
-                self.client.budget = RaiPlayHttpBudget(int(configured_budget))
-            else:
+            configured_limit = getattr(settings, "RAIPLAY_MAX_HTTP_REQUESTS", None)
+
+        if configured_limit is not None:
+            try:
+                self.client.budget = RaiPlayHttpBudget(int(configured_limit))
+            except (TypeError, ValueError) as exc:
                 raise RaiPlayConfigurationError(
                     "RaiPlay requires a configured finite HTTP budget"
-                )
+                ) from exc
+        elif getattr(self.client, "requester", None) is None:
+            raise RaiPlayConfigurationError(
+                "RaiPlay requires a configured finite HTTP budget"
+            )
 
     def fetch_evidence(self, *, provider_content_id: str, url: str) -> SourceFetchResult:
         """Targeted evidence fetch for one provider-native programme by stored URL and identity.
