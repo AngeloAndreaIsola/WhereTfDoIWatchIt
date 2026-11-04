@@ -7,6 +7,7 @@ import { ProviderFilter, ProviderItem } from "./ProviderFilter";
 import { AccessTypeFilter } from "./AccessTypeFilter";
 import CountrySelect, { countryName } from "./CountrySelect";
 import { useCurrentLocation } from "./CurrentLocationProvider";
+import { DurationFilter } from "./DurationFilter";
 
 export interface FilterState {
   q: string;
@@ -23,7 +24,27 @@ export interface FilterState {
   sort_by: string; // "", "rating_desc", "year_desc", "year_asc", "title_asc", "title_desc"
   /** Access model filter: "", "all", or "subscription,addon,free,free_with_ads,rent,buy". */
   access: string;
+  duration_min: string;
+  duration_max: string;
 }
+
+export const DEFAULT_FILTER_STATE: FilterState = {
+  q: "",
+  content_type: "all",
+  genre: "",
+  year_min: "",
+  year_max: "",
+  actors: [],
+  providers: [],
+  country: "",
+  status: "",
+  quality: "",
+  score_min: "",
+  sort_by: "",
+  access: "",
+  duration_min: "",
+  duration_max: "",
+};
 
 interface FilterBarProps {
   filters: FilterState;
@@ -127,6 +148,30 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
     onChange({
       ...filters,
       actors: filters.actors.filter((a) => a.id !== id),
+    });
+  };
+
+  const hasActiveFilters = Boolean(
+    filters.q ||
+      (filters.content_type && filters.content_type !== "all") ||
+      filters.genre ||
+      filters.year_min ||
+      filters.year_max ||
+      (filters.actors && filters.actors.length > 0) ||
+      (filters.providers && filters.providers.length > 0) ||
+      filters.country ||
+      filters.status ||
+      filters.quality ||
+      filters.score_min ||
+      filters.sort_by ||
+      filters.access ||
+      filters.duration_min ||
+      filters.duration_max
+  );
+
+  const handleClearAllFilters = () => {
+    onChange({
+      ...DEFAULT_FILTER_STATE,
     });
   };
 
@@ -428,6 +473,19 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
           </select>
         </div>
 
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+            Duration
+          </label>
+          <DurationFilter
+            durationMin={filters.duration_min || ""}
+            durationMax={filters.duration_max || ""}
+            onChange={(duration_min, duration_max) =>
+              onChange({ ...filters, duration_min, duration_max })
+            }
+          />
+        </div>
+
         {showStatusFilter && (
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
@@ -447,6 +505,21 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
           </div>
         )}
       </div>
+
+      {/* Clear All Filters Row */}
+      {hasActiveFilters && (
+        <div className="flex items-center justify-end pt-2 border-t border-gray-100 dark:border-gray-800">
+          <button
+            type="button"
+            onClick={handleClearAllFilters}
+            data-testid="clear-all-filters-btn"
+            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-medium text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/40 hover:bg-red-100 dark:hover:bg-red-900/40 border border-red-200 dark:border-red-900 transition-colors"
+          >
+            <span>Clear all filters</span>
+            <span className="font-bold">×</span>
+          </button>
+        </div>
+      )}
     </div>
   );
 }
