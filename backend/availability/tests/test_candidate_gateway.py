@@ -110,7 +110,7 @@ class CandidateGatewayTests(TestCase):
         self.assertEqual(budget.succeeded, 1)
 
         # Check cache was created
-        cached = TmdbSearchCache.objects.get(query="Fight Club", year=1999, content_type=ContentType.MOVIE)
+        cached = TmdbSearchCache.objects.get(query="fight club", year=1999, content_type=ContentType.MOVIE)
         self.assertFalse(cached.is_negative)
         self.assertEqual(len(cached.results), 1)
 

@@ -32,6 +32,8 @@ local database only; writes belong to the refresh service and the
 repositories.
 """
 
+from datetime import timedelta
+
 from django.db import models
 from django.utils import timezone
 
@@ -677,6 +679,11 @@ class SyncCursor(models.Model):
         return (timezone.now() - reference) > STALL_AFTER
 
 
+def tmdb_default_cache_expiry():
+    """Default retained for direct model creation; gateway chooses pos/neg TTL."""
+    return timezone.now() + timedelta(days=30)
+
+
 class TmdbSearchCache(models.Model):
     """Positive and negative cache for TMDb search queries.
 
@@ -686,10 +693,16 @@ class TmdbSearchCache(models.Model):
 
     query = models.CharField(max_length=255, db_index=True)
     year = models.IntegerField(null=True, blank=True, db_index=True)
+    # A non-null identity component prevents SQL's nullable-unique semantics
+    # from admitting duplicate cache records for a query without a year.
+    year_fingerprint = models.CharField(max_length=16, default="year:none", editable=False)
     content_type = models.CharField(max_length=10, choices=ContentType.choices, db_index=True)
+    locale = models.CharField(max_length=32, default="en-US")
+    endpoint_version = models.CharField(max_length=16, default="v3")
 
     results = models.JSONField(default=list, blank=True)
     is_negative = models.BooleanField(default=False, db_index=True)
+    expires_at = models.DateTimeField(default=tmdb_default_cache_expiry, db_index=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -697,13 +710,18 @@ class TmdbSearchCache(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["query", "year", "content_type"],
-                name="uniq_tmdbsearchcache_query_year_type",
+                fields=["query", "year_fingerprint", "content_type", "locale", "endpoint_version"],
+                name="uniq_tmdbsearchcache_identity",
             ),
         ]
         indexes = [
             models.Index(fields=["query", "content_type"], name="idx_tmdbsearchcache_query_type"),
+            models.Index(fields=["expires_at"], name="idx_tmdbsearchcache_expiry"),
         ]
+
+    def save(self, *args, **kwargs):
+        self.year_fingerprint = f"year:{self.year}" if self.year is not None else "year:none"
+        super().save(*args, **kwargs)
 
     def __str__(self):
         kind = "negative" if self.is_negative else f"{len(self.results)} results"

@@ -9,7 +9,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db.models import Exists, OuterRef
 
 from availability.domain.enums import CandidateResolutionCategory, ContentType
-from availability.models import ContentMapping, ProviderContent, TmdbSearchCache
+from availability.models import ContentMapping, ProviderContent
 from availability.services.candidate_gateway import (
     CandidateDiscoveryBudget,
     CandidateDiscoveryBudgetExceeded,
@@ -154,20 +154,11 @@ class Command(BaseCommand):
             year = content.release_date.year if content.release_date else None
             content_type = content.content_type
 
-            # Check cache status first
-            cached_entry = TmdbSearchCache.objects.filter(
-                query__iexact=query.strip(),
-                year=year,
-                content_type=content_type,
-            ).first()
-
-            cache_status = "miss"
-            if cached_entry:
-                cache_status = "hit_negative" if cached_entry.is_negative else "hit_positive"
-                stats["cache_hits"] += 1
+            cache_status = "cache_unchecked"
 
             if is_preview or not authorize_network:
-                # Offline / preview mode: 0 network, 0 writes
+                # Offline / preview mode: 0 network, 0 writes. Do not inspect
+                # cache internals here; the gateway owns cache identity/TTL.
                 preview_records.append({
                     "provider": content.provider.slug,
                     "content_id": content.provider_content_id,

@@ -17,8 +17,8 @@ TIE_MARGIN = 0.05
 
 
 def normalize_title(value: Optional[str]) -> str:
-    """Case, punctuation, and whitespace-insensitive alphanumeric title form."""
-    return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+    """Casefold titles while retaining Unicode word characters for matching."""
+    return re.sub(r"[^\w]+", " ", str(value or "").casefold(), flags=re.UNICODE).strip()
 
 
 def is_token_run(shorter: list[str], longer: list[str]) -> bool:

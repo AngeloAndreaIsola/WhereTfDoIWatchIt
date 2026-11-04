@@ -3,13 +3,16 @@ from __future__ import annotations
 
 import email.utils
 import logging
+import re
 import time
+import unicodedata
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone as datetime_timezone
 from typing import Any, Optional
 
 import requests
 from django.conf import settings
+from django.utils import timezone
 
 from tracker.services.tmdb import TMDB_BASE, DEFAULT_TIMEOUT, TMDbClient
 from ..domain.enums import ContentType
@@ -94,6 +97,9 @@ class TMDbCandidateGateway:
 
     max_retries: int = 2
     max_backoff_seconds: float = 5.0
+    positive_cache_ttl = timedelta(days=30)
+    negative_cache_ttl = timedelta(days=7)
+    endpoint_version = "v3"
 
     def __init__(
         self,
@@ -102,12 +108,21 @@ class TMDbCandidateGateway:
         session: Optional[requests.Session] = None,
         sleep_fn=time.sleep,
         allow_cache_writes: bool = True,
+        locale: str = "en-US",
+        min_request_interval_seconds: float = 0.0,
+        monotonic_fn=time.monotonic,
     ):
+        if min_request_interval_seconds < 0:
+            raise ValueError("min_request_interval_seconds must be non-negative")
         self.client = client or TMDbClient()
         self.budget = budget
         self.session = session or requests.Session()
         self.sleep_fn = sleep_fn
         self.allow_cache_writes = allow_cache_writes
+        self.locale = locale
+        self.min_request_interval_seconds = min_request_interval_seconds
+        self.monotonic_fn = monotonic_fn
+        self._last_request_at: Optional[float] = None
 
     def search(
         self,
@@ -122,9 +137,11 @@ class TMDbCandidateGateway:
         When authorize_network is False, only cache hits return results; cache misses
         return [] without executing network calls.
         """
-        normalized_query = (query or "").strip()
+        normalized_query = self._normalize_query(query)
         if not normalized_query:
             return []
+        if authorize_network and self.budget is None:
+            raise ValueError("authorize_network=True requires a finite positive CandidateDiscoveryBudget")
 
         if content_type in (ContentType.SERIES, "tv"):
             target_type = ContentType.SERIES
@@ -132,12 +149,16 @@ class TMDbCandidateGateway:
         else:
             target_type = ContentType.MOVIE
             endpoint = "search/movie"
+        year_fingerprint = self._year_fingerprint(year)
 
-        # 1. Check positive/negative cache
+        # A cache entry is usable only until its positive/negative TTL expires.
         cache_entry = TmdbSearchCache.objects.filter(
-            query__iexact=normalized_query,
-            year=year,
+            query=normalized_query,
+            year_fingerprint=year_fingerprint,
             content_type=target_type,
+            locale=self.locale,
+            endpoint_version=self.endpoint_version,
+            expires_at__gt=timezone.now(),
         ).first()
 
         if cache_entry:
@@ -149,7 +170,8 @@ class TMDbCandidateGateway:
         if not authorize_network:
             return []
 
-        # 2. Execute network request under budget
+        # _fetch_search raises on transport/HTTP failures; only a successful
+        # response, including a successful empty result, is eligible for caching.
         results = self._fetch_search(
             endpoint=endpoint,
             query=normalized_query,
@@ -157,16 +179,21 @@ class TMDbCandidateGateway:
             content_type=target_type,
         )
 
-        # 3. Store in positive/negative cache only if permitted
         if self.allow_cache_writes:
             is_negative = len(results) == 0
             TmdbSearchCache.objects.update_or_create(
                 query=normalized_query,
-                year=year,
+                year_fingerprint=year_fingerprint,
                 content_type=target_type,
+                locale=self.locale,
+                endpoint_version=self.endpoint_version,
                 defaults={
+                    "year": year,
                     "results": results,
                     "is_negative": is_negative,
+                    "expires_at": timezone.now() + (
+                        self.negative_cache_ttl if is_negative else self.positive_cache_ttl
+                    ),
                 },
             )
 
@@ -193,6 +220,7 @@ class TMDbCandidateGateway:
         for attempt in range(self.max_retries + 1):
             if self.budget:
                 self.budget.reserve(label=f"{endpoint}:{query}")
+            self._pace_request()
 
             try:
                 resp = self.session.get(
@@ -203,7 +231,8 @@ class TMDbCandidateGateway:
                     allow_redirects=False,
                 )
 
-                # Explicitly handle 3xx redirects as an error or count
+                # Reject redirects as a terminal failure: requests does not
+                # raise for 3xx, and retrying would conceal an unexpected host.
                 if 300 <= resp.status_code < 400:
                     logger.warning(
                         "tmdb_unexpected_redirect status=%d attempt=%d query=%s",
@@ -211,7 +240,11 @@ class TMDbCandidateGateway:
                         attempt + 1,
                         query,
                     )
-                    resp.raise_for_status()
+                    if self.budget:
+                        self.budget.record_failure()
+                    error = requests.HTTPError(f"Unexpected TMDb redirect: HTTP {resp.status_code}")
+                    error.response = resp
+                    raise error
 
                 # Permanent 4xx (except 429) must not retry
                 if 400 <= resp.status_code < 500 and resp.status_code != 429:
@@ -271,7 +304,7 @@ class TMDbCandidateGateway:
 
             except requests.HTTPError as http_err:
                 status = getattr(http_err.response, "status_code", None)
-                if status and 400 <= status < 500 and status != 429:
+                if status and ((300 <= status < 400) or (400 <= status < 500 and status != 429)):
                     raise http_err
                 last_error = http_err
                 if attempt < self.max_retries:
@@ -308,6 +341,26 @@ class TMDbCandidateGateway:
             raise last_error
         return []
 
+    def _pace_request(self) -> None:
+        """Apply configured spacing before each actual HTTP attempt."""
+        if self._last_request_at is not None and self.min_request_interval_seconds:
+            elapsed = self.monotonic_fn() - self._last_request_at
+            remaining = self.min_request_interval_seconds - elapsed
+            if remaining > 0:
+                self.sleep_fn(remaining)
+        self._last_request_at = self.monotonic_fn()
+
+    @staticmethod
+    def _normalize_query(query: str) -> str:
+        # NFC makes canonically equivalent user input share a cache entry; \w
+        # retains Unicode letters/digits rather than erasing non-ASCII titles.
+        normalized = unicodedata.normalize("NFC", str(query or "")).casefold()
+        return re.sub(r"[^\w]+", " ", normalized, flags=re.UNICODE).strip()
+
+    @staticmethod
+    def _year_fingerprint(year: Optional[int]) -> str:
+        return f"year:{year}" if year is not None else "year:none"
+
     @staticmethod
     def _parse_retry_after(header_val: Optional[str]) -> Optional[float]:
         """Parse Retry-After header supporting both integer seconds and RFC 2822 date formats."""
@@ -322,7 +375,7 @@ class TMDbCandidateGateway:
         # Try parsing HTTP date
         try:
             parsed_date = email.utils.parsedate_to_datetime(header_str)
-            now = datetime.now(timezone.utc)
+            now = datetime.now(datetime_timezone.utc)
             delta = (parsed_date - now).total_seconds()
             return max(0.0, delta)
         except Exception:
