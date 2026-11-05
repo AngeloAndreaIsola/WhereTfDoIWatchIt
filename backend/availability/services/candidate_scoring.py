@@ -212,23 +212,35 @@ def persist_candidates(
         ).first()
 
         if existing:
-            if existing.review_state == CandidateReviewState.REJECTED:
+            # Preserve human decision states: REJECTED and ACCEPTED must never be overwritten
+            # by automated candidate discovery.
+            if existing.review_state in (CandidateReviewState.REJECTED, CandidateReviewState.ACCEPTED):
                 existing.confidence_score = cand_dict["confidence_score"]
                 existing.scoring_evidence = cand_dict["scoring_evidence"]
-                existing.save(update_fields=["confidence_score", "scoring_evidence", "updated_at"])
+                existing.resolution_category = resolution_category
+                existing.title = cand_dict.get("title", existing.title)
+                existing.year = cand_dict.get("year", existing.year)
+                existing.save(
+                    update_fields=[
+                        "confidence_score",
+                        "scoring_evidence",
+                        "resolution_category",
+                        "title",
+                        "year",
+                        "updated_at",
+                    ]
+                )
                 persisted.append(existing)
                 continue
 
-            if existing.review_state == CandidateReviewState.PENDING:
-                if resolution_category == CandidateResolutionCategory.UNIQUE_CANDIDATE:
-                    if cand_dict["confidence_score"] >= HIGH_CONFIDENCE_THRESHOLD:
-                        existing.review_state = CandidateReviewState.ACCEPTED
-                    else:
-                        existing.review_state = CandidateReviewState.PENDING
-                elif resolution_category == CandidateResolutionCategory.AMBIGUOUS:
-                    existing.review_state = CandidateReviewState.AMBIGUOUS
-                elif resolution_category == CandidateResolutionCategory.CONFLICT:
-                    existing.review_state = CandidateReviewState.CONFLICT
+            # For unreviewed candidates, keep review_state as PENDING.
+            # Never set ACCEPTED automatically during automated discovery.
+            if resolution_category == CandidateResolutionCategory.AMBIGUOUS:
+                existing.review_state = CandidateReviewState.AMBIGUOUS
+            elif resolution_category == CandidateResolutionCategory.CONFLICT:
+                existing.review_state = CandidateReviewState.CONFLICT
+            else:
+                existing.review_state = CandidateReviewState.PENDING
 
             existing.resolution_category = resolution_category
             existing.confidence_score = cand_dict["confidence_score"]
@@ -238,13 +250,10 @@ def persist_candidates(
             existing.save()
             persisted.append(existing)
         else:
+            # Automated discovery creates new candidates in PENDING, AMBIGUOUS, or CONFLICT.
+            # It NEVER sets ACCEPTED regardless of confidence score.
             review_state = CandidateReviewState.PENDING
-            if resolution_category == CandidateResolutionCategory.UNIQUE_CANDIDATE:
-                if cand_dict["confidence_score"] >= HIGH_CONFIDENCE_THRESHOLD:
-                    review_state = CandidateReviewState.ACCEPTED
-                else:
-                    review_state = CandidateReviewState.PENDING
-            elif resolution_category == CandidateResolutionCategory.AMBIGUOUS:
+            if resolution_category == CandidateResolutionCategory.AMBIGUOUS:
                 review_state = CandidateReviewState.AMBIGUOUS
             elif resolution_category == CandidateResolutionCategory.CONFLICT:
                 review_state = CandidateReviewState.CONFLICT

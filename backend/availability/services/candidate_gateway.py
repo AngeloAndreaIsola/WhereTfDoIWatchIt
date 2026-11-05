@@ -16,7 +16,7 @@ from django.utils import timezone
 
 from tracker.services.tmdb import TMDB_BASE, DEFAULT_TIMEOUT, TMDbClient
 from ..domain.enums import ContentType
-from ..models import TmdbSearchCache
+from ..models import TmdbDetailsCache, TmdbSearchCache
 
 logger = logging.getLogger(__name__)
 
@@ -198,6 +198,274 @@ class TMDbCandidateGateway:
             )
 
         return results
+
+    def get_details(
+        self,
+        tmdb_id: int,
+        content_type: str = ContentType.MOVIE,
+        authorize_network: bool = False,
+    ) -> Optional[dict[str, Any]]:
+        """Fetch TMDb item details using cached entries or budgeted HTTP dispatch.
+
+        content_type must map to either movie (/movie/{id}) or series (/tv/{id}).
+        When authorize_network is False, only cache hits return results; cache misses
+        return None without executing network calls.
+        """
+        try:
+            tmdb_id = int(tmdb_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Invalid tmdb_id: {tmdb_id!r}") from exc
+
+        if content_type in (ContentType.SERIES, "tv"):
+            target_type = ContentType.SERIES
+            endpoint = f"tv/{tmdb_id}"
+        else:
+            target_type = ContentType.MOVIE
+            endpoint = f"movie/{tmdb_id}"
+
+        if authorize_network and self.budget is None:
+            raise ValueError("authorize_network=True requires a finite positive CandidateDiscoveryBudget")
+
+        cache_entry = TmdbDetailsCache.objects.filter(
+            tmdb_id=tmdb_id,
+            content_type=target_type,
+            locale=self.locale,
+            endpoint_version=self.endpoint_version,
+            expires_at__gt=timezone.now(),
+        ).first()
+
+        if cache_entry:
+            if self.budget:
+                self.budget.record_cache_hit()
+            return None if cache_entry.is_negative else (cache_entry.details or None)
+
+        if not authorize_network:
+            return None
+
+        details = self._fetch_details(
+            endpoint=endpoint,
+            tmdb_id=tmdb_id,
+            content_type=target_type,
+        )
+
+        if self.allow_cache_writes:
+            is_negative = details is None
+            TmdbDetailsCache.objects.update_or_create(
+                tmdb_id=tmdb_id,
+                content_type=target_type,
+                locale=self.locale,
+                endpoint_version=self.endpoint_version,
+                defaults={
+                    "details": details or {},
+                    "is_negative": is_negative,
+                    "expires_at": timezone.now() + (
+                        self.negative_cache_ttl if is_negative else self.positive_cache_ttl
+                    ),
+                },
+            )
+
+        return details
+
+    def _fetch_details(
+        self,
+        endpoint: str,
+        tmdb_id: int,
+        content_type: str,
+    ) -> Optional[dict[str, Any]]:
+        params, headers = self.client._auth()
+        params.update({"language": self.locale, "append_to_response": "credits"})
+        url = f"{TMDB_BASE}/{endpoint}"
+        last_error: Optional[Exception] = None
+
+        for attempt in range(self.max_retries + 1):
+            if self.budget:
+                self.budget.reserve(label=f"{endpoint}")
+            self._pace_request()
+
+            try:
+                resp = self.session.get(
+                    url,
+                    params=params,
+                    headers=headers,
+                    timeout=self.client.timeout or DEFAULT_TIMEOUT,
+                    allow_redirects=False,
+                )
+
+                if 300 <= resp.status_code < 400:
+                    logger.warning(
+                        "tmdb_unexpected_redirect status=%d attempt=%d endpoint=%s",
+                        resp.status_code,
+                        attempt + 1,
+                        endpoint,
+                    )
+                    if self.budget:
+                        self.budget.record_failure()
+                    error = requests.HTTPError(f"Unexpected TMDb redirect: HTTP {resp.status_code}")
+                    error.response = resp
+                    raise error
+
+                # 404 indicates resource does not exist on TMDb: treat as negative response
+                if resp.status_code == 404:
+                    if self.budget:
+                        self.budget.record_success()
+                    return None
+
+                # Permanent 4xx (except 429) must not retry
+                if 400 <= resp.status_code < 500 and resp.status_code != 429:
+                    logger.warning(
+                        "tmdb_client_error status=%d endpoint=%s",
+                        resp.status_code,
+                        endpoint,
+                    )
+                    if self.budget:
+                        self.budget.record_failure()
+                    resp.raise_for_status()
+
+                if resp.status_code == 429:
+                    retry_after = self._parse_retry_after(resp.headers.get("Retry-After"))
+                    logger.warning(
+                        "tmdb_rate_limited status=429 attempt=%d retry_after=%s endpoint=%s",
+                        attempt + 1,
+                        retry_after,
+                        endpoint,
+                    )
+                    if attempt < self.max_retries:
+                        if self.budget:
+                            self.budget.record_retry()
+                        backoff = min(
+                            retry_after if retry_after is not None else (0.5 * (2 ** attempt)),
+                            self.max_backoff_seconds,
+                        )
+                        self.sleep_fn(backoff)
+                        continue
+                    if self.budget:
+                        self.budget.record_failure()
+                    resp.raise_for_status()
+
+                if resp.status_code in (500, 502, 503, 504):
+                    logger.warning(
+                        "tmdb_server_error status=%d attempt=%d endpoint=%s",
+                        resp.status_code,
+                        attempt + 1,
+                        endpoint,
+                    )
+                    if attempt < self.max_retries:
+                        if self.budget:
+                            self.budget.record_retry()
+                        backoff = min(0.5 * (2 ** attempt), self.max_backoff_seconds)
+                        self.sleep_fn(backoff)
+                        continue
+                    if self.budget:
+                        self.budget.record_failure()
+                    resp.raise_for_status()
+
+                resp.raise_for_status()
+                data = resp.json()
+                if self.budget:
+                    self.budget.record_success()
+                return self._normalize_details(data, content_type)
+
+            except requests.HTTPError as http_err:
+                status = getattr(http_err.response, "status_code", None)
+                if status and ((300 <= status < 400) or (400 <= status < 500 and status != 429)):
+                    raise http_err
+                last_error = http_err
+                if attempt < self.max_retries:
+                    if self.budget:
+                        self.budget.record_retry()
+                    backoff = min(0.5 * (2 ** attempt), self.max_backoff_seconds)
+                    self.sleep_fn(backoff)
+                    continue
+                if self.budget:
+                    self.budget.record_failure()
+                raise http_err
+
+            except requests.RequestException as exc:
+                last_error = exc
+                logger.warning(
+                    "tmdb_request_exception attempt=%d endpoint=%s error=%s",
+                    attempt + 1,
+                    endpoint,
+                    exc,
+                )
+                if attempt < self.max_retries:
+                    if self.budget:
+                        self.budget.record_retry()
+                    backoff = min(0.5 * (2 ** attempt), self.max_backoff_seconds)
+                    self.sleep_fn(backoff)
+                    continue
+                if self.budget:
+                    self.budget.record_failure()
+                raise exc
+
+        if self.budget:
+            self.budget.record_failure()
+        if last_error:
+            raise last_error
+        return None
+
+    @staticmethod
+    def _normalize_details(data: dict[str, Any], content_type: str) -> dict[str, Any]:
+        title = data.get("title") or data.get("name") or data.get("original_title") or data.get("original_name") or ""
+        release_date = data.get("release_date") or data.get("first_air_date")
+        year = None
+        if release_date and len(str(release_date)) >= 4:
+            try:
+                year = int(str(release_date)[:4])
+            except ValueError:
+                year = None
+
+        genres = [{"id": g["id"], "name": g["name"]} for g in data.get("genres", []) if "id" in g]
+        genre_ids = [g["id"] for g in genres]
+
+        cast = []
+        credits_data = data.get("credits", {})
+        for c in (credits_data.get("cast", []) or [])[:15]:
+            cast.append({
+                "id": c.get("id"),
+                "name": c.get("name"),
+                "character": c.get("character"),
+            })
+
+        director: list[str] = []
+        if content_type == ContentType.SERIES:
+            for c in data.get("created_by", []) or []:
+                name = c.get("name")
+                if name:
+                    director.append(name)
+        else:
+            for crew in (credits_data.get("crew", []) or []):
+                if crew.get("job") == "Director" and crew.get("name"):
+                    director.append(crew["name"])
+
+        seasons_data = []
+        if content_type == ContentType.SERIES and "seasons" in data:
+            for s in data.get("seasons", []) or []:
+                seasons_data.append({
+                    "season_number": s.get("season_number"),
+                    "episode_count": s.get("episode_count"),
+                    "name": s.get("name"),
+                    "poster_path": s.get("poster_path"),
+                })
+
+        return {
+            "tmdb_id": data.get("id"),
+            "title": title,
+            "original_title": data.get("original_title") or data.get("original_name") or "",
+            "year": year,
+            "content_type": content_type,
+            "overview": data.get("overview") or "",
+            "poster_path": data.get("poster_path") or "",
+            "genre_ids": genre_ids,
+            "genres": genres,
+            "cast": cast,
+            "director": director,
+            "seasons_data": seasons_data,
+            "runtime_minutes": data.get("runtime"),
+            "tmdb_rating": data.get("vote_average"),
+            "vote_count": data.get("vote_count"),
+            "status": data.get("status"),
+        }
 
     def _fetch_search(
         self,
