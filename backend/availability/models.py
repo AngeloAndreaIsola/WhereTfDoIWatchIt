@@ -32,10 +32,14 @@ local database only; writes belong to the refresh service and the
 repositories.
 """
 
+from datetime import timedelta
+
 from django.db import models
 from django.utils import timezone
 
 from .domain.enums import (
+    CandidateResolutionCategory,
+    CandidateReviewState,
     ContentType,
     MatchMethod,
     OfferType,
@@ -673,3 +677,115 @@ class SyncCursor(models.Model):
         if reference is None:
             return True
         return (timezone.now() - reference) > STALL_AFTER
+
+
+def tmdb_default_cache_expiry():
+    """Default retained for direct model creation; gateway chooses pos/neg TTL."""
+    return timezone.now() + timedelta(days=30)
+
+
+class TmdbSearchCache(models.Model):
+    """Positive and negative cache for TMDb search queries.
+
+    Stores the raw search result list (or empty list if no results),
+    avoiding redundant external network requests.
+    """
+
+    query = models.CharField(max_length=255, db_index=True)
+    year = models.IntegerField(null=True, blank=True, db_index=True)
+    # A non-null identity component prevents SQL's nullable-unique semantics
+    # from admitting duplicate cache records for a query without a year.
+    year_fingerprint = models.CharField(max_length=16, default="year:none", editable=False)
+    content_type = models.CharField(max_length=10, choices=ContentType.choices, db_index=True)
+    locale = models.CharField(max_length=32, default="en-US")
+    endpoint_version = models.CharField(max_length=16, default="v3")
+
+    results = models.JSONField(default=list, blank=True)
+    is_negative = models.BooleanField(default=False, db_index=True)
+    expires_at = models.DateTimeField(default=tmdb_default_cache_expiry, db_index=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["query", "year_fingerprint", "content_type", "locale", "endpoint_version"],
+                name="uniq_tmdbsearchcache_identity",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["query", "content_type"], name="idx_tmdbsearchcache_query_type"),
+            models.Index(fields=["expires_at"], name="idx_tmdbsearchcache_expiry"),
+        ]
+
+    def save(self, *args, **kwargs):
+        self.year_fingerprint = f"year:{self.year}" if self.year is not None else "year:none"
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        kind = "negative" if self.is_negative else f"{len(self.results)} results"
+        return f"TMDbSearchCache({self.content_type}: {self.query!r} ({self.year}) -> {kind})"
+
+
+class ProviderContentCandidate(models.Model):
+    """Durable candidate discovery record for an unmapped ProviderContent entry.
+
+    Stores prospective TMDb candidates along with scoring evidence, review
+    state, and resolution categorization without mutating canonical Movie,
+    Offer, or ContentMapping records.
+    """
+
+    provider_content = models.ForeignKey(
+        ProviderContent,
+        on_delete=models.CASCADE,
+        related_name="tmdb_candidates",
+    )
+    tmdb_id = models.IntegerField(db_index=True)
+    title = models.CharField(max_length=255)
+    year = models.IntegerField(null=True, blank=True)
+    content_type = models.CharField(max_length=10, choices=ContentType.choices)
+
+    confidence_score = models.FloatField(default=0.0)
+    scoring_evidence = models.JSONField(default=dict, blank=True)
+
+    review_state = models.CharField(
+        max_length=20,
+        choices=CandidateReviewState.choices,
+        default=CandidateReviewState.PENDING,
+        db_index=True,
+    )
+    resolution_category = models.CharField(
+        max_length=30,
+        choices=CandidateResolutionCategory.choices,
+        default=CandidateResolutionCategory.AMBIGUOUS,
+        db_index=True,
+    )
+    rejection_reason = models.TextField(blank=True, default="")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["provider_content", "tmdb_id"],
+                name="uniq_providercontentcandidate_content_tmdb",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["provider_content", "confidence_score"],
+                name="idx_cand_content_score",
+            ),
+            models.Index(
+                fields=["review_state", "resolution_category"],
+                name="idx_cand_review_category",
+            ),
+        ]
+
+    def __str__(self):
+        return (
+            f"Candidate({self.provider_content_id}:{self.tmdb_id} - "
+            f"{self.title} ({self.year}) [{self.review_state}])"
+        )
