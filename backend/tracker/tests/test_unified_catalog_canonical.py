@@ -204,6 +204,12 @@ class UnifiedCatalogFilterTests(UnifiedCatalogCanonicalTestCase):
 class UnifiedCatalogOfficialWatchabilityTests(
     ReconciliationFixtureMixin, TestCase
 ):
+    def setUp(self):
+        super().setUp()
+        from availability.tests.freshness_helpers import declare_freshness
+
+        declare_freshness(self, "recon-source-a", "recon-source-b")
+
     def test_official_watchability_reads_reconciled_canonical_offers(self):
         movie = Movie.objects.create(tmdb_id=550, title="Fight Club", year=1999)
         Subscription.objects.create(

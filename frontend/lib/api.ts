@@ -93,6 +93,25 @@ export interface PrimeOffer {
   price?: OfferPrice | null;
   /** Every source-specific price row, for inspection. */
   prices?: OfferPrice[];
+  /**
+   * How well this offer is evidenced: `verified` (recently confirmed),
+   * `stale` (last seen, needs recheck) or `unknown` (uncorroborated).
+   * `offers` only ever holds verified rows; absent means verified.
+   */
+  availability_evidence?: AvailabilityEvidence;
+  /** ISO timestamp of the newest positive observation behind this offer. */
+  last_seen_at?: string | null;
+}
+
+export type AvailabilityEvidence = "verified" | "stale" | "unknown";
+
+/** Stale/unverified positive evidence for a title — history, never "watchable now". */
+export interface LastKnownAvailability {
+  evidence: "stale" | "unknown";
+  last_seen_at: string | null;
+  /** What the evidence would mean were it current (e.g. `watchable_here`). */
+  status: string;
+  offers?: PrimeOffer[];
 }
 
 /** The backend's single access verdict for a title (detail pages). */
@@ -115,6 +134,10 @@ export interface TitleWatchability {
     has_buy?: boolean;
     requires_payment_only?: boolean;
   };
+  /** Set when stale/unverified positive evidence exists (status may be `needs_recheck`). */
+  availability_evidence?: "stale" | "unknown" | null;
+  last_seen_at?: string | null;
+  last_known?: LastKnownAvailability | null;
 }
 
 export interface TMDbGenre {
@@ -161,6 +184,11 @@ export interface PrimeMovieResponse {
   refresh_pending?: boolean;
   /** Status of the newest refresh request: `"pending"` / `"done"` / `"failed"`, null when never requested. */
   refresh_status?: "pending" | "done" | "failed" | null;
+  /**
+   * Stale ("last seen") or unverified positive offers. Discoverable history:
+   * never part of `offers`, never counted as watchable now.
+   */
+  last_known_offers?: PrimeOffer[];
   /**
    * The backend's own verdict on this title. Present so an empty `offers`
    * list is not ambiguous: `unavailable` means checked-and-nothing,
@@ -216,6 +244,11 @@ export interface PrimeSeriesResponse {
   refresh_pending?: boolean;
   /** Status of the newest refresh request: `"pending"` / `"done"` / `"failed"`, null when never requested. */
   refresh_status?: "pending" | "done" | "failed" | null;
+  /**
+   * Stale ("last seen") or unverified positive offers. Discoverable history:
+   * never part of `offers`, never counted as watchable now.
+   */
+  last_known_offers?: PrimeOffer[];
   /**
    * The backend's own verdict on this title. Present so an empty `offers`
    * list is not ambiguous: `unavailable` means checked-and-nothing,
@@ -297,6 +330,7 @@ export interface UnifiedCatalogItem {
     };
     explanation?: string[];
     excluded_offers?: unknown[];
+    last_seen_at?: string | null;
   } | null;
   unofficial_details?: {
     scraped_url: string;
@@ -1315,6 +1349,7 @@ export interface ResolvedWatchlistRow {
     };
     explanation?: string[];
     excluded_offers?: unknown[];
+    last_seen_at?: string | null;
   };
 }
 

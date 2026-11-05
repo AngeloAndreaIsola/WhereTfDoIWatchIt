@@ -442,6 +442,7 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
               <option value="watchable">🟢 Watchable (Any)</option>
               <option value="watchable_here">🟢 Watchable here</option>
               <option value="watchable_vpn">🟡 Watchable with VPN</option>
+              <option value="needs_recheck">🕓 Needs recheck (last seen)</option>
               <option value="not_watchable">⚫ Not watchable</option>
             </select>
           </div>

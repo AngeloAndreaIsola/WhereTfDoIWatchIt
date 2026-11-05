@@ -78,6 +78,30 @@ class FreshnessState(models.TextChoices):
     UNKNOWN = "unknown", "Unknown"
 
 
+class AvailabilityEvidence(models.TextChoices):
+    """How strongly the stored observations support "watchable right now".
+
+    Read-side presentation state derived at reconciliation time; it never
+    rewrites the raw lifecycle (``Offer.currently_available``) or timestamps.
+
+    * ``VERIFIED`` — a positive observation, inside its offer window, observed
+      within its source's declared freshness window.
+    * ``STALE`` — the same positive evidence, but older than that window: the
+      offer was last seen available and needs a recheck before it may count
+      as currently watchable.
+    * ``UNKNOWN`` — positive but uncorroborated evidence: the source declares
+      no freshness window, or the provider content's TMDB mapping is
+      ambiguous. Never read as unavailable.
+    * ``UNAVAILABLE`` — genuine negative evidence: deactivated by an
+      authoritative sync, or the offer window is closed.
+    """
+
+    VERIFIED = "verified", "Verified"
+    STALE = "stale", "Last seen"
+    UNKNOWN = "unknown", "Unverified"
+    UNAVAILABLE = "unavailable", "Unavailable"
+
+
 class CandidateReviewState(models.TextChoices):
     PENDING = "pending", "Pending"
     ACCEPTED = "accepted", "Accepted"

@@ -91,8 +91,11 @@ class WatchlistReportNonBlockingTests(TestCase):
         # Stale data should still be returned
         data = resp.json()
         self.assertEqual(len(data["report"]), 3)
-        # Movies with stale availability should still appear
-        self.assertEqual(data["summary"]["available_movies"], 2)
+        # Stale availability stays discoverable as "needs recheck", but is
+        # not counted as currently available (nor as unavailable).
+        self.assertEqual(data["summary"]["available_movies"], 0)
+        self.assertEqual(data["summary"]["needs_recheck_movies"], 2)
+        self.assertEqual(data["summary"]["unavailable_movies"], 1)
 
     @patch("tracker.services.streaming_api.StreamingAvailabilityClient.get_availability")
     def test_report_with_missing_data_does_not_block(self, mock_get_availability):
@@ -125,8 +128,10 @@ class WatchlistReportNonBlockingTests(TestCase):
 
         data = resp.json()
         self.assertEqual(len(data["report"]), 3)
-        # Two movies have some availability
-        self.assertEqual(data["summary"]["available_movies"], 2)
+        # Fresh counts as available; stale is qualified, missing is neither.
+        self.assertEqual(data["summary"]["available_movies"], 1)
+        self.assertEqual(data["summary"]["needs_recheck_movies"], 1)
+        self.assertEqual(data["summary"]["unavailable_movies"], 1)
 
     def test_external_api_failure_does_not_crash_report(self):
         """Offer read failures should not crash the entire report."""
@@ -148,7 +153,7 @@ class WatchlistReportNonBlockingTests(TestCase):
     def test_bulk_cache_failure_does_not_crash_report(self):
         """A failed batched read falls back safely to isolated local reads."""
         with patch(
-            "tracker.services.filtering.get_local_offers_bulk",
+            "tracker.services.filtering.get_offer_evidence_bulk",
             side_effect=Exception("Cache read failure"),
         ):
             resp = self.client.get("/api/watchlist/report/")

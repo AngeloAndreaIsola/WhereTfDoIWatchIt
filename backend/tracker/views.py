@@ -61,6 +61,7 @@ from tracker.services.filtering import apply_composable_filters
 from tracker.services.unified_catalogue import resolve_catalogue_scope, unofficial_catalogue_items
 from tracker.services.watchability import (
     QUALIFYING_OFFER_TYPES,
+    WatchabilityStatus,
     evaluate_watchability,
 )
 from tracker.services.access import SubscriptionAccessMode
@@ -94,7 +95,7 @@ from .services.bulk_refresh import (
     stale_catalogue_sources,
     title_level_source_slugs,
 )
-from .services.availability_reads import get_local_offers
+from .services.availability_reads import get_local_offers, get_offer_evidence
 from .services.availability_metrics import (
     WINDOW_DAYS,
     availability_metrics as collect_availability_metrics,
@@ -432,7 +433,7 @@ def movie_availability(request, tmdb_id: int):
 
     preference = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
 
-    offers = get_local_offers(movie)
+    offers, last_known = get_offer_evidence(movie)
     ranked = rank_offers(offers, preference)
 
     user_data = UserMovieData.objects.filter(user_id=1, movie=movie).first()
@@ -449,6 +450,10 @@ def movie_availability(request, tmdb_id: int):
                 "offers": len(offers),
             },
             "offers": RankedOfferSerializer([offer.to_dict() for offer in ranked], many=True).data,
+            # Stale/unverified positives: history ("last seen"), never current.
+            "last_known_offers": RankedOfferSerializer(
+                [offer.to_dict() for offer in rank_offers(last_known, preference)], many=True
+            ).data,
         }
     )
 
@@ -1389,6 +1394,7 @@ def watchlist_report(request):
     country_movie_sets: dict[str, set[int]] = {}
     service_movie_sets: dict[str, set[int]] = {}
     available_movies_count = 0
+    needs_recheck_movies_count = 0
     user_data_by_movie = {
         row.movie_id: row
         for row in UserMovieData.objects.filter(
@@ -1418,6 +1424,8 @@ def watchlist_report(request):
 
         if countries or watch_res.status in ("watchable_here", "watchable_vpn"):
             available_movies_count += 1
+        elif watch_res.status == WatchabilityStatus.NEEDS_RECHECK:
+            needs_recheck_movies_count += 1
 
         for c in countries:
             country_movie_sets.setdefault(c, set()).add(movie.id)
@@ -1439,7 +1447,9 @@ def watchlist_report(request):
         )
 
     total_movies = len(report)
-    unavailable_movies_count = total_movies - available_movies_count
+    unavailable_movies_count = (
+        total_movies - available_movies_count - needs_recheck_movies_count
+    )
 
     country_list = [
         {"country": c, "count": len(m_set)}
@@ -1457,6 +1467,8 @@ def watchlist_report(request):
         "total_movies": total_movies,
         "available_movies": available_movies_count,
         "unavailable_movies": unavailable_movies_count,
+        # Only stale/unverified evidence: neither available nor unavailable.
+        "needs_recheck_movies": needs_recheck_movies_count,
         "countries": country_list,
         "services": service_list,
     }
@@ -2501,12 +2513,19 @@ def _prime_detail_response(request, item: Movie, key: str) -> Response:
     from tracker.services.access import resolve_title as access_resolve_title
     from tracker.services.preferences import build_preference
 
+    from tracker.services.watchability import describe_last_known, qualify_watchability_dict
+
     access_pref = build_preference(1)
+    access_country = _current_country(request) or access_pref.current_country
+    current_offers, last_known_offers = get_offer_evidence(item, season=season)
     access_verdict = access_resolve_title(
         item,
-        get_local_offers(item, season=season),
+        current_offers,
         access_pref,
-        current_country=_current_country(request) or access_pref.current_country,
+        current_country=access_country,
+    )
+    last_known = describe_last_known(
+        item, last_known_offers, access_pref, current_country=access_country
     )
 
     payload = {
@@ -2520,7 +2539,12 @@ def _prime_detail_response(request, item: Movie, key: str) -> Response:
         # detail page and the watchlist can therefore never disagree about
         # whether a title is watchable, reachable via VPN, purchase-only or
         # genuinely unavailable.
-        "watchability": access_verdict.to_watchability_dict(),
+        "watchability": qualify_watchability_dict(
+            access_verdict.to_watchability_dict(), last_known
+        ),
+        # Stale ("last seen") or uncorroborated positive offers, classified by
+        # the same resolver. History only: never part of ``offers``/counts.
+        "last_known_offers": last_known.offers if last_known else [],
         # Rent/buy offers are surfaced separately (never in ``offers``, which
         # stays subscription/free by design) so "available only for an
         # additional payment" is distinguishable from "included".
