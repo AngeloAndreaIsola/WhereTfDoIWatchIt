@@ -352,93 +352,83 @@ def _movie_tmdb_map(movie_ids: list[int]) -> dict[int, int]:
     return dict(Movie.objects.filter(id__in=movie_ids).values_list("id", "tmdb_id"))
 
 
-def _active_offers_by_source(movie_ids: list[int]) -> tuple[dict[int, set[str]], set[int]]:
+def _active_offers_by_source(movie_ids: list[int], country: str | None = None) -> tuple[dict[int, set[str]], set[int]]:
     """``({movie_id: {sources with an ACTIVE offer}}, {movie_id})``.
 
-    Filtered on ``currently_available=True``, unlike
-    :func:`_offers_by_source` (which reports raw presence for diagnostics).
-    The distinction is load-bearing and was a real bug: an offer that has
-    since been withdrawn — a film that left a service — still exists as a row,
-    so an unfiltered read keeps reporting a title as ``available`` from a
-    source that has demonstrably said it is not there. Worse, it made the
-    headline state depend on which read was consulted: source evidence saw
-    the stale row while provider evidence (already filtered) did not, so one
-    title could be simultaneously "resolved by SA" and "available on nobody".
-
-    Both sides of the classification now read this one filtered function, so
-    they cannot disagree.
+    Filtered on ``currently_available=True``. When ``country`` is given,
+    only offers for that exact market count; missing-country offers never
+    imply worldwide availability.
     """
-    by_tmdb: dict[int, list[int]] = defaultdict(list)
-    for movie_id, tmdb_id in _movie_tmdb_map(movie_ids).items():
+    by_key: dict[tuple[int, str], list[int]] = defaultdict(list)
+    for movie_id, tmdb_id, content_type in Movie.objects.filter(id__in=movie_ids).values_list("id", "tmdb_id", "content_type"):
         if tmdb_id:
-            by_tmdb[tmdb_id].append(movie_id)
+            by_key[(tmdb_id, content_type or "movie")].append(movie_id)
 
     per_movie: dict[int, set[str]] = defaultdict(set)
     active: set[int] = set()
-    for tmdb_id, slug in Offer.objects.filter(
-        tmdb_id__in=set(by_tmdb), currently_available=True
-    ).values_list("tmdb_id", "source__slug").iterator():
-        for movie_id in by_tmdb.get(tmdb_id, ()):
+    qs = Offer.objects.filter(
+        tmdb_id__in={k[0] for k in by_key}, currently_available=True
+    )
+    if country:
+        qs = qs.filter(country__code=country.upper())
+    for tmdb_id, content_type, slug in qs.values_list("tmdb_id", "content_type", "source__slug").iterator():
+        for movie_id in by_key.get((tmdb_id, content_type or "movie"), ()):
             per_movie[movie_id].add(slug)
             active.add(movie_id)
     return per_movie, active
 
 
-def _offers_by_source(movie_ids: list[int]) -> tuple[dict[int, set[str]], set[int]]:
-    """``({movie_id: {sources with ANY offer row}}, {movie_id with any offer})``.
-
-    Unfiltered — includes withdrawn offers. Use this for diagnostics ("which
-    sources have ever spoken about this title?") and
-    :func:`_active_offers_by_source` for anything that decides a state.
-    """
-    by_tmdb: dict[int, list[int]] = defaultdict(list)
-    for movie_id, tmdb_id in _movie_tmdb_map(movie_ids).items():
+def _offers_by_source(movie_ids: list[int], country: str | None = None) -> tuple[dict[int, set[str]], set[int]]:
+    by_key: dict[tuple[int, str], list[int]] = defaultdict(list)
+    for movie_id, tmdb_id, content_type in Movie.objects.filter(id__in=movie_ids).values_list("id", "tmdb_id", "content_type"):
         if tmdb_id:
-            by_tmdb[tmdb_id].append(movie_id)
+            by_key[(tmdb_id, content_type or "movie")].append(movie_id)
 
     per_movie: dict[int, set[str]] = defaultdict(set)
     any_offer: set[int] = set()
-    for tmdb_id, slug in Offer.objects.filter(
-        tmdb_id__in=set(by_tmdb)
-    ).values_list("tmdb_id", "source__slug").iterator():
-        for movie_id in by_tmdb.get(tmdb_id, ()):
+    qs = Offer.objects.filter(tmdb_id__in={k[0] for k in by_key})
+    if country:
+        qs = qs.filter(country__code=country.upper())
+    for tmdb_id, content_type, slug in qs.values_list("tmdb_id", "content_type", "source__slug").iterator():
+        for movie_id in by_key.get((tmdb_id, content_type or "movie"), ()):
             per_movie[movie_id].add(slug)
             any_offer.add(movie_id)
     return per_movie, any_offer
 
 
-def _offered_providers(movie_ids: list[int]) -> dict[int, set[str]]:
-    """``{movie_id: {provider slugs}}`` — the "available on X" answer."""
-    by_tmdb: dict[int, list[int]] = defaultdict(list)
-    for movie_id, tmdb_id in _movie_tmdb_map(movie_ids).items():
+def _offered_providers(movie_ids: list[int], country: str | None = None) -> dict[int, set[str]]:
+    by_key: dict[tuple[int, str], list[int]] = defaultdict(list)
+    for movie_id, tmdb_id, content_type in Movie.objects.filter(id__in=movie_ids).values_list("id", "tmdb_id", "content_type"):
         if tmdb_id:
-            by_tmdb[tmdb_id].append(movie_id)
+            by_key[(tmdb_id, content_type or "movie")].append(movie_id)
 
     out: dict[int, set[str]] = defaultdict(set)
-    for tmdb_id, provider in Offer.objects.filter(
-        tmdb_id__in=set(by_tmdb), currently_available=True
-    ).values_list("tmdb_id", "provider__slug").iterator():
-        for movie_id in by_tmdb.get(tmdb_id, ()):
+    qs = Offer.objects.filter(
+        tmdb_id__in={k[0] for k in by_key}, currently_available=True
+    )
+    if country:
+        qs = qs.filter(country__code=country.upper())
+    for tmdb_id, content_type, provider in qs.values_list("tmdb_id", "content_type", "provider__slug").iterator():
+        for movie_id in by_key.get((tmdb_id, content_type or "movie"), ()):
             out[movie_id].add(provider)
     return out
 
 
-def _active_offer_count(movie_ids: list[int]) -> dict[int, int]:
-    """``{movie_id: number of currently-available canonical offers}``."""
-    by_tmdb: dict[int, list[int]] = defaultdict(list)
-    for movie_id, tmdb_id in _movie_tmdb_map(movie_ids).items():
+def _active_offer_count(movie_ids: list[int], country: str | None = None) -> dict[int, int]:
+    by_key: dict[tuple[int, str], list[int]] = defaultdict(list)
+    for movie_id, tmdb_id, content_type in Movie.objects.filter(id__in=movie_ids).values_list("id", "tmdb_id", "content_type"):
         if tmdb_id:
-            by_tmdb[tmdb_id].append(movie_id)
+            by_key[(tmdb_id, content_type or "movie")].append(movie_id)
 
     counts: dict[int, int] = defaultdict(int)
-    for tmdb_id, total in (
-        Offer.objects.filter(tmdb_id__in=set(by_tmdb), currently_available=True)
-        .values("tmdb_id")
-        .annotate(total=Count("id"))
-        .values_list("tmdb_id", "total")
-    ):
-        for movie_id in by_tmdb.get(tmdb_id, ()):
-            counts[movie_id] += total
+    qs = Offer.objects.filter(
+        tmdb_id__in={k[0] for k in by_key}, currently_available=True
+    )
+    if country:
+        qs = qs.filter(country__code=country.upper())
+    for tmdb_id, content_type in qs.values_list("tmdb_id", "content_type").iterator():
+        for movie_id in by_key.get((tmdb_id, content_type or "movie"), ()):
+            counts[movie_id] += 1
     return counts
 
 
@@ -705,7 +695,7 @@ def classify_title(source_rows: list[dict]) -> tuple[str, str]:
     return state, reason
 
 
-def title_source_report(movie_ids, batch=None) -> dict[int, dict]:
+def title_source_report(movie_ids, batch=None, country: str | None = None) -> dict[int, dict]:
     """Per-title, per-source verdicts — the honest answer to "why unknown?".
 
     Returns ``{movie_id: {
@@ -729,9 +719,9 @@ def title_source_report(movie_ids, batch=None) -> dict[int, dict]:
     title_slugs = _title_level_slugs()
     evidence = _terminal_status_evidence(movie_ids, batch=batch)
     permanent = _permanent_miss_sources(movie_ids)
-    offers_by_source, active_offer_movies = _active_offers_by_source(movie_ids)
-    providers = _offered_providers(movie_ids)
-    offer_counts = _active_offer_count(movie_ids)
+    offers_by_source, active_offer_movies = _active_offers_by_source(movie_ids, country=country)
+    providers = _offered_providers(movie_ids, country=country)
+    offer_counts = _active_offer_count(movie_ids, country=country)
     signals_by_movie = _title_availability_signals(movie_ids)
     last_checked = _last_checked_per_source(movie_ids)
     last_attempted = _last_attempted_per_source(movie_ids, batch=batch)
