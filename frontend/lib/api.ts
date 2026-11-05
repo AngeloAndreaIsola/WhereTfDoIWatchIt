@@ -1524,3 +1524,10 @@ export async function removeWatchlistItem(
   }
   return res.json();
 }
+
+export async function fetchWatched(params?: Record<string, string>) {
+  const qs = params ? new URLSearchParams(params).toString() : "";
+  const res = await fetch(`/api/watched/${qs ? "?" + qs : ""}`);
+  if (!res.ok) throw new Error(`fetchWatched failed: ${res.status}`);
+  return res.json();
+}

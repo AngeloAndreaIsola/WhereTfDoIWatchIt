@@ -2889,6 +2889,86 @@ def add_to_watchlist(request):
         logger.exception("Failed to add movie to watchlist for tmdb_id=%s", tmdb_id)
         return Response({"error": f"Failed to add to watchlist: {exc}"}, status=502)
 
+@api_view(["GET"])
+def watched_list(request):
+    """GET /api/watched/ — Paginated list of titles the user has watched."""
+    from tracker.models import Movie, UserMovieData, MovieWatchEvent, WatchlistItem
+
+    user_id = 1
+    page = int(request.GET.get("page", 1)) if str(request.GET.get("page", "")).isdigit() else 1
+    page_size = int(request.GET.get("page_size", 24)) if str(request.GET.get("page_size", "")).isdigit() else 24
+
+    qs = UserMovieData.objects.filter(user_id=user_id, is_watched=True).select_related("movie")
+
+    content_type = request.GET.get("content_type")
+    if content_type in ("movie", "series"):
+        qs = qs.filter(movie__content_type=content_type)
+
+    search = (request.GET.get("search") or "").strip()
+    if search:
+        qs = qs.filter(movie__title__icontains=search)
+
+    sort = request.GET.get("sort", "last_watched")
+    # Build per-title aggregates for watch events.
+    # We'll compute in Python after slicing? Need aggregates before sort for date/rating.
+    # Fetch all matching (bounded by typical data) then sort.
+    rows = list(qs)
+    # Precompute watch event aggregates and watchlist membership.
+    movie_ids = [r.movie_id for r in rows]
+    # watch counts + last watched date from MovieWatchEvent
+    event_agg = {}
+    for ev in MovieWatchEvent.objects.filter(user_id=user_id, movie_id__in=movie_ids):
+        a = event_agg.setdefault(ev.movie_id, {"count": 0, "last": None})
+        a["count"] += 1
+        if ev.watched_date is not None and (a["last"] is None or ev.watched_date > a["last"]):
+            a["last"] = ev.watched_date
+    watchlisted_ids = set(WatchlistItem.objects.filter(user_id=user_id, movie_id__in=movie_ids).values_list("movie_id", flat=True))
+
+    def last_watched_value(r):
+        a = event_agg.get(r.movie_id, {})
+        d = a.get("last")
+        if d is not None:
+            return d
+        # distinguish unknown from updated_at: use None, not updated_at
+        return r.watched_date
+
+    results = []
+    for r in rows:
+        m = r.movie
+        agg = event_agg.get(r.movie_id, {"count": 0, "last": None})
+        last_date = agg["last"] if agg["last"] is not None else r.watched_date
+        results.append({
+            "movie": {
+                "tmdb_id": m.tmdb_id,
+                "title": m.title,
+                "year": m.year,
+                "content_type": m.content_type,
+                "poster_path": getattr(m, "poster_path", None),
+            },
+            "user_data": {
+                "is_watched": r.is_watched,
+                "rating": r.rating,
+                "review": r.review,
+                "watched_date": r.watched_date.isoformat() if r.watched_date else None,
+            },
+            "watch_count": agg["count"] if agg["count"] > 0 else (1 if r.is_watched else 0),
+            "last_watched_at": last_date.isoformat() if last_date else None,
+            "is_in_watchlist": r.movie_id in watchlisted_ids,
+        })
+
+    if sort == "title":
+        results.sort(key=lambda x: (x["movie"]["title"] or "", x["movie"]["tmdb_id"]))
+    elif sort == "rating":
+        results.sort(key=lambda x: (x["user_data"]["rating"] is None, -(x["user_data"]["rating"] or 0), x["movie"]["title"] or ""))
+    else:  # last_watched
+        results.sort(key=lambda x: (x["last_watched_at"] is None, x["last_watched_at"] or "", x["movie"]["title"] or ""), reverse=False)
+        # newest first
+        results.sort(key=lambda x: (x["last_watched_at"] is None, x["last_watched_at"] or ""), reverse=True)
+
+    paged, pagination = paginate_list(results, page, page_size)
+    return Response({"results": paged, "pagination": pagination})
+
+
 @api_view(["POST"])
 def mark_movie_watched(request, tmdb_id: int):
     """POST /api/watched/<int:tmdb_id>/ — mark a movie as watched.
