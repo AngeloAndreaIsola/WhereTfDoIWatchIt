@@ -227,6 +227,9 @@ class SourceCapabilities:
     # (a resumable walker declaring "not incremental"). Consumers that need to
     # know whether a *checkpoint* exists must read this one.
     supports_resumable_catalogue_sync: bool = False
+    # The source supports targeted evidence fetching by provider-native identity
+    # and URL (without requiring catalogue walk or TMDb lookup).
+    supports_targeted_evidence: bool = False
 
 
 @dataclass(frozen=True)

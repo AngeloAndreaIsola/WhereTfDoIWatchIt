@@ -1132,3 +1132,280 @@ class RaiPlaySourceBudgetTests(SimpleTestCase):
         source = RaiPlaySource()  # Live client without requester or budget
         with self.assertRaises(RaiPlayConfigurationError):
             source.fetch()
+
+
+class RaiPlayTargetedEvidenceTests(SimpleTestCase):
+    @patch("requests.get")
+    def test_fetch_evidence_uses_a_fresh_finite_budget_for_each_invocation(self, mock_get):
+        api = FakeRaiPlayApi()
+        mock_get.side_effect = [
+            MagicMock(status_code=200, text=api.pages[FOLLEMENTE]),
+            MagicMock(status_code=200, text=api.pages[FOLLEMENTE_VIDEO]),
+            MagicMock(status_code=200, text=api.pages[FOLLEMENTE]),
+            MagicMock(status_code=200, text=api.pages[FOLLEMENTE_VIDEO]),
+        ]
+        # A successful evidence retrieval dispatches both programme and video
+        # requests. The same finite limit must be newly available next time.
+        source = RaiPlaySource(max_http_requests=2)
+
+        first = source.fetch_evidence(
+            provider_content_id=FOLLEMENTE_ID,
+            url=FOLLEMENTE,
+        )
+        first_budget = source.client.budget
+        second = source.fetch_evidence(
+            provider_content_id=FOLLEMENTE_ID,
+            url=FOLLEMENTE,
+        )
+        second_budget = source.client.budget
+
+        self.assertIsNotNone(first_budget)
+        self.assertIsNotNone(second_budget)
+        self.assertEqual(len(first.contents), 1)
+        self.assertEqual(len(second.contents), 1)
+        self.assertEqual(first_budget.attempted, 2)
+        self.assertEqual(second_budget.attempted, 2)
+        self.assertIsNot(first_budget, second_budget)
+        self.assertEqual(mock_get.call_count, 4)
+
+    @patch("requests.get")
+    def test_fetch_evidence_redirect_consumes_the_same_invocation_budget(self, mock_get):
+        api = FakeRaiPlayApi()
+        mock_get.side_effect = [
+            MagicMock(status_code=200, text=api.pages[FOLLEMENTE]),
+            MagicMock(status_code=302, headers={"Location": FOLLEMENTE_PLAYER}),
+        ]
+        source = RaiPlaySource(max_http_requests=2)
+
+        with self.assertRaises(RaiPlayHttpBudgetExceeded) as ctx:
+            source.fetch_evidence(provider_content_id=FOLLEMENTE_ID, url=FOLLEMENTE)
+
+        self.assertEqual(ctx.exception.limit, 2)
+        self.assertEqual(ctx.exception.attempted, 2)
+        self.assertEqual(ctx.exception.stage, "video")
+        self.assertEqual(ctx.exception.blocked_url, FOLLEMENTE_PLAYER)
+        self.assertEqual(mock_get.call_count, 2)
+
+    def test_capabilities_declare_supports_targeted_evidence(self):
+        capabilities = source_registry.get("rai_play").capabilities
+        self.assertTrue(capabilities.supports_targeted_evidence)
+
+    def test_fetch_evidence_validation_rejects_empty_inputs(self):
+        source, _api = build_source()
+        for bad_id in ("", "   ", None, 123):
+            with self.subTest(bad_id=bad_id):
+                with self.assertRaises(ValueError):
+                    source.fetch_evidence(provider_content_id=bad_id, url=FOLLEMENTE)
+
+        for bad_url in ("", "   ", None, 123):
+            with self.subTest(bad_url=bad_url):
+                with self.assertRaises(ValueError):
+                    source.fetch_evidence(provider_content_id=FOLLEMENTE_ID, url=bad_url)
+
+    def test_fetch_evidence_validates_url_host_and_scheme(self):
+        source, _api = build_source()
+        with self.assertRaises(SourceFetchError):
+            source.fetch_evidence(
+                provider_content_id=FOLLEMENTE_ID,
+                url="http://www.raiplay.it/programmi/follemente",
+            )
+        with self.assertRaises(SourceFetchError):
+            source.fetch_evidence(
+                provider_content_id=FOLLEMENTE_ID,
+                url="https://evil.com/programmi/follemente",
+            )
+
+    def test_fetch_evidence_unsupported_path_returns_empty_result(self):
+        source, _api = build_source()
+        for unsupported_url in (LIVE_CHANNEL, COLLECTION):
+            with self.subTest(unsupported_url=unsupported_url):
+                with self.assertLogs("availability.sources.rai_play", level="WARNING") as logs:
+                    result = source.fetch_evidence(
+                        provider_content_id=FOLLEMENTE_ID,
+                        url=unsupported_url,
+                    )
+                self.assertIn("rai_play_targeted_unsupported_path", "\n".join(logs.output))
+                self.assertEqual(result.contents, [])
+                self.assertEqual(result.offers, [])
+                self.assertEqual(result.sync_mode, SyncMode.TARGETED)
+                self.assertFalse(result.authoritative)
+                self.assertIsNone(result.cursor)
+
+    def test_fetch_evidence_successful_movie_retrieval(self):
+        source, _api = build_source()
+        result = source.fetch_evidence(
+            provider_content_id=FOLLEMENTE_ID,
+            url=FOLLEMENTE,
+        )
+        self.assertEqual(result.sync_mode, SyncMode.TARGETED)
+        self.assertFalse(result.authoritative)
+        self.assertFalse(result.complete_snapshot)
+        self.assertIsNone(result.cursor)
+        self.assertEqual(len(result.contents), 1)
+        self.assertEqual(len(result.offers), 1)
+
+        content = result.contents[0]
+        self.assertEqual(content.provider_id, "raiplay")
+        self.assertEqual(content.provider_content_id, FOLLEMENTE_ID)
+        self.assertEqual(content.content_type, ContentType.MOVIE)
+        self.assertEqual(content.title, "Follemente")
+        self.assertEqual(content.release_date, dt.date(2024, 1, 1))
+        self.assertEqual(content.duration, 5564)
+        self.assertEqual(content.url, FOLLEMENTE)
+
+        offer = result.offers[0]
+        self.assertEqual(offer.provider_id, "raiplay")
+        self.assertEqual(offer.provider_content_id, FOLLEMENTE_ID)
+        self.assertEqual(offer.country, "IT")
+        self.assertEqual(offer.offer_type, OfferType.FREE)
+        self.assertEqual(offer.content_type, ContentType.MOVIE)
+        self.assertEqual(offer.provider_url, FOLLEMENTE)
+        self.assertEqual(offer.source_record_id, FOLLEMENTE_VIDEO_ID)
+        self.assertEqual(offer.subtitle_languages, [])
+        self.assertIsNone(offer.audio_languages)
+        self.assertIsNone(offer.tmdb_id)
+
+    def test_fetch_evidence_successful_series_retrieval(self):
+        source, _api = build_source()
+        result = source.fetch_evidence(
+            provider_content_id=NORMAL_PEOPLE_ID,
+            url=NORMAL_PEOPLE,
+        )
+        self.assertEqual(result.sync_mode, SyncMode.TARGETED)
+        self.assertFalse(result.authoritative)
+        self.assertIsNone(result.cursor)
+        self.assertEqual(len(result.contents), 1)
+        self.assertEqual(len(result.offers), 1)
+
+        content = result.contents[0]
+        self.assertEqual(content.provider_content_id, NORMAL_PEOPLE_ID)
+        self.assertEqual(content.content_type, ContentType.SERIES)
+        self.assertEqual(content.title, "Normal People")
+        # Preserves series limitations: no release_date, no duration
+        self.assertIsNone(content.release_date)
+        self.assertIsNone(content.duration)
+
+        offer = result.offers[0]
+        self.assertEqual(offer.provider_content_id, NORMAL_PEOPLE_ID)
+        self.assertEqual(offer.content_type, ContentType.SERIES)
+        self.assertEqual(offer.offer_type, OfferType.FREE)
+        # Preserves series limitations: no window, no subtitles/quality, no audio languages
+        self.assertIsNone(offer.available_from)
+        self.assertIsNone(offer.available_until)
+        self.assertIsNone(offer.subtitle_languages)
+        self.assertIsNone(offer.audio_languages)
+        self.assertEqual(offer.quality, "")
+
+    def test_fetch_evidence_identity_mismatch_returns_empty_result(self):
+        source, _api = build_source()
+        with self.assertLogs("availability.sources.rai_play", level="WARNING") as logs:
+            result = source.fetch_evidence(
+                provider_content_id="ContentItem-mismatched-uuid",
+                url=FOLLEMENTE,
+            )
+        self.assertIn("rai_play_targeted_identity_mismatch", "\n".join(logs.output))
+        self.assertEqual(result.contents, [])
+        self.assertEqual(result.offers, [])
+        self.assertEqual(result.sync_mode, SyncMode.TARGETED)
+        self.assertIsNone(result.cursor)
+
+    def test_fetch_evidence_missing_or_retired_entry_returns_empty_result(self):
+        source, _api = build_source()
+        with self.assertLogs("availability.sources.rai_play", level="INFO") as logs:
+            result = source.fetch_evidence(
+                provider_content_id="ContentItem-retired",
+                url=RETIRED,
+            )
+        self.assertIn("rai_play_targeted_content_missing", "\n".join(logs.output))
+        self.assertIn("reason=not_found", "\n".join(logs.output))
+        self.assertEqual(result.contents, [])
+        self.assertEqual(result.offers, [])
+        self.assertEqual(result.sync_mode, SyncMode.TARGETED)
+
+    def test_fetch_evidence_non_programme_payload_returns_empty_result(self):
+        source, api = build_source()
+        set_state(api, FOLLEMENTE, lambda s: s.update(data_type="collection"))
+        with self.assertLogs("availability.sources.rai_play", level="INFO") as logs:
+            result = source.fetch_evidence(
+                provider_content_id=FOLLEMENTE_ID,
+                url=FOLLEMENTE,
+            )
+        self.assertIn("reason=not_a_programme", "\n".join(logs.output))
+        self.assertEqual(result.contents, [])
+        self.assertEqual(result.offers, [])
+
+    def test_fetch_evidence_unsupported_layout_returns_empty_result(self):
+        source, api = build_source()
+        set_state(api, FOLLEMENTE, lambda s: s.update(layout="editorial"))
+        with self.assertLogs("availability.sources.rai_play", level="WARNING") as logs:
+            result = source.fetch_evidence(
+                provider_content_id=FOLLEMENTE_ID,
+                url=FOLLEMENTE,
+            )
+        self.assertIn("rai_play_unsupported_content", "\n".join(logs.output))
+        self.assertEqual(result.contents, [])
+        self.assertEqual(result.offers, [])
+
+    def test_fetch_evidence_region_unobservable_skips_offer_only(self):
+        source, api = build_source()
+        set_state(api, FOLLEMENTE_VIDEO, lambda s: access_spec(s).pop("eligibleRegion"))
+        with self.assertLogs("availability.sources.rai_play", level="INFO") as logs:
+            result = source.fetch_evidence(
+                provider_content_id=FOLLEMENTE_ID,
+                url=FOLLEMENTE,
+            )
+        self.assertIn("reason=region_unobserved", "\n".join(logs.output))
+        self.assertEqual(len(result.contents), 1)
+        self.assertEqual(result.contents[0].provider_content_id, FOLLEMENTE_ID)
+        self.assertEqual(result.offers, [])
+
+    def test_fetch_evidence_expired_window_skips_offer_only(self):
+        source, api = build_source()
+        set_state(api, FOLLEMENTE_VIDEO, lambda s: access_spec(s).update(
+            availabilityEnds="2020-01-01T00:00:00.000"
+        ))
+        with self.assertLogs("availability.sources.rai_play", level="INFO") as logs:
+            result = source.fetch_evidence(
+                provider_content_id=FOLLEMENTE_ID,
+                url=FOLLEMENTE,
+            )
+        self.assertIn("reason=expired", "\n".join(logs.output))
+        self.assertEqual(len(result.contents), 1)
+        self.assertEqual(result.contents[0].provider_content_id, FOLLEMENTE_ID)
+        self.assertEqual(result.offers, [])
+
+    def test_fetch_evidence_bare_json_player_record_is_followed(self):
+        source, api = build_source()
+        serve_video_record(api)
+        result = source.fetch_evidence(
+            provider_content_id=FOLLEMENTE_ID,
+            url=FOLLEMENTE,
+        )
+        self.assertEqual(len(result.contents), 1)
+        self.assertEqual(len(result.offers), 1)
+        self.assertEqual(result.offers[0].source_record_id, FOLLEMENTE_VIDEO_ID)
+        self.assertEqual(api.video_requests, [FOLLEMENTE_VIDEO, FOLLEMENTE_PLAYER])
+
+    def test_fetch_evidence_enforces_finite_budget_in_production(self):
+        source = RaiPlaySource()  # Live client without requester or budget
+        with self.assertRaises(RaiPlayConfigurationError):
+            source.fetch_evidence(provider_content_id=FOLLEMENTE_ID, url=FOLLEMENTE)
+
+    @patch("requests.get")
+    def test_fetch_evidence_budget_exhaustion_uses_real_http_accounting(self, mock_get):
+        mock_get.return_value = MagicMock(
+            status_code=200,
+            text=FakeRaiPlayApi().pages[FOLLEMENTE],
+        )
+        source = RaiPlaySource(max_http_requests=1)
+
+        with self.assertRaises(RaiPlayHttpBudgetExceeded) as ctx:
+            source.fetch_evidence(
+                provider_content_id=FOLLEMENTE_ID,
+                url=FOLLEMENTE,
+            )
+
+        self.assertEqual(ctx.exception.limit, 1)
+        self.assertEqual(ctx.exception.attempted, 1)
+        self.assertEqual(ctx.exception.stage, "video")
+        self.assertEqual(mock_get.call_count, 1)
