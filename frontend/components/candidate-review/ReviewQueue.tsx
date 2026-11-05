@@ -16,6 +16,10 @@ interface ReviewQueueProps {
   onFilterContentTypeChange: (contentType: string) => void;
   searchQuery: string;
   onSearchQueryChange: (query: string) => void;
+  page: number;
+  pages: number;
+  totalItems: number;
+  onPageChange: (newPage: number) => void;
 }
 
 export function ReviewQueue({
@@ -31,6 +35,10 @@ export function ReviewQueue({
   onFilterContentTypeChange,
   searchQuery,
   onSearchQueryChange,
+  page,
+  pages,
+  totalItems,
+  onPageChange,
 }: ReviewQueueProps) {
   // Extract unique providers for filter dropdown
   const providers = Array.from(new Set(items.map((i) => i.provider_slug))).filter(Boolean);
@@ -39,7 +47,7 @@ export function ReviewQueue({
     <aside className="w-full md:w-80 flex-shrink-0 flex flex-col border-r border-gray-200 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900/40 p-4 space-y-4">
       <div>
         <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-          Unresolved Queue ({items.length})
+          Unresolved Queue ({totalItems})
         </h2>
         <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
           Provider items requiring TMDb identity verification
@@ -75,15 +83,15 @@ export function ReviewQueue({
           <select
             value={filterStatus}
             onChange={(e) => onFilterStatusChange(e.target.value)}
-            aria-label="Filter by resolution status"
+            aria-label="Filter by review state"
             className="w-1/2 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-2 py-1 text-xs text-gray-700 dark:text-gray-300 focus:outline-none"
           >
-            <option value="">All Statuses</option>
-            <option value="unresolved">Unresolved</option>
-            <option value="ambiguous">Ambiguous</option>
-            <option value="conflict">Conflict</option>
-            <option value="unique_candidate">Unique</option>
-            <option value="no_results">No Results</option>
+            <option value="">All Review States</option>
+            <option value="pending">Pending</option>
+            <option value="accepted">Accepted</option>
+            <option value="rejected">Rejected</option>
+            <option value="unmapped">Unmapped</option>
+            <option value="mapped">Mapped</option>
           </select>
         </div>
 
@@ -102,7 +110,7 @@ export function ReviewQueue({
       </div>
 
       {/* Queue items list */}
-      <div className="flex-1 overflow-y-auto space-y-2 max-h-[600px] pr-1">
+      <div className="flex-1 overflow-y-auto space-y-2 max-h-[520px] pr-1">
         {loading && (
           <p className="text-xs text-center py-6 text-gray-500">Loading queue items…</p>
         )}
@@ -168,6 +176,31 @@ export function ReviewQueue({
               </button>
             );
           })}
+      </div>
+
+      {/* Pagination Controls */}
+      <div className="pt-3 border-t border-gray-200 dark:border-gray-800 flex items-center justify-between text-xs text-gray-600 dark:text-gray-400">
+        <button
+          type="button"
+          disabled={loading || page <= 1}
+          onClick={() => onPageChange(page - 1)}
+          className="px-2.5 py-1 rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 disabled:opacity-40 hover:bg-gray-50 dark:hover:bg-gray-750"
+        >
+          Previous
+        </button>
+
+        <span className="font-medium">
+          Page {page} of {Math.max(pages, 1)}
+        </span>
+
+        <button
+          type="button"
+          disabled={loading || page >= pages}
+          onClick={() => onPageChange(page + 1)}
+          className="px-2.5 py-1 rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 disabled:opacity-40 hover:bg-gray-50 dark:hover:bg-gray-750"
+        >
+          Next
+        </button>
       </div>
     </aside>
   );

@@ -2,17 +2,19 @@
  * Typed API client and adapter for TMDb Candidate Review interface (Local Operator).
  *
  * Backend integration endpoints owned by Wave 2A mapping-acceptance backend:
- * - GET /api/admin/provider-content/candidates/ (Review queue with search, status, content_type filters)
+ * - GET /api/admin/provider-content/candidates/ (Review queue with search, status, content_type, page, page_size filters)
  * - GET /api/admin/provider-content/{id}/candidates/ (Details & candidate list)
  * - POST /api/admin/provider-content/{id}/candidates/{tmdb_id}/accept/
  * - POST /api/admin/provider-content/{id}/candidates/{tmdb_id}/reject/
  *
- * STRICT GUARDRAILS:
- * - No alternative endpoints or undocumented fallbacks (a 404 from the documented endpoint indicates backend unavailable).
- * - No test fixtures used as production data.
+ * STRICT GUARDRAILS & SECURITY CONTRACT:
+ * - Anti-CSRF and operator context headers sent on mutations (X-Requested-With, X-Operator-Context, X-CSRFToken).
+ * - Non-secret same-origin headers coordinate with verify_operator_mutation_guard when no Django staff session exists.
+ * - Normalized legacy candidate provenance from `is_legacy_unverified`.
+ * - Derived manual mapping from `match_method: "manual"`.
+ * - Detection of manual mapping override conflicts (existingMapping.is_manual && candidate.tmdb_id !== existingMapping.tmdb_id).
  * - Mapped does NOT imply watchable.
- * - Mandatory trimmed reason, explicit expected_revision, and 409 stale detection.
- * - Respect legacy_unverified as unverified machine matches rather than human accepted.
+ * - Server-side pagination support (page, pages, total_items).
  */
 
 export type ReviewState = "pending" | "accepted" | "rejected" | "conflict" | "ambiguous";
@@ -188,20 +190,54 @@ export class ApiError extends Error {
 }
 
 // ============================================================================
+// Operator Security & CSRF Token Helper
+// ============================================================================
+
+export function getCsrfToken(): string | null {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+export function getMutationHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    // Standard non-secret same-origin & operator context headers required by verify_operator_mutation_guard
+    "X-Requested-With": "XMLHttpRequest",
+    "X-Operator-Context": "local-operator",
+  };
+
+  const token = getCsrfToken();
+  if (token) {
+    headers["X-CSRFToken"] = token;
+  }
+
+  return headers;
+}
+
+// ============================================================================
 // Normalization Helpers (Wave 2A Adapter)
 // ============================================================================
 
 export function normalizeExistingMapping(raw: Record<string, unknown> | null | undefined): ExistingMapping | null {
   if (!raw || typeof raw !== "object" || !raw.tmdb_id) return null;
+
+  const matchMethod = (raw.match_method as string) || "";
+  // Backend provides match_method: "manual" (or "manual_curation") rather than is_manual: true
+  const isManual = Boolean(
+    raw.is_manual === true ||
+    matchMethod.toLowerCase().includes("manual")
+  );
+
   return {
     id: typeof raw.id === "number" ? raw.id : undefined,
     tmdb_id: Number(raw.tmdb_id),
     title: (raw.title as string) || (raw.tmdb_title as string) || undefined,
     year: typeof raw.year === "number" ? raw.year : (typeof raw.tmdb_year === "number" ? raw.tmdb_year : null),
     content_type: (raw.content_type as string) || "movie",
-    match_method: (raw.match_method as string) || (raw.is_manual ? "manual" : "automated"),
+    match_method: matchMethod || (isManual ? "manual" : "automated"),
     confidence: typeof raw.confidence === "number" ? raw.confidence : 1.0,
-    is_manual: Boolean(raw.is_manual),
+    is_manual: isManual,
     source: raw.source as string | undefined,
     first_seen: (raw.first_seen as string) ?? null,
     last_verified: (raw.last_verified as string) ?? null,
@@ -287,7 +323,8 @@ export function normalizeCandidate(raw: Record<string, unknown>): TMDbCandidate 
   const evidence: CandidateScoringEvidence = (raw.scoring_evidence as CandidateScoringEvidence) || (raw.evidence as CandidateScoringEvidence) || {};
   const score = typeof raw.confidence_score === "number" ? raw.confidence_score : (typeof raw.confidence === "number" ? raw.confidence : (evidence.final_score ?? 0));
 
-  const isLegacyUnverified = Boolean(raw.legacy_unverified);
+  // Actual Wave 2A backend sends `is_legacy_unverified`
+  const isLegacyUnverified = Boolean(raw.is_legacy_unverified ?? raw.legacy_unverified);
   const isHumanReviewed = raw.is_human_reviewed !== undefined ? Boolean(raw.is_human_reviewed) : !isLegacyUnverified;
 
   return {
@@ -470,7 +507,7 @@ export async function acceptCandidate(
       `/api/admin/provider-content/${encodeURIComponent(id)}/candidates/${encodeURIComponent(tmdbId)}/accept/`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getMutationHeaders(),
         body: JSON.stringify(bodyData),
       }
     );
@@ -525,7 +562,7 @@ export async function rejectCandidate(
       `/api/admin/provider-content/${encodeURIComponent(id)}/candidates/${encodeURIComponent(tmdbId)}/reject/`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getMutationHeaders(),
         body: JSON.stringify({ reason: trimmedReason }),
       }
     );

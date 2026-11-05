@@ -29,6 +29,8 @@ export function CandidateComparison({
     );
   }
 
+  const existingMapping = providerContent.existing_mapping;
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -50,7 +52,12 @@ export function CandidateComparison({
 
           const hasTypeConflict = cand.content_type !== providerContent.content_type;
           const hasYearConflict = evidence.year_match === "conflict";
-          const hasManualConflict = Boolean(cand.competing_manual_mapping);
+
+          // Manual conflict: derived from existing manual mapping when proposed TMDb ID diverges
+          const hasManualOverrideConflict = Boolean(
+            existingMapping?.is_manual && existingMapping.tmdb_id !== cand.tmdb_id
+          );
+          const hasManualConflict = Boolean(cand.competing_manual_mapping) || hasManualOverrideConflict;
 
           const confidencePct = Math.round(cand.confidence_score * 100);
 
@@ -157,6 +164,11 @@ export function CandidateComparison({
                     {cand.competing_manual_mapping && (
                       <li>
                         <strong>MANUAL MAPPING CONFLICT:</strong> {cand.competing_manual_mapping.detail} (Acceptance disabled)
+                      </li>
+                    )}
+                    {hasManualOverrideConflict && (
+                      <li>
+                        <strong>MANUAL MAPPING OVERRIDE CONFLICT:</strong> Existing manual mapping points to TMDb {existingMapping?.tmdb_id}. Accepting candidate TMDb {cand.tmdb_id} would overwrite a verified human mapping. Acceptance disabled to prevent server conflict.
                       </li>
                     )}
                     {evidence.warnings?.map((warning, wIdx) => (

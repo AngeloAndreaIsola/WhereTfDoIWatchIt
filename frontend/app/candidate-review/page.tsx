@@ -20,6 +20,11 @@ export default function CandidateReviewPage() {
   const [queueLoading, setQueueLoading] = useState(true);
   const [queueError, setQueueError] = useState<string | null>(null);
 
+  // Pagination state
+  const [page, setPage] = useState(1);
+  const [pages, setPages] = useState(1);
+  const [totalItems, setTotalItems] = useState(0);
+
   // Filters mapped to Wave 2A backend query params: provider, status, content_type, search
   const [filterProvider, setFilterProvider] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
@@ -59,10 +64,14 @@ export default function CandidateReviewPage() {
         status: filterStatus || undefined,
         content_type: filterContentType || undefined,
         search: searchQuery.trim() || undefined,
+        page,
+        page_size: 25,
       });
 
       const items = data.items || [];
       setQueue(items);
+      setPages(data.pages || 1);
+      setTotalItems(data.total_items ?? items.length);
 
       if (items.length > 0) {
         setSelectedItem((prev) => {
@@ -83,7 +92,7 @@ export default function CandidateReviewPage() {
     } finally {
       setQueueLoading(false);
     }
-  }, [filterProvider, filterStatus, filterContentType, searchQuery]);
+  }, [filterProvider, filterStatus, filterContentType, searchQuery, page]);
 
   useEffect(() => {
     loadQueue();
@@ -120,6 +129,27 @@ export default function CandidateReviewPage() {
       setCandidates([]);
     }
   }, [selectedItem?.id, loadCandidates]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Filter setters that reset page to 1
+  const handleFilterProviderChange = (provider: string) => {
+    setFilterProvider(provider);
+    setPage(1);
+  };
+
+  const handleFilterStatusChange = (status: string) => {
+    setFilterStatus(status);
+    setPage(1);
+  };
+
+  const handleFilterContentTypeChange = (contentType: string) => {
+    setFilterContentType(contentType);
+    setPage(1);
+  };
+
+  const handleSearchQueryChange = (query: string) => {
+    setSearchQuery(query);
+    setPage(1);
+  };
 
   const handleInitiateAction = (candidate: TMDbCandidate, action: "accept" | "reject") => {
     setActionError(null);
@@ -262,13 +292,17 @@ export default function CandidateReviewPage() {
           onSelectItem={onSelectItem}
           loading={queueLoading}
           filterProvider={filterProvider}
-          onFilterProviderChange={setFilterProvider}
+          onFilterProviderChange={handleFilterProviderChange}
           filterStatus={filterStatus}
-          onFilterStatusChange={setFilterStatus}
+          onFilterStatusChange={handleFilterStatusChange}
           filterContentType={filterContentType}
-          onFilterContentTypeChange={setFilterContentType}
+          onFilterContentTypeChange={handleFilterContentTypeChange}
           searchQuery={searchQuery}
-          onSearchQueryChange={setSearchQuery}
+          onSearchQueryChange={handleSearchQueryChange}
+          page={page}
+          pages={pages}
+          totalItems={totalItems}
+          onPageChange={setPage}
         />
 
         {/* Right: Inspection, Evidence & Candidates Area */}

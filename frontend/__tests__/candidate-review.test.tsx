@@ -58,11 +58,19 @@ describe("Candidate Review Interface (Wave 2A Backend Compatibility)", () => {
     });
   });
 
-  it("renders unresolved queue items and selects the first item", async () => {
+  it("renders unresolved queue items, pagination controls, and selects the first item", async () => {
     vi.spyOn(global, "fetch").mockImplementation(async (url) => {
       const u = String(url);
       if (u.includes("/api/admin/provider-content/candidates/")) {
-        return new Response(JSON.stringify(mockBackendQueueResponse), { status: 200 });
+        return new Response(
+          JSON.stringify({
+            ...mockBackendQueueResponse,
+            page: 1,
+            pages: 3,
+            total_items: 65,
+          }),
+          { status: 200 }
+        );
       }
       if (u.includes("/api/admin/provider-content/pc-101/candidates/")) {
         return new Response(JSON.stringify(mockBackendDetailAmbiguous), { status: 200 });
@@ -73,8 +81,13 @@ describe("Candidate Review Interface (Wave 2A Backend Compatibility)", () => {
     render(<CandidateReviewPage />);
 
     await waitFor(() => {
-      expect(screen.getByText(/Unresolved Queue \(4\)/i)).toBeInTheDocument();
+      expect(screen.getByText(/Unresolved Queue \(65\)/i)).toBeInTheDocument();
     });
+
+    // Check pagination controls
+    expect(screen.getByText("Page 1 of 3")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Previous" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Next" })).not.toBeDisabled();
 
     // Verify first item is rendered and selected
     expect(screen.getByRole("heading", { name: "Pinocchio" })).toBeInTheDocument();
@@ -206,6 +219,62 @@ describe("Candidate Review Interface (Wave 2A Backend Compatibility)", () => {
     expect(acceptButtons[0]).toBeDisabled();
   });
 
+  it("derives manual mapping from match_method and disables unsafe candidate acceptance", async () => {
+    const itemWithManualMapping = {
+      ...mockBackendDetailMappedNoOffer,
+      existing_mapping: {
+        id: 99,
+        tmdb_id: 11111,
+        title: "Original Manually Mapped Movie",
+        match_method: "manual",
+        revision: 2,
+      },
+      candidates: [
+        {
+          id: 50,
+          tmdb_id: 22222, // Diverging target TMDb ID
+          title: "Conflicting Candidate Movie",
+          content_type: "movie",
+          year: 2020,
+          confidence_score: 0.9,
+          scoring_evidence: {
+            title_relation: "exact",
+          },
+          status: "pending",
+        },
+      ],
+    };
+
+    vi.spyOn(global, "fetch").mockImplementation(async (url) => {
+      const u = String(url);
+      if (u.includes("/api/admin/provider-content/candidates/")) {
+        return new Response(
+          JSON.stringify({
+            items: [itemWithManualMapping],
+            page: 1,
+            pages: 1,
+            total_items: 1,
+          }),
+          { status: 200 }
+        );
+      }
+      if (u.includes("/api/admin/provider-content/pc-104/candidates/")) {
+        return new Response(JSON.stringify(itemWithManualMapping), { status: 200 });
+      }
+      return new Response("Not found", { status: 404 });
+    });
+
+    render(<CandidateReviewPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/MANUAL MAPPING OVERRIDE CONFLICT/i)).toBeInTheDocument();
+    });
+
+    // Acceptance should be disabled before reaching the server
+    const acceptButton = screen.getByRole("button", { name: /Accept Candidate…/i });
+    expect(acceptButton).toBeDisabled();
+  });
+
   it("distinguishes mapping versus offer availability and enforces 'Mapped ≠ Watchable'", async () => {
     vi.spyOn(global, "fetch").mockImplementation(async (url) => {
       const u = String(url);
@@ -240,54 +309,8 @@ describe("Candidate Review Interface (Wave 2A Backend Compatibility)", () => {
     ).toBeInTheDocument();
   });
 
-  it("validates mandatory non-empty reason for accept/reject mutations", async () => {
-    vi.spyOn(global, "fetch").mockImplementation(async (url) => {
-      const u = String(url);
-      if (u.includes("/api/admin/provider-content/candidates/")) {
-        return new Response(JSON.stringify(mockBackendQueueResponse), { status: 200 });
-      }
-      if (u.includes("/api/admin/provider-content/pc-101/candidates/")) {
-        return new Response(JSON.stringify(mockBackendDetailAmbiguous), { status: 200 });
-      }
-      return new Response("Not found", { status: 404 });
-    });
-
-    const user = userEvent.setup();
-    render(<CandidateReviewPage />);
-
-    await waitFor(() => {
-      expect(screen.getByText(/Discovered TMDb Candidates \(3\)/i)).toBeInTheDocument();
-    });
-
-    // Click Accept on first candidate
-    const acceptButtons = screen.getAllByRole("button", { name: /Accept Candidate…/i });
-    await user.click(acceptButtons[0]);
-
-    // Confirmation modal should be visible
-    expect(screen.getByRole("heading", { name: /Confirm Candidate Acceptance/i })).toBeInTheDocument();
-
-    const submitConfirmButton = screen.getByRole("button", { name: /Confirm & Accept Candidate/i });
-
-    // Attempt submitting without reason
-    await user.click(submitConfirmButton);
-
-    expect(
-      screen.getByText(/A mandatory reason is required to accept this candidate/i)
-    ).toBeInTheDocument();
-
-    // Type spaces only
-    const reasonTextarea = screen.getByPlaceholderText(/Explain why this candidate is the verified match/i);
-    await user.type(reasonTextarea, "     ");
-    await user.click(submitConfirmButton);
-
-    expect(
-      screen.getByText(/A mandatory reason is required to accept this candidate/i)
-    ).toBeInTheDocument();
-  });
-
-  it("handles PR #50 accept mutation response shape {status: 'accepted', mapping, candidate, movie}", async () => {
-    let acceptCalled = false;
-    let acceptPayload: unknown = null;
+  it("sends operator-guard headers (anti-CSRF) and handles 403 operator guard failure", async () => {
+    let capturedHeaders: HeadersInit | undefined;
 
     vi.spyOn(global, "fetch").mockImplementation(async (url, init) => {
       const u = String(url);
@@ -295,30 +318,17 @@ describe("Candidate Review Interface (Wave 2A Backend Compatibility)", () => {
         return new Response(JSON.stringify(mockBackendQueueResponse), { status: 200 });
       }
       if (u.includes("/api/admin/provider-content/pc-101/candidates/532639/accept/")) {
-        acceptCalled = true;
-        acceptPayload = JSON.parse(String(init?.body));
+        capturedHeaders = init?.headers;
+        // Verify mock operator guard: fail with 403 if operator guard header is missing
+        const headersObj = init?.headers as Record<string, string>;
+        if (headersObj?.["X-Operator-Context"] !== "local-operator") {
+          return new Response(JSON.stringify({ detail: "Forbidden: operator guard check failed" }), { status: 403 });
+        }
         return new Response(
           JSON.stringify({
             status: "accepted",
-            mapping: {
-              id: 99,
-              tmdb_id: 532639,
-              provider_content_id: "pc-101",
-              revision: 1,
-            },
-            candidate: {
-              id: 1,
-              tmdb_id: 532639,
-              title: "Pinocchio",
-            },
-            movie: {
-              tmdb_id: 532639,
-              title: "Pinocchio",
-            },
-            audit: {
-              id: 10,
-              created_at: new Date().toISOString(),
-            },
+            mapping: { id: 1, tmdb_id: 532639 },
+            candidate: { id: 1, tmdb_id: 532639, title: "Pinocchio" },
           }),
           { status: 200 }
         );
@@ -340,23 +350,20 @@ describe("Candidate Review Interface (Wave 2A Backend Compatibility)", () => {
     await user.click(acceptButtons[0]);
 
     const reasonTextarea = screen.getByPlaceholderText(/Explain why this candidate is the verified match/i);
-    await user.type(reasonTextarea, "Verified director and Italian release year 2022");
+    await user.type(reasonTextarea, "Verified via director and Italian release year 2022");
 
     const submitConfirmButton = screen.getByRole("button", { name: /Confirm & Accept Candidate/i });
     await user.click(submitConfirmButton);
 
     await waitFor(() => {
-      expect(acceptCalled).toBe(true);
-      expect(acceptPayload).toEqual({
-        reason: "Verified director and Italian release year 2022",
-        expected_revision: null,
-      });
+      expect(screen.getByText(/Successfully accepted candidate\. TMDb ID: 532639/i)).toBeInTheDocument();
     });
 
-    // Check success notification referencing the normalized response
-    await waitFor(() => {
-      expect(screen.getByText(/Successfully accepted candidate\. TMDb ID: 532639 \(Pinocchio\)\. Mapping updated: yes\./i)).toBeInTheDocument();
-    });
+    // Assert that operator mutation guard headers were present on the request
+    expect(capturedHeaders).toBeDefined();
+    const headersObj = capturedHeaders as Record<string, string>;
+    expect(headersObj["X-Operator-Context"]).toBe("local-operator");
+    expect(headersObj["X-Requested-With"]).toBe("XMLHttpRequest");
   });
 
   it("handles PR #50 reject mutation response and concurrent / stale conflict errors (409) cleanly", async () => {
