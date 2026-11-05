@@ -805,3 +805,51 @@ class AdversarialOfferRecoveryTests(OfferRecoveryBaseTestCase):
         self.assertEqual(OfferEvidence.objects.count(), initial_evidence)
         self.assertEqual(OfferPrice.objects.count(), initial_prices)
         self.assertEqual(SyncRun.objects.count(), initial_runs)
+
+
+    def test_credential_sanitization_in_cli_json_and_text(self):
+        content, mapping = self.create_movie_and_mapping()
+
+        secret_token = "SECRET_TEST_TOKEN"
+        leaky_message = (
+            f"Failed to fetch https://api.example.com/v1/resource?api_key={secret_token}&client=123 "
+            f"Headers: Authorization: Bearer {secret_token}"
+        )
+
+        with patch.object(self.source, "fetch_evidence", side_effect=requests.exceptions.ConnectTimeout(leaky_message)):
+            # 1. Test recover_provider_evidence service level
+            result = recover_provider_evidence(
+                provider_content_pk=content.pk,
+                max_http_requests=10,
+                apply=True,
+            )
+            self.assertEqual(result.outcome, OUTCOME_RETRYABLE_ERROR)
+            self.assertNotIn(secret_token, result.error_detail or "")
+            self.assertIn("[REDACTED]", result.error_detail or "")
+
+            # 2. Test CLI JSON output
+            out_json = StringIO()
+            call_command(
+                "recover_provider_evidence",
+                "--provider-content-id", str(content.pk),
+                "--max-http-requests", "10",
+                "--apply",
+                "--json",
+                stdout=out_json,
+            )
+            json_text = out_json.getvalue()
+            self.assertNotIn(secret_token, json_text)
+            self.assertIn("[REDACTED]", json_text)
+
+            # 3. Test CLI text output
+            out_text = StringIO()
+            call_command(
+                "recover_provider_evidence",
+                "--provider-content-id", str(content.pk),
+                "--max-http-requests", "10",
+                "--apply",
+                stdout=out_text,
+            )
+            plain_text = out_text.getvalue()
+            self.assertNotIn(secret_token, plain_text)
+            self.assertIn("[REDACTED]", plain_text)

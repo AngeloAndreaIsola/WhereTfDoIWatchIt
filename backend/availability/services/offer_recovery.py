@@ -12,6 +12,8 @@ from typing import Any, Optional
 import requests
 from django.db import transaction
 
+import re
+
 from availability.domain.enums import SyncMode
 from availability.models import ContentMapping, ProviderContent, Source
 from availability.services.normalize import normalize_content_type
@@ -21,6 +23,46 @@ from availability.sources.base import SourceFetchError, SourceFetchResult, Sourc
 from availability.sources.registry import UnknownSourceError, source_registry
 
 logger = logging.getLogger(__name__)
+
+
+def sanitize_error_detail(exc: Exception) -> str:
+    """Return a deterministic, credential-free summary of an exception for operator surfaces."""
+    exc_type = type(exc).__name__
+
+    # If exception exposes safe diagnostic (e.g. SourceQuotaExceeded)
+    if hasattr(exc, "diagnostic") and callable(getattr(exc, "diagnostic")):
+        raw = str(exc.diagnostic())
+    else:
+        status_code = None
+        if hasattr(exc, "response") and getattr(exc, "response", None) is not None:
+            status_code = getattr(exc.response, "status_code", None)
+        elif hasattr(exc, "status_code") and isinstance(getattr(exc, "status_code"), int):
+            status_code = getattr(exc, "status_code")
+
+        msg = str(exc)
+        if status_code is not None:
+            raw = f"status={status_code}: {msg}"
+        else:
+            raw = msg
+
+    # Strip URLs entirely
+    sanitized = re.sub(r'https?://[^\s\'"<>]+', '[URL]', raw)
+    # Redact Authorization: Bearer <token>
+    sanitized = re.sub(r'(?i)\bauthorization\s*:\s*bearer\s+[^\s,;]+', 'Authorization: Bearer [REDACTED]', sanitized)
+    # Redact generic Bearer <token>
+    sanitized = re.sub(r'(?i)\bbearer\s+[A-Za-z0-9_\-\.]+', 'Bearer [REDACTED]', sanitized)
+    # Redact api_key=..., token=..., secret=..., password=...
+    sanitized = re.sub(
+        r'(?i)\b(api[_-]?key|token|secret|password|client_secret|apikey|auth)\s*([:=])\s*([^\s&,;]+)',
+        r'\1\2[REDACTED]',
+        sanitized
+    )
+
+    sanitized = " ".join(sanitized.split())
+    if len(sanitized) > 160:
+        sanitized = sanitized[:157] + "..."
+
+    return f"{exc_type}: {sanitized}" if not sanitized.startswith(exc_type) else sanitized
 
 
 # Standardized outcome categories
@@ -379,6 +421,7 @@ def recover_provider_evidence(
         # Classify the exception
         # Budget exhausted check (RaiPlayHttpBudgetExceeded or SourceQuotaExceeded)
         exc_name = type(exc).__name__
+        safe_detail = sanitize_error_detail(exc)
         if "BudgetExceeded" in exc_name or isinstance(exc, SourceQuotaExceeded):
             return RecoveryResult(
                 outcome=OUTCOME_BUDGET_EXHAUSTED,
@@ -393,7 +436,7 @@ def recover_provider_evidence(
                 offers_updated=0,
                 offer_identities=[],
                 reason_code="budget_exhausted",
-                error_detail=str(exc),
+                error_detail=safe_detail,
                 applied=True,
             )
 
@@ -422,7 +465,7 @@ def recover_provider_evidence(
                 offers_updated=0,
                 offer_identities=[],
                 reason_code="upstream_network_transient",
-                error_detail=str(exc),
+                error_detail=safe_detail,
                 applied=True,
             )
 
@@ -443,7 +486,7 @@ def recover_provider_evidence(
                     offers_updated=0,
                     offer_identities=[],
                     reason_code="source_fetch_transient",
-                    error_detail=str(exc),
+                    error_detail=safe_detail,
                     applied=True,
                 )
 
@@ -461,7 +504,7 @@ def recover_provider_evidence(
             offers_updated=0,
             offer_identities=[],
             reason_code="unexpected_fetch_error",
-            error_detail=str(exc),
+            error_detail=safe_detail,
             applied=True,
         )
 
