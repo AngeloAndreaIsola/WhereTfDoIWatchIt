@@ -4,6 +4,7 @@ from django.test import TestCase
 
 from availability.domain.enums import ContentType, OfferType, SourceType
 from availability.models import Country, Offer as AvailabilityOffer, Source
+from availability.tests.freshness_helpers import declare_freshness
 from tracker.models import Movie, Provider, ProviderCategory
 
 
@@ -16,6 +17,7 @@ class AvailabilityReadBoundaryTests(TestCase):
         self.source, _ = Source.objects.get_or_create(
             slug="availability-api", defaults={"name": "Availability API", "type": SourceType.API}
         )
+        declare_freshness(self, "availability-api")
         self.country, _ = Country.objects.get_or_create(code="US", defaults={"name": "United States"})
 
     def local_offer(self, movie):

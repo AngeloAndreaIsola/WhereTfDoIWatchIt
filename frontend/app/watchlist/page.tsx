@@ -8,6 +8,7 @@ import { useCurrentLocation } from "@/components/CurrentLocationProvider";
 import { VpnWatchModal } from "@/components/VpnWatchModal";
 import { WhyCantIWatchModal, ExcludedOffer } from "@/components/WhyCantIWatchModal";
 import { Pagination } from "@/components/Pagination";
+import { formatLastSeen } from "@/lib/time";
 import WatchlistRefreshButton from "@/components/WatchlistRefreshButton";
 import AvailabilityStatusPanel from "@/components/AvailabilityStatusPanel";
 import {
@@ -51,6 +52,7 @@ interface WatchlistItemRow {
     };
     explanation?: string[];
     excluded_offers?: ExcludedOffer[];
+    last_seen_at?: string | null;
   };
 }
 
@@ -392,7 +394,9 @@ export default function WatchlistPage() {
                 status === "watchable_here" || status === "watchable_vpn";
               // 🔵 Checking… is transient queue state, not a verdict — the
               // card stays undimmed until the check lands (⚫ / 🟢 / …).
-              const isDimmed = !isWatchable && status !== "checking";
+              // 🕓 Needs recheck is last-known evidence, not a negative.
+              const isDimmed =
+                !isWatchable && status !== "checking" && status !== "needs_recheck";
               const isWatched = !!(row.user_data?.is_watched ?? row.is_watched ?? movie.user_data?.is_watched);
 
               return (
@@ -426,6 +430,14 @@ export default function WatchlistPage() {
                       <span className="absolute top-2 right-2 px-2 py-1 rounded-md text-xs font-bold bg-black/70 text-white backdrop-blur-sm">
                         {symbol} {label}
                       </span>
+                      {status === "needs_recheck" && (
+                        <span
+                          data-testid="last-seen"
+                          className="absolute top-9 right-2 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-black/60 text-white"
+                        >
+                          {formatLastSeen(watchRes.last_seen_at)}
+                        </span>
+                      )}
                     </div>
                   </Link>
 

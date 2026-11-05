@@ -24,7 +24,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from .enums import ConflictKind, FreshnessState, SyncStatus
+from .enums import AvailabilityEvidence, ConflictKind, FreshnessState, SyncStatus
 
 
 @dataclass(frozen=True)
@@ -114,6 +114,26 @@ class OfferObservation:
     source_prices: tuple["PriceObservation", ...] = ()
     """Every source's price for this observation's offer identity, so a price
     row can never be attached to the wrong observation."""
+    window_open: bool = True
+    """Derived: the offer's availability window is open at ``now``."""
+
+    @property
+    def evidence(self) -> AvailabilityEvidence:
+        """What this single observation says about "watchable right now".
+
+        Freshness only qualifies *positive* evidence: a stale positive is
+        "last seen", never negative. Mapping doubt makes an otherwise
+        positive observation uncorroborated rather than unavailable.
+        """
+        if self.available_now:
+            if self.freshness == FreshnessState.FRESH:
+                return AvailabilityEvidence.VERIFIED
+            if self.freshness == FreshnessState.STALE:
+                return AvailabilityEvidence.STALE
+            return AvailabilityEvidence.UNKNOWN
+        if self.currently_available and self.window_open and self.mapping_doubt:
+            return AvailabilityEvidence.UNKNOWN
+        return AvailabilityEvidence.UNAVAILABLE
 
 
 @dataclass(frozen=True)
@@ -168,6 +188,18 @@ class ReconciledOffer:
     so the UI can say "from €X" instead of implying one exact price."""
     prices: tuple[PriceObservation, ...] = ()
     """Every source-specific price row, current and stale, for inspection."""
+    evidence: AvailabilityEvidence = AvailabilityEvidence.UNAVAILABLE
+    """Strongest evidence across observations (verified > stale > unknown >
+    unavailable). ``currently_available`` keeps its lifecycle/window meaning;
+    only ``VERIFIED`` may be presented as recently verified availability."""
+    last_verified_at: Optional[datetime] = None
+    """Newest ``last_seen`` among verified observations, if any."""
+    last_seen_available_at: Optional[datetime] = None
+    """Newest ``last_seen`` among positive (verified/stale/unknown) observations."""
+
+    @property
+    def is_verified_available(self) -> bool:
+        return self.evidence == AvailabilityEvidence.VERIFIED
 
     @property
     def source_urls(self) -> tuple[tuple[str, str], ...]:

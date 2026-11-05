@@ -31,6 +31,8 @@ interface SummaryData {
   total_movies: number;
   available_movies: number;
   unavailable_movies: number;
+  /** Titles with only stale/unverified evidence — neither available nor unavailable. */
+  needs_recheck_movies?: number;
   countries: CountrySummary[];
   services: ServiceSummary[];
 }
@@ -152,6 +154,20 @@ export default function WatchlistReportPage() {
                 {data.summary.unavailable_movies}
               </div>
             </div>
+
+            {(data.summary.needs_recheck_movies ?? 0) > 0 && (
+              <div
+                data-testid="needs-recheck-count"
+                className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800 sm:col-span-3"
+              >
+                <span className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                  🕓 Needs recheck (last seen, not recently verified)
+                </span>
+                <div className="mt-2 text-3xl font-bold text-gray-700 dark:text-gray-300">
+                  {data.summary.needs_recheck_movies}
+                </div>
+              </div>
+            )}
           </section>
 
           {/* Analytics Breakdown Grid */}

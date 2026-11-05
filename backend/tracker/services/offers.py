@@ -26,6 +26,12 @@ class Offer:
     price: Optional[dict] = None
     #: Every source-specific price row (current and stale) for inspection.
     prices: list[dict] = field(default_factory=list)
+    #: Derived ``AvailabilityEvidence`` value (``verified`` / ``stale`` /
+    #: ``unknown``). Defaults to ``verified`` so offers built outside the
+    #: canonical read path keep their established meaning.
+    availability_evidence: str = "verified"
+    #: ISO timestamp of the newest positive observation behind this offer.
+    last_seen_at: Optional[str] = None
 
     def get(self, key: str, default: Any = None) -> Any:
         """Dict-like access for backward compatibility."""
@@ -56,6 +62,8 @@ class Offer:
             is_scraped_source=bool(d.get("is_scraped_source", False)),
             price=d.get("price") or None,
             prices=list(d.get("prices") or []),
+            availability_evidence=d.get("availability_evidence") or "verified",
+            last_seen_at=d.get("last_seen_at") or None,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -73,4 +81,6 @@ class Offer:
             "is_scraped_source": self.is_scraped_source,
             "price": self.price,
             "prices": self.prices,
+            "availability_evidence": self.availability_evidence,
+            "last_seen_at": self.last_seen_at,
         }

@@ -35,6 +35,9 @@ __all__ = [
     "WatchabilityResult",
     "get_user_subscriptions",
     "evaluate_watchability",
+    "LastKnownAvailability",
+    "describe_last_known",
+    "qualify_watchability",
 ]
 
 # Offer types that count as "included" for watchability: a subscription the
@@ -57,6 +60,22 @@ class WatchabilityStatus:
     # The only accessible offers require an extra payment (rent/buy). Distinct
     # from 🟠 so "buy it" is never conflated with "you have it".
     PURCHASE_ONLY = "purchase_only"          # 🟣
+    # No recently verified offer, but positive evidence that is stale ("last
+    # seen") or uncorroborated. Never counted as watchable, never read as
+    # genuinely unavailable.
+    NEEDS_RECHECK = "needs_recheck"          # 🕓
+
+
+NEEDS_RECHECK_SYMBOL = "🕓"
+
+#: Statuses a last-known (stale/unverified) offer may replace: only "nothing
+#: current". A verified result (🟢🟡🟣🟠) and an in-flight check stay as-is.
+_QUALIFIABLE = frozenset({
+    WatchabilityStatus.NOT_WATCHABLE,
+    WatchabilityStatus.UNKNOWN,
+    AccessVerdict.UNAVAILABLE,
+    AccessVerdict.UNKNOWN,
+})
 
 
 _VERDICT_TO_STATUS = {
@@ -161,6 +180,7 @@ class WatchabilityResult:
     explanation: list[str] = field(default_factory=list)
     refresh_state: Optional[str] = None
     access_flags: dict[str, Any] = field(default_factory=dict)
+    last_known: Optional["LastKnownAvailability"] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -175,6 +195,7 @@ class WatchabilityResult:
             "explanation": self.explanation,
             "refresh_state": self.refresh_state,
             "access_flags": self.access_flags,
+            **_last_known_fields(self.last_known),
         }
 
 
@@ -259,3 +280,136 @@ def evaluate_watchability(
 # Re-exported for callers that imported the classifier helper directly.
 classify = classify_offer
 INCLUDED_TYPES = INCLUDED_ACCESS_TYPES
+
+
+@dataclass
+class LastKnownAvailability:
+    """Stale/uncorroborated positive offers of one title, classified for the user.
+
+    ``evidence`` is ``stale`` when any offer was last seen by a source whose
+    freshness window has lapsed, else ``unknown``. ``status`` is what the
+    evidence *would* mean were it current (e.g. ``watchable_here``) — kept
+    apart from the title's real status so it is never counted as watchable.
+    Entitlement and language flags on ``offers`` come from the shared
+    classifier, unchanged.
+    """
+
+    evidence: str
+    last_seen_at: Optional[str]
+    status: str
+    offers: list[dict[str, Any]] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "evidence": self.evidence,
+            "last_seen_at": self.last_seen_at,
+            "status": self.status,
+            "offers": self.offers,
+        }
+
+
+def describe_last_known(
+    movie: Movie,
+    offers: Iterable[Offer],
+    preference: Preference,
+    *,
+    current_country: Optional[str] = None,
+    user_subscriptions: Optional[set[str]] = None,
+    access: Optional[UserAccess] = None,
+    provider_map: Optional[dict[str, Provider]] = None,
+) -> Optional[LastKnownAvailability]:
+    """Classify last-known offers with the shared resolver, or ``None`` if none."""
+    offer_list = list(offers or ())
+    if not offer_list:
+        return None
+    result = resolve_title(
+        movie,
+        offer_list,
+        preference,
+        current_country=current_country,
+        user_subscriptions=user_subscriptions,
+        access=access,
+        provider_map=provider_map,
+    )
+    by_key = {}
+    for offer in offer_list:
+        by_key.setdefault(_offer_key(offer), offer)
+    classified = result.accessible_offers + [
+        c for c in result.excluded_offers if c not in result.accessible_offers
+    ]
+    out: list[dict[str, Any]] = []
+    for c in classified:
+        source = by_key.get(_offer_key(c))
+        item = c.to_dict()
+        item["availability_evidence"] = (
+            getattr(source, "availability_evidence", "unknown") if source else "unknown"
+        )
+        item["last_seen_at"] = getattr(source, "last_seen_at", None) if source else None
+        out.append(item)
+    stale = any(o.availability_evidence == "stale" for o in offer_list)
+    seen = [o.last_seen_at for o in offer_list if o.last_seen_at]
+    return LastKnownAvailability(
+        evidence="stale" if stale else "unknown",
+        last_seen_at=max(seen) if seen else None,
+        status=_VERDICT_TO_STATUS.get(result.verdict, WatchabilityStatus.UNKNOWN),
+        offers=out,
+    )
+
+
+def qualify_watchability(result: WatchabilityResult, last_known: Optional[LastKnownAvailability]) -> WatchabilityResult:
+    """Attach last-known evidence; replace a "nothing current" status with 🕓."""
+    result.last_known = last_known
+    if last_known is not None and result.status in _QUALIFIABLE:
+        result.status = WatchabilityStatus.NEEDS_RECHECK
+        result.status_label, result.status_symbol = _needs_recheck_label(last_known)
+        result.explanation = _needs_recheck_explanation(last_known)
+    return result
+
+
+def qualify_watchability_dict(payload: dict[str, Any], last_known: Optional[LastKnownAvailability]) -> dict[str, Any]:
+    """Same as :func:`qualify_watchability` for the detail page's verdict dict."""
+    payload.update(_last_known_fields(last_known))
+    if last_known is not None and payload.get("status") in _QUALIFIABLE:
+        payload["status"] = payload["verdict"] = WatchabilityStatus.NEEDS_RECHECK
+        payload["status_label"], payload["status_symbol"] = _needs_recheck_label(last_known)
+        payload["explanation"] = _needs_recheck_explanation(last_known)
+    return payload
+
+
+def _last_known_fields(last_known: Optional[LastKnownAvailability]) -> dict[str, Any]:
+    return {
+        "availability_evidence": last_known.evidence if last_known else None,
+        "last_seen_at": last_known.last_seen_at if last_known else None,
+        "last_known": last_known.to_dict() if last_known else None,
+    }
+
+
+def _needs_recheck_label(last_known: LastKnownAvailability) -> tuple[str, str]:
+    if last_known.evidence == "stale":
+        return "Last seen available — needs recheck", NEEDS_RECHECK_SYMBOL
+    return "Unverified availability — needs recheck", NEEDS_RECHECK_SYMBOL
+
+
+def _needs_recheck_explanation(last_known: LastKnownAvailability) -> list[str]:
+    when = f" on {last_known.last_seen_at[:10]}" if last_known.last_seen_at else ""
+    if last_known.evidence == "stale":
+        lines = [
+            f"Last seen available{when}, but not re-confirmed within its "
+            "source's refresh window."
+        ]
+    else:
+        lines = [
+            f"Reported available{when} by a source with no freshness guarantee; "
+            "not independently verified."
+        ]
+    if last_known.status in (WatchabilityStatus.WATCHABLE_HERE, WatchabilityStatus.WATCHABLE_VPN):
+        lines.append("When last seen, it was included with your services.")
+    return lines
+
+
+def _offer_key(offer) -> tuple[str, str, str]:
+    return (
+        (getattr(offer, "service", "") or "").lower(),
+        (getattr(offer, "country", "") or "").upper(),
+        (getattr(offer, "offer_type", "") or "").lower(),
+    )
