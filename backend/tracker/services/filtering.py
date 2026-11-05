@@ -237,7 +237,7 @@ def apply_composable_filters(
                 (getattr(o, "service", None) or (o.get("service") if isinstance(o, dict) else "") or "").lower()
                 for o in evidence_offers
             }
-            if not any(ps in s or s in ps for ps in provider_slug_set for s in all_services):
+            if not any(ps == s for ps in provider_slug_set for s in all_services):
                 continue
 
         # Apply Country Filter
