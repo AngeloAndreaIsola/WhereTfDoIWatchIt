@@ -432,47 +432,40 @@ def _active_offer_count(movie_ids: list[int], country: str | None = None) -> dic
     return counts
 
 
-def _title_availability_signals(movie_ids: list[int]) -> dict[int, list[dict]]:
-    """Title-level availability claims from sources that produced no offer.
-
-    A scraper row with ``is_available=True``, or a legacy ``Availability`` row,
-    is *explicit positive evidence from a source* that the title is there — but
-    it is not a displayable, playable offer. Reading these separately is what
-    lets the app distinguish "a source reports this title as available" from
-    "here is a concrete offer you can watch", and stops the first from being
-    rendered as the second (or as a flat ``unknown``).
-    """
+def _title_availability_signals(movie_ids: list[int], country: str | None = None) -> dict[int, list[dict]]:
+    """Title-level availability claims from sources that produced no offer."""
+    target = (country or "").upper().strip() if country else None
     out: dict[int, list[dict]] = defaultdict(list)
-    for movie_id, slug, country, seen in (
-        ScrapedContentMapping.objects.filter(
-            movie_id__in=movie_ids, is_available=True
-        )
-        .exclude(provider__isnull=True)
-        .values_list("movie_id", "provider__slug", "country_code", "updated_at")
-        .iterator()
+    scraper_qs = ScrapedContentMapping.objects.filter(
+        movie_id__in=movie_ids, is_available=True
+    ).exclude(provider__isnull=True)
+    if target is not None:
+        scraper_qs = scraper_qs.filter(country_code__iexact=target)
+    for movie_id, slug, row_country, seen in (
+        scraper_qs.values_list("movie_id", "provider__slug", "country_code", "updated_at").iterator()
     ):
         out[movie_id].append(
             {
                 "provider": slug or "",
-                "country": (country or "").upper(),
+                "country": (row_country or "").upper(),
                 "offer_type": "",
                 "source": "legacy_scraper",
                 "checked_at": seen,
             }
         )
-    for movie_id, slug, country, offer_type, seen in (
-        Availability.objects.filter(movie_id__in=movie_ids, is_available=True)
-        .select_related("region")
-        .values_list(
+    legacy_qs = Availability.objects.filter(movie_id__in=movie_ids, is_available=True).select_related("region")
+    if target is not None:
+        legacy_qs = legacy_qs.filter(region__country__iexact=target)
+    for movie_id, slug, row_country, offer_type, seen in (
+        legacy_qs.values_list(
             "movie_id", "region__provider", "region__country",
             "offer_type", "last_checked_at",
-        )
-        .iterator()
+        ).iterator()
     ):
         out[movie_id].append(
             {
                 "provider": slug or "",
-                "country": (country or "").upper(),
+                "country": (row_country or "").upper(),
                 "offer_type": offer_type or "",
                 "source": "legacy_availability",
                 "checked_at": seen,
@@ -722,7 +715,7 @@ def title_source_report(movie_ids, batch=None, country: str | None = None) -> di
     offers_by_source, active_offer_movies = _active_offers_by_source(movie_ids, country=country)
     providers = _offered_providers(movie_ids, country=country)
     offer_counts = _active_offer_count(movie_ids, country=country)
-    signals_by_movie = _title_availability_signals(movie_ids)
+    signals_by_movie = _title_availability_signals(movie_ids, country=country)
     last_checked = _last_checked_per_source(movie_ids)
     last_attempted = _last_attempted_per_source(movie_ids, batch=batch)
     blocked = {s: (source_quota(s) or {}) for s in title_slugs}
