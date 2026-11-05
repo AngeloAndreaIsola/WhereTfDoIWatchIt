@@ -9,6 +9,7 @@ const navItems = [
   { href: "/watchlist", label: "Watchlist" },
   { href: "/preferences", label: "Preferences", hidden: true },
   { href: "/subscriptions", label: "Subscriptions" },
+  { href: "/candidate-review", label: "Candidate Review" },
 ];
 
 export function AppNav() {
