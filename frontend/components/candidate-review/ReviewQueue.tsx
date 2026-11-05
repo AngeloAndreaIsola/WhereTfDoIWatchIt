@@ -1,0 +1,169 @@
+"use client";
+
+import React from "react";
+import { ProviderContentItem } from "@/lib/candidateReviewApi";
+
+interface ReviewQueueProps {
+  items: ProviderContentItem[];
+  selectedId: string | number | null;
+  onSelectItem: (item: ProviderContentItem) => void;
+  loading: boolean;
+  filterProvider: string;
+  onFilterProviderChange: (provider: string) => void;
+  filterCategory: string;
+  onFilterCategoryChange: (category: string) => void;
+  searchQuery: string;
+  onSearchQueryChange: (query: string) => void;
+}
+
+export function ReviewQueue({
+  items,
+  selectedId,
+  onSelectItem,
+  loading,
+  filterProvider,
+  onFilterProviderChange,
+  filterCategory,
+  onFilterCategoryChange,
+  searchQuery,
+  onSearchQueryChange,
+}: ReviewQueueProps) {
+  // Extract unique providers for filter
+  const providers = Array.from(new Set(items.map((i) => i.provider_slug))).filter(Boolean);
+
+  const filteredItems = items.filter((item) => {
+    if (filterProvider && item.provider_slug !== filterProvider) return false;
+    if (filterCategory && item.resolution_category !== filterCategory) return false;
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      const matchTitle = item.native_title.toLowerCase().includes(q);
+      const matchId = String(item.provider_content_id).toLowerCase().includes(q);
+      const matchProvider = item.provider_name.toLowerCase().includes(q);
+      if (!matchTitle && !matchId && !matchProvider) return false;
+    }
+    return true;
+  });
+
+  return (
+    <aside className="w-full md:w-80 flex-shrink-0 flex flex-col border-r border-gray-200 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900/40 p-4 space-y-4">
+      <div>
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+          Unresolved Queue ({items.length})
+        </h2>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+          Provider items requiring TMDb identity verification
+        </p>
+      </div>
+
+      {/* Filters & Search */}
+      <div className="space-y-2">
+        <input
+          type="text"
+          placeholder="Filter title, ID or provider…"
+          value={searchQuery}
+          onChange={(e) => onSearchQueryChange(e.target.value)}
+          aria-label="Filter queue items"
+          className="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-1.5 text-xs text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500"
+        />
+
+        <div className="flex gap-2">
+          <select
+            value={filterProvider}
+            onChange={(e) => onFilterProviderChange(e.target.value)}
+            aria-label="Filter by provider"
+            className="w-1/2 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-2 py-1 text-xs text-gray-700 dark:text-gray-300 focus:outline-none"
+          >
+            <option value="">All Providers</option>
+            {providers.map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={filterCategory}
+            onChange={(e) => onFilterCategoryChange(e.target.value)}
+            aria-label="Filter by resolution category"
+            className="w-1/2 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-2 py-1 text-xs text-gray-700 dark:text-gray-300 focus:outline-none"
+          >
+            <option value="">All Categories</option>
+            <option value="ambiguous">Ambiguous</option>
+            <option value="conflict">Conflict</option>
+            <option value="unique_candidate">Unique</option>
+            <option value="no_results">No Results</option>
+          </select>
+        </div>
+      </div>
+
+      {/* Queue items list */}
+      <div className="flex-1 overflow-y-auto space-y-2 max-h-[600px] pr-1">
+        {loading && (
+          <p className="text-xs text-center py-6 text-gray-500">Loading queue items…</p>
+        )}
+
+        {!loading && filteredItems.length === 0 && (
+          <div className="text-center py-8 text-xs text-gray-500 dark:text-gray-400">
+            {items.length === 0 ? "Queue is empty. No review needed." : "No items match current filters."}
+          </div>
+        )}
+
+        {!loading &&
+          filteredItems.map((item) => {
+            const isSelected = selectedId === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => onSelectItem(item)}
+                aria-pressed={isSelected}
+                data-testid={`queue-item-${item.id}`}
+                className={`w-full text-left p-3 rounded-lg border transition-all ${
+                  isSelected
+                    ? "border-blue-500 bg-blue-50/80 dark:bg-blue-950/40 ring-1 ring-blue-500 shadow-sm"
+                    : "border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-800/80 hover:border-gray-300 dark:hover:border-gray-700"
+                }`}
+              >
+                <div className="flex items-center justify-between gap-1 mb-1">
+                  <span className="text-[10px] font-semibold tracking-wide uppercase px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300">
+                    {item.provider_name || item.provider_slug}
+                  </span>
+                  <span
+                    className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                      item.resolution_category === "ambiguous"
+                        ? "bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300"
+                        : item.resolution_category === "conflict"
+                        ? "bg-red-100 text-red-800 dark:bg-red-950/60 dark:text-red-300"
+                        : "bg-blue-100 text-blue-800 dark:bg-blue-950/60 dark:text-blue-300"
+                    }`}
+                  >
+                    {item.resolution_category}
+                  </span>
+                </div>
+
+                <div className="font-medium text-sm text-gray-900 dark:text-gray-100 truncate">
+                  {item.native_title}
+                </div>
+
+                <div className="text-[11px] font-mono text-gray-500 dark:text-gray-400 truncate">
+                  ID: {item.provider_content_id}
+                </div>
+
+                <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  <span>
+                    {item.content_type} {item.release_year ? `• ${item.release_year}` : ""}
+                  </span>
+                  <span>{item.candidate_count} candidates</span>
+                </div>
+
+                {/* Offer notice indicator */}
+                <div className="mt-1.5 text-[10px] text-gray-400 dark:text-gray-500 truncate">
+                  Status: {item.availability_summary?.status_label ?? "Unknown"}
+                </div>
+              </button>
+            );
+          })}
+      </div>
+    </aside>
+  );
+}
