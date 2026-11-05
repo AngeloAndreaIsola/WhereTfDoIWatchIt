@@ -4,15 +4,15 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import CandidateReviewPage from "@/app/candidate-review/page";
 import {
-  mockCandidateQueue,
-  mockQueueEmpty,
-  mockAmbiguousCandidatesResponse,
-  mockConflictCandidatesResponse,
-  mockManualConflictCandidatesResponse,
-  mockQueueItemMappedNoOffer,
+  mockBackendQueueResponse,
+  mockBackendQueueEmpty,
+  mockBackendDetailAmbiguous,
+  mockBackendDetailConflict,
+  mockBackendDetailManualConflict,
+  mockBackendDetailMappedNoOffer,
 } from "@/lib/candidateReviewFixtures";
 
-describe("Candidate Review Interface", () => {
+describe("Candidate Review Interface (Wave 2A Backend Compatibility)", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
@@ -21,11 +21,11 @@ describe("Candidate Review Interface", () => {
     vi.clearAllMocks();
   });
 
-  it("renders loading and empty queue states", async () => {
+  it("renders loading and empty queue states from Wave 2A {items, total_items} format", async () => {
     vi.spyOn(global, "fetch").mockImplementation(async (url) => {
       const u = String(url);
-      if (u.includes("/api/admin/provider-content/candidates/") || u.includes("/api/admin/provider-content/unresolved/")) {
-        return new Response(JSON.stringify(mockQueueEmpty), { status: 200 });
+      if (u.includes("/api/admin/provider-content/candidates/")) {
+        return new Response(JSON.stringify(mockBackendQueueEmpty), { status: 200 });
       }
       return new Response("Not found", { status: 404 });
     });
@@ -40,9 +40,13 @@ describe("Candidate Review Interface", () => {
     });
   });
 
-  it("handles unavailable backend gracefully without crashing", async () => {
-    vi.spyOn(global, "fetch").mockImplementation(async () => {
-      return new Response(JSON.stringify({ detail: "Service Unavailable" }), { status: 503 });
+  it("handles 404 from documented queue endpoint by showing backend unavailable (no fallback)", async () => {
+    vi.spyOn(global, "fetch").mockImplementation(async (url) => {
+      const u = String(url);
+      if (u.includes("/api/admin/provider-content/candidates/")) {
+        return new Response(JSON.stringify({ detail: "Not found" }), { status: 404 });
+      }
+      return new Response("Not found", { status: 404 });
     });
 
     render(<CandidateReviewPage />);
@@ -57,11 +61,11 @@ describe("Candidate Review Interface", () => {
   it("renders unresolved queue items and selects the first item", async () => {
     vi.spyOn(global, "fetch").mockImplementation(async (url) => {
       const u = String(url);
-      if (u.includes("/api/admin/provider-content/candidates/") || u.includes("/api/admin/provider-content/unresolved/")) {
-        return new Response(JSON.stringify(mockCandidateQueue), { status: 200 });
+      if (u.includes("/api/admin/provider-content/candidates/")) {
+        return new Response(JSON.stringify(mockBackendQueueResponse), { status: 200 });
       }
       if (u.includes("/api/admin/provider-content/pc-101/candidates/")) {
-        return new Response(JSON.stringify(mockAmbiguousCandidatesResponse), { status: 200 });
+        return new Response(JSON.stringify(mockBackendDetailAmbiguous), { status: 200 });
       }
       return new Response("Not found", { status: 404 });
     });
@@ -78,14 +82,14 @@ describe("Candidate Review Interface", () => {
     expect(screen.getAllByText(/pinocchio-2022-stream/i).length).toBeGreaterThan(0);
   });
 
-  it("displays multiple ambiguous candidates and evidence comparison", async () => {
+  it("displays multiple ambiguous candidates and evidence comparison from flat backend response", async () => {
     vi.spyOn(global, "fetch").mockImplementation(async (url) => {
       const u = String(url);
-      if (u.includes("/api/admin/provider-content/candidates/") || u.includes("/api/admin/provider-content/unresolved/")) {
-        return new Response(JSON.stringify(mockCandidateQueue), { status: 200 });
+      if (u.includes("/api/admin/provider-content/candidates/")) {
+        return new Response(JSON.stringify(mockBackendQueueResponse), { status: 200 });
       }
       if (u.includes("/api/admin/provider-content/pc-101/candidates/")) {
-        return new Response(JSON.stringify(mockAmbiguousCandidatesResponse), { status: 200 });
+        return new Response(JSON.stringify(mockBackendDetailAmbiguous), { status: 200 });
       }
       return new Response("Not found", { status: 404 });
     });
@@ -110,14 +114,14 @@ describe("Candidate Review Interface", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders movie/year conflicts and existing mapping details", async () => {
+  it("renders movie/year conflicts, legacy unverified status, and existing mapping details", async () => {
     vi.spyOn(global, "fetch").mockImplementation(async (url) => {
       const u = String(url);
-      if (u.includes("/api/admin/provider-content/candidates/") || u.includes("/api/admin/provider-content/unresolved/")) {
-        return new Response(JSON.stringify(mockCandidateQueue), { status: 200 });
+      if (u.includes("/api/admin/provider-content/candidates/")) {
+        return new Response(JSON.stringify(mockBackendQueueResponse), { status: 200 });
       }
       if (u.includes("/api/admin/provider-content/pc-102/candidates/")) {
-        return new Response(JSON.stringify(mockConflictCandidatesResponse), { status: 200 });
+        return new Response(JSON.stringify(mockBackendDetailConflict), { status: 200 });
       }
       return new Response("Not found", { status: 404 });
     });
@@ -157,19 +161,22 @@ describe("Candidate Review Interface", () => {
     expect(
       screen.getByText(/Release year 2011 does not match provider broadcast of the 1982 classic/i)
     ).toBeInTheDocument();
+
+    // Verify legacy_unverified is displayed as Unverified Machine Match
+    expect(screen.getByText(/Unverified Machine Match/i)).toBeInTheDocument();
   });
 
   it("displays manual mapping conflict warnings clearly and disables acceptance", async () => {
     vi.spyOn(global, "fetch").mockImplementation(async (url) => {
       const u = String(url);
-      if (u.includes("/api/admin/provider-content/candidates/") || u.includes("/api/admin/provider-content/unresolved/")) {
-        return new Response(JSON.stringify(mockCandidateQueue), { status: 200 });
+      if (u.includes("/api/admin/provider-content/candidates/")) {
+        return new Response(JSON.stringify(mockBackendQueueResponse), { status: 200 });
       }
       if (u.includes("/api/admin/provider-content/pc-103/candidates/")) {
-        return new Response(JSON.stringify(mockManualConflictCandidatesResponse), { status: 200 });
+        return new Response(JSON.stringify(mockBackendDetailManualConflict), { status: 200 });
       }
       if (u.includes("/api/admin/provider-content/pc-101/candidates/")) {
-        return new Response(JSON.stringify(mockAmbiguousCandidatesResponse), { status: 200 });
+        return new Response(JSON.stringify(mockBackendDetailAmbiguous), { status: 200 });
       }
       return new Response("Not found", { status: 404 });
     });
@@ -202,24 +209,11 @@ describe("Candidate Review Interface", () => {
   it("distinguishes mapping versus offer availability and enforces 'Mapped ≠ Watchable'", async () => {
     vi.spyOn(global, "fetch").mockImplementation(async (url) => {
       const u = String(url);
-      if (u.includes("/api/admin/provider-content/candidates/") || u.includes("/api/admin/provider-content/unresolved/")) {
-        return new Response(JSON.stringify(mockCandidateQueue), { status: 200 });
+      if (u.includes("/api/admin/provider-content/candidates/")) {
+        return new Response(JSON.stringify(mockBackendQueueResponse), { status: 200 });
       }
       if (u.includes("/api/admin/provider-content/pc-104/candidates/")) {
-        return new Response(
-          JSON.stringify({
-            provider_content: mockQueueItemMappedNoOffer,
-            candidates: [],
-            summary: {
-              total_candidates: 0,
-              accepted_count: 0,
-              rejected_count: 0,
-              pending_count: 0,
-              has_manual_conflict: false,
-            },
-          }),
-          { status: 200 }
-        );
+        return new Response(JSON.stringify(mockBackendDetailMappedNoOffer), { status: 200 });
       }
       return new Response("Not found", { status: 404 });
     });
@@ -249,11 +243,11 @@ describe("Candidate Review Interface", () => {
   it("validates mandatory non-empty reason for accept/reject mutations", async () => {
     vi.spyOn(global, "fetch").mockImplementation(async (url) => {
       const u = String(url);
-      if (u.includes("/api/admin/provider-content/candidates/") || u.includes("/api/admin/provider-content/unresolved/")) {
-        return new Response(JSON.stringify(mockCandidateQueue), { status: 200 });
+      if (u.includes("/api/admin/provider-content/candidates/")) {
+        return new Response(JSON.stringify(mockBackendQueueResponse), { status: 200 });
       }
       if (u.includes("/api/admin/provider-content/pc-101/candidates/")) {
-        return new Response(JSON.stringify(mockAmbiguousCandidatesResponse), { status: 200 });
+        return new Response(JSON.stringify(mockBackendDetailAmbiguous), { status: 200 });
       }
       return new Response("Not found", { status: 404 });
     });
@@ -291,33 +285,46 @@ describe("Candidate Review Interface", () => {
     ).toBeInTheDocument();
   });
 
-  it("performs accept mutation after confirmation and sends expected_revision", async () => {
+  it("handles PR #50 accept mutation response shape {status: 'accepted', mapping, candidate, movie}", async () => {
     let acceptCalled = false;
     let acceptPayload: unknown = null;
 
     vi.spyOn(global, "fetch").mockImplementation(async (url, init) => {
       const u = String(url);
-      if (u.includes("/api/admin/provider-content/candidates/") || u.includes("/api/admin/provider-content/unresolved/")) {
-        return new Response(JSON.stringify(mockCandidateQueue), { status: 200 });
+      if (u.includes("/api/admin/provider-content/candidates/")) {
+        return new Response(JSON.stringify(mockBackendQueueResponse), { status: 200 });
       }
       if (u.includes("/api/admin/provider-content/pc-101/candidates/532639/accept/")) {
         acceptCalled = true;
         acceptPayload = JSON.parse(String(init?.body));
         return new Response(
           JSON.stringify({
-            success: true,
-            message: "Candidate accepted",
-            tmdb_id: 532639,
-            provider_content_id: "pc-101",
-            review_state: "accepted",
-            mapping_updated: true,
-            reviewed_at: new Date().toISOString(),
+            status: "accepted",
+            mapping: {
+              id: 99,
+              tmdb_id: 532639,
+              provider_content_id: "pc-101",
+              revision: 1,
+            },
+            candidate: {
+              id: 1,
+              tmdb_id: 532639,
+              title: "Pinocchio",
+            },
+            movie: {
+              tmdb_id: 532639,
+              title: "Pinocchio",
+            },
+            audit: {
+              id: 10,
+              created_at: new Date().toISOString(),
+            },
           }),
           { status: 200 }
         );
       }
       if (u.includes("/api/admin/provider-content/pc-101/candidates/")) {
-        return new Response(JSON.stringify(mockAmbiguousCandidatesResponse), { status: 200 });
+        return new Response(JSON.stringify(mockBackendDetailAmbiguous), { status: 200 });
       }
       return new Response("Not found", { status: 404 });
     });
@@ -346,17 +353,17 @@ describe("Candidate Review Interface", () => {
       });
     });
 
-    // Check success notification
+    // Check success notification referencing the normalized response
     await waitFor(() => {
-      expect(screen.getByText(/Successfully accepted candidate TMDb 532639/i)).toBeInTheDocument();
+      expect(screen.getByText(/Successfully accepted candidate\. TMDb ID: 532639 \(Pinocchio\)\. Mapping updated: yes\./i)).toBeInTheDocument();
     });
   });
 
-  it("handles concurrent / stale conflict errors (409) cleanly", async () => {
+  it("handles PR #50 reject mutation response and concurrent / stale conflict errors (409) cleanly", async () => {
     vi.spyOn(global, "fetch").mockImplementation(async (url) => {
       const u = String(url);
-      if (u.includes("/api/admin/provider-content/candidates/") || u.includes("/api/admin/provider-content/unresolved/")) {
-        return new Response(JSON.stringify(mockCandidateQueue), { status: 200 });
+      if (u.includes("/api/admin/provider-content/candidates/")) {
+        return new Response(JSON.stringify(mockBackendQueueResponse), { status: 200 });
       }
       if (u.includes("/api/admin/provider-content/pc-101/candidates/532639/reject/")) {
         return new Response(
@@ -367,7 +374,7 @@ describe("Candidate Review Interface", () => {
         );
       }
       if (u.includes("/api/admin/provider-content/pc-101/candidates/")) {
-        return new Response(JSON.stringify(mockAmbiguousCandidatesResponse), { status: 200 });
+        return new Response(JSON.stringify(mockBackendDetailAmbiguous), { status: 200 });
       }
       return new Response("Not found", { status: 404 });
     });

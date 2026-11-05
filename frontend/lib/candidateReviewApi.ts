@@ -1,18 +1,18 @@
 /**
- * Typed API client for TMDb Candidate Review interface (Local Operator).
+ * Typed API client and adapter for TMDb Candidate Review interface (Local Operator).
  *
- * Backend integration endpoints owned by parallel mapping-acceptance backend:
- * - GET /api/admin/provider-content/candidates/ (Paginated review queue)
- * - GET /api/admin/provider-content/{id}/candidates/ (Details & candidates)
+ * Backend integration endpoints owned by Wave 2A mapping-acceptance backend:
+ * - GET /api/admin/provider-content/candidates/ (Review queue with search, status, content_type filters)
+ * - GET /api/admin/provider-content/{id}/candidates/ (Details & candidate list)
  * - POST /api/admin/provider-content/{id}/candidates/{tmdb_id}/accept/
  * - POST /api/admin/provider-content/{id}/candidates/{tmdb_id}/reject/
  *
  * STRICT GUARDRAILS:
- * - Do not invent alternative mutation endpoints.
- * - If an endpoint is unavailable during development, return structured error or handle cleanly.
- * - Never claim that an acceptance succeeded without backend confirmation.
- * - Mapped does not imply watchable.
- * - Explicit backend-unavailable state when collection endpoint is absent (do not use fake mock fallback or silent 404->empty).
+ * - No alternative endpoints or undocumented fallbacks (a 404 from the documented endpoint indicates backend unavailable).
+ * - No test fixtures used as production data.
+ * - Mapped does NOT imply watchable.
+ * - Mandatory trimmed reason, explicit expected_revision, and 409 stale detection.
+ * - Respect legacy_unverified as unverified machine matches rather than human accepted.
  */
 
 export type ReviewState = "pending" | "accepted" | "rejected" | "conflict" | "ambiguous";
@@ -22,7 +22,8 @@ export type ResolutionCategory =
   | "ambiguous"
   | "conflict"
   | "no_results"
-  | "rejected";
+  | "rejected"
+  | "unresolved";
 
 export type AvailabilityOfferStatus =
   | "no_offer"
@@ -73,6 +74,13 @@ export interface CandidateScoringEvidence {
   warnings?: string[];
 }
 
+export interface CompetingManualMapping {
+  mapping_id: number;
+  provider_slug: string;
+  provider_content_id: string;
+  detail: string;
+}
+
 export interface TMDbCandidate {
   id?: number;
   tmdb_id: number;
@@ -90,13 +98,10 @@ export interface TMDbCandidate {
   reviewed_by?: string | null;
   /** True only if an operator explicitly confirmed this match */
   is_human_reviewed?: boolean;
+  /** If imported as legacy or automated match without human review */
+  legacy_unverified?: boolean;
   /** Competing manual mapping on the same TMDb ID if detected */
-  competing_manual_mapping?: {
-    mapping_id: number;
-    provider_slug: string;
-    provider_content_id: string;
-    detail: string;
-  } | null;
+  competing_manual_mapping?: CompetingManualMapping | null;
 }
 
 export interface ProviderContentItem {
@@ -118,9 +123,19 @@ export interface ProviderContentItem {
   revision?: number | string | null;
 }
 
+export interface QueueSummary {
+  total_unresolved?: number;
+  ambiguous?: number;
+  conflict?: number;
+  [key: string]: unknown;
+}
+
 export interface ProviderContentQueueResponse {
-  count: number;
-  results: ProviderContentItem[];
+  items: ProviderContentItem[];
+  page: number;
+  pages: number;
+  total_items: number;
+  summary?: QueueSummary;
 }
 
 export interface ProviderContentCandidatesResponse {
@@ -146,15 +161,16 @@ export interface ReviewRejectPayload {
   reason: string;
 }
 
-export interface ReviewMutationResponse {
-  success: boolean;
-  message: string;
+export interface NormalizedMutationResponse {
+  status: "accepted" | "already_accepted" | "rejected" | string;
   tmdb_id: number;
   provider_content_id: string | number;
-  review_state: ReviewState;
-  rejection_reason?: string;
   mapping_updated: boolean;
-  reviewed_at: string;
+  rejection_reason?: string;
+  reviewed_at?: string;
+  candidate_title?: string;
+  mapping_id?: number;
+  revision?: number | string | null;
 }
 
 export class ApiError extends Error {
@@ -171,36 +187,165 @@ export class ApiError extends Error {
   }
 }
 
+// ============================================================================
+// Normalization Helpers (Wave 2A Adapter)
+// ============================================================================
+
+export function normalizeExistingMapping(raw: Record<string, unknown> | null | undefined): ExistingMapping | null {
+  if (!raw || typeof raw !== "object" || !raw.tmdb_id) return null;
+  return {
+    id: typeof raw.id === "number" ? raw.id : undefined,
+    tmdb_id: Number(raw.tmdb_id),
+    title: (raw.title as string) || (raw.tmdb_title as string) || undefined,
+    year: typeof raw.year === "number" ? raw.year : (typeof raw.tmdb_year === "number" ? raw.tmdb_year : null),
+    content_type: (raw.content_type as string) || "movie",
+    match_method: (raw.match_method as string) || (raw.is_manual ? "manual" : "automated"),
+    confidence: typeof raw.confidence === "number" ? raw.confidence : 1.0,
+    is_manual: Boolean(raw.is_manual),
+    source: raw.source as string | undefined,
+    first_seen: (raw.first_seen as string) ?? null,
+    last_verified: (raw.last_verified as string) ?? null,
+    revision: (raw.revision as number | string) ?? null,
+  };
+}
+
+export function normalizeAvailabilitySummary(
+  raw: Record<string, unknown> | null | undefined,
+  existingMapping: ExistingMapping | null
+): AvailabilityOffersSummary {
+  const rawAvailability = raw?.availability_summary as Record<string, unknown> | undefined;
+  const activeOffers = Number(raw?.active_offer_count ?? rawAvailability?.active_offers ?? raw?.active_offers ?? 0);
+  const totalOffers = Number(raw?.offer_count ?? rawAvailability?.total_offers ?? raw?.total_offers ?? activeOffers);
+
+  const countries = (raw?.countries as string[]) ?? (rawAvailability?.countries as string[]) ?? [];
+  const services = (raw?.services as string[]) ?? (rawAvailability?.services as string[]) ?? (raw?.provider ? [raw.provider as string] : []);
+
+  const isMapped = Boolean(existingMapping && existingMapping.tmdb_id);
+  const hasOffers = activeOffers > 0;
+
+  let status: AvailabilityOfferStatus = "unknown";
+  let statusLabel = "Unknown";
+  let disclaimer = "";
+
+  if (hasOffers) {
+    status = "active_offer";
+    statusLabel = "Active Offer";
+    disclaimer = `Active stream available across ${services.length || 1} provider(s).`;
+  } else if (isMapped) {
+    status = "no_offer";
+    statusLabel = "Mapped (No Offers)";
+    disclaimer = "Content identity is mapped to TMDb, but has ZERO playable offers (Mapped ≠ Watchable).";
+  } else {
+    status = "no_offer";
+    statusLabel = "No Offers";
+    disclaimer = "No active streaming offers found for this provider catalogue item.";
+  }
+
+  return {
+    status,
+    status_label: statusLabel,
+    total_offers: totalOffers,
+    active_offers: activeOffers,
+    countries,
+    services,
+    disclaimer,
+  };
+}
+
+export function normalizeProviderContentItem(raw: Record<string, unknown>): ProviderContentItem {
+  const existingMapping = normalizeExistingMapping(raw.existing_mapping as Record<string, unknown> | undefined);
+  const availability = normalizeAvailabilitySummary(raw, existingMapping);
+
+  const providerSlug = (raw.provider_slug as string) || (raw.provider as string) || "provider";
+  const providerName = (raw.provider_name as string) || (raw.provider as string) || providerSlug;
+  const providerContentId = (raw.provider_content_id as string) || (raw.raw_id as string) || String(raw.id);
+  const nativeTitle = (raw.native_title as string) || (raw.title as string) || "Untitled";
+  const contentType = raw.content_type === "series" ? "series" : "movie";
+  const releaseYear = typeof raw.release_year === "number" ? raw.release_year : (typeof raw.year === "number" ? raw.year : null);
+
+  return {
+    id: raw.id as string | number,
+    provider_slug: providerSlug,
+    provider_name: providerName,
+    provider_content_id: providerContentId,
+    native_title: nativeTitle,
+    content_type: contentType,
+    release_year: releaseYear,
+    provider_url: (raw.provider_url as string) || (raw.url as string) || undefined,
+    metadata: (raw.metadata as Record<string, unknown>) || {},
+    existing_mapping: existingMapping,
+    availability_summary: availability,
+    candidate_count: typeof raw.candidate_count === "number" ? raw.candidate_count : (Array.isArray(raw.candidates) ? raw.candidates.length : 0),
+    top_confidence: typeof raw.top_confidence === "number" ? raw.top_confidence : undefined,
+    resolution_category: ((raw.resolution_category as string) || (raw.status as string) || "unresolved") as ResolutionCategory,
+    last_seen: (raw.last_seen as string) ?? null,
+    revision: (raw.revision as number | string) ?? existingMapping?.revision ?? null,
+  };
+}
+
+export function normalizeCandidate(raw: Record<string, unknown>): TMDbCandidate {
+  const evidence: CandidateScoringEvidence = (raw.scoring_evidence as CandidateScoringEvidence) || (raw.evidence as CandidateScoringEvidence) || {};
+  const score = typeof raw.confidence_score === "number" ? raw.confidence_score : (typeof raw.confidence === "number" ? raw.confidence : (evidence.final_score ?? 0));
+
+  const isLegacyUnverified = Boolean(raw.legacy_unverified);
+  const isHumanReviewed = raw.is_human_reviewed !== undefined ? Boolean(raw.is_human_reviewed) : !isLegacyUnverified;
+
+  return {
+    id: typeof raw.id === "number" ? raw.id : undefined,
+    tmdb_id: Number(raw.tmdb_id),
+    title: (raw.title as string) || (raw.tmdb_title as string) || "Unknown TMDb Title",
+    original_title: (raw.original_title as string) || (raw.tmdb_original_title as string) || undefined,
+    content_type: raw.content_type === "series" ? "series" : "movie",
+    year: typeof raw.year === "number" ? raw.year : (typeof raw.tmdb_year === "number" ? raw.tmdb_year : null),
+    poster_path: (raw.poster_path as string) ?? null,
+    confidence_score: score,
+    scoring_evidence: evidence,
+    review_state: ((raw.review_state as string) || (raw.status as string) || "pending") as ReviewState,
+    resolution_category: ((raw.resolution_category as string) || "unresolved") as ResolutionCategory,
+    rejection_reason: raw.rejection_reason as string | undefined,
+    reviewed_at: (raw.reviewed_at as string) ?? null,
+    reviewed_by: (raw.reviewed_by as string) ?? null,
+    is_human_reviewed: isHumanReviewed,
+    legacy_unverified: isLegacyUnverified,
+    competing_manual_mapping: (raw.competing_manual_mapping as CompetingManualMapping) ?? null,
+  };
+}
+
+// ============================================================================
+// API Client Functions
+// ============================================================================
+
+export interface QueueQueryParams {
+  search?: string;
+  status?: string;
+  content_type?: string;
+  provider?: string;
+  page?: number;
+  page_size?: number;
+}
+
 /**
- * Fetch the queue of unresolved or review-pending provider contents.
- * Target endpoint: GET /api/admin/provider-content/candidates/
- * Fallback endpoint: GET /api/admin/provider-content/unresolved/
+ * Fetch the candidate review queue from Wave 2A backend:
+ * GET /api/admin/provider-content/candidates/
+ *
+ * Query params: search, status, content_type, provider, page, page_size
+ * Expected backend shape: { items: [...], page, pages, total_items, summary }
  */
 export async function fetchCandidateQueue(
-  params?: { provider?: string; category?: string; q?: string }
+  params?: QueueQueryParams
 ): Promise<ProviderContentQueueResponse> {
   const query = new URLSearchParams();
+  if (params?.search) query.set("search", params.search);
+  if (params?.status) query.set("status", params.status);
+  if (params?.content_type) query.set("content_type", params.content_type);
   if (params?.provider) query.set("provider", params.provider);
-  if (params?.category) query.set("category", params.category);
-  if (params?.q) query.set("q", params.q);
+  if (params?.page) query.set("page", String(params.page));
+  if (params?.page_size) query.set("page_size", String(params.page_size));
 
   const queryString = query.toString() ? `?${query.toString()}` : "";
   let res: Response;
   try {
-    const primaryRes = await fetch(`/api/admin/provider-content/candidates/${queryString}`);
-    if (primaryRes.ok) {
-      res = primaryRes;
-    } else if (primaryRes.status === 404) {
-      // Check secondary fallback endpoint
-      const fallbackRes = await fetch(`/api/admin/provider-content/unresolved/${queryString}`);
-      if (fallbackRes.ok) {
-        res = fallbackRes;
-      } else {
-        res = primaryRes;
-      }
-    } else {
-      res = primaryRes;
-    }
+    res = await fetch(`/api/admin/provider-content/candidates/${queryString}`);
   } catch (err: unknown) {
     throw new ApiError(
       err instanceof Error ? err.message : "Network failure connecting to candidate review backend.",
@@ -211,17 +356,31 @@ export async function fetchCandidateQueue(
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new ApiError(
-      body.error ?? body.detail ?? `Failed to fetch candidate queue (${res.status})`,
+      body.error ?? body.detail ?? `Candidate review backend endpoint is currently unavailable (${res.status}).`,
       res.status
     );
   }
 
-  return res.json();
+  const raw = await res.json();
+  const rawItems: Record<string, unknown>[] = raw.items || raw.results || [];
+  const normalizedItems = rawItems.map(normalizeProviderContentItem);
+
+  return {
+    items: normalizedItems,
+    page: raw.page ?? 1,
+    pages: raw.pages ?? 1,
+    total_items: raw.total_items ?? raw.count ?? normalizedItems.length,
+    summary: raw.summary,
+  };
 }
 
 /**
- * Fetch candidate details and evidence for a specific provider content.
- * Endpoint: GET /api/admin/provider-content/{id}/candidates/
+ * Fetch candidate details and evidence for a specific provider content:
+ * GET /api/admin/provider-content/{id}/candidates/
+ *
+ * Wave 2A backend returns either flat fields:
+ * { id, provider, title, year, existing_mapping, offer_count, active_offer_count, candidates, ... }
+ * or nested { provider_content, candidates, summary }.
  */
 export async function fetchProviderContentCandidates(
   id: string | number
@@ -244,24 +403,51 @@ export async function fetchProviderContentCandidates(
     );
   }
 
-  return res.json();
+  const raw = await res.json();
+  const rawContent = (raw.provider_content || raw) as Record<string, unknown>;
+  const normalizedContent = normalizeProviderContentItem(rawContent);
+
+  const rawCandidates: Record<string, unknown>[] = (raw.candidates || rawContent.candidates || []) as Record<string, unknown>[];
+  const normalizedCandidates = rawCandidates.map(normalizeCandidate);
+
+  let acceptedCount = 0;
+  let rejectedCount = 0;
+  let pendingCount = 0;
+  let hasManualConflict = false;
+
+  for (const c of normalizedCandidates) {
+    if (c.review_state === "accepted") acceptedCount++;
+    else if (c.review_state === "rejected") rejectedCount++;
+    else pendingCount++;
+
+    if (c.competing_manual_mapping) hasManualConflict = true;
+  }
+
+  return {
+    provider_content: normalizedContent,
+    candidates: normalizedCandidates,
+    summary: raw.summary || {
+      total_candidates: normalizedCandidates.length,
+      accepted_count: acceptedCount,
+      rejected_count: rejectedCount,
+      pending_count: pendingCount,
+      has_manual_conflict: hasManualConflict,
+    },
+  };
 }
 
 /**
- * Explicitly accept a candidate TMDb identity for a provider content.
- * Endpoint: POST /api/admin/provider-content/{id}/candidates/{tmdb_id}/accept/
+ * Accept a candidate TMDb identity:
+ * POST /api/admin/provider-content/{id}/candidates/{tmdb_id}/accept/
  *
- * Requirements:
- * - Mandatory non-empty reason.
- * - Explicit expected_revision (null when unmapped).
- * - Confirmation required before invocation.
- * - Does not claim success without backend confirmation.
+ * Backend returns:
+ * { status: "accepted" | "already_accepted", mapping: {...}, candidate: {...}, movie?: {...}, audit?: {...} }
  */
 export async function acceptCandidate(
   id: string | number,
   tmdbId: number,
   payload: ReviewAcceptPayload
-): Promise<ReviewMutationResponse> {
+): Promise<NormalizedMutationResponse> {
   const trimmedReason = payload.reason?.trim();
   if (!trimmedReason) {
     throw new ApiError("A valid, non-empty reason is mandatory for acceptance.", 400);
@@ -301,23 +487,33 @@ export async function acceptCandidate(
     throw new ApiError(message, res.status, res.status === 409);
   }
 
-  return res.json();
+  const data = await res.json();
+  const returnedTmdbId = data.candidate?.tmdb_id ?? data.mapping?.tmdb_id ?? data.tmdb_id ?? tmdbId;
+
+  return {
+    status: data.status || "accepted",
+    tmdb_id: returnedTmdbId,
+    provider_content_id: id,
+    mapping_updated: data.status === "accepted",
+    candidate_title: data.candidate?.title,
+    mapping_id: data.mapping?.id,
+    revision: data.mapping?.revision ?? null,
+    reviewed_at: data.audit?.created_at || new Date().toISOString(),
+  };
 }
 
 /**
- * Explicitly reject a candidate TMDb identity for a provider content.
- * Endpoint: POST /api/admin/provider-content/{id}/candidates/{tmdb_id}/reject/
+ * Reject a candidate TMDb identity:
+ * POST /api/admin/provider-content/{id}/candidates/{tmdb_id}/reject/
  *
- * Requirements:
- * - Mandatory non-empty reason.
- * - Confirmation required before invocation.
- * - Does not claim success without backend confirmation.
+ * Backend returns:
+ * { status: "rejected", candidate: {...}, audit?: {...} }
  */
 export async function rejectCandidate(
   id: string | number,
   tmdbId: number,
   payload: ReviewRejectPayload
-): Promise<ReviewMutationResponse> {
+): Promise<NormalizedMutationResponse> {
   const trimmedReason = payload.reason?.trim();
   if (!trimmedReason) {
     throw new ApiError("A valid, non-empty reason is mandatory for rejection.", 400);
@@ -346,5 +542,16 @@ export async function rejectCandidate(
     throw new ApiError(message, res.status, res.status === 409);
   }
 
-  return res.json();
+  const data = await res.json();
+  const returnedTmdbId = data.candidate?.tmdb_id ?? data.tmdb_id ?? tmdbId;
+
+  return {
+    status: data.status || "rejected",
+    tmdb_id: returnedTmdbId,
+    provider_content_id: id,
+    mapping_updated: false,
+    rejection_reason: trimmedReason,
+    candidate_title: data.candidate?.title,
+    reviewed_at: data.audit?.created_at || new Date().toISOString(),
+  };
 }

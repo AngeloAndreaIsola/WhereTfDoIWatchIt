@@ -127,8 +127,8 @@ export function CandidateComparison({
                     >
                       {cand.review_state}
                     </span>
-                    {/* Machine generated vs human verified distinction */}
-                    {isAccepted && !cand.is_human_reviewed && (
+                    {/* Machine generated vs human verified distinction / legacy unverified */}
+                    {(cand.legacy_unverified || (!cand.is_human_reviewed && isAccepted)) && (
                       <span className="text-[9px] uppercase font-semibold text-amber-600 dark:text-amber-400">
                         Unverified Machine Match
                       </span>

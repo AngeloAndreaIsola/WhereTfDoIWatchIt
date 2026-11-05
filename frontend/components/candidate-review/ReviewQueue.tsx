@@ -10,8 +10,10 @@ interface ReviewQueueProps {
   loading: boolean;
   filterProvider: string;
   onFilterProviderChange: (provider: string) => void;
-  filterCategory: string;
-  onFilterCategoryChange: (category: string) => void;
+  filterStatus: string;
+  onFilterStatusChange: (status: string) => void;
+  filterContentType: string;
+  onFilterContentTypeChange: (contentType: string) => void;
   searchQuery: string;
   onSearchQueryChange: (query: string) => void;
 }
@@ -23,26 +25,15 @@ export function ReviewQueue({
   loading,
   filterProvider,
   onFilterProviderChange,
-  filterCategory,
-  onFilterCategoryChange,
+  filterStatus,
+  onFilterStatusChange,
+  filterContentType,
+  onFilterContentTypeChange,
   searchQuery,
   onSearchQueryChange,
 }: ReviewQueueProps) {
-  // Extract unique providers for filter
+  // Extract unique providers for filter dropdown
   const providers = Array.from(new Set(items.map((i) => i.provider_slug))).filter(Boolean);
-
-  const filteredItems = items.filter((item) => {
-    if (filterProvider && item.provider_slug !== filterProvider) return false;
-    if (filterCategory && item.resolution_category !== filterCategory) return false;
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      const matchTitle = item.native_title.toLowerCase().includes(q);
-      const matchId = String(item.provider_content_id).toLowerCase().includes(q);
-      const matchProvider = item.provider_name.toLowerCase().includes(q);
-      if (!matchTitle && !matchId && !matchProvider) return false;
-    }
-    return true;
-  });
 
   return (
     <aside className="w-full md:w-80 flex-shrink-0 flex flex-col border-r border-gray-200 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900/40 p-4 space-y-4">
@@ -55,11 +46,11 @@ export function ReviewQueue({
         </p>
       </div>
 
-      {/* Filters & Search */}
+      {/* Filters & Search - mapped to Wave 2A query params: search, provider, status, content_type */}
       <div className="space-y-2">
         <input
           type="text"
-          placeholder="Filter title, ID or provider…"
+          placeholder="Search title or ID…"
           value={searchQuery}
           onChange={(e) => onSearchQueryChange(e.target.value)}
           aria-label="Filter queue items"
@@ -82,16 +73,30 @@ export function ReviewQueue({
           </select>
 
           <select
-            value={filterCategory}
-            onChange={(e) => onFilterCategoryChange(e.target.value)}
-            aria-label="Filter by resolution category"
+            value={filterStatus}
+            onChange={(e) => onFilterStatusChange(e.target.value)}
+            aria-label="Filter by resolution status"
             className="w-1/2 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-2 py-1 text-xs text-gray-700 dark:text-gray-300 focus:outline-none"
           >
-            <option value="">All Categories</option>
+            <option value="">All Statuses</option>
+            <option value="unresolved">Unresolved</option>
             <option value="ambiguous">Ambiguous</option>
             <option value="conflict">Conflict</option>
             <option value="unique_candidate">Unique</option>
             <option value="no_results">No Results</option>
+          </select>
+        </div>
+
+        <div className="flex gap-2">
+          <select
+            value={filterContentType}
+            onChange={(e) => onFilterContentTypeChange(e.target.value)}
+            aria-label="Filter by content type"
+            className="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-2 py-1 text-xs text-gray-700 dark:text-gray-300 focus:outline-none"
+          >
+            <option value="">All Types (Movies & Series)</option>
+            <option value="movie">Movies Only</option>
+            <option value="series">Series Only</option>
           </select>
         </div>
       </div>
@@ -102,14 +107,14 @@ export function ReviewQueue({
           <p className="text-xs text-center py-6 text-gray-500">Loading queue items…</p>
         )}
 
-        {!loading && filteredItems.length === 0 && (
+        {!loading && items.length === 0 && (
           <div className="text-center py-8 text-xs text-gray-500 dark:text-gray-400">
-            {items.length === 0 ? "Queue is empty. No review needed." : "No items match current filters."}
+            Queue is empty. No review needed.
           </div>
         )}
 
         {!loading &&
-          filteredItems.map((item) => {
+          items.map((item) => {
             const isSelected = selectedId === item.id;
             return (
               <button

@@ -20,8 +20,10 @@ export default function CandidateReviewPage() {
   const [queueLoading, setQueueLoading] = useState(true);
   const [queueError, setQueueError] = useState<string | null>(null);
 
+  // Filters mapped to Wave 2A backend query params: provider, status, content_type, search
   const [filterProvider, setFilterProvider] = useState("");
-  const [filterCategory, setFilterCategory] = useState("");
+  const [filterStatus, setFilterStatus] = useState("");
+  const [filterContentType, setFilterContentType] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
 
   const [selectedItem, setSelectedItem] = useState<ProviderContentItem | null>(null);
@@ -52,14 +54,22 @@ export default function CandidateReviewPage() {
     setQueueLoading(true);
     setQueueError(null);
     try {
-      const data = await fetchCandidateQueue();
-      setQueue(data.results || []);
-      if (data.results && data.results.length > 0) {
+      const data = await fetchCandidateQueue({
+        provider: filterProvider || undefined,
+        status: filterStatus || undefined,
+        content_type: filterContentType || undefined,
+        search: searchQuery.trim() || undefined,
+      });
+
+      const items = data.items || [];
+      setQueue(items);
+
+      if (items.length > 0) {
         setSelectedItem((prev) => {
-          if (prev && data.results.some((i) => i.id === prev.id)) {
-            return data.results.find((i) => i.id === prev.id) || data.results[0];
+          if (prev && items.some((i) => i.id === prev.id)) {
+            return items.find((i) => i.id === prev.id) || items[0];
           }
-          return data.results[0];
+          return items[0];
         });
       } else {
         setSelectedItem(null);
@@ -73,7 +83,7 @@ export default function CandidateReviewPage() {
     } finally {
       setQueueLoading(false);
     }
-  }, []);
+  }, [filterProvider, filterStatus, filterContentType, searchQuery]);
 
   useEffect(() => {
     loadQueue();
@@ -147,9 +157,10 @@ export default function CandidateReviewPage() {
           max_http_requests: data.maxRequests,
         });
 
+        const statusMsg = resp.status === "already_accepted" ? "Candidate was already accepted." : "Successfully accepted candidate.";
         setNotification({
           type: "success",
-          message: `Successfully accepted candidate TMDb ${resp.tmdb_id}. Mapping updated: ${
+          message: `${statusMsg} TMDb ID: ${resp.tmdb_id}${resp.candidate_title ? ` (${resp.candidate_title})` : ""}. Mapping updated: ${
             resp.mapping_updated ? "yes" : "no"
           }.`,
         });
@@ -160,7 +171,7 @@ export default function CandidateReviewPage() {
 
         setNotification({
           type: "info",
-          message: `Candidate TMDb ${resp.tmdb_id} rejected.`,
+          message: `Candidate TMDb ID: ${resp.tmdb_id}${resp.candidate_title ? ` (${resp.candidate_title})` : ""} rejected. Reason: "${resp.rejection_reason}".`,
         });
       }
 
@@ -252,8 +263,10 @@ export default function CandidateReviewPage() {
           loading={queueLoading}
           filterProvider={filterProvider}
           onFilterProviderChange={setFilterProvider}
-          filterCategory={filterCategory}
-          onFilterCategoryChange={setFilterCategory}
+          filterStatus={filterStatus}
+          onFilterStatusChange={setFilterStatus}
+          filterContentType={filterContentType}
+          onFilterContentTypeChange={setFilterContentType}
           searchQuery={searchQuery}
           onSearchQueryChange={setSearchQuery}
         />
