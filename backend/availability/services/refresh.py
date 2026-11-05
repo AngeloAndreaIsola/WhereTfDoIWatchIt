@@ -903,6 +903,134 @@ class AvailabilityRefreshService:
             unresolved=unresolved,
         )
 
+    def persist_targeted_offers(
+        self,
+        offers: list[ProviderOffer],
+        *,
+        source_model: Source,
+    ) -> tuple[int, int, list[str], list[SyncRun]]:
+        """Persist fresh, already-validated targeted ProviderOffers.
+
+        Reuses the canonical offer, price, evidence, and SyncRun persistence
+        machinery without modifying ProviderContent, without calling TMDb or
+        creating/altering ContentMapping, without advancing SyncCursor, and
+        without deactivating any unseen offers.
+
+        Must be called behind the write_barrier within the caller's locked
+        atomic transaction.
+        """
+        capabilities = self.source.capabilities
+        grouped = defaultdict(list)
+        skipped = 0
+
+        for normalized in offers:
+            if normalized.tmdb_id is None:
+                logger.warning(
+                    "availability_offer_skipped source=%s reason=missing_tmdb",
+                    self.source.slug,
+                )
+                skipped += 1
+                continue
+            if (
+                capabilities.supported_content_types is not None
+                and normalized.content_type not in capabilities.supported_content_types
+            ):
+                logger.warning(
+                    "availability_offer_skipped source=%s content_type=%s "
+                    "tmdb_id=%s reason=unsupported_content_type",
+                    self.source.slug, normalized.content_type, normalized.tmdb_id,
+                )
+                skipped += 1
+                continue
+            provider = self._provider(normalized.provider_id, country=normalized.country)
+            country = Country.objects.filter(
+                code=normalized.country.upper(), enabled=True
+            ).first()
+            if provider is None or country is None:
+                logger.warning(
+                    "availability_offer_skipped source=%s provider=%s country=%s "
+                    "tmdb_id=%s reason=%s",
+                    self.source.slug, normalized.provider_id, normalized.country,
+                    normalized.tmdb_id,
+                    "unsupported_provider" if provider is None else "unsupported_country",
+                )
+                skipped += 1
+                continue
+            grouped[(provider, country)].append(normalized)
+
+        runs = [
+            (
+                self.sync_runs.start(
+                    provider=provider,
+                    source=source_model,
+                    country=country,
+                    mode=SyncMode.TARGETED,
+                    authoritative=False,
+                ),
+                provider,
+                country,
+                group,
+            )
+            for (provider, country), group in grouped.items()
+        ]
+
+        created_count = 0
+        updated_count = 0
+        persisted_identities: list[str] = []
+
+        try:
+            for run, provider, country, group in runs:
+                group_created = 0
+                group_updated = 0
+                for normalized in group:
+                    offer, was_created = self.offers.upsert(
+                        provider=provider,
+                        country=country,
+                        source=source_model,
+                        sync_run=run,
+                        content_type=normalized.content_type,
+                        tmdb_id=normalized.tmdb_id,
+                        season_number=normalized.season_number,
+                        episode_number=normalized.episode_number,
+                        offer_type=normalized.offer_type,
+                        provider_content_id=normalized.provider_content_id,
+                        provider_url=normalized.provider_url,
+                        quality=normalized.quality,
+                        audio_languages=normalized.audio_languages,
+                        subtitle_languages=normalized.subtitle_languages,
+                        available_from=normalized.available_from,
+                        available_until=normalized.available_until,
+                        source_record_id=normalized.source_record_id,
+                        source_version=normalized.source_version,
+                    )
+                    self.prices.record(
+                        offer=offer,
+                        source=source_model,
+                        amount=normalized.price_amount,
+                        currency=normalized.price_currency,
+                        source_offer_id=normalized.source_record_id,
+                        error=normalized.price_error,
+                    )
+                    persisted_identities.append(offer.identity)
+                    group_created += int(was_created)
+                    group_updated += int(not was_created)
+
+                self.sync_runs.mark_succeeded(
+                    run,
+                    items_discovered=len(group),
+                    items_processed=len(group),
+                    offers_created=group_created,
+                    offers_updated=group_updated,
+                )
+                created_count += group_created
+                updated_count += group_updated
+        except Exception as exc:
+            for run, _provider, _country, _group in runs:
+                self.sync_runs.mark_failed(run, exc)
+            raise
+
+        return created_count, updated_count, persisted_identities, [run for run, *_ in runs]
+
     def _provider(self, external_id, country=None):
         """Resolve a source-reported provider id to a canonical ``Provider``.
 
