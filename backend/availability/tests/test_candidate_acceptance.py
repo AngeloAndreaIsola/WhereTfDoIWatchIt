@@ -495,6 +495,7 @@ class CandidateAdminApiIntegrationTests(TestCase):
             f"/api/admin/provider-content/{self.content.id}/candidates/693134/accept/",
             data=json.dumps(payload),
             content_type="application/json",
+            HTTP_X_OPERATOR_ROLE="admin",
         )
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
@@ -509,6 +510,7 @@ class CandidateAdminApiIntegrationTests(TestCase):
             f"/api/admin/provider-content/{self.content.id}/candidates/693134/accept/",
             data=json.dumps(payload),
             content_type="application/json",
+            HTTP_X_OPERATOR_ROLE="admin",
         )
         self.assertEqual(resp.status_code, 400)
         data = resp.json()
@@ -522,9 +524,80 @@ class CandidateAdminApiIntegrationTests(TestCase):
             f"/api/admin/provider-content/{self.content.id}/candidates/693134/reject/",
             data=json.dumps(payload),
             content_type="application/json",
+            HTTP_X_OPERATOR_ROLE="admin",
         )
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
         self.assertEqual(data["status"], "rejected")
         self.candidate.refresh_from_db()
         self.assertEqual(self.candidate.review_state, CandidateReviewState.REJECTED)
+
+    def test_security_cross_origin_and_unauthorized_mutation_guards(self):
+        # 1. Missing operator header in unauthenticated context -> 403 OPERATOR_AUTHORIZATION_REQUIRED
+        payload = {"reason": "Test", "expected_revision": None}
+        resp = self.client.post(
+            f"/api/admin/provider-content/{self.content.id}/candidates/693134/accept/",
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.json()["code"], "OPERATOR_AUTHORIZATION_REQUIRED")
+
+        # 2. Browser cross-site request (Sec-Fetch-Site: cross-site) -> 403 FORBIDDEN_CROSS_ORIGIN
+        resp = self.client.post(
+            f"/api/admin/provider-content/{self.content.id}/candidates/693134/accept/",
+            data=json.dumps(payload),
+            content_type="application/json",
+            HTTP_X_OPERATOR_ROLE="admin",
+            HTTP_SEC_FETCH_SITE="cross-site",
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.json()["code"], "FORBIDDEN_CROSS_ORIGIN")
+
+        # 3. Untrusted Origin header -> 403 FORBIDDEN_ORIGIN
+        resp = self.client.post(
+            f"/api/admin/provider-content/{self.content.id}/candidates/693134/accept/",
+            data=json.dumps(payload),
+            content_type="application/json",
+            HTTP_X_OPERATOR_ROLE="admin",
+            HTTP_ORIGIN="https://malicious-attacker-site.com",
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.json()["code"], "FORBIDDEN_ORIGIN")
+
+        # 4. Untrusted Referer header -> 403 FORBIDDEN_REFERER
+        resp = self.client.post(
+            f"/api/admin/provider-content/{self.content.id}/candidates/693134/accept/",
+            data=json.dumps(payload),
+            content_type="application/json",
+            HTTP_X_OPERATOR_ROLE="admin",
+            HTTP_REFERER="https://malicious-attacker-site.com/exploit",
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.json()["code"], "FORBIDDEN_REFERER")
+
+        # 5. Non-JSON Content-Type -> 415 INVALID_CONTENT_TYPE
+        resp = self.client.post(
+            f"/api/admin/provider-content/{self.content.id}/candidates/693134/accept/",
+            data="reason=foo",
+            content_type="application/x-www-form-urlencoded",
+            HTTP_X_OPERATOR_ROLE="admin",
+        )
+        self.assertEqual(resp.status_code, 415)
+        self.assertEqual(resp.json()["code"], "INVALID_CONTENT_TYPE")
+
+    @patch("availability.candidate_admin_views.CandidateAcceptanceService.accept")
+    def test_internal_error_does_not_disclose_server_exception(self, mock_accept):
+        mock_accept.side_effect = RuntimeError("Sensitive DB password in traceback: p4ssw0rd")
+        payload = {"reason": "Test", "expected_revision": None}
+        resp = self.client.post(
+            f"/api/admin/provider-content/{self.content.id}/candidates/693134/accept/",
+            data=json.dumps(payload),
+            content_type="application/json",
+            HTTP_X_OPERATOR_ROLE="admin",
+        )
+        self.assertEqual(resp.status_code, 500)
+        data = resp.json()
+        self.assertEqual(data["code"], "INTERNAL_ERROR")
+        self.assertNotIn("p4ssw0rd", data["error"])
+        self.assertIn("internal server error occurred", data["error"].lower())

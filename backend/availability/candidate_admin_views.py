@@ -4,10 +4,12 @@ from __future__ import annotations
 import json
 import logging
 from typing import Any
+from urllib.parse import urlparse
 
+from django.conf import settings
 from django.core.paginator import Paginator
 from django.db.models import Count, Q
-from django.http import JsonResponse
+from django.http import HttpRequest, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
@@ -29,6 +31,112 @@ from availability.services.candidate_acceptance import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _is_trusted_origin_or_host(url_str: str, request_host: str) -> bool:
+    """Verify whether the origin or referer matches local/allowed hosts."""
+    if not url_str:
+        return True
+    try:
+        parsed = urlparse(url_str)
+        host = (parsed.netloc or "").split(":")[0].lower()
+        if not host:
+            return False
+        # Local loopback hosts
+        if host in ("localhost", "127.0.0.1", "testserver"):
+            return True
+        # Request host
+        req_netloc = request_host.split(":")[0].lower()
+        if host == req_netloc:
+            return True
+        # Allowed hosts from settings
+        for allowed in getattr(settings, "ALLOWED_HOSTS", []):
+            allowed = allowed.split(":")[0].strip().lower()
+            if allowed and (allowed == "*" or host == allowed or (allowed.startswith(".") and host.endswith(allowed))):
+                return True
+        return False
+    except Exception:
+        return False
+
+
+def verify_operator_mutation_guard(request: HttpRequest) -> tuple[bool, Optional[JsonResponse]]:
+    """Enforce operator authorization and cross-origin protections for privileged mutations.
+
+    Protections:
+    1. Browser Sec-Fetch-Site: reject 'cross-site' requests.
+    2. Origin / Referer validation: must match trusted local/allowed origins.
+    3. Content-Type validation: state-changing mutations must specify application/json.
+    4. Operator authentication / authorization seam:
+       - If user is authenticated in Django session, must have is_staff=True.
+       - If no login session (single-user personal deployment model), require an explicit
+         operator header (e.g. 'X-Operator-Role: admin', 'X-Requested-With', or
+         'X-Operator-Action: confirm') to prevent ambient browser form/tag cross-site forgery.
+    """
+    sec_fetch_site = request.headers.get("Sec-Fetch-Site", "").lower()
+    if sec_fetch_site == "cross-site":
+        logger.warning("Operator mutation rejected: Sec-Fetch-Site cross-site attempt from %s", request.META.get("REMOTE_ADDR"))
+        return False, JsonResponse(
+            {"error": "Cross-origin requests are forbidden on admin mutation endpoints", "code": "FORBIDDEN_CROSS_ORIGIN"},
+            status=403,
+        )
+
+    req_host = request.get_host()
+
+    origin = request.headers.get("Origin")
+    if origin and not _is_trusted_origin_or_host(origin, req_host):
+        logger.warning("Operator mutation rejected: Untrusted Origin %r", origin)
+        return False, JsonResponse(
+            {"error": "Untrusted request Origin", "code": "FORBIDDEN_ORIGIN"},
+            status=403,
+        )
+
+    referer = request.headers.get("Referer")
+    if referer and not _is_trusted_origin_or_host(referer, req_host):
+        logger.warning("Operator mutation rejected: Untrusted Referer %r", referer)
+        return False, JsonResponse(
+            {"error": "Untrusted request Referer", "code": "FORBIDDEN_REFERER"},
+            status=403,
+        )
+
+    content_type = request.content_type or ""
+    if "application/json" not in content_type.lower():
+        return False, JsonResponse(
+            {"error": "Expected application/json Content-Type", "code": "INVALID_CONTENT_TYPE"},
+            status=415,
+        )
+
+    # Operator authorization check:
+    # If a session user is logged in, check is_staff.
+    user = getattr(request, "user", None)
+    if user and user.is_authenticated:
+        if not user.is_staff:
+            return False, JsonResponse(
+                {"error": "Operator staff privileges required", "code": "FORBIDDEN_NOT_STAFF"},
+                status=403,
+            )
+        return True, None
+
+    # In local/no-auth mode, require proof of non-ambient operator context (custom header)
+    has_operator_header = any(
+        [
+            request.headers.get("X-Operator-Role") == "admin",
+            request.headers.get("X-Requested-With") in ("XMLHttpRequest", "fetch", "WhereTfDoIWatchIt-Client"),
+            request.headers.get("X-Operator-Action") == "confirm",
+            bool(request.headers.get("X-Correlation-ID")),
+        ]
+    )
+    if not has_operator_header:
+        # If neither custom header nor session is present, reject ambient cross-site requests
+        logger.warning("Operator mutation rejected: Missing operator confirmation header in unauthenticated context")
+        return False, JsonResponse(
+            {
+                "error": "Operator confirmation header required for unauthenticated privileged mutation (e.g. X-Operator-Role: admin or X-Requested-With)",
+                "code": "OPERATOR_AUTHORIZATION_REQUIRED",
+            },
+            status=403,
+        )
+
+    return True, None
 
 
 def _serialize_candidate(candidate: ProviderContentCandidate) -> dict[str, Any]:
@@ -259,6 +367,10 @@ def candidate_accept(request, pk: int, tmdb_id: int):
     - authorize_network (optional bool)
     - max_http_requests (optional int budget when authorize_network is True)
     """
+    allowed, err_resp = verify_operator_mutation_guard(request)
+    if not allowed and err_resp is not None:
+        return err_resp
+
     try:
         body = json.loads(request.body.decode("utf-8") or "{}")
     except Exception:
@@ -270,6 +382,12 @@ def candidate_accept(request, pk: int, tmdb_id: int):
     authorize_network = bool(body.get("authorize_network", False))
     max_http_requests = body.get("max_http_requests")
 
+    reviewer_id = (
+        request.user.username
+        if getattr(request, "user", None) and request.user.is_authenticated and request.user.username
+        else "local_operator"
+    )
+
     service = CandidateAcceptanceService()
     try:
         result = service.accept(
@@ -280,6 +398,8 @@ def candidate_accept(request, pk: int, tmdb_id: int):
             has_expected_revision=has_expected_revision,
             authorize_network=authorize_network,
             max_http_requests=max_http_requests,
+            reviewer_id=reviewer_id,
+            correlation_id=request.headers.get("X-Correlation-ID"),
         )
         return JsonResponse(result, status=200)
     except CandidateAcceptanceError as exc:
@@ -290,8 +410,11 @@ def candidate_accept(request, pk: int, tmdb_id: int):
         }
         return JsonResponse(data, status=exc.status_code)
     except Exception as exc:
-        logger.exception("Unexpected error in candidate_accept: %s", exc)
-        return JsonResponse({"error": str(exc), "code": "INTERNAL_ERROR"}, status=500)
+        logger.exception("Unexpected internal error in candidate_accept: %s", exc)
+        return JsonResponse(
+            {"error": "An internal server error occurred while processing the candidate acceptance.", "code": "INTERNAL_ERROR"},
+            status=500,
+        )
 
 
 @csrf_exempt
@@ -302,18 +425,30 @@ def candidate_reject(request, pk: int, tmdb_id: int):
     Request:
     - reason (mandatory non-empty string)
     """
+    allowed, err_resp = verify_operator_mutation_guard(request)
+    if not allowed and err_resp is not None:
+        return err_resp
+
     try:
         body = json.loads(request.body.decode("utf-8") or "{}")
     except Exception:
         return JsonResponse({"error": "Invalid JSON body", "code": "INVALID_JSON"}, status=400)
 
     reason = body.get("reason")
+    reviewer_id = (
+        request.user.username
+        if getattr(request, "user", None) and request.user.is_authenticated and request.user.username
+        else "local_operator"
+    )
+
     service = CandidateRejectionService()
     try:
         result = service.reject(
             provider_content_id=pk,
             tmdb_id=tmdb_id,
             reason=reason,
+            reviewer_id=reviewer_id,
+            correlation_id=request.headers.get("X-Correlation-ID"),
         )
         return JsonResponse(result, status=200)
     except CandidateAcceptanceError as exc:
@@ -324,5 +459,8 @@ def candidate_reject(request, pk: int, tmdb_id: int):
         }
         return JsonResponse(data, status=exc.status_code)
     except Exception as exc:
-        logger.exception("Unexpected error in candidate_reject: %s", exc)
-        return JsonResponse({"error": str(exc), "code": "INTERNAL_ERROR"}, status=500)
+        logger.exception("Unexpected internal error in candidate_reject: %s", exc)
+        return JsonResponse(
+            {"error": "An internal server error occurred while processing the candidate rejection.", "code": "INTERNAL_ERROR"},
+            status=500,
+        )
