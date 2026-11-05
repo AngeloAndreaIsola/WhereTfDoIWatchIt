@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { fetchWatched } from "@/lib/api";
+import { fetchWatched, type WatchedItem, type WatchedListResponse } from "@/lib/api";
 
 export default function WatchedPage() {
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<WatchedListResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -30,7 +30,7 @@ export default function WatchedPage() {
     <div className="p-6">
       <h1 className="text-2xl font-bold mb-4">Watched</h1>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {data.results.map((r: any) => (
+        {data.results.map((r: WatchedItem) => (
           <Link key={r.movie.tmdb_id} href={`/movie/${r.movie.tmdb_id}`} className="border rounded p-2">
             <div className="font-semibold">{r.movie.title}</div>
             <div className="text-sm text-gray-500">{r.movie.year} · {r.movie.content_type}</div>
