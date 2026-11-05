@@ -33,71 +33,98 @@ from availability.services.candidate_acceptance import (
 logger = logging.getLogger(__name__)
 
 
-def _is_trusted_origin_or_host(url_str: str, request_host: str) -> bool:
-    """Verify whether the origin or referer matches local/allowed hosts."""
+import ipaddress
+
+# Trusted local frontend/backend origins allowed for local loopback operation.
+# Strict scheme + hostname + port verification: wildcard hosts or arbitrary localhost ports
+# are strictly rejected.
+DEFAULT_TRUSTED_LOCAL_ORIGINS = frozenset(
+    {
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "http://testserver",
+    }
+)
+
+
+def _is_loopback_remote_addr(addr: Optional[str]) -> bool:
+    """Verify whether client remote address originates from a loopback interface."""
+    if not addr:
+        return False
+    addr_clean = addr.strip()
+    if addr_clean.lower() in ("localhost", "testserver"):
+        return True
+    try:
+        ip = ipaddress.ip_address(addr_clean)
+        return ip.is_loopback
+    except ValueError:
+        return False
+
+
+def _is_trusted_origin_url(url_str: str, request_host: str) -> bool:
+    """Verify whether origin or referer matches strict trusted origins.
+
+    Never accepts arbitrary ports or wildcard hosts. Scheme, hostname, and port
+    must match known local development origins, request same-origin, or
+    settings.CSRF_TRUSTED_ORIGINS.
+    """
     if not url_str:
         return True
     try:
         parsed = urlparse(url_str)
-        host = (parsed.netloc or "").split(":")[0].lower()
-        if not host:
+        scheme = (parsed.scheme or "").lower()
+        if scheme not in ("http", "https"):
             return False
-        # Local loopback hosts
-        if host in ("localhost", "127.0.0.1", "testserver"):
+
+        origin_netloc = (parsed.netloc or "").lower()
+        if not origin_netloc:
+            return False
+
+        full_origin = f"{scheme}://{origin_netloc}"
+
+        # 1. Check default local development origins
+        if full_origin in DEFAULT_TRUSTED_LOCAL_ORIGINS:
             return True
-        # Request host
-        req_netloc = request_host.split(":")[0].lower()
-        if host == req_netloc:
+
+        # 2. Check same-origin against request host
+        req_netloc = request_host.lower()
+        if origin_netloc == req_netloc:
             return True
-        # Allowed hosts from settings
-        for allowed in getattr(settings, "ALLOWED_HOSTS", []):
-            allowed = allowed.split(":")[0].strip().lower()
-            if allowed and (allowed == "*" or host == allowed or (allowed.startswith(".") and host.endswith(allowed))):
+
+        # 3. Check explicitly configured CSRF_TRUSTED_ORIGINS (if configured in settings)
+        for trusted in getattr(settings, "CSRF_TRUSTED_ORIGINS", []):
+            trusted = trusted.strip().lower()
+            if trusted and full_origin == trusted:
                 return True
+
         return False
     except Exception:
         return False
 
 
 def verify_operator_mutation_guard(request: HttpRequest) -> tuple[bool, Optional[JsonResponse]]:
-    """Enforce operator authorization and cross-origin protections for privileged mutations.
+    """Enforce operator authorization and loopback no-login cross-origin protections.
 
-    Protections:
-    1. Browser Sec-Fetch-Site: reject 'cross-site' requests.
-    2. Origin / Referer validation: must match trusted local/allowed origins.
-    3. Content-Type validation: state-changing mutations must specify application/json.
-    4. Operator authentication / authorization seam:
-       - If user is authenticated in Django session, must have is_staff=True.
-       - If no login session (single-user personal deployment model), require an explicit
-         operator header (e.g. 'X-Operator-Role: admin', 'X-Requested-With', or
-         'X-Operator-Action: confirm') to prevent ambient browser form/tag cross-site forgery.
+    Threat model & controls:
+    1. Operator / staff authorization when authentication exists:
+       If a user session is authenticated, user must have is_staff=True.
+    2. Local-only no-login operation:
+       In unauthenticated mode, the request MUST originate from a verified loopback IP
+       (e.g., 127.0.0.1, ::1). Remote/non-loopback requests without operator authentication
+       are rejected with HTTP 403.
+    3. Browser Sec-Fetch-Site:
+       Rejects 'cross-site' requests with HTTP 403.
+    4. Strict Origin / Referer validation:
+       Strict scheme + hostname + port validation. Wildcard hosts and arbitrary cross-port
+       origins on localhost (e.g. localhost:9999) are rejected.
+    5. Content-Type validation:
+       Mutations must specify application/json.
     """
-    sec_fetch_site = request.headers.get("Sec-Fetch-Site", "").lower()
-    if sec_fetch_site == "cross-site":
-        logger.warning("Operator mutation rejected: Sec-Fetch-Site cross-site attempt from %s", request.META.get("REMOTE_ADDR"))
-        return False, JsonResponse(
-            {"error": "Cross-origin requests are forbidden on admin mutation endpoints", "code": "FORBIDDEN_CROSS_ORIGIN"},
-            status=403,
-        )
-
-    req_host = request.get_host()
-
-    origin = request.headers.get("Origin")
-    if origin and not _is_trusted_origin_or_host(origin, req_host):
-        logger.warning("Operator mutation rejected: Untrusted Origin %r", origin)
-        return False, JsonResponse(
-            {"error": "Untrusted request Origin", "code": "FORBIDDEN_ORIGIN"},
-            status=403,
-        )
-
-    referer = request.headers.get("Referer")
-    if referer and not _is_trusted_origin_or_host(referer, req_host):
-        logger.warning("Operator mutation rejected: Untrusted Referer %r", referer)
-        return False, JsonResponse(
-            {"error": "Untrusted request Referer", "code": "FORBIDDEN_REFERER"},
-            status=403,
-        )
-
+    # 1. Content-Type check
     content_type = request.content_type or ""
     if "application/json" not in content_type.lower():
         return False, JsonResponse(
@@ -105,8 +132,7 @@ def verify_operator_mutation_guard(request: HttpRequest) -> tuple[bool, Optional
             status=415,
         )
 
-    # Operator authorization check:
-    # If a session user is logged in, check is_staff.
+    # 2. Authenticated operator check
     user = getattr(request, "user", None)
     if user and user.is_authenticated:
         if not user.is_staff:
@@ -114,25 +140,50 @@ def verify_operator_mutation_guard(request: HttpRequest) -> tuple[bool, Optional
                 {"error": "Operator staff privileges required", "code": "FORBIDDEN_NOT_STAFF"},
                 status=403,
             )
-        return True, None
+        # Authenticated staff user is authorized; proceed with origin checks
+    else:
+        # Deliberately unauthenticated local operation: constrain to verified loopback
+        remote_addr = request.META.get("REMOTE_ADDR")
+        if not _is_loopback_remote_addr(remote_addr):
+            logger.warning(
+                "Operator mutation rejected: unauthenticated request from non-loopback IP %s",
+                remote_addr,
+            )
+            return False, JsonResponse(
+                {
+                    "error": "Operator authentication required for non-loopback requests",
+                    "code": "REMOTE_OPERATOR_AUTHENTICATION_REQUIRED",
+                },
+                status=403,
+            )
 
-    # In local/no-auth mode, require proof of non-ambient operator context (custom header)
-    has_operator_header = any(
-        [
-            request.headers.get("X-Operator-Role") == "admin",
-            request.headers.get("X-Requested-With") in ("XMLHttpRequest", "fetch", "WhereTfDoIWatchIt-Client"),
-            request.headers.get("X-Operator-Action") == "confirm",
-            bool(request.headers.get("X-Correlation-ID")),
-        ]
-    )
-    if not has_operator_header:
-        # If neither custom header nor session is present, reject ambient cross-site requests
-        logger.warning("Operator mutation rejected: Missing operator confirmation header in unauthenticated context")
+    # 3. Browser Sec-Fetch-Site check
+    sec_fetch_site = request.headers.get("Sec-Fetch-Site", "").lower()
+    if sec_fetch_site == "cross-site":
+        logger.warning(
+            "Operator mutation rejected: Sec-Fetch-Site cross-site attempt from %s",
+            request.META.get("REMOTE_ADDR"),
+        )
         return False, JsonResponse(
-            {
-                "error": "Operator confirmation header required for unauthenticated privileged mutation (e.g. X-Operator-Role: admin or X-Requested-With)",
-                "code": "OPERATOR_AUTHORIZATION_REQUIRED",
-            },
+            {"error": "Cross-origin requests are forbidden on admin mutation endpoints", "code": "FORBIDDEN_CROSS_ORIGIN"},
+            status=403,
+        )
+
+    # 4. Strict Origin / Referer verification
+    req_host = request.get_host()
+    origin = request.headers.get("Origin")
+    if origin and not _is_trusted_origin_url(origin, req_host):
+        logger.warning("Operator mutation rejected: Untrusted Origin %r", origin)
+        return False, JsonResponse(
+            {"error": "Untrusted request Origin", "code": "FORBIDDEN_ORIGIN"},
+            status=403,
+        )
+
+    referer = request.headers.get("Referer")
+    if referer and not _is_trusted_origin_url(referer, req_host):
+        logger.warning("Operator mutation rejected: Untrusted Referer %r", referer)
+        return False, JsonResponse(
+            {"error": "Untrusted request Referer", "code": "FORBIDDEN_REFERER"},
             status=403,
         )
 
