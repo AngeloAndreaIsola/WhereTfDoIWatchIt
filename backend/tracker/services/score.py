@@ -24,7 +24,7 @@ QUALITY_RANK = {"4k": 0, "uhd": 0, "hdr": 1, "qhd": 1, "hd": 2, "sd": 3}
 
 @dataclass
 class ScoredOffer:
-    is_match: bool
+    is_match: Optional[bool]
     score_tuple: tuple
     audio_rank: int
     sub_rank: int
@@ -161,7 +161,18 @@ def score_offer(
     sub_rank = _min_rank(subs, sub_priority)
     quality_rank = QUALITY_RANK.get(quality, 99)
 
-    if lang_rule and isinstance(lang_rule, dict) and bool(lang_rule):
+    # Missing language metadata must remain UNKNOWN, never a definite
+    # mismatch: do not evaluate the rule against an empty language set.
+    if not audio and not subs:
+        is_match = None
+        match_score = 1
+        if lang_rule and isinstance(lang_rule, dict) and bool(lang_rule):
+            score_tuple = (match_score, quality_rank, audio_rank, sub_rank)
+        elif pref_audio or pref_subs:
+            score_tuple = (match_score, audio_rank, sub_rank, quality_rank)
+        else:
+            score_tuple = (match_score, quality_rank, audio_rank, sub_rank)
+    elif lang_rule and isinstance(lang_rule, dict) and bool(lang_rule):
         is_match = evaluate_language_rule(lang_rule, audio, subs)
         match_score = 0 if is_match else 1
         score_tuple = (match_score, quality_rank, audio_rank, sub_rank)

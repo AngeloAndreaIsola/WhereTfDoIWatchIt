@@ -629,11 +629,13 @@ def classify_offer(
             reasons.append(
                 f"No active subscription for {presented.service_display or service}"
             )
-    if not is_lang_match:
-        reasons.append(
-            "Language information unknown" if not has_lang_info
-            else "Does not satisfy language rules"
-        )
+    if is_lang_match is None:
+        reasons.append("Language information unknown")
+    elif is_lang_match is False:
+        if not has_lang_info:
+            reasons.append("Language information unknown")
+        else:
+            reasons.append("Does not satisfy language rules")
     if locality == Locality.OUT_OF_REACH:
         cc = country or "?"
         if reach.vpn_regions:
