@@ -189,6 +189,7 @@ def recover_provider_evidence(
     mapping = mappings[0]
     pinned_mapping_id = mapping.pk
     pinned_tmdb_id = mapping.tmdb_id
+    pinned_mapping_revision = getattr(mapping, "revision", None)
 
     try:
         mapping_content_type = normalize_content_type(mapping.content_type)
@@ -658,11 +659,18 @@ def recover_provider_evidence(
                     applied=True,
                 )
 
-            # Verify that mapping has not changed
+            # Verify that mapping has not changed (including optimistic concurrency revision if supported)
+            current_mapping_revision = getattr(locked_mapping, "revision", None)
+            revision_changed = (
+                pinned_mapping_revision is not None
+                and current_mapping_revision != pinned_mapping_revision
+            )
+
             if (
                 locked_mapping.tmdb_id != pinned_tmdb_id
                 or normalize_content_type(locked_mapping.content_type) != norm_content_type
                 or locked_mapping.provider_content_id != provider_content_id
+                or revision_changed
             ):
                 return RecoveryResult(
                     outcome=OUTCOME_MAPPING_CONFLICT,
@@ -677,7 +685,7 @@ def recover_provider_evidence(
                     offers_updated=0,
                     offer_identities=[],
                     reason_code="mapping_concurrently_altered",
-                    error_detail="ContentMapping target or type changed while recovery was in progress.",
+                    error_detail="ContentMapping target, type, or revision changed while recovery was in progress.",
                     applied=True,
                 )
 

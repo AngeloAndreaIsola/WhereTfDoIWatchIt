@@ -720,3 +720,32 @@ class AdversarialOfferRecoveryTests(OfferRecoveryBaseTestCase):
         # Other source evidence was NOT touched or marked absent
         existing_evidence.refresh_from_db()
         self.assertTrue(existing_evidence.is_present)
+
+
+    def test_mapping_revision_change_during_fetch_fails_closed(self):
+        content, mapping = self.create_movie_and_mapping(tmdb_id=1001)
+
+        # Simulate presence of revision attribute
+        mapping.revision = 1
+        original_fetch = self.source.fetch_evidence
+
+        def mutating_fetch(*args, **kwargs):
+            res = original_fetch(*args, **kwargs)
+            # Advance revision during fetch
+            mapping.revision = 2
+            return res
+
+        with patch.object(self.source, "fetch_evidence", side_effect=mutating_fetch):
+            # Patch getattr on ContentMapping to return our simulated revision
+            with patch("availability.services.offer_recovery.getattr", side_effect=lambda obj, attr, default=None: (
+                mapping.revision if isinstance(obj, ContentMapping) and attr == "revision" else getattr(obj, attr, default)
+            )):
+                result = recover_provider_evidence(
+                    provider_content_pk=content.pk,
+                    max_http_requests=10,
+                    apply=True,
+                )
+
+        self.assertEqual(result.outcome, OUTCOME_MAPPING_CONFLICT)
+        self.assertEqual(result.reason_code, "mapping_concurrently_altered")
+        self.assertEqual(Offer.objects.count(), 0)
