@@ -465,9 +465,11 @@ def recover_provider_evidence(
             applied=True,
         )
 
-    # 6. Validate source-returned native identity and media type
+    # 6. Validate source-returned native identity, provider, and media type
     returned_contents = fetch_result.contents or []
     returned_offers = fetch_result.offers or []
+
+    service = refresh_service or AvailabilityRefreshService(source=source_instance)
 
     for dc in returned_contents:
         if dc.provider_content_id != provider_content_id:
@@ -487,6 +489,27 @@ def recover_provider_evidence(
                 error_detail=(
                     f"DiscoveredContent identity '{dc.provider_content_id}' contradicts "
                     f"expected '{provider_content_id}'"
+                ),
+                applied=True,
+            )
+        resolved_dc_provider = service._provider(dc.provider_id)
+        if resolved_dc_provider is None or resolved_dc_provider.pk != provider.pk:
+            return RecoveryResult(
+                outcome=OUTCOME_MAPPING_CONFLICT,
+                provider_content_pk=provider_content_pk,
+                provider_content_id=provider_content_id,
+                provider_slug=provider_slug,
+                source_slug=source_instance.slug,
+                tmdb_id=pinned_tmdb_id,
+                content_type=norm_content_type,
+                http_requests_attempted=http_attempted,
+                offers_created=0,
+                offers_updated=0,
+                offer_identities=[],
+                reason_code="provider_conflict",
+                error_detail=(
+                    f"DiscoveredContent provider '{dc.provider_id}' resolved to "
+                    f"{resolved_dc_provider}, contradicts expected '{provider_slug}'"
                 ),
                 applied=True,
             )
@@ -533,6 +556,27 @@ def recover_provider_evidence(
                 error_detail=(
                     f"ProviderOffer identity '{po.provider_content_id}' contradicts "
                     f"expected '{provider_content_id}'"
+                ),
+                applied=True,
+            )
+        resolved_po_provider = service._provider(po.provider_id, country=po.country)
+        if resolved_po_provider is None or resolved_po_provider.pk != provider.pk:
+            return RecoveryResult(
+                outcome=OUTCOME_MAPPING_CONFLICT,
+                provider_content_pk=provider_content_pk,
+                provider_content_id=provider_content_id,
+                provider_slug=provider_slug,
+                source_slug=source_instance.slug,
+                tmdb_id=pinned_tmdb_id,
+                content_type=norm_content_type,
+                http_requests_attempted=http_attempted,
+                offers_created=0,
+                offers_updated=0,
+                offer_identities=[],
+                reason_code="provider_conflict",
+                error_detail=(
+                    f"ProviderOffer provider '{po.provider_id}' resolved to "
+                    f"{resolved_po_provider}, contradicts expected '{provider_slug}'"
                 ),
                 applied=True,
             )
@@ -608,8 +652,6 @@ def recover_provider_evidence(
     ]
 
     # 8. Acquire write barrier and perform persistence under database transaction
-    service = refresh_service or AvailabilityRefreshService(source=source_instance)
-
     with writer_barrier(f"targeted recovery for {provider_slug}:{provider_content_id}"):
         with transaction.atomic():
             # Lock ProviderContent and ContentMapping rows with select_for_update()

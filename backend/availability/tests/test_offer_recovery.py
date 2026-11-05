@@ -749,3 +749,59 @@ class AdversarialOfferRecoveryTests(OfferRecoveryBaseTestCase):
         self.assertEqual(result.outcome, OUTCOME_MAPPING_CONFLICT)
         self.assertEqual(result.reason_code, "mapping_concurrently_altered")
         self.assertEqual(Offer.objects.count(), 0)
+
+
+    def test_provider_slug_conflict_in_source_result_fails_closed(self):
+        content, mapping = self.create_movie_and_mapping(tmdb_id=1001)
+
+        # Another registered provider
+        other_provider, _ = Provider.objects.get_or_create(
+            slug="netflix",
+            defaults={"name": "Netflix", "provider_type": "subscription", "is_active": True},
+        )
+
+        initial_offers = Offer.objects.count()
+        initial_evidence = OfferEvidence.objects.count()
+        initial_prices = OfferPrice.objects.count()
+        initial_runs = SyncRun.objects.count()
+
+        # Source returns an offer where provider_id resolves to "netflix" instead of "raiplay"
+        conflicting_provider_offer = ProviderOffer(
+            provider_id="netflix",
+            provider_content_id=content.provider_content_id,
+            country="IT",
+            content_type=ContentType.MOVIE,
+            tmdb_id=1001,
+            season_number=None,
+            episode_number=None,
+            offer_type=OfferType.FREE,
+        )
+        fake_fetch_result = SourceFetchResult(
+            contents=[
+                DiscoveredContent(
+                    provider_id="netflix",
+                    provider_content_id=content.provider_content_id,
+                    content_type=ContentType.MOVIE,
+                )
+            ],
+            offers=[conflicting_provider_offer],
+            sync_mode=SyncMode.TARGETED,
+        )
+
+        with patch.object(self.source, "fetch_evidence", return_value=fake_fetch_result):
+            result = recover_provider_evidence(
+                provider_content_pk=content.pk,
+                max_http_requests=10,
+                apply=True,
+            )
+
+        self.assertEqual(result.outcome, OUTCOME_MAPPING_CONFLICT)
+        self.assertEqual(result.reason_code, "provider_conflict")
+        self.assertEqual(result.offers_created, 0)
+        self.assertEqual(result.offers_updated, 0)
+
+        # Ensure NO Offer, OfferEvidence, OfferPrice, or SyncRun mutations occurred
+        self.assertEqual(Offer.objects.count(), initial_offers)
+        self.assertEqual(OfferEvidence.objects.count(), initial_evidence)
+        self.assertEqual(OfferPrice.objects.count(), initial_prices)
+        self.assertEqual(SyncRun.objects.count(), initial_runs)
