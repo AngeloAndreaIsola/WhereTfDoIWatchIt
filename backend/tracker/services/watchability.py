@@ -22,6 +22,7 @@ from tracker.services.access import (
     ClassifiedOffer,
     RefreshState,
     classify_offer,
+    normalize_service_slug,
     UserAccess,
     resolve_title,
 )
@@ -189,16 +190,23 @@ def get_user_subscriptions(user_id: int = 1) -> set[str]:
     subscribed = set()
     for slug, name in subs:
         if slug:
-            subscribed.add(slug.lower().strip())
+            canon = normalize_service_slug(slug)
+            if canon:
+                subscribed.add(canon)
         if name:
-            subscribed.add(name.lower().strip())
+            canon = normalize_service_slug(name)
+            if canon:
+                subscribed.add(canon)
 
     free_or_scrapers = Provider.objects.filter(
         category__in=["bvod", "scraper"], is_enabled=True
     ).values_list("slug", flat=True)
     for s in free_or_scrapers:
-        subscribed.add(s.lower().strip())
+        canon = normalize_service_slug(s)
+        if canon:
+            subscribed.add(canon)
 
+    subscribed.discard("")
     return subscribed
 
 
