@@ -97,7 +97,15 @@ class CandidateDiscoveryRegressionTests(TestCase):
         sleeps = []
         session = MagicMock()
         session.get.return_value = Response(200, {"results": []})
-        gateway = self.gateway(session, min_request_interval_seconds=2.5, sleep_fn=sleeps.append)
+        current_time = [100.0]
+        def mock_monotonic():
+            return current_time[0]
+        gateway = self.gateway(
+            session,
+            min_request_interval_seconds=2.5,
+            sleep_fn=sleeps.append,
+            monotonic_fn=mock_monotonic,
+        )
         gateway.search("first", authorize_network=True)
         gateway.search("second", authorize_network=True)
         self.assertEqual(len(sleeps), 1)

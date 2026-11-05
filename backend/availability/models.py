@@ -593,6 +593,7 @@ class ContentMapping(models.Model):
     )
     confidence = models.FloatField(default=1.0)
     match_method = models.CharField(max_length=25, choices=MatchMethod.choices)
+    revision = models.PositiveIntegerField(default=1)
     first_seen = models.DateTimeField(auto_now_add=True)
     last_verified = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -789,3 +790,83 @@ class ProviderContentCandidate(models.Model):
             f"Candidate({self.provider_content_id}:{self.tmdb_id} - "
             f"{self.title} ({self.year}) [{self.review_state}])"
         )
+
+
+class TmdbDetailsCache(models.Model):
+    """Positive and negative cache for TMDb details queries.
+
+    Stores the raw details result dict for movies or TV shows,
+    avoiding redundant external network requests during candidate review.
+    """
+
+    tmdb_id = models.IntegerField(db_index=True)
+    content_type = models.CharField(max_length=10, choices=ContentType.choices, db_index=True)
+    locale = models.CharField(max_length=32, default="en-US")
+    endpoint_version = models.CharField(max_length=16, default="v3")
+
+    details = models.JSONField(default=dict, blank=True)
+    is_negative = models.BooleanField(default=False, db_index=True)
+    expires_at = models.DateTimeField(default=tmdb_default_cache_expiry, db_index=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tmdb_id", "content_type", "locale", "endpoint_version"],
+                name="uniq_tmdbdetailscache_identity",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["expires_at"], name="idx_tmdbdetailscache_expiry"),
+        ]
+
+    def __str__(self):
+        kind = "negative" if self.is_negative else f"details({self.details.get('title') or self.details.get('name')})"
+        return f"TmdbDetailsCache({self.content_type}:{self.tmdb_id} -> {kind})"
+
+
+class CandidateReviewAudit(models.Model):
+    """Append-only audit record for human reviewer decisions on TMDb candidates."""
+
+    ACTION_CHOICES = [
+        ("accept", "Accept"),
+        ("reject", "Reject"),
+    ]
+
+    provider_content = models.ForeignKey(
+        ProviderContent,
+        on_delete=models.CASCADE,
+        related_name="review_audits",
+    )
+    candidate_tmdb_id = models.IntegerField(db_index=True)
+    action = models.CharField(max_length=10, choices=ACTION_CHOICES, db_index=True)
+    reviewer_id = models.CharField(max_length=100, default="local_operator")
+    reason = models.TextField()
+
+    previous_review_state = models.CharField(max_length=20, choices=CandidateReviewState.choices)
+    resulting_review_state = models.CharField(max_length=20, choices=CandidateReviewState.choices)
+
+    expected_revision = models.PositiveIntegerField(null=True, blank=True)
+    resulting_revision = models.PositiveIntegerField(null=True, blank=True)
+
+    verified_tmdb_id = models.IntegerField(null=True, blank=True)
+    verified_content_type = models.CharField(
+        max_length=10, choices=ContentType.choices, null=True, blank=True
+    )
+    verification_provenance = models.CharField(max_length=50, blank=True, default="")
+    correlation_id = models.CharField(max_length=64, blank=True, default="", db_index=True)
+
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=["provider_content", "candidate_tmdb_id", "-created_at"],
+                name="idx_cand_audit_lookup",
+            ),
+        ]
+
+    def __str__(self):
+        return f"CandidateReviewAudit({self.provider_content_id}:{self.candidate_tmdb_id} - {self.action} by {self.reviewer_id})"

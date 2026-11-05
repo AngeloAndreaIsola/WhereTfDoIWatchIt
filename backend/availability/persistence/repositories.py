@@ -946,6 +946,7 @@ class MappingRepository:
             existing.tmdb_id = tmdb_id
             existing.confidence = confidence
             existing.match_method = match_method
+            existing.revision = (existing.revision or 1) + 1
             existing.last_verified = now
             if content is not None:
                 existing.content = content
