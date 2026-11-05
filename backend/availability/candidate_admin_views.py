@@ -34,10 +34,12 @@ logger = logging.getLogger(__name__)
 
 
 import ipaddress
+import socket
+from django.middleware.csrf import CsrfViewMiddleware
 
 # Trusted local frontend/backend origins allowed for local loopback operation.
-# Strict scheme + hostname + port verification: wildcard hosts or arbitrary localhost ports
-# are strictly rejected.
+# Strict scheme + hostname + port verification: wildcard hosts, scheme mismatches,
+# and arbitrary localhost ports are strictly rejected.
 DEFAULT_TRUSTED_LOCAL_ORIGINS = frozenset(
     {
         "http://localhost:3000",
@@ -51,8 +53,25 @@ DEFAULT_TRUSTED_LOCAL_ORIGINS = frozenset(
 )
 
 
-def _is_loopback_remote_addr(addr: Optional[str]) -> bool:
-    """Verify whether client remote address originates from a loopback interface."""
+def _resolve_trusted_proxy_ips() -> set[str]:
+    """Resolve and cache IPs for the configured internal frontend proxy container."""
+    trusted = set(getattr(settings, "INTERNAL_FRONTEND_PROXY_IPS", []))
+    proxy_host = getattr(settings, "INTERNAL_FRONTEND_PROXY_HOST", "frontend")
+    if proxy_host:
+        try:
+            addr_info = socket.getaddrinfo(proxy_host, None)
+            for item in addr_info:
+                ip = item[4][0]
+                if ip:
+                    trusted.add(ip)
+        except (socket.gaierror, OSError):
+            # Not in containerized environment or hostname does not resolve
+            pass
+    return trusted
+
+
+def _is_loopback_or_trusted_internal_proxy(addr: Optional[str]) -> bool:
+    """Verify whether client remote address originates from loopback or verified internal frontend proxy."""
     if not addr:
         return False
     addr_clean = addr.strip()
@@ -60,17 +79,22 @@ def _is_loopback_remote_addr(addr: Optional[str]) -> bool:
         return True
     try:
         ip = ipaddress.ip_address(addr_clean)
-        return ip.is_loopback
+        if ip.is_loopback:
+            return True
     except ValueError:
-        return False
+        pass
+
+    # In local Docker Compose, check if REMOTE_ADDR matches the resolved frontend proxy container
+    trusted_ips = _resolve_trusted_proxy_ips()
+    return addr_clean in trusted_ips
 
 
-def _is_trusted_origin_url(url_str: str, request_host: str) -> bool:
+def _is_trusted_origin_url(url_str: str, request: HttpRequest) -> bool:
     """Verify whether origin or referer matches strict trusted origins.
 
     Never accepts arbitrary ports or wildcard hosts. Scheme, hostname, and port
-    must match known local development origins, request same-origin, or
-    settings.CSRF_TRUSTED_ORIGINS.
+    must match known local development origins, request same-origin with matching scheme,
+    or settings.CSRF_TRUSTED_ORIGINS.
     """
     if not url_str:
         return True
@@ -90,12 +114,13 @@ def _is_trusted_origin_url(url_str: str, request_host: str) -> bool:
         if full_origin in DEFAULT_TRUSTED_LOCAL_ORIGINS:
             return True
 
-        # 2. Check same-origin against request host
-        req_netloc = request_host.lower()
-        if origin_netloc == req_netloc:
+        # 2. Check same-origin against request host AND request scheme
+        req_scheme = "https" if request.is_secure() else "http"
+        req_netloc = request.get_host().lower()
+        if scheme == req_scheme and origin_netloc == req_netloc:
             return True
 
-        # 3. Check explicitly configured CSRF_TRUSTED_ORIGINS (if configured in settings)
+        # 3. Check explicitly configured CSRF_TRUSTED_ORIGINS
         for trusted in getattr(settings, "CSRF_TRUSTED_ORIGINS", []):
             trusted = trusted.strip().lower()
             if trusted and full_origin == trusted:
@@ -107,20 +132,21 @@ def _is_trusted_origin_url(url_str: str, request_host: str) -> bool:
 
 
 def verify_operator_mutation_guard(request: HttpRequest) -> tuple[bool, Optional[JsonResponse]]:
-    """Enforce operator authorization and loopback no-login cross-origin protections.
+    """Enforce operator authorization, CSRF protection, and loopback/proxy no-login origin guards.
 
     Threat model & controls:
     1. Operator / staff authorization when authentication exists:
        If a user session is authenticated, user must have is_staff=True.
+       Furthermore, Django CSRF token is enforced for authenticated staff to prevent session CSRF.
     2. Local-only no-login operation:
        In unauthenticated mode, the request MUST originate from a verified loopback IP
-       (e.g., 127.0.0.1, ::1). Remote/non-loopback requests without operator authentication
-       are rejected with HTTP 403.
+       or the verified internal frontend proxy container (e.g. Next.js rewrite container in Compose).
+       Remote/untrusted non-loopback requests without operator authentication are rejected with HTTP 403.
     3. Browser Sec-Fetch-Site:
        Rejects 'cross-site' requests with HTTP 403.
     4. Strict Origin / Referer validation:
-       Strict scheme + hostname + port validation. Wildcard hosts and arbitrary cross-port
-       origins on localhost (e.g. localhost:9999) are rejected.
+       Strict scheme + hostname + port validation. Wildcard hosts, scheme mismatches, and arbitrary
+       cross-port origins on localhost (e.g. localhost:9999) are rejected.
     5. Content-Type validation:
        Mutations must specify application/json.
     """
@@ -140,13 +166,19 @@ def verify_operator_mutation_guard(request: HttpRequest) -> tuple[bool, Optional
                 {"error": "Operator staff privileges required", "code": "FORBIDDEN_NOT_STAFF"},
                 status=403,
             )
-        # Authenticated staff user is authorized; proceed with origin checks
+        # Enforce CSRF token check for authenticated sessions to prevent session hijacking
+        csrf_check = CsrfViewMiddleware(lambda r: None).process_view(request, None, (), {})
+        if csrf_check is not None:
+            return False, JsonResponse(
+                {"error": "CSRF verification failed for authenticated operator", "code": "CSRF_FAILED"},
+                status=403,
+            )
     else:
-        # Deliberately unauthenticated local operation: constrain to verified loopback
+        # Deliberately unauthenticated local operation: constrain to verified loopback or internal frontend proxy
         remote_addr = request.META.get("REMOTE_ADDR")
-        if not _is_loopback_remote_addr(remote_addr):
+        if not _is_loopback_or_trusted_internal_proxy(remote_addr):
             logger.warning(
-                "Operator mutation rejected: unauthenticated request from non-loopback IP %s",
+                "Operator mutation rejected: unauthenticated request from untrusted address %s",
                 remote_addr,
             )
             return False, JsonResponse(
@@ -170,9 +202,8 @@ def verify_operator_mutation_guard(request: HttpRequest) -> tuple[bool, Optional
         )
 
     # 4. Strict Origin / Referer verification
-    req_host = request.get_host()
     origin = request.headers.get("Origin")
-    if origin and not _is_trusted_origin_url(origin, req_host):
+    if origin and not _is_trusted_origin_url(origin, request):
         logger.warning("Operator mutation rejected: Untrusted Origin %r", origin)
         return False, JsonResponse(
             {"error": "Untrusted request Origin", "code": "FORBIDDEN_ORIGIN"},
@@ -180,7 +211,7 @@ def verify_operator_mutation_guard(request: HttpRequest) -> tuple[bool, Optional
         )
 
     referer = request.headers.get("Referer")
-    if referer and not _is_trusted_origin_url(referer, req_host):
+    if referer and not _is_trusted_origin_url(referer, request):
         logger.warning("Operator mutation rejected: Untrusted Referer %r", referer)
         return False, JsonResponse(
             {"error": "Untrusted request Referer", "code": "FORBIDDEN_REFERER"},

@@ -614,7 +614,19 @@ class CandidateAdminApiIntegrationTests(TestCase):
         self.assertEqual(resp.status_code, 415)
         self.assertEqual(resp.json()["code"], "INVALID_CONTENT_TYPE")
 
-        # 8. Legitimate frontend origin (http://localhost:3001) with Content-Type: application/json succeeds
+        # 8. Same-host different-scheme Origin (e.g. https when request is http) is rejected
+        resp = self.client.post(
+            f"/api/admin/provider-content/{self.content.id}/candidates/693134/accept/",
+            data=json.dumps(payload),
+            content_type="application/json",
+            REMOTE_ADDR="127.0.0.1",
+            HTTP_HOST="localhost:8000",
+            HTTP_ORIGIN="https://localhost:8000",
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.json()["code"], "FORBIDDEN_ORIGIN")
+
+        # 9. Legitimate frontend origin (http://localhost:3001) with Content-Type: application/json succeeds
         with patch.object(TMDbCandidateGateway, "get_details") as mock_details:
             mock_details.return_value = {
                 "tmdb_id": 693134,
@@ -630,6 +642,65 @@ class CandidateAdminApiIntegrationTests(TestCase):
             )
             self.assertEqual(resp.status_code, 200)
             self.assertEqual(resp.json()["status"], "accepted")
+
+    def test_docker_compose_proxy_topology_simulation(self):
+        """Simulate real Compose networking: Next.js rewrite in frontend container forwarding to backend."""
+        frontend_container_ip = "172.19.0.4"
+        untrusted_container_ip = "172.19.0.99"
+        payload = {"reason": "Compose operator acceptance", "expected_revision": None}
+
+        # Case A: Untrusted container on the bridge network attempting mutation -> 403
+        with self.settings(INTERNAL_FRONTEND_PROXY_IPS=[frontend_container_ip]):
+            resp = self.client.post(
+                f"/api/admin/provider-content/{self.content.id}/candidates/693134/accept/",
+                data=json.dumps(payload),
+                content_type="application/json",
+                REMOTE_ADDR=untrusted_container_ip,
+                HTTP_ORIGIN="http://localhost:3001",
+            )
+            self.assertEqual(resp.status_code, 403)
+            self.assertEqual(resp.json()["code"], "REMOTE_OPERATOR_AUTHENTICATION_REQUIRED")
+
+        # Case B: Verified frontend proxy container forwarding request from browser Origin http://localhost:3001 -> 200 OK
+        with self.settings(INTERNAL_FRONTEND_PROXY_IPS=[frontend_container_ip]):
+            with patch.object(TMDbCandidateGateway, "get_details") as mock_details:
+                mock_details.return_value = {
+                    "tmdb_id": 693134,
+                    "title": "Dune: Part Two",
+                    "content_type": ContentType.MOVIE,
+                }
+                resp = self.client.post(
+                    f"/api/admin/provider-content/{self.content.id}/candidates/693134/accept/",
+                    data=json.dumps(payload),
+                    content_type="application/json",
+                    REMOTE_ADDR=frontend_container_ip,
+                    HTTP_HOST="backend:8000",
+                    HTTP_ORIGIN="http://localhost:3001",
+                    HTTP_SEC_FETCH_SITE="same-site",
+                )
+                self.assertEqual(resp.status_code, 200)
+                self.assertEqual(resp.json()["status"], "accepted")
+
+    def test_authenticated_staff_requires_valid_csrf(self):
+        """Ensure authenticated staff sessions enforce CSRF protection despite @csrf_exempt."""
+        from django.contrib.auth.models import User
+        from django.test import Client
+
+        staff_user = User.objects.create_user(username="admin_op", password="secret", is_staff=True)
+        csrf_client = Client(enforce_csrf_checks=True, HTTP_HOST="localhost")
+        csrf_client.force_login(staff_user)
+
+        payload = {"reason": "Staff acceptance", "expected_revision": None}
+        # Attempt POST without CSRF token -> 403 CSRF_FAILED
+        resp = csrf_client.post(
+            f"/api/admin/provider-content/{self.content.id}/candidates/693134/accept/",
+            data=json.dumps(payload),
+            content_type="application/json",
+            REMOTE_ADDR="127.0.0.1",
+            HTTP_ORIGIN="http://localhost:3001",
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.json()["code"], "CSRF_FAILED")
 
     @patch("availability.candidate_admin_views.CandidateAcceptanceService.accept")
     def test_internal_error_does_not_disclose_server_exception(self, mock_accept):

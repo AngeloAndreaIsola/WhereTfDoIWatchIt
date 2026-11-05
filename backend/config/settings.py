@@ -33,6 +33,15 @@ ALLOWED_HOSTS = [
 ]
 USE_X_FORWARDED_HOST = True
 
+# Internal frontend proxy configuration for containerized local Compose deployments.
+# In docker-compose, Next.js rewrites forward /api requests from the 'frontend' container.
+INTERNAL_FRONTEND_PROXY_HOST = os.environ.get("INTERNAL_FRONTEND_PROXY_HOST", "frontend")
+INTERNAL_FRONTEND_PROXY_IPS = [
+    ip.strip()
+    for ip in os.environ.get("INTERNAL_FRONTEND_PROXY_IPS", "").split(",")
+    if ip.strip()
+]
+
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
