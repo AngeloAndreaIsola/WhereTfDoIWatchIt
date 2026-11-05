@@ -357,11 +357,15 @@ def build_user_access(user_id: int = 1) -> UserAccess:
             canon_slug = normalize_service_slug(slug)
             if canon_slug:
                 target.add(canon_slug)
-        if name:
+        else:
+            # Name-only rows preserve their declared access_mode.
+            if name:
+                access.names.add(name)
+                canon_name = normalize_service_slug(name)
+                if canon_name:
+                    target.add(canon_name)
+        if name and slug:
             access.names.add(name)
-            canon_name = normalize_service_slug(name)
-            if canon_name:
-                target.add(canon_name)
 
     auto = Provider.objects.filter(
         is_enabled=True,
