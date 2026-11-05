@@ -243,6 +243,70 @@ JW_PROVIDERS_NL = envelope({
     ]
 })
 
+#: Multi-country and multi-access type fixtures (NL, IT, JP)
+#: Access types covered: FLATRATE (subscription), ADS (free_with_ads),
+#: FREE (free), RENT (rent), BUY (buy).
+JW_SEARCH_MULTI_COUNTRY_ACCESS = envelope({
+    "popularTitles": {
+        "edges": edges(
+            title(
+                "tm30001", "Global Cinema Showcase", year=2024, tmdb_id="80001",
+                imdb_id="tt8000001", full_path="/movie/global-cinema-showcase",
+                offers=[
+                    # NL: FLATRATE on netflix, RENT on apple_tv_store (itunes)
+                    offer("nl_flat_1", "netflix", "Netflix", "nfx", "FLATRATE", "HD",
+                          audio=["en", "nl"], subs=["nl"]),
+                    offer("nl_rent_1", "itunes", "Apple TV Store", "itu", "RENT", "4K",
+                          audio=["en"], subs=["nl"]),
+                    # IT: FLATRATE on amazonprimevideo, FREE/ADS on raiplay
+                    offer("it_flat_1", "amazonprimevideo", "Amazon Prime Video", "prv", "FLATRATE", "HD",
+                          audio=["it", "en"], subs=["it"]),
+                    offer("it_free_1", "raiplay", "Rai Play", "rai", "ADS", "HD",
+                          audio=["it"], subs=["it"]),
+                    # JP: FLATRATE on netflix, BUY on itunes, unmapped service offer
+                    offer("jp_flat_1", "netflix", "Netflix", "nfx", "FLATRATE", "HD",
+                          audio=["ja"], subs=["en", "ja"]),
+                    offer("jp_buy_1", "itunes", "Apple TV Store", "itu", "BUY", "HD",
+                          audio=["ja"], subs=[]),
+                    offer("jp_unmapped_1", "unmappedstreamjp", "Unmapped Stream JP", "usj", "FLATRATE", "HD",
+                          audio=["ja"], subs=[]),
+                ],
+            )
+        )
+    }
+})
+
+JW_SEARCH_SERIES_JP = envelope({
+    "popularTitles": {
+        "edges": edges(
+            title(
+                "ts90001", "Tokyo Midnight Stories", object_type="SHOW", year=2024,
+                tmdb_id="90001", imdb_id="tt9000001", full_path="/jp/tv-series/tokyo-midnight-stories",
+                total_season_count=1,
+                offers=[
+                    offer("jp_series_sub_1", "netflix", "Netflix", "nfx", "FLATRATE", "HD",
+                          audio=["ja"], subs=["en"]),
+                ],
+            )
+        )
+    }
+})
+
+JW_SEARCH_SERIES_UNRESOLVED = envelope({
+    "popularTitles": {
+        "edges": edges(
+            title(
+                "ts90002", "Unmapped Enigmatic Chronicles", object_type="SHOW", year=2024,
+                tmdb_id=None, imdb_id=None, full_path="/jp/tv-series/unmapped-enigmatic",
+                total_season_count=1,
+                offers=[
+                    offer("jp_unres_1", "netflix", "Netflix", "nfx", "FLATRATE", "HD"),
+                ],
+            )
+        )
+    }
+})
+
 JW_ERRORS_PAGE_TOO_LARGE = {
     "errors": [{"message": "page too large"}], "data": None}
 JW_ERRORS_COMPLEXITY = {
