@@ -1681,6 +1681,7 @@ def watchlist_refresh_explicit(request):
         batch=result.get("batch"),
         movie_ids=movie_ids,
         source_policy=title_level_source_slugs(),
+        country=_active_country(request),
     )
 
     stale_catalogue = stale_catalogue_sources()

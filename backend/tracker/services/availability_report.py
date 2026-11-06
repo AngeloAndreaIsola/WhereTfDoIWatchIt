@@ -253,7 +253,7 @@ def _catalogue_slugs() -> list[str]:
     )
 
 
-def _terminal_status_evidence(movie_ids: list[int], batch=None) -> dict[int, dict[str, str]]:
+def _terminal_status_evidence(movie_ids: list[int], batch=None, country: str | None = None) -> dict[int, dict[str, str]]:
     """``{movie_id: {source: terminal status}}`` from the newest row per pair.
 
     A title can accumulate many request rows per source over its life
@@ -272,6 +272,8 @@ def _terminal_status_evidence(movie_ids: list[int], batch=None) -> dict[int, dic
     qs = RefreshRequest.objects.filter(movie_id__in=movie_ids)
     if batch is not None:
         qs = qs.filter(batch=batch)
+    if country is not None:
+        qs = qs.filter(country=country.upper())
     for movie_id, src, status, requested_at, pk in qs.values_list(
         "movie_id", "source", "status", "requested_at", "id"
     ).iterator():
@@ -287,7 +289,7 @@ def _terminal_status_evidence(movie_ids: list[int], batch=None) -> dict[int, dic
 
 
 def _terminal_status_by_source(
-    movie_ids: list[int], batch=None
+    movie_ids: list[int], batch=None, country: str | None = None
 ) -> dict[str, dict[int, str]]:
     """``{source: {movie_id: newest status}}`` — the transpose of
     :func:`_terminal_status_evidence`.
@@ -309,7 +311,7 @@ def _terminal_status_by_source(
     argument that is silently ignored is worse than no argument, because it
     reads as "this view is run-scoped" when it is not.
     """
-    per_movie = _terminal_status_evidence(movie_ids, batch=batch)
+    per_movie = _terminal_status_evidence(movie_ids, batch=batch, country=country)
     by_source: dict[str, dict[int, str]] = defaultdict(dict)
     for movie_id, per_src in per_movie.items():
         for src, status in per_src.items():
@@ -317,7 +319,7 @@ def _terminal_status_by_source(
     return by_source
 
 
-def _permanent_miss_sources(movie_ids: list[int]) -> dict[int, set[str]]:
+def _permanent_miss_sources(movie_ids: list[int], country: str | None = None) -> dict[int, set[str]]:
     """``{movie_id: {source}}`` where a title is a *permanent* upstream 404.
 
     ``UpstreamTitleNotFound`` is the one terminal error that must never be
@@ -327,7 +329,10 @@ def _permanent_miss_sources(movie_ids: list[int]) -> dict[int, set[str]]:
     is what keeps a transient network 404 from being written off forever.
     """
     out: dict[int, set[str]] = defaultdict(set)
-    for movie_id, src in RefreshRequest.objects.filter(movie_id__in=movie_ids).filter(
+    qs = RefreshRequest.objects.filter(movie_id__in=movie_ids)
+    if country is not None:
+        qs = qs.filter(country=country.upper())
+    for movie_id, src in qs.filter(
         Q(
             status=RefreshRequestStatus.DONE,
             outcome=RefreshRequestOutcome.TITLE_NOT_FOUND,
@@ -474,7 +479,7 @@ def _title_availability_signals(movie_ids: list[int], country: str | None = None
     return out
 
 
-def _last_attempted_per_source(movie_ids: list[int], batch=None) -> dict[tuple[int, str], object]:
+def _last_attempted_per_source(movie_ids: list[int], batch=None, country: str | None = None) -> dict[tuple[int, str], object]:
     """``{(movie_id, source): when the source last touched this title}``.
 
     Distinct from :func:`_last_checked_per_source`, which reads
@@ -508,6 +513,8 @@ def _last_attempted_per_source(movie_ids: list[int], batch=None) -> dict[tuple[i
     qs = RefreshRequest.objects.filter(movie_id__in=movie_ids)
     if batch is not None:
         qs = qs.filter(batch=batch)
+    if country is not None:
+        qs = qs.filter(country=country.upper())
     for movie_id, src, requested_at, completed_at, pk in qs.values_list(
         "movie_id", "source", "requested_at", "completed_at", "id"
     ).iterator():
@@ -520,7 +527,7 @@ def _last_attempted_per_source(movie_ids: list[int], batch=None) -> dict[tuple[i
     return {key: value[0] for key, value in newest.items() if value[0] is not None}
 
 
-def _last_checked_per_source(movie_ids: list[int]) -> dict[tuple[int, str], object]:
+def _last_checked_per_source(movie_ids: list[int], country: str | None = None) -> dict[tuple[int, str], object]:
     """``{(movie_id, source): newest Offer.last_seen}`` — an *answer* stamp.
 
     Only meaningful for a source that produced an offer. For a source that
@@ -535,9 +542,10 @@ def _last_checked_per_source(movie_ids: list[int]) -> dict[tuple[int, str], obje
             by_tmdb[tmdb_id].append(movie_id)
 
     newest: dict[tuple[int, str], object] = {}
-    for tmdb_id, slug, seen in Offer.objects.filter(
-        tmdb_id__in=set(by_tmdb)
-    ).values_list("tmdb_id", "source__slug", "last_seen").iterator():
+    qs = Offer.objects.filter(tmdb_id__in=set(by_tmdb))
+    if country:
+        qs = qs.filter(country__code=country.upper())
+    for tmdb_id, slug, seen in qs.values_list("tmdb_id", "source__slug", "last_seen").iterator():
         for movie_id in by_tmdb.get(tmdb_id, ()):
             key = (movie_id, slug)
             prev = newest.get(key)
@@ -710,14 +718,16 @@ def title_source_report(movie_ids, batch=None, country: str | None = None) -> di
         return {}
 
     title_slugs = _title_level_slugs()
-    evidence = _terminal_status_evidence(movie_ids, batch=batch) if country is None else {}
-    permanent = _permanent_miss_sources(movie_ids) if country is None else {mid: set() for mid in movie_ids}
+    # Request evidence is market provenance. A scoped report may use only
+    # exact-country rows; blank historical rows are intentionally unknown.
+    evidence = _terminal_status_evidence(movie_ids, batch=batch, country=country)
+    permanent = _permanent_miss_sources(movie_ids, country=country)
     offers_by_source, active_offer_movies = _active_offers_by_source(movie_ids, country=country)
     providers = _offered_providers(movie_ids, country=country)
     offer_counts = _active_offer_count(movie_ids, country=country)
     signals_by_movie = _title_availability_signals(movie_ids, country=country)
-    last_checked = _last_checked_per_source(movie_ids)
-    last_attempted = _last_attempted_per_source(movie_ids, batch=batch)
+    last_checked = _last_checked_per_source(movie_ids, country=country)
+    last_attempted = _last_attempted_per_source(movie_ids, batch=batch, country=country)
     blocked = {s: (source_quota(s) or {}) for s in title_slugs}
     exhausted = {s for s, q in blocked.items() if q.get("exhausted")}
 
@@ -840,7 +850,7 @@ def unknown_breakdown(movie_ids) -> dict[str, int]:
     return dict(counts.most_common())
 
 
-def source_progress(movie_ids, batch=None) -> list[dict]:
+def source_progress(movie_ids, batch=None, country: str | None = None) -> list[dict]:
     """Per-source roll-up: how much work each source owes, owes, is blocked on.
 
     The "source-first" report from the plan. Each entry answers three
@@ -865,7 +875,7 @@ def source_progress(movie_ids, batch=None) -> list[dict]:
     if not movie_ids:
         return []
     title_slugs = _title_level_slugs()
-    terminal = _terminal_status_by_source(movie_ids, batch=batch)
+    terminal = _terminal_status_by_source(movie_ids, batch=batch, country=country)
 
     rows: list[dict] = []
     for slug in title_slugs:
@@ -886,10 +896,13 @@ def source_progress(movie_ids, batch=None) -> list[dict]:
             1 for s in by_status.values() if s == RefreshRequestStatus.BLOCKED
         )
         quota = source_quota(slug)
-        produced = Offer.objects.filter(
+        produced_qs = Offer.objects.filter(
             tmdb_id__in=Movie.objects.filter(id__in=movie_ids).values("tmdb_id"),
             source__slug=slug,
-        ).count()
+        )
+        if country:
+            produced_qs = produced_qs.filter(country__code=country.upper())
+        produced = produced_qs.count()
 
         if total == 0:
             status = "not_applicable"
@@ -1056,7 +1069,7 @@ def build_run_summary(movie_ids, batch=None, country: str | None = None) -> dict
     hides exactly the faults the report exists to surface.
     """
     movie_ids = list(movie_ids)
-    sources = source_progress(movie_ids, batch=batch)
+    sources = source_progress(movie_ids, batch=batch, country=country)
     collectors = catalogue_progress()
     report = title_source_report(movie_ids, batch=batch, country=country)
     states = Counter(entry["state"] for entry in report.values())
@@ -1128,16 +1141,17 @@ def record_run(
     batch=None,
     movie_ids=None,
     source_policy=None,
+    country: str | None = None,
     status: str = "queued",
 ) -> AvailabilityRefresh:
     """Create (or adopt) the run row for a refresh and freeze its scope."""
     refresh, created = AvailabilityRefresh.objects.get_or_create(
         batch=batch,
         run_type=run_type,
-        defaults={"status": status, "started_at": timezone.now()},
+        defaults={"status": status, "started_at": timezone.now(), "country": (country or "").upper()},
     ) if batch is not None else (
         AvailabilityRefresh.objects.create(
-            run_type=run_type, status=status, started_at=timezone.now()
+            run_type=run_type, status=status, started_at=timezone.now(), country=(country or "").upper()
         ),
         True,
     )
@@ -1218,7 +1232,10 @@ def sync_run_progress(refresh: AvailabilityRefresh, movie_ids, batch=None) -> Av
     property is what lets the frontend recover a run after a reload by
     simply asking for it again.
     """
-    summary = build_run_summary(movie_ids, batch=batch if batch is not None else refresh.batch)
+    summary = build_run_summary(
+        movie_ids, batch=batch if batch is not None else refresh.batch,
+        country=refresh.country or None,
+    )
     rows = summary["sources"] + summary["collectors"]
 
     for row in rows:

@@ -64,6 +64,7 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 
+from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
@@ -140,68 +141,43 @@ class AvailabilityRefreshLifecycle:
         )
         return refresh
 
+    @staticmethod
     def fail(refresh: AvailabilityRefresh, error: str = "") -> AvailabilityRefresh:
-        """Record a fatal, run-level failure.
+        """Atomically settle and record a fatal run-level failure.
 
-        The run-level failure path, and the only route to ``FAILED`` that means
-        "the refresh itself broke". A single source's fetch failing must never
-        arrive here.
-
-        **Settles before it terminates.** The invariant P6a established applies
-        to *every* terminal status, FAILED included:
-
-            terminal refresh
-                => zero queued/running requests
-                => zero queued/running source rows
-                => finished_at IS NOT NULL
-
-        This function used to stamp ``FAILED`` unconditionally, which meant the
-        worker's exception handler could produce precisely the state the
-        invariant forbids. It happened in production: run 8's tick raised
-        ``UnsettledWorkError`` because 563 requests were still queued, the
-        handler caught it, called this, and recorded ``failed`` with 426 pending
-        requests — a terminal run whose terminal status was earned by the very
-        defect the status is supposed to report.
-
-        So: settle what cannot execute, verify nothing is outstanding, then
-        terminate. A failed refresh is full of settled rows — ``done``,
-        ``failed``, ``blocked``/``quota_exhausted`` — and is still ``FAILED``,
-        because settling work is not the same as declaring it successful. The
-        run-level failure is what the status records.
-
-        Refuses rather than records if work remains outstanding afterwards. That
-        guards future callers who bypass the worker's own failure path: a
-        misleading terminal record is worse than a loud failure, because it is
-        believed.
+        Lock the run and its source rows before deciding terminality. This
+        prevents a concurrent finaliser from overwriting FAILED, or a concurrent
+        source-row writer from leaving live work under a terminal run.
         """
-        settled = settle_unexecutable_requests(refresh)
-        settled_sources = settle_unexecutable_source_rows(refresh)
-
-        outstanding = _outstanding_request_count(refresh)
-        if outstanding:
-            raise UnsettledWorkError(
-                f"cannot fail refresh {refresh.pk}: {outstanding} request(s) are "
-                f"runnable and therefore must be executed or settled first"
-            )
-        unsettled_sources = [
-            f"{r.source}={r.status}"
-            for r in refresh.sources.all()
-            if r.status in NON_TERMINAL_SOURCE_STATUSES
-        ]
-        if unsettled_sources:
-            raise UnsettledWorkError(
-                f"cannot fail refresh {refresh.pk}: unsettled source row(s): "
-                + ", ".join(unsettled_sources)
-            )
-
-        refresh.status = AvailabilityRefreshStatus.FAILED
-        refresh.finished_at = timezone.now()
-        if error:
-            refresh.error = error[:2000]
-        refresh.save(update_fields=["status", "finished_at", "error"])
+        with transaction.atomic():
+            refresh = AvailabilityRefresh.objects.select_for_update().get(pk=refresh.pk)
+            list(refresh.sources.select_for_update())
+            if refresh.status in TERMINAL_STATUSES:
+                return refresh
+            settled = settle_unexecutable_requests(refresh)
+            settled_sources = settle_unexecutable_source_rows(refresh)
+            outstanding = _outstanding_request_count(refresh)
+            if outstanding:
+                raise UnsettledWorkError(
+                    f"cannot fail refresh {refresh.pk}: {outstanding} request(s) are "
+                    "runnable and therefore must be executed or settled first"
+                )
+            unsettled_sources = [
+                f"{r.source}={r.status}" for r in refresh.sources.all()
+                if r.status in NON_TERMINAL_SOURCE_STATUSES
+            ]
+            if unsettled_sources:
+                raise UnsettledWorkError(
+                    f"cannot fail refresh {refresh.pk}: unsettled source row(s): "
+                    + ", ".join(unsettled_sources)
+                )
+            refresh.status = AvailabilityRefreshStatus.FAILED
+            refresh.finished_at = timezone.now()
+            if error:
+                refresh.error = error[:2000]
+            refresh.save(update_fields=["status", "finished_at", "error"])
         logger.warning(
-            "availability_refresh_failed refresh_id=%s error=%s settled=%s "
-            "settled_sources=%s",
+            "availability_refresh_failed refresh_id=%s error=%s settled=%s settled_sources=%s",
             refresh.pk, error, settled or "{}", settled_sources or "{}",
         )
         return refresh
@@ -249,7 +225,7 @@ class AvailabilityRefreshLifecycle:
             )
             return refresh
 
-        summary = build_run_summary(ids, batch=refresh.batch)
+        summary = build_run_summary(ids, batch=refresh.batch, country=refresh.country or None)
         sync_run_progress(refresh, ids, batch=refresh.batch)
 
         # The result is a pure function of already-settled evidence, so it is
@@ -441,7 +417,7 @@ def derive_refresh_result(
 
     ids = _scope_movie_ids(refresh, None)
     if summary is None:
-        summary = build_run_summary(ids, batch=refresh.batch)
+        summary = build_run_summary(ids, batch=refresh.batch, country=refresh.country or None)
 
     if _has_unresolved_in_scope_title(ids, refresh):
         return AvailabilityRefreshStatus.PARTIAL

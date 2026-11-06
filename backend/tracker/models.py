@@ -969,6 +969,9 @@ class AvailabilityRefresh(models.Model):
     # The uuid stamped onto every RefreshRequest this run touched. Nullable
     # because a catalogue-only run owns no title requests.
     batch = models.UUIDField(null=True, blank=True, db_index=True)
+    # A run is a market-specific observation. Blank is retained only for
+    # historical/global runs; it must never answer a requested market.
+    country = models.CharField(max_length=2, blank=True, default="", db_index=True)
     title_filter = models.JSONField(default=list, blank=True)
     # Which sources this run is allowed to consult, in tier order. Frozen at
     # creation so a run's scope is auditable after the fact even if the
