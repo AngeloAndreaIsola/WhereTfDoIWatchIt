@@ -434,11 +434,11 @@ class PrimeMovieEndpointTests(TestCase):
         """
         movie = Movie.objects.create(tmdb_id=194, title="Amélie", year=2001)
         # No Subscription rows at all: every offer is from an unowned service.
-        local_offer(movie, country="CA", service="netflix", offer_type="subscription",
+        local_offer(movie, country="NL", service="netflix", offer_type="subscription",
                     quality="hd", audio_languages=["EN"], subtitle_languages=["EN"])
-        local_offer(movie, country="JP", service="hulu", offer_type="subscription",
+        local_offer(movie, country="NL", service="hulu", offer_type="subscription",
                     quality="hd", audio_languages=["EN"], subtitle_languages=["EN"])
-        local_offer(movie, country="SE", service="max", offer_type="subscription",
+        local_offer(movie, country="NL", service="max", offer_type="subscription",
                     quality="hd", audio_languages=["EN"], subtitle_languages=["EN"])
 
         from django.test import Client
@@ -452,9 +452,12 @@ class PrimeMovieEndpointTests(TestCase):
             self.assertFalse(offer["is_entitled"])
             self.assertFalse(offer["is_accessible"])
         # Available, but not with the user's subscriptions — never "available
-        # here" and never hidden.
+        # here" and never hidden. The request is for NL; the offers are
+        # present (foreign/unowned) but do not constitute verified NL
+        # availability, so the state stays "unknown" while the verdict
+        # remains "available_elsewhere".
         self.assertEqual(data["watchability"]["verdict"], "available_elsewhere")
-        self.assertEqual(data["availability"]["state"], "available")
+        self.assertEqual(data["availability"]["state"], "unknown")
 
     def test_accessible_offer_outranks_unowned_offer(self):
         """A playable offer leads the list even when an unowned offer ranks higher.

@@ -216,12 +216,12 @@ def request_availability_refresh(
             legacy_qs = RefreshRequest.objects.filter(
                 movie=movie,
                 source="",
-                country=country,
+                country__in=[country, ""],
                 status=RefreshRequestStatus.PENDING,
             )
             if legacy_qs.exists():
                 try:
-                    adopted = legacy_qs.update(source=DEFAULT_SOURCE_SLUG)
+                    adopted = legacy_qs.update(source=DEFAULT_SOURCE_SLUG, country=country)
                 except IntegrityError:
                     legacy_qs.delete()
                     adopted = 0

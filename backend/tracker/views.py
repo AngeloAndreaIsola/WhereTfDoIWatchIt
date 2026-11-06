@@ -483,7 +483,7 @@ def refresh_availability(request, tmdb_id: int):
         movie,
         priority=RefreshPriority.EXPLICIT,
         if_stale=False,
-        country=_active_country(request),
+        country=request.GET.get("current_country") or None,
     )
 
     pending = RefreshRequest.objects.filter(
