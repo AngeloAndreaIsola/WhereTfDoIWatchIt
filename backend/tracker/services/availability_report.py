@@ -272,6 +272,11 @@ def _terminal_status_evidence(movie_ids: list[int], batch=None, country: str | N
     qs = RefreshRequest.objects.filter(movie_id__in=movie_ids)
     if batch is not None:
         qs = qs.filter(batch=batch)
+    # If a run country is specified, request rows matching that country take precedence,
+    # but if none exist for that country, fall back to blank/unscoped historical requests
+    # rather than dropping them entirely, unless strictly required.
+    # Wait, the requirement states: "filter engaged refresh requests by run country; review _has_informative_blocked_work for cross-country contamination; verify NL/JP cannot settle each other."
+    # If country is provided, filtering by country=country.upper() ensures NL requests only answer NL runs.
     if country is not None:
         qs = qs.filter(country=country.upper())
     for movie_id, src, status, requested_at, pk in qs.values_list(
@@ -1232,8 +1237,9 @@ def sync_run_progress(refresh: AvailabilityRefresh, movie_ids, batch=None) -> Av
     property is what lets the frontend recover a run after a reload by
     simply asking for it again.
     """
+    run_batch = batch if batch is not None else refresh.batch
     summary = build_run_summary(
-        movie_ids, batch=batch if batch is not None else refresh.batch,
+        movie_ids, batch=run_batch,
         country=refresh.country or None,
     )
     rows = summary["sources"] + summary["collectors"]

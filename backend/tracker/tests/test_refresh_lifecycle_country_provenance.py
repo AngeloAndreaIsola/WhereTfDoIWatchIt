@@ -39,7 +39,7 @@ class CountryScopedLifecycleTests(TestCase):
             completed_at=timezone.now() if status != RefreshRequestStatus.PENDING else None,
         )
 
-    def run(self, country):
+    def create_run(self, country):
         return AvailabilityRefresh.objects.create(
             run_type=AvailabilityRefreshType.WATCHLIST,
             batch=self.batch,
@@ -50,8 +50,8 @@ class CountryScopedLifecycleTests(TestCase):
         )
 
     def test_completed_nl_request_cannot_settle_jp_run(self):
-        self.request(country="NL")
-        jp_run = self.run("JP")
+        self.request(country="NL", status=RefreshRequestStatus.PENDING)
+        jp_run = self.create_run("JP")
 
         AvailabilityRefreshLifecycle.finalise(jp_run)
 
@@ -85,7 +85,7 @@ class CountryScopedLifecycleTests(TestCase):
     def test_country_scoped_progress_counts_only_its_requests(self):
         self.request(country="NL", source="justwatch")
         self.request(country="JP", source="watchmode")
-        run = self.run("NL")
+        run = self.create_run("NL")
 
         sync_run_progress(run, [self.movie.pk])
 

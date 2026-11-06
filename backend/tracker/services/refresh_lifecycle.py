@@ -416,10 +416,11 @@ def derive_refresh_result(
         )
 
     ids = _scope_movie_ids(refresh, None)
+    run_country = refresh.country or None
     if summary is None:
-        summary = build_run_summary(ids, batch=refresh.batch, country=refresh.country or None)
+        summary = build_run_summary(ids, batch=refresh.batch, country=run_country)
 
-    if _has_unresolved_in_scope_title(ids, refresh):
+    if _has_unresolved_in_scope_title(ids, refresh, country=run_country):
         return AvailabilityRefreshStatus.PARTIAL
 
     # An applicable source that was tried and failed is incomplete evidence
@@ -431,13 +432,15 @@ def derive_refresh_result(
     # Blocked work is only a gap when it left something undetermined. A
     # `policy_not_needed` skip means a cheaper source already resolved the
     # title, which is exactly the ladder working.
-    if _has_informative_blocked_work(refresh):
+    if _has_informative_blocked_work(refresh, country=run_country):
         return AvailabilityRefreshStatus.PARTIAL
 
     return AvailabilityRefreshStatus.COMPLETED
 
 
-def _has_unresolved_in_scope_title(movie_ids, refresh: AvailabilityRefresh) -> bool:
+def _has_unresolved_in_scope_title(
+    movie_ids, refresh: AvailabilityRefresh, country: str | None = None
+) -> bool:
     """Whether a title in this run's scope was left without a determination.
 
     Scope matters here, and it is the whole point. The report classifies a title
@@ -460,16 +463,20 @@ def _has_unresolved_in_scope_title(movie_ids, refresh: AvailabilityRefresh) -> b
     if not movie_ids:
         return False
 
-    report = title_source_report(movie_ids, batch=refresh.batch)
+    if country is None and refresh.country:
+        country = refresh.country
+
+    report = title_source_report(movie_ids, batch=refresh.batch, country=country)
 
     # What this refresh actually asked about. A source with no request row in
     # this batch was not this run's responsibility, whatever the global
     # report says about it.
+    req_qs = RefreshRequest.objects.filter(batch=refresh.batch)
+    if country:
+        req_qs = req_qs.filter(country=country.upper())
     engaged = {
         (row["movie_id"], row["source"])
-        for row in RefreshRequest.objects.filter(batch=refresh.batch).values(
-            "movie_id", "source"
-        )
+        for row in req_qs.values("movie_id", "source")
     }
 
     for movie_id, entry in report.items():
@@ -511,7 +518,9 @@ _UNINFORMATIVE_BLOCK_REASONS = frozenset(
 )
 
 
-def _has_informative_blocked_work(refresh: AvailabilityRefresh) -> bool:
+def _has_informative_blocked_work(
+    refresh: AvailabilityRefresh, country: str | None = None
+) -> bool:
     """Whether any settled row is blocked for a reason that leaves a gap.
 
     Only `blocked`/``quota_exhausted`` and ``source_disabled`` count: those mean
@@ -519,9 +528,14 @@ def _has_informative_blocked_work(refresh: AvailabilityRefresh) -> bool:
     ``policy_not_needed`` and ``superseded`` do not — they record work another
     source or a newer request legitimately replaced.
     """
-    return RefreshRequest.objects.filter(
+    if country is None and refresh.country:
+        country = refresh.country
+    qs = RefreshRequest.objects.filter(
         batch=refresh.batch, status=RefreshRequestStatus.BLOCKED
-    ).exclude(blocked_reason__in=_UNINFORMATIVE_BLOCK_REASONS).exists()
+    )
+    if country:
+        qs = qs.filter(country=country.upper())
+    return qs.exclude(blocked_reason__in=_UNINFORMATIVE_BLOCK_REASONS).exists()
 
 
 def _has_applicable_source_failure(refresh: AvailabilityRefresh) -> bool:
