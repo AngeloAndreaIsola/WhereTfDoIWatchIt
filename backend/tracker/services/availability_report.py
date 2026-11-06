@@ -629,6 +629,10 @@ def classify_source(
     if request_status == RefreshRequestStatus.DONE:
         if outcome == "title_not_found":
             return "completed", AvailabilityResolutionReason.TITLE_NOT_FOUND
+        if outcome == "offers_found":
+            # produced_active_offer already handled above (RESOLVED). No active
+            # offer now means stale historical evidence, not a fresh NO_OFFER.
+            return "skipped", AvailabilityResolutionReason.NOT_APPLICABLE
         if outcome in ("", None, "unknown"):
             # Cached/freshness-only completion: not a definitive negative.
             return "skipped", AvailabilityResolutionReason.NOT_APPLICABLE
