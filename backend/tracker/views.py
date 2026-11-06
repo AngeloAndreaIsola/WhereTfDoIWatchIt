@@ -2050,7 +2050,13 @@ def availability_title_report(request, tmdb_id: int):
         return Response(
             {"error": "movie not found"}, status=status.HTTP_404_NOT_FOUND
         )
-    report = title_source_report([movie.pk]).get(movie.pk, {})
+    access_country = (
+        request.query_params.get("current_country")
+        or request.query_params.get("country")
+        or resolve_preferences(user_id=1).get("current_country")
+        or ""
+    )
+    report = title_source_report([movie.pk], country=str(access_country).upper() if access_country else None).get(movie.pk, {})
     from .services.availability_report import catalogue_progress
 
     return Response(
