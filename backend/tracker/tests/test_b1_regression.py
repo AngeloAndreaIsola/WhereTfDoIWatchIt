@@ -64,7 +64,6 @@ class B1StalePositiveTests(TestCase):
         self.assertNotIn("streaming_availability", decision["allowed_sources"])
         self.assertEqual(decision["skipped_sources"].get("streaming_availability"), "not_needed")
 
-    @unittest.expectedFailure
     def test_expired_offer_cannot_establish_availability_or_suppress_sa(self):
         """Expected failure: desired contract that expired offer cannot establish verified current availability or suppress eligible SA refresh (B2 target)."""
         offer = local_offer(self.movie, country="NL", service="netflix")
@@ -111,10 +110,8 @@ class B1MeteredSelfSuppressionTests(TestCase):
             decision = source_policy.decide_sources_for_title(
                 states.get(self.movie.pk, {}), applicable_slugs=["justwatch", "streaming_availability"]
             )
-        self.assertNotIn("streaming_availability", decision["allowed_sources"])
-        self.assertEqual(decision["skipped_sources"].get("streaming_availability"), "not_needed")
+        self.assertIn("streaming_availability", decision["allowed_sources"])
 
-    @unittest.expectedFailure
     def test_stale_sa_only_offer_cannot_suppress_its_own_refresh(self):
         """Expected failure: desired contract that a stale SA-only offer without cheaper evidence cannot suppress its own refresh (B2 target)."""
         sa_source, _ = Source.objects.get_or_create(slug="streaming_availability", defaults={"name": "SA"})

@@ -435,7 +435,6 @@ class RefreshOnViewTests(TestCase):
         metered scope — but the free title-level sources still run."""
         movie = Movie.objects.create(tmdb_id=306, title="Resolved", year=2020)
         local_offer(movie)
-        _backdate_offers(movie)
 
         resp = self.client.get(f"/api/movie/{movie.pk}/")
 
@@ -606,7 +605,6 @@ class PrimeDetailFanOutTests(TestCase):
         pipeline_cls.return_value.run.return_value = MagicMock(offers_out=[])
         movie = self._prime_movie(1303)
         local_offer(movie)
-        _backdate_offers(movie)
 
         resp = self._get("movie", movie.tmdb_id)
 
@@ -627,7 +625,6 @@ class PrimeDetailFanOutTests(TestCase):
         pipeline_cls.return_value.run.return_value = MagicMock(offers_out=[])
         series = self._prime_series(1304)
         local_offer(series)
-        _backdate_offers(series)
 
         resp = self._get("series", series.tmdb_id)
 
