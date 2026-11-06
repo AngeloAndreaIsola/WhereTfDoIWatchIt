@@ -199,7 +199,7 @@ class StreamingAvailabilityGateTests(TestCase):
         )
 
         with patch.dict(os.environ, {source_policy.LADDER_ENV_VAR: "1"}):
-            res = rr.request_watchlist_refresh(user_id=1)
+            res = rr.request_watchlist_refresh(user_id=1, priority=RefreshPriority.STALE)
 
         self.assertNotIn(SA, res["sources"])
         self.assertEqual(res["skipped_counts"].get("not_needed", 0), 1)
@@ -221,7 +221,7 @@ class StreamingAvailabilityGateTests(TestCase):
         )
 
         with patch.dict(os.environ, {source_policy.LADDER_ENV_VAR: "0"}):
-            res = rr.request_watchlist_refresh(user_id=1)
+            res = rr.request_watchlist_refresh(user_id=1, priority=RefreshPriority.STALE)
 
         self.assertIn(SA, res["sources"])
         sa_requests = RefreshRequest.objects.filter(movie=self.movie, source=SA)

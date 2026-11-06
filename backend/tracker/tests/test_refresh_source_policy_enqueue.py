@@ -45,6 +45,7 @@ from tracker.models import (
     Provider,
     RefreshRequest,
     RefreshRequestStatus,
+    RefreshPriority,
     WatchlistItem,
 )
 from tracker.services import availability_report as ar
@@ -208,7 +209,7 @@ class EnqueueGatingTests(TestCase):
         """THE test. A resolved title must not create a metered request."""
         offer_for(self.movie, WM)
         with self._gate_on():
-            result = rr.request_watchlist_refresh(user_id=1)
+            result = rr.request_watchlist_refresh(user_id=1, priority=RefreshPriority.STALE)
         self.assertEqual(self._sa_rows(), 0)
         self.assertGreater(result["queued"], 0, "the free sources still run")
 
@@ -236,7 +237,7 @@ class EnqueueGatingTests(TestCase):
     def test_a_resolved_title_creates_rows_only_for_free_sources(self):
         offer_for(self.movie, WM)
         with self._gate_on():
-            result = rr.request_watchlist_refresh(user_id=1)
+            result = rr.request_watchlist_refresh(user_id=1, priority=RefreshPriority.STALE)
         created = set(
             RefreshRequest.objects.filter(movie=self.movie).values_list("source", flat=True)
         )
