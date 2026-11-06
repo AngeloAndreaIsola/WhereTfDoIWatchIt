@@ -633,10 +633,10 @@ def classify_source(
             # produced_active_offer already handled above (RESOLVED). No active
             # offer now means stale historical evidence, not a fresh NO_OFFER.
             return "skipped", AvailabilityResolutionReason.NOT_APPLICABLE
-        if outcome in ("", None, "unknown"):
-            # Cached/freshness-only completion: not a definitive negative.
-            return "skipped", AvailabilityResolutionReason.NOT_APPLICABLE
-        return "completed", AvailabilityResolutionReason.NO_OFFER
+        if outcome == "no_offer":
+            return "completed", AvailabilityResolutionReason.NO_OFFER
+        # Unknown/unexpected outcomes must not become a definitive negative.
+        return "skipped", AvailabilityResolutionReason.NOT_APPLICABLE
     if request_status == RefreshRequestStatus.FAILED:
         return "failed", AvailabilityResolutionReason.SOURCE_UNAVAILABLE
     if request_status == RefreshRequestStatus.BLOCKED:
