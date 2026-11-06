@@ -452,9 +452,12 @@ class PrimeMovieEndpointTests(TestCase):
             self.assertFalse(offer["is_entitled"])
             self.assertFalse(offer["is_accessible"])
         # Available, but not with the user's subscriptions — never "available
-        # here" and never hidden.
+        # here" and never hidden. The request is for NL; the offers are
+        # present (foreign/unowned) but do not constitute verified NL
+        # availability, so the state stays "unknown" while the verdict
+        # remains "available_elsewhere".
         self.assertEqual(data["watchability"]["verdict"], "available_elsewhere")
-        self.assertEqual(data["availability"]["state"], "available")
+        self.assertEqual(data["availability"]["state"], "unknown")
 
     def test_accessible_offer_outranks_unowned_offer(self):
         """A playable offer leads the list even when an unowned offer ranks higher.
