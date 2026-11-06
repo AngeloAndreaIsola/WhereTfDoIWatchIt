@@ -362,13 +362,29 @@ def _movie_tmdb_map(movie_ids: list[int]) -> dict[int, int]:
     return dict(Movie.objects.filter(id__in=movie_ids).values_list("id", "tmdb_id"))
 
 
-def _active_offers_by_source(movie_ids: list[int], country: str | None = None) -> tuple[dict[int, set[str]], set[int]]:
-    """``({movie_id: {sources with an ACTIVE offer}}, {movie_id})``.
+def _offer_is_current(offer, now=None) -> bool:
+    if not getattr(offer, "currently_available", False):
+        return False
+    from django.utils import timezone as _tz
+    moment = now or _tz.now()
+    available_until = getattr(offer, "available_until", None)
+    if available_until is not None and available_until < moment:
+        return False
+    available_from = getattr(offer, "available_from", None)
+    if available_from is not None and available_from > moment:
+        return False
+    from availability.freshness import freshness_state, FreshnessState
+    src = offer.source
+    state = freshness_state(
+        src.slug,
+        offer.last_seen,
+        configuration=getattr(src, "configuration", None) or {},
+        now=moment,
+    )
+    return state == FreshnessState.FRESH
 
-    Filtered on ``currently_available=True``. When ``country`` is given,
-    only offers for that exact market count; missing-country offers never
-    imply worldwide availability.
-    """
+
+def _active_offers_by_source(movie_ids: list[int], country: str | None = None) -> tuple[dict[int, set[str]], set[int]]:
     by_key: dict[tuple[int, str], list[int]] = defaultdict(list)
     for movie_id, tmdb_id, content_type in Movie.objects.filter(id__in=movie_ids).values_list("id", "tmdb_id", "content_type"):
         if tmdb_id:
@@ -378,12 +394,14 @@ def _active_offers_by_source(movie_ids: list[int], country: str | None = None) -
     active: set[int] = set()
     qs = Offer.objects.filter(
         tmdb_id__in={k[0] for k in by_key}, currently_available=True
-    )
+    ).select_related("source")
     if country:
         qs = qs.filter(country__code=country.upper())
-    for tmdb_id, content_type, slug in qs.values_list("tmdb_id", "content_type", "source__slug").iterator():
-        for movie_id in by_key.get((tmdb_id, content_type or "movie"), ()):
-            per_movie[movie_id].add(slug)
+    for offer in qs:
+        if not _offer_is_current(offer):
+            continue
+        for movie_id in by_key.get((offer.tmdb_id, offer.content_type or "movie"), ()):
+            per_movie[movie_id].add(offer.source.slug)
             active.add(movie_id)
     return per_movie, active
 
@@ -415,12 +433,14 @@ def _offered_providers(movie_ids: list[int], country: str | None = None) -> dict
     out: dict[int, set[str]] = defaultdict(set)
     qs = Offer.objects.filter(
         tmdb_id__in={k[0] for k in by_key}, currently_available=True
-    )
+    ).select_related("source", "provider")
     if country:
         qs = qs.filter(country__code=country.upper())
-    for tmdb_id, content_type, provider in qs.values_list("tmdb_id", "content_type", "provider__slug").iterator():
-        for movie_id in by_key.get((tmdb_id, content_type or "movie"), ()):
-            out[movie_id].add(provider)
+    for offer in qs:
+        if not _offer_is_current(offer):
+            continue
+        for movie_id in by_key.get((offer.tmdb_id, offer.content_type or "movie"), ()):
+            out[movie_id].add(offer.provider.slug)
     return out
 
 
@@ -433,11 +453,13 @@ def _active_offer_count(movie_ids: list[int], country: str | None = None) -> dic
     counts: dict[int, int] = defaultdict(int)
     qs = Offer.objects.filter(
         tmdb_id__in={k[0] for k in by_key}, currently_available=True
-    )
+    ).select_related("source")
     if country:
         qs = qs.filter(country__code=country.upper())
-    for tmdb_id, content_type in qs.values_list("tmdb_id", "content_type").iterator():
-        for movie_id in by_key.get((tmdb_id, content_type or "movie"), ()):
+    for offer in qs:
+        if not _offer_is_current(offer):
+            continue
+        for movie_id in by_key.get((offer.tmdb_id, offer.content_type or "movie"), ()):
             counts[movie_id] += 1
     return counts
 
