@@ -476,7 +476,7 @@ def _title_availability_signals(movie_ids: list[int], country: str | None = None
     for movie_id, slug, row_country, scraped_at, updated_at, confirmed in (
         scraper_qs.values_list("movie_id", "provider__slug", "country_code", "last_scraped_at", "updated_at", "is_confirmed").iterator()
     ):
-        seen = scraped_at or updated_at
+        seen = scraped_at
         out[movie_id].append(
             {
                 "provider": slug or "",
@@ -849,7 +849,7 @@ def title_source_report(movie_ids, batch=None, country: str | None = None) -> di
         available_on = set(providers.get(movie_id, set()))
         available_on.update(
             s["provider"] for s in title_signals
-            if s["provider"] and s.get("confirmed", s.get("source") != "legacy_scraper")
+            if s["provider"] and s.get("confirmed") and s.get("checked_at") is not None
         )
 
         report[movie_id] = {
