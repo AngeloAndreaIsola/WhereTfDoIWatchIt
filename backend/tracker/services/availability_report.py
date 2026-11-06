@@ -433,7 +433,7 @@ def _offered_providers(movie_ids: list[int], country: str | None = None) -> dict
     out: dict[int, set[str]] = defaultdict(set)
     qs = Offer.objects.filter(
         tmdb_id__in={k[0] for k in by_key}, currently_available=True
-    ).select_related("source")
+    ).select_related("source", "provider")
     if country:
         qs = qs.filter(country__code=country.upper())
     for offer in qs:
