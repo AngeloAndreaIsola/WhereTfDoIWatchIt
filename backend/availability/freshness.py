@@ -145,37 +145,67 @@ def freshness_state(
     )
 
 
-def source_last_seen(tmdb_id, source: str) -> Optional[datetime]:
-    """Newest ``Offer.last_seen`` of *source* for that TMDb id, or ``None``.
+def _normalised_country(country: Optional[str]) -> Optional[str]:
+    """Return an explicit ISO country code, or ``None`` for legacy-global use."""
+    if country is None:
+        return None
+    country = country.strip().upper()
+    return country or None
 
-    ``None`` means the source has never observed the title — which reads as
-    stale for refresh decisions (there is no evidence the scope was checked).
+
+def source_last_seen(
+    tmdb_id,
+    source: str,
+    *,
+    country: Optional[str] = None,
+    content_type: Optional[str] = None,
+) -> Optional[datetime]:
+    """Newest matching ``Offer.last_seen`` for a source observation.
+
+    An explicit ``country`` is a hard evidence boundary: observations in US,
+    JP, or a historical global query never establish freshness for NL.  Passing
+    ``country=None`` deliberately preserves the legacy global behaviour.
+    ``content_type`` is likewise optional for compatibility, but callers with
+    a known movie/series identity must provide it so colliding TMDb ids cannot
+    contaminate each other.
     """
-    return Offer.objects.filter(
-        tmdb_id=tmdb_id, source__slug=source
-    ).aggregate(latest=Max("last_seen"))["latest"]
+    query = Offer.objects.filter(tmdb_id=tmdb_id, source__slug=source)
+    if (code := _normalised_country(country)) is not None:
+        query = query.filter(country__code=code)
+    if content_type is not None:
+        query = query.filter(content_type=content_type)
+    return query.aggregate(latest=Max("last_seen"))["latest"]
 
 
 def source_is_stale(
     tmdb_id,
     source: str,
     *,
+    country: Optional[str] = None,
+    content_type: Optional[str] = None,
     now: Optional[datetime] = None,
 ) -> bool:
-    """True when *source*'s observation of the title is missing or too old.
+    """True when source evidence for this country/content scope is stale.
 
-    Evaluated against that source's own window (``freshness_for``), never a
-    shared one: the default scope can be stale while a catalogue source for
-    the same title is fresh, and the other way around. A source that has
-    never observed the title is always stale for its own scope.
+    Explicit country and content scopes require evidence in that exact scope.
+    Omitting either is an intentional legacy-global request, never an implicit
+    fallback from an explicit scope.
     """
-    return _is_stale_at(source, source_last_seen(tmdb_id, source), now=now)
+    return _is_stale_at(
+        source,
+        source_last_seen(
+            tmdb_id, source, country=country, content_type=content_type
+        ),
+        now=now,
+    )
 
 
 def stale_sources(
     tmdb_id,
     *,
     sources=None,
+    country: Optional[str] = None,
+    content_type: Optional[str] = None,
     now: Optional[datetime] = None,
 ) -> list[str]:
     """Slugs whose observation of the title is stale, each on its own window.
@@ -193,11 +223,15 @@ def stale_sources(
     """
     from .sources.registry import DEFAULT_SOURCE_SLUG
 
+    scope_query = Offer.objects.filter(tmdb_id=tmdb_id)
+    if (code := _normalised_country(country)) is not None:
+        scope_query = scope_query.filter(country__code=code)
+    if content_type is not None:
+        scope_query = scope_query.filter(content_type=content_type)
+
     if sources is None:
         observed = set(
-            Offer.objects.filter(tmdb_id=tmdb_id)
-            .values_list("source__slug", flat=True)
-            .distinct()
+            scope_query.values_list("source__slug", flat=True).distinct()
         )
         candidates = observed | {DEFAULT_SOURCE_SLUG}
     else:
@@ -205,9 +239,7 @@ def stale_sources(
 
     latest_by_slug = {
         row["source__slug"]: row["latest"]
-        for row in Offer.objects.filter(
-            tmdb_id=tmdb_id, source__slug__in=candidates
-        )
+        for row in scope_query.filter(source__slug__in=candidates)
         .values("source__slug")
         .annotate(latest=Max("last_seen"))
     }
