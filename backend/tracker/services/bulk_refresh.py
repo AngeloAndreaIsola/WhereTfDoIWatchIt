@@ -212,7 +212,7 @@ def _latest_checks(tmdb_ids) -> dict:
     return {row["tmdb_id"]: row["latest"] for row in rows}
 
 
-def permanently_absent_scopes(tmdb_id) -> set[str]:
+def permanently_absent_scopes(tmdb_id, country: str | None = None) -> set[str]:
     """Source scopes the upstream catalogues are known not to carry this title.
 
     A title that answered **404** to a source has produced a *permanent*
@@ -238,8 +238,11 @@ def permanently_absent_scopes(tmdb_id) -> set[str]:
     sweep compares ``streaming_availability`` — and the exclusion would
     silently never match, reintroducing the very retry loop it exists to stop.
     """
+    qs = RefreshRequest.objects.filter(movie__tmdb_id=tmdb_id)
+    if country is not None:
+        qs = qs.filter(country=country.upper() if country else "")
     slugs = set(
-        RefreshRequest.objects.filter(movie__tmdb_id=tmdb_id).filter(
+        qs.filter(
             Q(
                 status=RefreshRequestStatus.DONE,
                 outcome=RefreshRequestOutcome.TITLE_NOT_FOUND,
@@ -518,12 +521,13 @@ def process_watchlist_refresh(
         # Scopes the upstream is known not to carry (a permanent 404) are
         # dropped here: they write no Offer row, so they would otherwise read
         # as stale forever and cost one metered call per sweep run, every run.
-        absent = permanently_absent_scopes(tmdb_id)
+        current_country = resolve_source_country()
+        absent = permanently_absent_scopes(tmdb_id, country=current_country)
         scopes = [
             slug
             for slug in stale_refresh_scopes(
                 tmdb_id,
-                country=resolve_source_country(),
+                country=current_country,
                 content_type=movie.content_type,
             )
             if slug not in absent

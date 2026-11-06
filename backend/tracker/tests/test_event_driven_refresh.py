@@ -744,7 +744,7 @@ class ExplicitRefreshEndpointTests(TestCase):
         service = MagicMock()
         summary = process_refresh_queue(budget=5, service=service)
 
-        service.refresh_content.assert_called_once_with(movie, country=None)
+        service.refresh_content.assert_called_once_with(movie, country='US')
         self.assertEqual(summary["refreshed"], 1)
         request = RefreshRequest.objects.get()
         self.assertEqual(request.status, RefreshRequestStatus.DONE)
@@ -755,7 +755,7 @@ class ExplicitRefreshEndpointTests(TestCase):
         local_offer(movie)
         _backdate_offers(movie)
         first = request_availability_refresh(
-            movie, priority=RefreshPriority.RECENTLY_VIEWED
+            movie, priority=RefreshPriority.RECENTLY_VIEWED, country="US"
         )
 
         resp = self._post(movie.tmdb_id)

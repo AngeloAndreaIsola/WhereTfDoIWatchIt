@@ -64,6 +64,7 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 
+from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
@@ -140,68 +141,43 @@ class AvailabilityRefreshLifecycle:
         )
         return refresh
 
+    @staticmethod
     def fail(refresh: AvailabilityRefresh, error: str = "") -> AvailabilityRefresh:
-        """Record a fatal, run-level failure.
+        """Atomically settle and record a fatal run-level failure.
 
-        The run-level failure path, and the only route to ``FAILED`` that means
-        "the refresh itself broke". A single source's fetch failing must never
-        arrive here.
-
-        **Settles before it terminates.** The invariant P6a established applies
-        to *every* terminal status, FAILED included:
-
-            terminal refresh
-                => zero queued/running requests
-                => zero queued/running source rows
-                => finished_at IS NOT NULL
-
-        This function used to stamp ``FAILED`` unconditionally, which meant the
-        worker's exception handler could produce precisely the state the
-        invariant forbids. It happened in production: run 8's tick raised
-        ``UnsettledWorkError`` because 563 requests were still queued, the
-        handler caught it, called this, and recorded ``failed`` with 426 pending
-        requests — a terminal run whose terminal status was earned by the very
-        defect the status is supposed to report.
-
-        So: settle what cannot execute, verify nothing is outstanding, then
-        terminate. A failed refresh is full of settled rows — ``done``,
-        ``failed``, ``blocked``/``quota_exhausted`` — and is still ``FAILED``,
-        because settling work is not the same as declaring it successful. The
-        run-level failure is what the status records.
-
-        Refuses rather than records if work remains outstanding afterwards. That
-        guards future callers who bypass the worker's own failure path: a
-        misleading terminal record is worse than a loud failure, because it is
-        believed.
+        Lock the run and its source rows before deciding terminality. This
+        prevents a concurrent finaliser from overwriting FAILED, or a concurrent
+        source-row writer from leaving live work under a terminal run.
         """
-        settled = settle_unexecutable_requests(refresh)
-        settled_sources = settle_unexecutable_source_rows(refresh)
-
-        outstanding = _outstanding_request_count(refresh)
-        if outstanding:
-            raise UnsettledWorkError(
-                f"cannot fail refresh {refresh.pk}: {outstanding} request(s) are "
-                f"runnable and therefore must be executed or settled first"
-            )
-        unsettled_sources = [
-            f"{r.source}={r.status}"
-            for r in refresh.sources.all()
-            if r.status in NON_TERMINAL_SOURCE_STATUSES
-        ]
-        if unsettled_sources:
-            raise UnsettledWorkError(
-                f"cannot fail refresh {refresh.pk}: unsettled source row(s): "
-                + ", ".join(unsettled_sources)
-            )
-
-        refresh.status = AvailabilityRefreshStatus.FAILED
-        refresh.finished_at = timezone.now()
-        if error:
-            refresh.error = error[:2000]
-        refresh.save(update_fields=["status", "finished_at", "error"])
+        with transaction.atomic():
+            refresh = AvailabilityRefresh.objects.select_for_update().get(pk=refresh.pk)
+            list(refresh.sources.select_for_update())
+            settled = settle_unexecutable_requests(refresh)
+            settled_sources = settle_unexecutable_source_rows(refresh)
+            outstanding = _outstanding_request_count(refresh)
+            if outstanding:
+                raise UnsettledWorkError(
+                    f"cannot fail refresh {refresh.pk}: {outstanding} request(s) are "
+                    "runnable and therefore must be executed or settled first"
+                )
+            unsettled_sources = [
+                f"{r.source}={r.status}" for r in refresh.sources.all()
+                if r.status in NON_TERMINAL_SOURCE_STATUSES
+            ]
+            if unsettled_sources:
+                raise UnsettledWorkError(
+                    f"cannot fail refresh {refresh.pk}: unsettled source row(s): "
+                    + ", ".join(unsettled_sources)
+                )
+            if refresh.status in TERMINAL_STATUSES:
+                return refresh
+            refresh.status = AvailabilityRefreshStatus.FAILED
+            refresh.finished_at = timezone.now()
+            if error:
+                refresh.error = error[:2000]
+            refresh.save(update_fields=["status", "finished_at", "error"])
         logger.warning(
-            "availability_refresh_failed refresh_id=%s error=%s settled=%s "
-            "settled_sources=%s",
+            "availability_refresh_failed refresh_id=%s error=%s settled=%s settled_sources=%s",
             refresh.pk, error, settled or "{}", settled_sources or "{}",
         )
         return refresh
@@ -249,7 +225,7 @@ class AvailabilityRefreshLifecycle:
             )
             return refresh
 
-        summary = build_run_summary(ids, batch=refresh.batch)
+        summary = build_run_summary(ids, batch=refresh.batch, country=refresh.country or None)
         sync_run_progress(refresh, ids, batch=refresh.batch)
 
         # The result is a pure function of already-settled evidence, so it is
@@ -440,10 +416,11 @@ def derive_refresh_result(
         )
 
     ids = _scope_movie_ids(refresh, None)
+    run_country = refresh.country or None
     if summary is None:
-        summary = build_run_summary(ids, batch=refresh.batch)
+        summary = build_run_summary(ids, batch=refresh.batch, country=run_country)
 
-    if _has_unresolved_in_scope_title(ids, refresh):
+    if _has_unresolved_in_scope_title(ids, refresh, country=run_country):
         return AvailabilityRefreshStatus.PARTIAL
 
     # An applicable source that was tried and failed is incomplete evidence
@@ -455,13 +432,15 @@ def derive_refresh_result(
     # Blocked work is only a gap when it left something undetermined. A
     # `policy_not_needed` skip means a cheaper source already resolved the
     # title, which is exactly the ladder working.
-    if _has_informative_blocked_work(refresh):
+    if _has_informative_blocked_work(refresh, country=run_country):
         return AvailabilityRefreshStatus.PARTIAL
 
     return AvailabilityRefreshStatus.COMPLETED
 
 
-def _has_unresolved_in_scope_title(movie_ids, refresh: AvailabilityRefresh) -> bool:
+def _has_unresolved_in_scope_title(
+    movie_ids, refresh: AvailabilityRefresh, country: str | None = None
+) -> bool:
     """Whether a title in this run's scope was left without a determination.
 
     Scope matters here, and it is the whole point. The report classifies a title
@@ -484,16 +463,20 @@ def _has_unresolved_in_scope_title(movie_ids, refresh: AvailabilityRefresh) -> b
     if not movie_ids:
         return False
 
-    report = title_source_report(movie_ids, batch=refresh.batch)
+    if country is None and refresh.country:
+        country = refresh.country
+
+    report = title_source_report(movie_ids, batch=refresh.batch, country=country)
 
     # What this refresh actually asked about. A source with no request row in
     # this batch was not this run's responsibility, whatever the global
     # report says about it.
+    req_qs = RefreshRequest.objects.filter(batch=refresh.batch)
+    if country:
+        req_qs = req_qs.filter(country=country.upper())
     engaged = {
         (row["movie_id"], row["source"])
-        for row in RefreshRequest.objects.filter(batch=refresh.batch).values(
-            "movie_id", "source"
-        )
+        for row in req_qs.values("movie_id", "source")
     }
 
     for movie_id, entry in report.items():
@@ -535,7 +518,9 @@ _UNINFORMATIVE_BLOCK_REASONS = frozenset(
 )
 
 
-def _has_informative_blocked_work(refresh: AvailabilityRefresh) -> bool:
+def _has_informative_blocked_work(
+    refresh: AvailabilityRefresh, country: str | None = None
+) -> bool:
     """Whether any settled row is blocked for a reason that leaves a gap.
 
     Only `blocked`/``quota_exhausted`` and ``source_disabled`` count: those mean
@@ -543,9 +528,14 @@ def _has_informative_blocked_work(refresh: AvailabilityRefresh) -> bool:
     ``policy_not_needed`` and ``superseded`` do not — they record work another
     source or a newer request legitimately replaced.
     """
-    return RefreshRequest.objects.filter(
+    if country is None and refresh.country:
+        country = refresh.country
+    qs = RefreshRequest.objects.filter(
         batch=refresh.batch, status=RefreshRequestStatus.BLOCKED
-    ).exclude(blocked_reason__in=_UNINFORMATIVE_BLOCK_REASONS).exists()
+    )
+    if country:
+        qs = qs.filter(country=country.upper())
+    return qs.exclude(blocked_reason__in=_UNINFORMATIVE_BLOCK_REASONS).exists()
 
 
 def _has_applicable_source_failure(refresh: AvailabilityRefresh) -> bool:

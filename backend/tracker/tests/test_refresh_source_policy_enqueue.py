@@ -214,7 +214,8 @@ class EnqueueGatingTests(TestCase):
 
     def test_a_metered_row_is_created_when_all_free_sources_say_no(self):
         for slug in rr.title_level_source_slugs():
-            say_definitely_negative(self.movie, slug)
+            if slug != SA:
+                say_definitely_negative(self.movie, slug)
         with self._gate_on():
             rr.request_watchlist_refresh(user_id=1)
         self.assertEqual(self._sa_rows(), 1)
