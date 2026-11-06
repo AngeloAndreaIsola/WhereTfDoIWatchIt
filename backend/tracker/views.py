@@ -2555,7 +2555,7 @@ def _prime_detail_response(request, item: Movie, key: str) -> Response:
         # unavailable" apart from "the evidence never resolved" without
         # inventing a second classifier. Absence of this field is read by the
         # frontend as unknown, never as unavailable.
-        "availability": title_source_report([item.pk]).get(item.pk),
+        "availability": title_source_report([item.pk], country=str(access_country) if access_country else None).get(item.pk),
         # True while this title still waits in the refresh queue — the
         # frontend polls on it ("Checking availability…") until the worker
         # drains the request and canonical offers land.
