@@ -97,6 +97,7 @@ class OfferRecoveryBaseTestCase(TestCase):
         source_registry._factories["rai_play"] = lambda: self.source
 
     def tearDown(self):
+        source_registry._factories.pop("dummy_src", None)
         if self._orig_raiplay_factory is not None:
             source_registry._factories["rai_play"] = self._orig_raiplay_factory
         super().tearDown()
