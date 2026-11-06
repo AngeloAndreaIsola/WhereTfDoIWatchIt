@@ -442,7 +442,7 @@ class PrimeMovieEndpointTests(TestCase):
                     quality="hd", audio_languages=["EN"], subtitle_languages=["EN"])
 
         from django.test import Client
-        response = Client().get("/api/prime/movie/194/?current_country=NL")
+        response = Client().get("/api/prime/movie/194/?current_country=CA")
 
         self.assertEqual(response.status_code, 200)
         data = response.json()

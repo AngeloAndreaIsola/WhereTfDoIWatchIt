@@ -152,8 +152,6 @@ class AvailabilityRefreshLifecycle:
         with transaction.atomic():
             refresh = AvailabilityRefresh.objects.select_for_update().get(pk=refresh.pk)
             list(refresh.sources.select_for_update())
-            if refresh.status in TERMINAL_STATUSES:
-                return refresh
             settled = settle_unexecutable_requests(refresh)
             settled_sources = settle_unexecutable_source_rows(refresh)
             outstanding = _outstanding_request_count(refresh)
@@ -171,6 +169,8 @@ class AvailabilityRefreshLifecycle:
                     f"cannot fail refresh {refresh.pk}: unsettled source row(s): "
                     + ", ".join(unsettled_sources)
                 )
+            if refresh.status in TERMINAL_STATUSES:
+                return refresh
             refresh.status = AvailabilityRefreshStatus.FAILED
             refresh.finished_at = timezone.now()
             if error:

@@ -42,7 +42,7 @@ services:
     ports:
       # v1 has no authentication boundary; local Compose must never publish
       # refresh/admin mutations to the LAN by default.
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:8005:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -54,7 +54,7 @@ services:
     environment:
       BACKEND_URL: ${BACKEND_URL}
     ports:
-      - "127.0.0.1:3001:3000"
+      - "127.0.0.1:3005:3000"
     depends_on:
       backend:
         condition: service_started

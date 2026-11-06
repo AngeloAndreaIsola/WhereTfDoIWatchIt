@@ -274,7 +274,7 @@ class BulkEnqueueEndpointTests(TestCase):
         movie = _watchlist_movie(203)
         local_offer(movie)
         existing = request_availability_refresh(
-            movie, priority=RefreshPriority.WATCHLIST, if_stale=False
+            movie, priority=RefreshPriority.WATCHLIST, if_stale=False, country="US"
         )
         self.assertIsNotNone(existing)
         self.assertEqual(existing.priority, RefreshPriority.WATCHLIST)
