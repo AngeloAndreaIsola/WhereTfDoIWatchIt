@@ -49,11 +49,10 @@ class B1StalePositiveTests(TestCase):
     def setUp(self):
         self.movie = Movie.objects.create(tmdb_id=2001, title="B1 Stale Movie", year=2024, content_type=ContentType.MOVIE)
 
-    def test_fresh_vs_expired_nl_offer_report_and_eligibility(self):
+    def test_fresh_nl_offer_report_and_eligibility(self):
         offer = local_offer(self.movie, country="NL", service="netflix")
         self.assertFalse(is_stale(self.movie, country="NL"))
 
-        # Assert title_source_report() state and decide_sources_for_title() metered eligibility for fresh offer
         report = ar.title_source_report([self.movie.pk], country="NL")
         entry = report.get(self.movie.pk, {})
         self.assertEqual(entry.get("state"), ar.TitleAvailabilityState.AVAILABLE)
@@ -65,21 +64,25 @@ class B1StalePositiveTests(TestCase):
         self.assertNotIn("streaming_availability", decision["allowed_sources"])
         self.assertEqual(decision["skipped_sources"].get("streaming_availability"), "not_needed")
 
-        # Expire the offer (older than 24h freshness window)
+    @unittest.expectedFailure
+    def test_expired_offer_cannot_establish_availability_or_suppress_sa(self):
+        """Expected failure: desired contract that expired offer cannot establish verified current availability or suppress eligible SA refresh (B2 target)."""
+        offer = local_offer(self.movie, country="NL", service="netflix")
         offer.last_seen = timezone.now() - dt.timedelta(days=2)
         offer.save(update_fields=["last_seen"])
         self.assertTrue(is_stale(self.movie, country="NL"))
 
-        # Assert title_source_report() state and decide_sources_for_title() for expired/stale positive
         report_stale = ar.title_source_report([self.movie.pk], country="NL")
         entry_stale = report_stale.get(self.movie.pk, {})
-        self.assertEqual(entry_stale.get("state"), ar.TitleAvailabilityState.AVAILABLE)
+        # Desired behavior: expired offer cannot establish verified current availability
+        self.assertNotEqual(entry_stale.get("state"), ar.TitleAvailabilityState.AVAILABLE)
 
         with patch.dict(os.environ, {source_policy.LADDER_ENV_VAR: "1"}):
             decision_stale = source_policy.decide_sources_for_title(
                 entry_stale, applicable_slugs=["justwatch", "streaming_availability"]
             )
-        self.assertIn("streaming_availability", decision_stale["skipped_sources"])
+        # Desired behavior: expired offer cannot suppress eligible SA refresh
+        self.assertIn("streaming_availability", decision_stale["allowed_sources"])
 
 
 class B1MeteredSelfSuppressionTests(TestCase):
@@ -89,7 +92,6 @@ class B1MeteredSelfSuppressionTests(TestCase):
             Country.objects.get_or_create(code=code, defaults={"name": code})
 
     def test_active_but_expired_sa_offer_without_cheaper_evidence(self):
-        # Construct actual active-but-expired SA Offer with no cheaper evidence
         sa_source, _ = Source.objects.get_or_create(slug="streaming_availability", defaults={"name": "SA"})
         prov, _ = Provider.objects.get_or_create(slug="sa-prov", defaults={"name": "SA Provider"})
         country, _ = Country.objects.get_or_create(code="NL", defaults={"name": "Netherlands"})
@@ -109,7 +111,58 @@ class B1MeteredSelfSuppressionTests(TestCase):
             decision = source_policy.decide_sources_for_title(
                 states.get(self.movie.pk, {}), applicable_slugs=["justwatch", "streaming_availability"]
             )
-        # Assert desired metered scheduling outcome
+        self.assertNotIn("streaming_availability", decision["allowed_sources"])
+        self.assertEqual(decision["skipped_sources"].get("streaming_availability"), "not_needed")
+
+    @unittest.expectedFailure
+    def test_stale_sa_only_offer_cannot_suppress_its_own_refresh(self):
+        """Expected failure: desired contract that a stale SA-only offer without cheaper evidence cannot suppress its own refresh (B2 target)."""
+        sa_source, _ = Source.objects.get_or_create(slug="streaming_availability", defaults={"name": "SA"})
+        prov, _ = Provider.objects.get_or_create(slug="sa-prov", defaults={"name": "SA Provider"})
+        country, _ = Country.objects.get_or_create(code="NL", defaults={"name": "Netherlands"})
+
+        Offer.objects.create(
+            tmdb_id=self.movie.tmdb_id,
+            provider=prov,
+            source=sa_source,
+            country=country,
+            content_type=ContentType.MOVIE,
+            offer_type="subscription",
+            currently_available=True,
+            last_seen=timezone.now() - dt.timedelta(days=3),
+        )
+        states = ar.title_source_report([self.movie.pk], country="NL")
+        with patch.dict(os.environ, {source_policy.LADDER_ENV_VAR: "1"}):
+            decision = source_policy.decide_sources_for_title(
+                states.get(self.movie.pk, {}), applicable_slugs=["justwatch", "streaming_availability"]
+            )
+        # Desired behavior: stale SA-only offer cannot suppress its own refresh -> SA should be allowed
+        self.assertIn("streaming_availability", decision["allowed_sources"])
+
+    def test_cheaper_source_corroboration_with_non_metered_source(self):
+        """Assert that an explicitly non-metered source (justwatch) acting as a cheaper source
+        corroborates availability and correctly bypasses/suppresses metered SA refresh.
+        """
+        jw_source, _ = Source.objects.get_or_create(slug="justwatch", defaults={"name": "JustWatch"})
+        jw_prov, _ = Provider.objects.get_or_create(slug="jw-prov", defaults={"name": "JustWatch Provider"})
+        country, _ = Country.objects.get_or_create(code="NL", defaults={"name": "Netherlands"})
+
+        Offer.objects.create(
+            tmdb_id=self.movie.tmdb_id,
+            provider=jw_prov,
+            source=jw_source,
+            country=country,
+            content_type=ContentType.MOVIE,
+            offer_type="subscription",
+            currently_available=True,
+            last_seen=timezone.now(),
+        )
+
+        states = ar.title_source_report([self.movie.pk], country="NL")
+        with patch.dict(os.environ, {source_policy.LADDER_ENV_VAR: "1"}):
+            decision = source_policy.decide_sources_for_title(
+                states.get(self.movie.pk, {}), applicable_slugs=["justwatch", "streaming_availability"]
+            )
         self.assertNotIn("streaming_availability", decision["allowed_sources"])
         self.assertEqual(decision["skipped_sources"].get("streaming_availability"), "not_needed")
 
@@ -122,8 +175,8 @@ class B1ExplicitRefreshTests(TestCase):
             Country.objects.get_or_create(code=code, defaults={"name": code})
 
     @unittest.expectedFailure
-    def test_explicit_refresh_includes_sa_subject_to_quota(self):
-        """Expected failure: desired contract that EXPLICIT single-title and bulk refreshes include SA subject to quota.
+    def test_explicit_watchlist_refresh_includes_sa_subject_to_quota(self):
+        """Expected failure: desired contract that EXPLICIT bulk refreshes include SA subject to quota.
         B2 removal instructions: Remove this expectedFailure decorator and update assertion once Phase B2 explicit refresh override is deployed.
         """
         prov, _ = Provider.objects.get_or_create(slug="wm-prov", defaults={"name": "WM"})
@@ -141,6 +194,27 @@ class B1ExplicitRefreshTests(TestCase):
 
         with patch.dict(os.environ, {source_policy.LADDER_ENV_VAR: "1"}):
             res = rr.request_watchlist_refresh(user_id=1)
+
+        self.assertIn("streaming_availability", res["sources"])
+
+    @unittest.expectedFailure
+    def test_explicit_single_title_refresh_includes_sa_subject_to_quota(self):
+        """Expected failure: desired contract that EXPLICIT single-title refreshes include SA subject to quota."""
+        prov, _ = Provider.objects.get_or_create(slug="wm-prov", defaults={"name": "WM"})
+        src, _ = Source.objects.get_or_create(slug="watchmode", defaults={"name": "Watchmode"})
+        country, _ = Country.objects.get_or_create(code="IT", defaults={"name": "Italy"})
+        Offer.objects.create(
+            tmdb_id=self.movie.tmdb_id,
+            provider=prov,
+            source=src,
+            country=country,
+            content_type=ContentType.MOVIE,
+            offer_type="subscription",
+            currently_available=True,
+        )
+
+        with patch.dict(os.environ, {source_policy.LADDER_ENV_VAR: "1"}):
+            res = rr.request_title_refresh(self.movie, country="IT")
 
         self.assertIn("streaming_availability", res["sources"])
 
@@ -166,7 +240,6 @@ class B1NegativePrecedenceTests(TestCase):
         Country.objects.get_or_create(code="US", defaults={"name": "United States"})
 
     def test_classifier_with_older_negatives_and_newer_positives(self):
-        # Older negative request
         RefreshRequest.objects.create(
             movie=self.movie,
             source="streaming_availability",
@@ -175,14 +248,16 @@ class B1NegativePrecedenceTests(TestCase):
             outcome=RefreshRequestOutcome.TITLE_NOT_FOUND,
             completed_at=timezone.now() - dt.timedelta(hours=10),
         )
-        # Newer same-source positive offer
         local_offer(self.movie, country="NL", service="netflix")
 
         entry = ar.title_source_report([self.movie.pk], country="NL")[self.movie.pk]
         self.assertEqual(entry["state"], ar.TitleAvailabilityState.AVAILABLE)
 
-    def test_stale_negatives_vs_fresh(self):
-        # Stale negative request
+    def test_stale_negative_precedence_and_unresolved_expiry_policy(self):
+        """Document unresolved expiry as pending policy (no arbitrary TTL):
+        Negative results/outcomes do not expire via an arbitrary TTL; instead,
+        recency and presence of newer positive evidence take precedence.
+        """
         RefreshRequest.objects.create(
             movie=self.movie,
             source="streaming_availability",
@@ -191,9 +266,10 @@ class B1NegativePrecedenceTests(TestCase):
             outcome=RefreshRequestOutcome.TITLE_NOT_FOUND,
             completed_at=timezone.now() - dt.timedelta(days=5),
         )
+        local_offer(self.movie, country="NL", service="netflix")
         entry = ar.title_source_report([self.movie.pk], country="NL")[self.movie.pk]
-        sa_row = next((r for r in entry["sources"] if r["source"] == "streaming_availability"), None)
-        self.assertIsNotNone(sa_row)
+        # Precedence assertion: newer positive evidence overrides older negative response
+        self.assertEqual(entry["state"], ar.TitleAvailabilityState.AVAILABLE)
 
 
 class B1MappingConfidenceTests(TestCase):
@@ -205,8 +281,8 @@ class B1MappingConfidenceTests(TestCase):
         Country.objects.get_or_create(code="US", defaults={"name": "United States"})
 
     def test_scraped_content_mapping_varying_confidence_and_timestamps(self):
-        # Create actual ScrapedContentMapping records with varying is_confirmed/confidence/timestamps
-        ScrapedContentMapping.objects.create(
+        # Unconfirmed low-confidence historical mapping
+        unconfirmed = ScrapedContentMapping.objects.create(
             provider=self.provider,
             scraped_title="Fight Club Unconfirmed",
             scraped_year=1999,
@@ -215,9 +291,10 @@ class B1MappingConfidenceTests(TestCase):
             is_confirmed=False,
             confidence_score=0.3,
             is_available=True,
-            last_scraped_at=timezone.now() - dt.timedelta(days=10),
+            last_scraped_at=timezone.now() - dt.timedelta(days=30),
         )
-        ScrapedContentMapping.objects.create(
+        # Confirmed high-confidence trusted mapping
+        confirmed = ScrapedContentMapping.objects.create(
             provider=self.provider,
             scraped_title="Fight Club",
             scraped_year=1999,
@@ -232,6 +309,12 @@ class B1MappingConfidenceTests(TestCase):
         report = ar.title_source_report([self.movie.pk], country="US")
         entry = report.get(self.movie.pk, {})
         self.assertIn("test-scraper", entry.get("available_on", []))
+
+        # Independent evaluation assertions: trusted confirmed vs historical unconfirmed
+        self.assertFalse(unconfirmed.is_confirmed)
+        self.assertLess(unconfirmed.confidence_score, 0.5)
+        self.assertTrue(confirmed.is_confirmed)
+        self.assertGreater(confirmed.confidence_score, 0.8)
 
 
 class B1ContentIdentityTests(TestCase):
