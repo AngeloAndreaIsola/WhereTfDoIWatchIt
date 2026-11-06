@@ -12,10 +12,10 @@ from tracker.tests.availability_factories import local_offer
 class CountryAwareRefreshTests(TestCase):
     def setUp(self):
         self.movie = Movie.objects.create(
-            tmdb_id=9101, title="Country Scope", year=2024, content_type=ContentType.MOVIE
+            tmdb_id=9201, title="Country Scope", year=2024, content_type=ContentType.MOVIE
         )
         self.series_collision = Movie.objects.create(
-            tmdb_id=9101,
+            tmdb_id=9201,
             title="Country Scope Series",
             year=2024,
             content_type=ContentType.SERIES,
