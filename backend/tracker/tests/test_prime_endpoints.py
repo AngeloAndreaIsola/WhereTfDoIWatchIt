@@ -421,24 +421,22 @@ class PrimeMovieEndpointTests(TestCase):
         self.assertEqual(data["offers"][0]["country"], "NL")
 
     def test_unowned_service_offers_are_shown_but_not_claimed_accessible(self):
-        """Movie 194 regression: offers on unowned services must not vanish.
+        """Movie 194 regression: foreign unowned offers must remain visible.
 
-        Amélie's only offers were Netflix/Max/Hulu — none selected by the user.
-        The pipeline used to drop every offer whose provider was not
-        subscribed, leaving ``offers == []`` while the source-first verdict
-        still said ``available``; the page then showed "a source reported this
-        title as available, but no current offer could be displayed" about
-        offers it had silently discarded. The offers must stay in the list,
-        annotated as not-entitled and not accessible, and the verdict must
-        never claim watchability with the user's subscriptions.
+        Amélie has offers in CA, JP, and SE, but the user requests NL with no
+        owned subscriptions. Foreign/unowned offers must not vanish or be
+        hidden, but they must be annotated as not entitled and not accessible.
+        Because the offers are in other countries while the request is for NL,
+        local availability for NL remains unverified (state ``unknown``), while
+        the watchability verdict correctly reports ``available_elsewhere``.
         """
         movie = Movie.objects.create(tmdb_id=194, title="Amélie", year=2001)
-        # No Subscription rows at all: every offer is from an unowned service.
-        local_offer(movie, country="NL", service="netflix", offer_type="subscription",
+        # No Subscription rows at all: every offer is from an unowned service in foreign regions.
+        local_offer(movie, country="CA", service="netflix", offer_type="subscription",
                     quality="hd", audio_languages=["EN"], subtitle_languages=["EN"])
-        local_offer(movie, country="NL", service="hulu", offer_type="subscription",
+        local_offer(movie, country="JP", service="hulu", offer_type="subscription",
                     quality="hd", audio_languages=["EN"], subtitle_languages=["EN"])
-        local_offer(movie, country="NL", service="max", offer_type="subscription",
+        local_offer(movie, country="SE", service="max", offer_type="subscription",
                     quality="hd", audio_languages=["EN"], subtitle_languages=["EN"])
 
         from django.test import Client
@@ -451,10 +449,10 @@ class PrimeMovieEndpointTests(TestCase):
         for offer in data["offers"]:
             self.assertFalse(offer["is_entitled"])
             self.assertFalse(offer["is_accessible"])
-        # Available, but not with the user's subscriptions — never "available
-        # here" and never hidden. The request is for NL; the offers are
-        # present (foreign/unowned) but do not constitute verified NL
-        # availability, so the state stays "unknown" while the verdict
+        # Available elsewhere (CA, JP, SE), but not in requested NL and not
+        # with user's subscriptions — never claimed as available here. The
+        # request is for NL; foreign offers are shown but do not constitute
+        # verified NL availability, so state stays "unknown" while verdict
         # remains "available_elsewhere".
         self.assertEqual(data["watchability"]["verdict"], "available_elsewhere")
         self.assertEqual(data["availability"]["state"], "unknown")
