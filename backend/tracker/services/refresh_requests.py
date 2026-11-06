@@ -213,36 +213,39 @@ def request_availability_refresh(
         # Empty source is a legacy alias for the default source. Let the
         # partial unique constraint arbitrate concurrent adoption safely.
         if source == DEFAULT_SOURCE_SLUG:
-            try:
-                adopted = RefreshRequest.objects.filter(
-                    movie=movie,
-                    source="",
-                    country=country,
-                    status=RefreshRequestStatus.PENDING,
-                ).update(source=DEFAULT_SOURCE_SLUG)
-            except IntegrityError:
-                adopted = 0
-            if adopted:
-                RefreshRequest.objects.filter(
-                    movie=movie,
-                    source=DEFAULT_SOURCE_SLUG,
-                    country=country,
-                    status=RefreshRequestStatus.PENDING,
-                    priority__gt=effective_priority,
-                ).update(priority=effective_priority)
-                if batch is not None:
+            legacy_qs = RefreshRequest.objects.filter(
+                movie=movie,
+                source="",
+                country=country,
+                status=RefreshRequestStatus.PENDING,
+            )
+            if legacy_qs.exists():
+                try:
+                    adopted = legacy_qs.update(source=DEFAULT_SOURCE_SLUG)
+                except IntegrityError:
+                    legacy_qs.delete()
+                    adopted = 0
+                if adopted:
                     RefreshRequest.objects.filter(
                         movie=movie,
                         source=DEFAULT_SOURCE_SLUG,
                         country=country,
                         status=RefreshRequestStatus.PENDING,
-                    ).update(batch=batch)
-                return RefreshRequest.objects.get(
-                    movie=movie,
-                    source=DEFAULT_SOURCE_SLUG,
-                    country=country,
-                    status=RefreshRequestStatus.PENDING,
-                )
+                        priority__gt=effective_priority,
+                    ).update(priority=effective_priority)
+                    if batch is not None:
+                        RefreshRequest.objects.filter(
+                            movie=movie,
+                            source=DEFAULT_SOURCE_SLUG,
+                            country=country,
+                            status=RefreshRequestStatus.PENDING,
+                        ).update(batch=batch)
+                    return RefreshRequest.objects.get(
+                        movie=movie,
+                        source=DEFAULT_SOURCE_SLUG,
+                        country=country,
+                        status=RefreshRequestStatus.PENDING,
+                    )
 
         try:
             request, created = RefreshRequest.objects.get_or_create(
@@ -366,6 +369,9 @@ def request_title_refresh(
     Returns ``{"sources": <allowed slugs>, "queued": <rows touched>,
     "skipped": {source: reason}}``.
     """
+    country = (
+        resolve_source_country() if country is None else str(country).strip().upper()
+    ) or ""
     base_sources = (
         list(sources) if sources is not None else title_level_source_slugs()
     )
@@ -373,7 +379,7 @@ def request_title_refresh(
     from .availability_report import title_source_report
     from .source_policy import decide_sources_for_title
 
-    report_entry = title_source_report([movie.pk]).get(movie.pk, {})
+    report_entry = title_source_report([movie.pk], country=country).get(movie.pk, {})
     decision = decide_sources_for_title(
         report_entry, applicable_slugs=base_sources
     )
@@ -462,6 +468,9 @@ def request_watchlist_refresh(
     off restores the previous scheduling byte for byte.
     """
     batch = uuid.uuid4()
+    country = (
+        resolve_source_country() if country is None else str(country).strip().upper()
+    ) or ""
     base_sources = list(sources) if sources is not None else title_level_source_slugs()
     movie_ids = list(
         WatchlistItem.objects.filter(user_id=user_id)
@@ -474,7 +483,7 @@ def request_watchlist_refresh(
     from .availability_report import title_source_report
     from .source_policy import decide_sources_for_title
 
-    report = title_source_report(movie_ids) if movie_ids else {}
+    report = title_source_report(movie_ids, country=country) if movie_ids else {}
 
     # `applicable` is the union across titles (which sources this run touches
     # at all); `skipped_by_source` records per-source skip counts so the
@@ -510,6 +519,7 @@ def request_watchlist_refresh(
     queued = RefreshRequest.objects.filter(
         movie_id__in=movie_ids,
         source__in=applicable,
+        country=country,
         status=RefreshRequestStatus.PENDING,
         batch=batch,
     ).count()

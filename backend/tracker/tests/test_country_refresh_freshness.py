@@ -104,7 +104,7 @@ class CountryAwareRefreshTests(TestCase):
             source.fetch(self.movie)
 
         # 7. Quota exhaustion
-        client.get_availability.side_effect = RuntimeError("quota exhaustion")
+        client.get_availability.side_effect = RuntimeError("quota exhausted")
         with self.assertRaises(RuntimeError):
             source.fetch(self.movie)
 
