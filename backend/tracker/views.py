@@ -483,6 +483,7 @@ def refresh_availability(request, tmdb_id: int):
         movie,
         priority=RefreshPriority.EXPLICIT,
         if_stale=False,
+        country=_active_country(request),
     )
 
     pending = RefreshRequest.objects.filter(
@@ -1190,7 +1191,7 @@ def scraper_confirm_match(request):
     ingest_scraped_mapping(mapping)
     # Manual match = explicit user intent: if the canonical path has no
     # availability for this TMDb id yet, request an asynchronous refresh.
-    request_availability_refresh(movie, priority=RefreshPriority.EXPLICIT)
+    request_availability_refresh(movie, priority=RefreshPriority.EXPLICIT, country=_active_country(request))
 
     return Response(ScrapedContentMappingSerializer(mapping).data)
 
@@ -1350,7 +1351,7 @@ def watchlist_resolve(request):
         )
         # Event-driven refresh: resolved selections become eligible for
         # canonical availability refresh (idempotent, local-only).
-        request_availability_refresh(movie, priority=RefreshPriority.WATCHLIST)
+        request_availability_refresh(movie, priority=RefreshPriority.WATCHLIST, country=_active_country(request))
         watchlist_items.append(item)
 
     return Response(
@@ -1659,7 +1660,7 @@ def watchlist_refresh_explicit(request):
     toward the status endpoint's progress, while earlier refreshes never do.
     """
     started_at = timezone.now()
-    result = request_watchlist_refresh(user_id=1)
+    result = request_watchlist_refresh(user_id=1, country=_active_country(request))
 
     if result["total_watchlist"] and not result["queued"]:
         # request_watchlist_refresh swallows enqueue failures (same contract
@@ -2132,7 +2133,7 @@ def availability_refresh_start(request):
     from the id rather than losing the run.
     """
     started_at = timezone.now()
-    result = request_watchlist_refresh(user_id=1)
+    result = request_watchlist_refresh(user_id=1, country=_active_country(request))
 
     if result["total_watchlist"] and not result["queued"]:
         return Response(
@@ -2508,7 +2509,11 @@ def _prime_detail_response(request, item: Movie, key: str) -> Response:
     # (capability-driven — catalogue-only collectors are structurally excluded
     # and no catalogue crawl can happen). Reusing ``request_title_refresh``
     # keeps the dedup, cooldown and metered-source policy identical here.
-    request_title_refresh(item, priority=RefreshPriority.RECENTLY_VIEWED)
+    request_title_refresh(
+        item,
+        priority=RefreshPriority.RECENTLY_VIEWED,
+        country=_current_country(request),
+    )
 
     user_data = UserMovieData.objects.filter(user_id=1, movie=item).first()
     is_in_watchlist = WatchlistItem.objects.filter(user_id=1, movie=item).exists()
@@ -2763,7 +2768,11 @@ def movie_detail(request, pk: int):
     # catalogue-only collectors are structurally excluded and no catalogue
     # crawl is triggered). One default-scope check cannot answer a market only
     # JustWatch covers, which is why an opened title used to stay unknown.
-    request_title_refresh(movie, priority=RefreshPriority.RECENTLY_VIEWED)
+    request_title_refresh(
+        movie,
+        priority=RefreshPriority.RECENTLY_VIEWED,
+        country=_current_country(request),
+    )
 
     user_data = UserMovieData.objects.filter(user_id=1, movie=movie).first()
     watch_events = MovieWatchEvent.objects.filter(user_id=1, movie=movie).order_by("-watched_date", "-created_at")
@@ -2822,7 +2831,7 @@ def link_tmdb(request, pk: int):
             Availability.objects.filter(movie=movie).delete()
             # The canonical offers now key on a TMDb id that has likely never
             # been fetched — request a refresh (local insert, async drain).
-            request_availability_refresh(movie, priority=RefreshPriority.EXPLICIT)
+            request_availability_refresh(movie, priority=RefreshPriority.EXPLICIT, country=_active_country(request))
 
     return Response({
         "message": f"Linked to TMDB {details.tmdb_id}",
@@ -2906,7 +2915,9 @@ def add_to_watchlist(request):
             # transaction — the response never waits for a provider; the
             # budgeted refresh run drains it later.
             request_availability_refresh(
-                watchlist_item.movie, priority=RefreshPriority.WATCHLIST
+                watchlist_item.movie,
+                priority=RefreshPriority.WATCHLIST,
+                country=_active_country(request),
             )
 
         # Create UserMovieData entry if not exists
@@ -3011,7 +3022,11 @@ def mark_movie_watched(request, tmdb_id: int):
         # accurate. Freshness-guarded (a title checked within the stale
         # window enqueues nothing) and never-fetched titles still bump to
         # NEW — a local insert only, the response never waits for a fetch.
-        request_availability_refresh(movie, priority=RefreshPriority.WATCHED)
+        request_availability_refresh(
+            movie,
+            priority=RefreshPriority.WATCHED,
+            country=_active_country(request),
+        )
 
         return Response({
             "message": "Movie marked as watched",
