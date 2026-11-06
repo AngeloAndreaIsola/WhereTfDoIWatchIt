@@ -847,10 +847,22 @@ def title_source_report(movie_ids, batch=None, country: str | None = None) -> di
             evidence_class = "none"
 
         available_on = set(providers.get(movie_id, set()))
-        available_on.update(
-            s["provider"] for s in title_signals
-            if s["provider"] and s.get("confirmed") and s.get("checked_at") is not None
-        )
+        try:
+            from availability.freshness import freshness_state, FreshnessState
+            def _scraper_fresh(sig):
+                ts = sig.get("checked_at")
+                if ts is None:
+                    return False
+                try:
+                    return freshness_state("legacy_scraper", ts) == FreshnessState.FRESH
+                except Exception:
+                    return False
+            available_on.update(
+                s["provider"] for s in title_signals
+                if s["provider"] and s.get("confirmed") and _scraper_fresh(s)
+            )
+        except Exception:
+            pass
 
         report[movie_id] = {
             "state": state,
