@@ -202,7 +202,7 @@ class EnqueueGatingTests(TestCase):
         add_to_watchlist(self.movie)
 
     def _sa_rows(self) -> int:
-        return RefreshRequest.objects.filter(movie=self.movie, source=SA).count()
+        return RefreshRequest.objects.filter(movie=self.movie, source=SA, status=RefreshRequestStatus.PENDING).count()
 
     def test_no_metered_row_when_the_title_is_already_resolved(self):
         """THE test. A resolved title must not create a metered request."""

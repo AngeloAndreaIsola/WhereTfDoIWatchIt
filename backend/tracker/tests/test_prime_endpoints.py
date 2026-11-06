@@ -434,11 +434,11 @@ class PrimeMovieEndpointTests(TestCase):
         """
         movie = Movie.objects.create(tmdb_id=194, title="Amélie", year=2001)
         # No Subscription rows at all: every offer is from an unowned service.
-        local_offer(movie, country="CA", service="netflix", offer_type="subscription",
+        local_offer(movie, country="NL", service="netflix", offer_type="subscription",
                     quality="hd", audio_languages=["EN"], subtitle_languages=["EN"])
-        local_offer(movie, country="JP", service="hulu", offer_type="subscription",
+        local_offer(movie, country="NL", service="hulu", offer_type="subscription",
                     quality="hd", audio_languages=["EN"], subtitle_languages=["EN"])
-        local_offer(movie, country="SE", service="max", offer_type="subscription",
+        local_offer(movie, country="NL", service="max", offer_type="subscription",
                     quality="hd", audio_languages=["EN"], subtitle_languages=["EN"])
 
         from django.test import Client
