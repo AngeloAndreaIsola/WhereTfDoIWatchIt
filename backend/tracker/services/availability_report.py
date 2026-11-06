@@ -469,14 +469,14 @@ def _title_availability_signals(movie_ids: list[int], country: str | None = None
     target = (country or "").upper().strip() if country else None
     out: dict[int, list[dict]] = defaultdict(list)
     scraper_qs = ScrapedContentMapping.objects.filter(
-        movie_id__in=movie_ids, is_available=True, is_confirmed=True,
-        last_scraped_at__isnull=False,
+        movie_id__in=movie_ids, is_available=True
     ).exclude(provider__isnull=True)
     if target is not None:
         scraper_qs = scraper_qs.filter(country_code__iexact=target)
-    for movie_id, slug, row_country, seen in (
-        scraper_qs.values_list("movie_id", "provider__slug", "country_code", "last_scraped_at").iterator()
+    for movie_id, slug, row_country, scraped_at, updated_at, confirmed in (
+        scraper_qs.values_list("movie_id", "provider__slug", "country_code", "last_scraped_at", "updated_at", "is_confirmed").iterator()
     ):
+        seen = scraped_at or updated_at
         out[movie_id].append(
             {
                 "provider": slug or "",
@@ -484,6 +484,7 @@ def _title_availability_signals(movie_ids: list[int], country: str | None = None
                 "offer_type": "",
                 "source": "legacy_scraper",
                 "checked_at": seen,
+                "confirmed": bool(confirmed),
             }
         )
     legacy_qs = Availability.objects.filter(movie_id__in=movie_ids, is_available=True).select_related("region")
@@ -847,7 +848,8 @@ def title_source_report(movie_ids, batch=None, country: str | None = None) -> di
 
         available_on = set(providers.get(movie_id, set()))
         available_on.update(
-            s["provider"] for s in title_signals if s["provider"]
+            s["provider"] for s in title_signals
+            if s["provider"] and s.get("confirmed", s.get("source") != "legacy_scraper")
         )
 
         report[movie_id] = {
