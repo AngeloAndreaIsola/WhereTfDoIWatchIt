@@ -380,8 +380,9 @@ def request_title_refresh(
     from .source_policy import decide_sources_for_title
 
     report_entry = title_source_report([movie.pk], country=country).get(movie.pk, {})
+    ladder_switch = priority != RefreshPriority.EXPLICIT
     decision = decide_sources_for_title(
-        report_entry, applicable_slugs=base_sources
+        report_entry, applicable_slugs=base_sources, ladder_switch=ladder_switch
     )
     allowed = list(decision["allowed_sources"])
 
@@ -494,7 +495,8 @@ def request_watchlist_refresh(
 
     for _movie_id, movie in Movie.objects.in_bulk(movie_ids).items():
         decision = decide_sources_for_title(
-            report.get(movie.pk, {}), applicable_slugs=base_sources
+            report.get(movie.pk, {}), applicable_slugs=base_sources,
+            ladder_switch=priority != RefreshPriority.EXPLICIT,
         )
         allowed = list(decision["allowed_sources"])
         for source, reason in decision["skipped_sources"].items():
