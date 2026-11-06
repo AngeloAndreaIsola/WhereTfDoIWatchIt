@@ -469,12 +469,13 @@ def _title_availability_signals(movie_ids: list[int], country: str | None = None
     target = (country or "").upper().strip() if country else None
     out: dict[int, list[dict]] = defaultdict(list)
     scraper_qs = ScrapedContentMapping.objects.filter(
-        movie_id__in=movie_ids, is_available=True
+        movie_id__in=movie_ids, is_available=True, is_confirmed=True,
+        last_scraped_at__isnull=False,
     ).exclude(provider__isnull=True)
     if target is not None:
         scraper_qs = scraper_qs.filter(country_code__iexact=target)
     for movie_id, slug, row_country, seen in (
-        scraper_qs.values_list("movie_id", "provider__slug", "country_code", "updated_at").iterator()
+        scraper_qs.values_list("movie_id", "provider__slug", "country_code", "last_scraped_at").iterator()
     ):
         out[movie_id].append(
             {
