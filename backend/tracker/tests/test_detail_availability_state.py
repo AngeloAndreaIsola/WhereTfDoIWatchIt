@@ -33,6 +33,7 @@ from tracker.models import (
     Provider,
     ProviderCategory,
     RefreshRequest,
+    RefreshRequestOutcome,
     RefreshRequestStatus,
     ScrapedContentMapping,
 )
@@ -108,7 +109,7 @@ def unavailable_everywhere(movie):
     for slug in _title_level_slugs():
         RefreshRequest.objects.update_or_create(
             movie=movie, source=slug,
-            defaults={"status": RefreshRequestStatus.DONE},
+            defaults={"status": RefreshRequestStatus.DONE, "outcome": RefreshRequestOutcome.NO_OFFER},
         )
     return movie
 

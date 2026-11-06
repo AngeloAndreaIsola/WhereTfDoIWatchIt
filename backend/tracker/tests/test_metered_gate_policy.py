@@ -24,6 +24,7 @@ from tracker.models import (
     Provider,
     RefreshPriority,
     RefreshRequest,
+    RefreshRequestOutcome,
     RefreshRequestStatus,
     WatchlistItem,
 )
@@ -80,7 +81,7 @@ class MeteredGateTruthTableTests(TestCase):
             movie=movie,
             source=slug,
             status=RefreshRequestStatus.DONE,
-            defaults={"completed_at": timezone.now(), "last_error": ""},
+            defaults={"completed_at": timezone.now(), "last_error": "", "outcome": RefreshRequestOutcome.NO_OFFER},
         )
 
     def _decide(self, movie: Movie, *, gate: bool) -> dict:
