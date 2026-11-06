@@ -710,8 +710,8 @@ def title_source_report(movie_ids, batch=None, country: str | None = None) -> di
         return {}
 
     title_slugs = _title_level_slugs()
-    evidence = _terminal_status_evidence(movie_ids, batch=batch)
-    permanent = _permanent_miss_sources(movie_ids)
+    evidence = _terminal_status_evidence(movie_ids, batch=batch) if country is None else {}
+    permanent = _permanent_miss_sources(movie_ids) if country is None else {mid: set() for mid in movie_ids}
     offers_by_source, active_offer_movies = _active_offers_by_source(movie_ids, country=country)
     providers = _offered_providers(movie_ids, country=country)
     offer_counts = _active_offer_count(movie_ids, country=country)
