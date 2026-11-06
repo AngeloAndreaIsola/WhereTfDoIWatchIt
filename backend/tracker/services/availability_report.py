@@ -587,6 +587,7 @@ def classify_source(
     permanent_miss: bool,
     request_status: str | None,
     quota_exhausted: bool,
+    blocked_reason: str | None = None,
 ) -> tuple[str, str]:
     """One source's verdict for one title: ``(status, reason)``.
 
@@ -624,16 +625,14 @@ def classify_source(
     if request_status == RefreshRequestStatus.FAILED:
         return "failed", AvailabilityResolutionReason.SOURCE_UNAVAILABLE
     if request_status == RefreshRequestStatus.BLOCKED:
-        # Deliberately not attempted, and deliberately **not** a failure and
-        # **not** a negative answer. `policy_not_needed` in particular says
-        # nothing about whether the title exists: a cheaper source already
-        # answered, so this source being silent is the *intended* outcome and
-        # the title's own state is decided by that other source's evidence.
-        #
-        # It is reported as `skipped` rather than `unknown` because "no
-        # information" would wrongly demote a resolved title. The classifier
-        # reads offers and definitive answers, never request statuses, so a
-        # title blocked here still reports AVAILABLE from its collector.
+        # Preserve the actual blocked reason where available. POLICY_NOT_NEEDED
+        # stays NOT_APPLICABLE (it says nothing about the title). Other blocked
+        # reasons (quota, disabled, cancelled) keep their identity so reports
+        # and policy decisions can distinguish them.
+        if blocked_reason == "policy_not_needed":
+            return "skipped", AvailabilityResolutionReason.NOT_APPLICABLE
+        if blocked_reason == "quota_exhausted":
+            return "skipped", AvailabilityResolutionReason.QUOTA_EXHAUSTED
         return "skipped", AvailabilityResolutionReason.NOT_APPLICABLE
     if request_status == RefreshRequestStatus.PENDING:
         if quota_exhausted:
