@@ -214,7 +214,12 @@ class B1ExplicitRefreshTests(TestCase):
         )
 
         with patch.dict(os.environ, {source_policy.LADDER_ENV_VAR: "1"}):
-            res = rr.request_title_refresh(self.movie, country="IT")
+            res = rr.request_title_refresh(
+                self.movie,
+                country="IT",
+                priority=RefreshPriority.EXPLICIT,
+                if_stale=False,
+            )
 
         self.assertIn("streaming_availability", res["sources"])
 
@@ -255,10 +260,10 @@ class B1NegativePrecedenceTests(TestCase):
 
     def test_stale_negative_precedence_and_unresolved_expiry_policy(self):
         """Document unresolved expiry as pending policy (no arbitrary TTL):
-        Negative results/outcomes do not expire via an arbitrary TTL; instead,
-        recency and presence of newer positive evidence take precedence.
+        Negative results/outcomes (e.g. TITLE_NOT_FOUND) do not expire via an arbitrary TTL.
+        Instead, recency and presence of newer positive evidence take precedence over older negative outcomes.
         """
-        RefreshRequest.objects.create(
+        neg_req = RefreshRequest.objects.create(
             movie=self.movie,
             source="streaming_availability",
             country="NL",
@@ -268,7 +273,10 @@ class B1NegativePrecedenceTests(TestCase):
         )
         local_offer(self.movie, country="NL", service="netflix")
         entry = ar.title_source_report([self.movie.pk], country="NL")[self.movie.pk]
-        # Precedence assertion: newer positive evidence overrides older negative response
+        
+        # Meaningful precedence assertion: older negative outcome exists in database records (not arbitrarily expired by TTL),
+        # but newer positive local offer takes precedence, classifying the title state as AVAILABLE.
+        self.assertTrue(RefreshRequest.objects.filter(pk=neg_req.pk).exists())
         self.assertEqual(entry["state"], ar.TitleAvailabilityState.AVAILABLE)
 
 
@@ -309,6 +317,12 @@ class B1MappingConfidenceTests(TestCase):
         report = ar.title_source_report([self.movie.pk], country="US")
         entry = report.get(self.movie.pk, {})
         self.assertIn("test-scraper", entry.get("available_on", []))
+
+        # Report-level assertion: unconfirmed low-confidence historical evidence and confirmed high-confidence trusted evidence
+        # both enter title_source_report() via title_signals (distinguishing trusted vs historical).
+        title_signals = entry.get("title_signals", [])
+        self.assertTrue(any(s["provider"] == "test-scraper" for s in title_signals))
+        self.assertEqual(entry.get("evidence"), "title_signal")
 
         # Independent evaluation assertions: trusted confirmed vs historical unconfirmed
         self.assertFalse(unconfirmed.is_confirmed)
