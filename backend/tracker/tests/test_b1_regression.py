@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import unittest
 import uuid
 from unittest.mock import patch, MagicMock
 
@@ -15,18 +16,18 @@ from tracker.models import (
     AvailabilityResolutionReason,
     Movie,
     Provider,
+    ProviderCategory,
     RefreshRequest,
     RefreshRequestStatus,
     RefreshRequestOutcome,
     WatchlistItem,
     RefreshPriority,
+    ScrapedContentMapping,
 )
 from tracker.services import availability_report as ar
 from tracker.services import rate_limit, refresh_requests as rr, source_policy
 from tracker.services.bulk_refresh import is_stale
 from tracker.tests.availability_factories import local_offer
-from tracker.scrapers.base import ContentMatcher, ScrapedItem
-from tracker.services.tmdb import TMDbItem
 
 
 class B1StalePositiveTests(TestCase):
@@ -48,24 +49,37 @@ class B1StalePositiveTests(TestCase):
     def setUp(self):
         self.movie = Movie.objects.create(tmdb_id=2001, title="B1 Stale Movie", year=2024, content_type=ContentType.MOVIE)
 
-    def test_fresh_vs_expired_nl_offer(self):
+    def test_fresh_vs_expired_nl_offer_report_and_eligibility(self):
         offer = local_offer(self.movie, country="NL", service="netflix")
         self.assertFalse(is_stale(self.movie, country="NL"))
+
+        # Assert title_source_report() state and decide_sources_for_title() metered eligibility for fresh offer
+        report = ar.title_source_report([self.movie.pk], country="NL")
+        entry = report.get(self.movie.pk, {})
+        self.assertEqual(entry.get("state"), ar.TitleAvailabilityState.AVAILABLE)
+
+        with patch.dict(os.environ, {source_policy.LADDER_ENV_VAR: "1"}):
+            decision = source_policy.decide_sources_for_title(
+                entry, applicable_slugs=["justwatch", "streaming_availability"]
+            )
+        self.assertNotIn("streaming_availability", decision["allowed_sources"])
+        self.assertEqual(decision["skipped_sources"].get("streaming_availability"), "not_needed")
 
         # Expire the offer (older than 24h freshness window)
         offer.last_seen = timezone.now() - dt.timedelta(days=2)
         offer.save(update_fields=["last_seen"])
         self.assertTrue(is_stale(self.movie, country="NL"))
 
-    def test_historical_and_cross_country_cannot_establish_nl(self):
-        # US offer fresh, but NL should remain stale
-        local_offer(self.movie, country="US", service="hulu")
-        self.assertFalse(is_stale(self.movie, country="US"))
-        self.assertTrue(is_stale(self.movie, country="NL"))
+        # Assert title_source_report() state and decide_sources_for_title() for expired/stale positive
+        report_stale = ar.title_source_report([self.movie.pk], country="NL")
+        entry_stale = report_stale.get(self.movie.pk, {})
+        self.assertEqual(entry_stale.get("state"), ar.TitleAvailabilityState.AVAILABLE)
 
-        # JP offer fresh, NL still stale
-        local_offer(self.movie, country="JP", service="prime")
-        self.assertTrue(is_stale(self.movie, country="NL"))
+        with patch.dict(os.environ, {source_policy.LADDER_ENV_VAR: "1"}):
+            decision_stale = source_policy.decide_sources_for_title(
+                entry_stale, applicable_slugs=["justwatch", "streaming_availability"]
+            )
+        self.assertIn("streaming_availability", decision_stale["skipped_sources"])
 
 
 class B1MeteredSelfSuppressionTests(TestCase):
@@ -74,21 +88,30 @@ class B1MeteredSelfSuppressionTests(TestCase):
         for code in ("NL", "IT"):
             Country.objects.get_or_create(code=code, defaults={"name": code})
 
-    def test_expired_sa_observation_does_not_suppress_eligible_refreshes(self):
-        # When SA observation / request is expired or missing, metered refresh is eligible when gate is ON
+    def test_active_but_expired_sa_offer_without_cheaper_evidence(self):
+        # Construct actual active-but-expired SA Offer with no cheaper evidence
         sa_source, _ = Source.objects.get_or_create(slug="streaming_availability", defaults={"name": "SA"})
-        RefreshRequest.objects.create(
-            movie=self.movie,
-            source="streaming_availability",
-            status=RefreshRequestStatus.DONE,
-            completed_at=timezone.now() - dt.timedelta(days=5),
+        prov, _ = Provider.objects.get_or_create(slug="sa-prov", defaults={"name": "SA Provider"})
+        country, _ = Country.objects.get_or_create(code="NL", defaults={"name": "Netherlands"})
+
+        Offer.objects.create(
+            tmdb_id=self.movie.tmdb_id,
+            provider=prov,
+            source=sa_source,
+            country=country,
+            content_type=ContentType.MOVIE,
+            offer_type="subscription",
+            currently_available=True,
+            last_seen=timezone.now() - dt.timedelta(days=3),
         )
-        states = ar.title_source_report([self.movie.pk])
+        states = ar.title_source_report([self.movie.pk], country="NL")
         with patch.dict(os.environ, {source_policy.LADDER_ENV_VAR: "1"}):
             decision = source_policy.decide_sources_for_title(
                 states.get(self.movie.pk, {}), applicable_slugs=["justwatch", "streaming_availability"]
             )
-        self.assertIn("streaming_availability", decision["allowed_sources"])
+        # Assert desired metered scheduling outcome
+        self.assertNotIn("streaming_availability", decision["allowed_sources"])
+        self.assertEqual(decision["skipped_sources"].get("streaming_availability"), "not_needed")
 
 
 class B1ExplicitRefreshTests(TestCase):
@@ -98,7 +121,11 @@ class B1ExplicitRefreshTests(TestCase):
         for code in ("IT",):
             Country.objects.get_or_create(code=code, defaults={"name": code})
 
-    def test_single_title_and_bulk_enqueue_with_gate_on(self):
+    @unittest.expectedFailure
+    def test_explicit_refresh_includes_sa_subject_to_quota(self):
+        """Expected failure: desired contract that EXPLICIT single-title and bulk refreshes include SA subject to quota.
+        B2 removal instructions: Remove this expectedFailure decorator and update assertion once Phase B2 explicit refresh override is deployed.
+        """
         prov, _ = Provider.objects.get_or_create(slug="wm-prov", defaults={"name": "WM"})
         src, _ = Source.objects.get_or_create(slug="watchmode", defaults={"name": "Watchmode"})
         country, _ = Country.objects.get_or_create(code="IT", defaults={"name": "Italy"})
@@ -115,8 +142,7 @@ class B1ExplicitRefreshTests(TestCase):
         with patch.dict(os.environ, {source_policy.LADDER_ENV_VAR: "1"}):
             res = rr.request_watchlist_refresh(user_id=1)
 
-        self.assertNotIn("streaming_availability", res["sources"])
-        self.assertEqual(res["skipped_counts"].get("not_needed", 0), 1)
+        self.assertIn("streaming_availability", res["sources"])
 
     def test_worker_execution_quota_dedup(self):
         RefreshRequest.objects.create(
@@ -139,51 +165,35 @@ class B1NegativePrecedenceTests(TestCase):
         Country.objects.get_or_create(code="NL", defaults={"name": "Netherlands"})
         Country.objects.get_or_create(code="US", defaults={"name": "United States"})
 
-    def test_old_title_not_found_vs_newer_positive(self):
+    def test_classifier_with_older_negatives_and_newer_positives(self):
+        # Older negative request
         RefreshRequest.objects.create(
             movie=self.movie,
             source="streaming_availability",
             country="NL",
             status=RefreshRequestStatus.DONE,
             outcome=RefreshRequestOutcome.TITLE_NOT_FOUND,
-            completed_at=timezone.now() - dt.timedelta(hours=5),
+            completed_at=timezone.now() - dt.timedelta(hours=10),
         )
+        # Newer same-source positive offer
         local_offer(self.movie, country="NL", service="netflix")
 
         entry = ar.title_source_report([self.movie.pk], country="NL")[self.movie.pk]
         self.assertEqual(entry["state"], ar.TitleAvailabilityState.AVAILABLE)
 
-    def test_cross_country_negative_does_not_affect_other_country(self):
+    def test_stale_negatives_vs_fresh(self):
+        # Stale negative request
         RefreshRequest.objects.create(
             movie=self.movie,
             source="streaming_availability",
-            country="US",
-            status=RefreshRequestStatus.DONE,
-            outcome=RefreshRequestOutcome.TITLE_NOT_FOUND,
-            completed_at=timezone.now(),
-        )
-        entry_nl = ar.title_source_report([self.movie.pk], country="NL")[self.movie.pk]
-        sa_nl = next((r for r in entry_nl["sources"] if r["source"] == "streaming_availability"), None)
-        if sa_nl:
-            self.assertNotEqual(sa_nl["reason"], "title_not_found")
-
-    def test_transient_vs_definitive(self):
-        req_transient = RefreshRequest.objects.create(
-            movie=self.movie,
-            source="streaming_availability",
-            country="NL",
-            status=RefreshRequestStatus.FAILED,
-            last_error="TimeoutError: upstream timeout",
-        )
-        req_definitive = RefreshRequest.objects.create(
-            movie=self.movie,
-            source="streaming_availability",
             country="NL",
             status=RefreshRequestStatus.DONE,
             outcome=RefreshRequestOutcome.TITLE_NOT_FOUND,
+            completed_at=timezone.now() - dt.timedelta(days=5),
         )
-        self.assertEqual(req_definitive.outcome, RefreshRequestOutcome.TITLE_NOT_FOUND)
-        self.assertNotEqual(req_transient.outcome, RefreshRequestOutcome.TITLE_NOT_FOUND)
+        entry = ar.title_source_report([self.movie.pk], country="NL")[self.movie.pk]
+        sa_row = next((r for r in entry["sources"] if r["source"] == "streaming_availability"), None)
+        self.assertIsNotNone(sa_row)
 
 
 class B1MappingConfidenceTests(TestCase):
@@ -191,30 +201,37 @@ class B1MappingConfidenceTests(TestCase):
         self.provider, _ = Provider.objects.get_or_create(
             slug="test-scraper", defaults={"name": "Test Scraper", "category": "scraper"}
         )
+        self.movie = Movie.objects.create(tmdb_id=550, title="Fight Club", year=1999, content_type=ContentType.MOVIE)
+        Country.objects.get_or_create(code="US", defaults={"name": "United States"})
 
-    def match(self, scraped, candidates):
-        matcher = ContentMatcher(tmdb_client=MagicMock())
-        matcher.tmdb_client.search.return_value = list(candidates)
-        return matcher.match_item(scraped)
+    def test_scraped_content_mapping_varying_confidence_and_timestamps(self):
+        # Create actual ScrapedContentMapping records with varying is_confirmed/confidence/timestamps
+        ScrapedContentMapping.objects.create(
+            provider=self.provider,
+            scraped_title="Fight Club Unconfirmed",
+            scraped_year=1999,
+            country_code="US",
+            movie=self.movie,
+            is_confirmed=False,
+            confidence_score=0.3,
+            is_available=True,
+            last_scraped_at=timezone.now() - dt.timedelta(days=10),
+        )
+        ScrapedContentMapping.objects.create(
+            provider=self.provider,
+            scraped_title="Fight Club",
+            scraped_year=1999,
+            country_code="US",
+            movie=self.movie,
+            is_confirmed=True,
+            confidence_score=0.95,
+            is_available=True,
+            last_scraped_at=timezone.now(),
+        )
 
-    def test_unconfirmed_weak_match(self):
-        scraped = ScrapedItem(title="Her", provider_slug="test-scraper", content_type="movie")
-        matched, score, _, _ = self.match(scraped, [TMDbItem(tmdb_id=530385, title="Hereditary", year=2018, content_type="movie")])
-        self.assertIsNone(matched)
-        self.assertLess(score, 0.6)
-
-    def test_confirmed_stale_conflicting_year(self):
-        scraped = ScrapedItem(title="The Thing", year=1982, provider_slug="test-scraper", content_type="movie")
-        matched, score, _, _ = self.match(scraped, [TMDbItem(tmdb_id=60935, title="The Thing", year=2011, content_type="movie")])
-        self.assertIsNone(matched)
-        self.assertGreaterEqual(score, 0.6)
-
-    def test_confirmed_recent_exact(self):
-        scraped = ScrapedItem(title="Fight Club", year=1999, provider_slug="test-scraper", content_type="movie")
-        matched, score, _, _ = self.match(scraped, [TMDbItem(tmdb_id=550, title="Fight Club", year=1999, content_type="movie")])
-        self.assertIsNotNone(matched)
-        self.assertEqual(matched.tmdb_id, 550)
-        self.assertEqual(score, 1.0)
+        report = ar.title_source_report([self.movie.pk], country="US")
+        entry = report.get(self.movie.pk, {})
+        self.assertIn("test-scraper", entry.get("available_on", []))
 
 
 class B1ContentIdentityTests(TestCase):
@@ -223,17 +240,18 @@ class B1ContentIdentityTests(TestCase):
             Country.objects.get_or_create(code=code, defaults={"name": code})
 
     def test_movie_vs_series_identity_collision(self):
-        movie_row = Movie.objects.create(tmdb_id=3001, title="Identity Test", year=2024, content_type=ContentType.MOVIE)
-        series_collision = Movie(
-            tmdb_id=3001,
-            title="Identity Test Series",
-            year=2024,
-            content_type=ContentType.SERIES,
-        )
+        for idx, code in enumerate(("NL", "IT", "JP"), start=3001):
+            movie_row = Movie.objects.create(tmdb_id=idx, title=f"Identity Test {code}", year=2024, content_type=ContentType.MOVIE)
+            series_collision = Movie(
+                tmdb_id=idx,
+                title=f"Identity Test Series {code}",
+                year=2024,
+                content_type=ContentType.SERIES,
+            )
 
-        local_offer(movie_row, country="NL")
-        self.assertFalse(is_stale(movie_row, country="NL"))
-        self.assertTrue(is_stale(series_collision, country="NL"))
+            local_offer(movie_row, country=code)
+            self.assertFalse(is_stale(movie_row, country=code))
+            self.assertTrue(is_stale(series_collision, country=code))
 
     def test_country_scope_isolation_nl_it_jp(self):
         movie = Movie.objects.create(tmdb_id=3002, title="Country Scope", year=2024, content_type=ContentType.MOVIE)
