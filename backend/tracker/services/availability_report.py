@@ -1027,7 +1027,7 @@ def catalogue_progress() -> list[dict]:
     return rows
 
 
-def build_run_summary(movie_ids, batch=None) -> dict:
+def build_run_summary(movie_ids, batch=None, country: str | None = None) -> dict:
     """The whole availability picture: per-source progress plus title outcomes.
 
     Shape::
@@ -1058,7 +1058,7 @@ def build_run_summary(movie_ids, batch=None) -> dict:
     movie_ids = list(movie_ids)
     sources = source_progress(movie_ids, batch=batch)
     collectors = catalogue_progress()
-    report = title_source_report(movie_ids, batch=batch)
+    report = title_source_report(movie_ids, batch=batch, country=country)
     states = Counter(entry["state"] for entry in report.values())
     return {
         "sources": sources,
@@ -1077,7 +1077,7 @@ def build_run_summary(movie_ids, batch=None) -> dict:
                 if e["state"] == TitleAvailabilityState.UNKNOWN
             ).most_common()
         },
-        "stale_failures": stale_failure_breakdown(movie_ids),
+        "stale_failures": stale_failure_breakdown(movie_ids, country=country),
         # Internal: consumed by the policy counterfactual so it does not
         # re-derive a per-title classification with its own queries.
         "_states": {mid: e["state"] for mid, e in report.items()},
@@ -1088,7 +1088,7 @@ def build_run_summary(movie_ids, batch=None) -> dict:
     }
 
 
-def stale_failure_breakdown(movie_ids) -> dict[str, int]:
+def stale_failure_breakdown(movie_ids, country: str | None = None) -> dict:
     """Unknown titles carrying an older failure, split by that failure's kind.
 
     ``{"permanent": n, "transient": n}`` — how many unknown titles have a
@@ -1097,7 +1097,7 @@ def stale_failure_breakdown(movie_ids) -> dict[str, int]:
     """
     newest = _terminal_status_evidence(movie_ids)
     unknown_ids = [
-        mid for mid, e in title_source_report(movie_ids).items()
+        mid for mid, e in title_source_report(movie_ids, country=country).items()
         if e["state"] == TitleAvailabilityState.UNKNOWN
     ]
     if not unknown_ids:

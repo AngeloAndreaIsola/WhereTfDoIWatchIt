@@ -1973,7 +1973,13 @@ def availability_report(request):
     movie_ids = _watchlist_movie_ids()
     batch_raw = request.GET.get("batch")
     batch = batch_raw or None
-    summary = build_run_summary(movie_ids, batch=batch)
+    country = (
+        request.GET.get("current_country")
+        or request.GET.get("country")
+        or resolve_preferences(user_id=1).get("current_country")
+        or None
+    )
+    summary = build_run_summary(movie_ids, batch=batch, country=country)
     counterfactual = source_policy.counterfactual(
         summary.pop("_states"), summary.pop("_resolved_sources")
     )
