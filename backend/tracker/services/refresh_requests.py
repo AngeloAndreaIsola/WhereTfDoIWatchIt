@@ -636,27 +636,22 @@ def _finish(
 
 
 def _successful_outcome(request: RefreshRequest, source: str) -> str:
-    """Return the durable result of a successful title-level fetch.
-
-    A refresh can complete without creating an offer.  That is a negative
-    observation, not an error, and must not be reconstructed later from a
-    missing row.  We query only this source's active canonical observations so
-    an offer from another source cannot turn this source's negative into a
-    false positive.
-    """
+    qs = Offer.objects.filter(
+        tmdb_id=request.movie.tmdb_id,
+        source__slug=source,
+        currently_available=True,
+    )
+    if request.country:
+        qs = qs.filter(country__code=request.country)
     return (
         RefreshRequestOutcome.OFFERS_FOUND
-        if Offer.objects.filter(
-            tmdb_id=request.movie.tmdb_id,
-            source__slug=source,
-            currently_available=True,
-        ).exists()
+        if qs.exists()
         else RefreshRequestOutcome.NO_OFFER
     )
 
 
 def _metered_source_is_unnecessary(
-    movie, source: str, priority, explicitly_named_source: bool = True
+    movie, source: str, priority, explicitly_named_source: bool = True, country: str | None = None
 ) -> bool:
     """Whether this metered request should never have been spent.
 
@@ -715,7 +710,7 @@ def _metered_source_is_unnecessary(
 
     from .availability_report import title_source_report
 
-    entry = title_source_report([movie.pk]).get(movie.pk)
+    entry = title_source_report([movie.pk], country=country).get(movie.pk)
     if not entry:
         # No classification available: never block a request on missing data.
         return False
@@ -801,7 +796,7 @@ def _drain_one(
     # title-level classifier reads evidence, not request statuses, so it still
     # reports such a title as resolved.
     if _metered_source_is_unnecessary(
-        movie, source, request.priority, explicitly_named_source=bool(request.source)
+        movie, source, request.priority, explicitly_named_source=bool(request.source), country=str(request.country) or None
     ):
         request.settle(
             RefreshRequestStatus.BLOCKED,
@@ -940,7 +935,7 @@ def _drain_one(
             # answer per country (JustWatch) cannot be called without it, and
             # ones that answer globally (Streaming Availability) ignore it.
             _service_for_scope(request.source, service).refresh_content(
-                movie, country=resolve_source_country()
+                movie, country=request.country or resolve_source_country()
             )
     except RateLimitExceeded:
         summary.note_rate_limited_source(source)
