@@ -96,6 +96,7 @@ def is_stale(
     movie: Movie,
     *,
     source: str = "",
+    country: Optional[str] = None,
     now=None,
 ) -> bool:
     """True when *source*'s observation of the movie is missing or too old.
@@ -107,13 +108,18 @@ def is_stale(
     Streaming Availability one (and vice versa).
 
     ``source=""`` is the default title-targeted scope
-    (``DEFAULT_SOURCE_SLUG``) — what this module's sweep and a default
-    ``RefreshRequest`` refresh. The newest ``Offer.last_seen`` of that scope
-    counts (season/episode rows included, so a series refreshed through
-    season-level offers is not re-fetched). A scope the canonical path has
-    never observed is always stale.
+    (``DEFAULT_SOURCE_SLUG``).  When ``country`` is explicit it is a hard
+    evidence boundary, and the movie's content type is always included, so a
+    US movie, NL movie, and same-id series cannot make one another fresh.
+    ``country=None`` deliberately retains the legacy global read behaviour.
     """
-    return source_is_stale(movie.tmdb_id, source or DEFAULT_SOURCE_SLUG, now=now)
+    return source_is_stale(
+        movie.tmdb_id,
+        source or DEFAULT_SOURCE_SLUG,
+        country=country,
+        content_type=movie.content_type,
+        now=now,
+    )
 
 
 def title_level_source_slugs() -> list[str]:
@@ -165,7 +171,13 @@ def refreshable_source_slugs() -> list[str]:
     return title_level_source_slugs()
 
 
-def stale_refresh_scopes(tmdb_id, *, now=None) -> list[str]:
+def stale_refresh_scopes(
+    tmdb_id,
+    *,
+    country: Optional[str] = None,
+    content_type: Optional[str] = None,
+    now=None,
+) -> list[str]:
     """Refreshable sources whose observation of the title is stale.
 
     Each candidate is evaluated on its own freshness window, so one stale
@@ -176,7 +188,11 @@ def stale_refresh_scopes(tmdb_id, *, now=None) -> list[str]:
     """
     refreshable = set(refreshable_source_slugs())
     return [
-        slug for slug in stale_sources(tmdb_id, now=now) if slug in refreshable
+        slug
+        for slug in stale_sources(
+            tmdb_id, country=country, content_type=content_type, now=now
+        )
+        if slug in refreshable
     ]
 
 
@@ -505,7 +521,11 @@ def process_watchlist_refresh(
         absent = permanently_absent_scopes(tmdb_id)
         scopes = [
             slug
-            for slug in stale_refresh_scopes(tmdb_id)
+            for slug in stale_refresh_scopes(
+                tmdb_id,
+                country=resolve_source_country(),
+                content_type=movie.content_type,
+            )
             if slug not in absent
         ]
         if not scopes:
