@@ -165,6 +165,7 @@ def request_availability_refresh(
     priority: int = RefreshPriority.STALE,
     *,
     source: str = "",
+    country: str = "",
     if_stale: bool = True,
     batch: uuid.UUID | None = None,
 ) -> RefreshRequest | None:
@@ -191,6 +192,7 @@ def request_availability_refresh(
     Never raises: an enqueue failure is logged and swallowed so it cannot
     break the user action that triggered it.
     """
+    country = (country or "").strip().upper()
     try:
         if if_stale and not is_stale(movie, source=source):
             return None
@@ -215,12 +217,12 @@ def request_availability_refresh(
         legacy_scope = ""
         if source == DEFAULT_SOURCE_SLUG:
             pending_scopes = RefreshRequest.objects.filter(
-                movie=movie, status=RefreshRequestStatus.PENDING
+                movie=movie, status=RefreshRequestStatus.PENDING, country=country
             ).values_list("source", flat=True)
             if legacy_scope in pending_scopes and DEFAULT_SOURCE_SLUG not in pending_scopes:
                 legacy = RefreshRequest.objects.get(
                     movie=movie, source=legacy_scope,
-                    status=RefreshRequestStatus.PENDING,
+                    status=RefreshRequestStatus.PENDING, country=country,
                 )
                 legacy.source = DEFAULT_SOURCE_SLUG
                 legacy.priority = min(legacy.priority, effective_priority)
@@ -233,6 +235,7 @@ def request_availability_refresh(
             request, created = RefreshRequest.objects.get_or_create(
                 movie=movie,
                 source=source,
+                country=country,
                 status=RefreshRequestStatus.PENDING,
                 defaults={"priority": effective_priority, "batch": batch},
             )
@@ -240,7 +243,7 @@ def request_availability_refresh(
             # Concurrent event won the partial unique constraint; the row we
             # want already exists — fall through to the upgrade check below.
             request, created = RefreshRequest.objects.get(
-                movie=movie, source=source, status=RefreshRequestStatus.PENDING
+                movie=movie, source=source, country=country, status=RefreshRequestStatus.PENDING
             ), False
 
         if not created:

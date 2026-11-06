@@ -702,6 +702,7 @@ class RefreshRequest(models.Model):
         Movie, on_delete=models.CASCADE, related_name="refresh_requests"
     )
     source = models.CharField(max_length=50, blank=True, default="", db_index=True)
+    country = models.CharField(max_length=2, blank=True, default="", db_index=True)
     priority = models.IntegerField(
         choices=RefreshPriority.choices, default=RefreshPriority.STALE
     )
@@ -753,9 +754,9 @@ class RefreshRequest(models.Model):
         ordering = ["priority", "requested_at"]
         constraints = [
             models.UniqueConstraint(
-                fields=["movie", "source"],
+                fields=["movie", "source", "country"],
                 condition=models.Q(status="pending"),
-                name="uniq_refreshrequest_pending_movie_source",
+                name="uniq_refreshrequest_pending_movie_source_country",
             ),
             # `blocked` and its reason are one fact stated twice; the database
             # is the right place to keep them consistent because every code
