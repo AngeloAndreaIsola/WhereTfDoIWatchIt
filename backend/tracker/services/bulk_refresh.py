@@ -44,7 +44,7 @@ from typing import Optional
 
 from django.conf import settings
 from django.db import connection
-from django.db.models import Max, Q
+from django.db.models import Max
 from django.utils import timezone
 
 from availability.domain.enums import ContentType
@@ -72,7 +72,6 @@ from ..models import (
     CatalogueRefreshStatus,
     Movie,
     RefreshRequest,
-    RefreshRequestOutcome,
     RefreshRequestStatus,
     RefreshRun,
     RefreshPriority,
@@ -214,50 +213,12 @@ def _latest_checks(tmdb_ids) -> dict:
 
 
 def permanently_absent_scopes(tmdb_id, country: str | None = None) -> set[str]:
-    """Source scopes the upstream catalogues are known not to carry this title.
+    """Compatibility reader using the shared market-aware supersession rules."""
+    from .availability_report import _permanent_miss_sources
 
-    A title that answered **404** to a source has produced a *permanent*
-    negative answer, not a stale one: the provider does not carry it, and no
-    amount of waiting will change that. Those ``RefreshRequest`` rows carry a
-    successful ``title_not_found`` outcome, so they are durable evidence — and
-    that is exactly the point:
-
-    an absent title writes **no** ``Offer`` row, so ``stale_sources`` keeps
-    reporting its scope as stale forever. Without this exclusion the background
-    sweep re-selects such a title on *every* run (hundreds of times a day for a
-    watched title), spending one metered call each time to relearn a fact that
-    cannot change. Excluding them here is what makes the 404 never-retry
-    behaviour real for the sweep, not just for the queue drain.
-
-    Only a successful permanent-negative outcome counts. A transient failure
-    (5xx/timeout/429) has no outcome, so the title stays refreshable.
-
-    **The legacy ``source=""`` spelling is normalized to the default slug
-    here.** ``""`` and ``"streaming_availability"`` are the same logical scope
-    (see ``resolve_request_source``) but different literal strings, so a
-    title-level request created before the fan-out would store ``""`` while the
-    sweep compares ``streaming_availability`` — and the exclusion would
-    silently never match, reintroducing the very retry loop it exists to stop.
-    """
-    qs = RefreshRequest.objects.filter(movie__tmdb_id=tmdb_id)
-    if country is not None:
-        qs = qs.filter(country=country.upper() if country else "")
-    slugs = set(
-        qs.filter(
-            Q(
-                status=RefreshRequestStatus.DONE,
-                outcome=RefreshRequestOutcome.TITLE_NOT_FOUND,
-            )
-            # Pre-migration rows remain readable until the data migration has
-            # run in every environment. This is compatibility, never a new
-            # write format.
-            | Q(
-                status=RefreshRequestStatus.FAILED,
-                last_error__startswith="UpstreamTitleNotFound",
-            )
-        ).values_list("source", flat=True)
-    )
-    return {slug or DEFAULT_SOURCE_SLUG for slug in slugs}
+    movie_ids = list(Movie.objects.filter(tmdb_id=tmdb_id).values_list("id", flat=True))
+    misses = _permanent_miss_sources(movie_ids, country=country)
+    return {slug for slugs in misses.values() for slug in slugs}
 
 
 def _is_spent(limiter) -> bool:
@@ -492,6 +453,14 @@ def process_watchlist_refresh(
         m.id: m for m in Movie.objects.filter(id__in=[movie_id for movie_id, _ in pairs])
     }
 
+    # Read after draining: an explicit answer in this tick can supersede an
+    # older permanent miss. Scope the snapshot to this sweep's market and key
+    # by Movie identity, using exactly the report/worker's history policy.
+    from .availability_report import _permanent_miss_sources
+
+    current_country = resolve_source_country()
+    permanent_misses = _permanent_miss_sources(list(movies_by_id), country=current_country)
+
     rate_limit_hit = summary.rate_limited
     default_limiter_spent = _is_spent(limiter)
     for movie_id, tmdb_id in pairs:
@@ -522,8 +491,7 @@ def process_watchlist_refresh(
         # Scopes the upstream is known not to carry (a permanent 404) are
         # dropped here: they write no Offer row, so they would otherwise read
         # as stale forever and cost one metered call per sweep run, every run.
-        current_country = resolve_source_country()
-        absent = permanently_absent_scopes(tmdb_id, country=current_country)
+        absent = permanent_misses.get(movie_id, set())
         scopes = [
             slug
             for slug in stale_refresh_scopes(
