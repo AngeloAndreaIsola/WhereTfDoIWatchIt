@@ -24,6 +24,7 @@ from tracker.models import (
     Provider,
     RefreshPriority,
     RefreshRequest,
+    RefreshRequestOutcome,
     RefreshRequestStatus,
     WatchlistItem,
 )
@@ -80,7 +81,7 @@ class MeteredGateTruthTableTests(TestCase):
             movie=movie,
             source=slug,
             status=RefreshRequestStatus.DONE,
-            defaults={"completed_at": timezone.now(), "last_error": ""},
+            defaults={"completed_at": timezone.now(), "last_error": "", "outcome": RefreshRequestOutcome.NO_OFFER},
         )
 
     def _decide(self, movie: Movie, *, gate: bool) -> dict:
@@ -199,7 +200,7 @@ class StreamingAvailabilityGateTests(TestCase):
         )
 
         with patch.dict(os.environ, {source_policy.LADDER_ENV_VAR: "1"}):
-            res = rr.request_watchlist_refresh(user_id=1)
+            res = rr.request_watchlist_refresh(user_id=1, priority=RefreshPriority.STALE)
 
         self.assertNotIn(SA, res["sources"])
         self.assertEqual(res["skipped_counts"].get("not_needed", 0), 1)
@@ -221,7 +222,7 @@ class StreamingAvailabilityGateTests(TestCase):
         )
 
         with patch.dict(os.environ, {source_policy.LADDER_ENV_VAR: "0"}):
-            res = rr.request_watchlist_refresh(user_id=1)
+            res = rr.request_watchlist_refresh(user_id=1, priority=RefreshPriority.STALE)
 
         self.assertIn(SA, res["sources"])
         sa_requests = RefreshRequest.objects.filter(movie=self.movie, source=SA)

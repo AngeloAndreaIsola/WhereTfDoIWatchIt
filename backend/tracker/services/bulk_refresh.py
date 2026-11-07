@@ -44,7 +44,7 @@ from typing import Optional
 
 from django.conf import settings
 from django.db import connection
-from django.db.models import Max, Q
+from django.db.models import Max
 from django.utils import timezone
 
 from availability.domain.enums import ContentType
@@ -72,9 +72,10 @@ from ..models import (
     CatalogueRefreshStatus,
     Movie,
     RefreshRequest,
-    RefreshRequestOutcome,
     RefreshRequestStatus,
+    RefreshRequestOutcome,
     RefreshRun,
+    RefreshPriority,
     WatchlistItem,
 )
 from .preferences import resolve_source_country
@@ -213,50 +214,12 @@ def _latest_checks(tmdb_ids) -> dict:
 
 
 def permanently_absent_scopes(tmdb_id, country: str | None = None) -> set[str]:
-    """Source scopes the upstream catalogues are known not to carry this title.
+    """Compatibility reader using the shared market-aware supersession rules."""
+    from .availability_report import _permanent_miss_sources
 
-    A title that answered **404** to a source has produced a *permanent*
-    negative answer, not a stale one: the provider does not carry it, and no
-    amount of waiting will change that. Those ``RefreshRequest`` rows carry a
-    successful ``title_not_found`` outcome, so they are durable evidence — and
-    that is exactly the point:
-
-    an absent title writes **no** ``Offer`` row, so ``stale_sources`` keeps
-    reporting its scope as stale forever. Without this exclusion the background
-    sweep re-selects such a title on *every* run (hundreds of times a day for a
-    watched title), spending one metered call each time to relearn a fact that
-    cannot change. Excluding them here is what makes the 404 never-retry
-    behaviour real for the sweep, not just for the queue drain.
-
-    Only a successful permanent-negative outcome counts. A transient failure
-    (5xx/timeout/429) has no outcome, so the title stays refreshable.
-
-    **The legacy ``source=""`` spelling is normalized to the default slug
-    here.** ``""`` and ``"streaming_availability"`` are the same logical scope
-    (see ``resolve_request_source``) but different literal strings, so a
-    title-level request created before the fan-out would store ``""`` while the
-    sweep compares ``streaming_availability`` — and the exclusion would
-    silently never match, reintroducing the very retry loop it exists to stop.
-    """
-    qs = RefreshRequest.objects.filter(movie__tmdb_id=tmdb_id)
-    if country is not None:
-        qs = qs.filter(country=country.upper() if country else "")
-    slugs = set(
-        qs.filter(
-            Q(
-                status=RefreshRequestStatus.DONE,
-                outcome=RefreshRequestOutcome.TITLE_NOT_FOUND,
-            )
-            # Pre-migration rows remain readable until the data migration has
-            # run in every environment. This is compatibility, never a new
-            # write format.
-            | Q(
-                status=RefreshRequestStatus.FAILED,
-                last_error__startswith="UpstreamTitleNotFound",
-            )
-        ).values_list("source", flat=True)
-    )
-    return {slug or DEFAULT_SOURCE_SLUG for slug in slugs}
+    movie_ids = list(Movie.objects.filter(tmdb_id=tmdb_id).values_list("id", flat=True))
+    misses = _permanent_miss_sources(movie_ids, country=country)
+    return {slug for slugs in misses.values() for slug in slugs}
 
 
 def _is_spent(limiter) -> bool:
@@ -476,7 +439,7 @@ def process_watchlist_refresh(
     # module load time. The returned set owns those titles for this run —
     # settled or still queued — so the sweep below neither re-attempts nor
     # double-counts them.
-    from .refresh_requests import drain_refresh_requests
+    from .refresh_requests import drain_refresh_requests, _metered_source_is_unnecessary
 
     queue_owned = drain_refresh_requests(
         summary=summary,
@@ -490,6 +453,14 @@ def process_watchlist_refresh(
     movies_by_id = {
         m.id: m for m in Movie.objects.filter(id__in=[movie_id for movie_id, _ in pairs])
     }
+
+    # Read after draining: an explicit answer in this tick can supersede an
+    # older permanent miss. Scope the snapshot to this sweep's market and key
+    # by Movie identity, using exactly the report/worker's history policy.
+    from .availability_report import _permanent_miss_sources
+
+    current_country = resolve_source_country()
+    permanent_misses = _permanent_miss_sources(list(movies_by_id), country=current_country)
 
     rate_limit_hit = summary.rate_limited
     default_limiter_spent = _is_spent(limiter)
@@ -521,20 +492,18 @@ def process_watchlist_refresh(
         # Scopes the upstream is known not to carry (a permanent 404) are
         # dropped here: they write no Offer row, so they would otherwise read
         # as stale forever and cost one metered call per sweep run, every run.
-        current_country = resolve_source_country()
-        absent = permanently_absent_scopes(tmdb_id, country=current_country)
-        scopes = [
-            slug
-            for slug in stale_refresh_scopes(
-                tmdb_id,
-                country=current_country,
-                content_type=movie.content_type,
-            )
-            if slug not in absent
-        ]
-        if not scopes:
+        absent = permanent_misses.get(movie_id, set())
+        stale_scopes = stale_refresh_scopes(
+            tmdb_id,
+            country=current_country,
+            content_type=movie.content_type,
+        )
+        if not stale_scopes:
             summary.skipped_cached += 1
             continue
+        # Reused negatives are their own outcome, never a second cache skip.
+        summary.skipped_upstream_missing += sum(slug in absent for slug in stale_scopes)
+        scopes = [slug for slug in stale_scopes if slug not in absent]
 
         # The stale scopes we may refresh, with budget and rate capacity.
         #
@@ -543,6 +512,13 @@ def process_watchlist_refresh(
         # and the next titles, instead of the run-wide bail-out the single
         # shared limiter used to force here.
         for slug in scopes:
+            # The sweep has no queue row, but still spends the same metered
+            # budget. Re-check the same policy immediately before execution.
+            if _metered_source_is_unnecessary(
+                movie, slug, RefreshPriority.BACKGROUND, country=current_country
+            ):
+                summary.skipped_policy_gated += 1
+                continue
             if summary.remaining_budget <= 0:
                 summary.skipped_budget_exhausted += 1
                 continue
@@ -568,13 +544,16 @@ def process_watchlist_refresh(
             )
             try:
                 with source_budget(scope_limiter, source=slug):
+                    # Acquisition owns the local quota ledger. The run limit
+                    # separately bounds attempts, including upstream failures.
+                    summary.remaining_budget -= 1
+                    requested_at = timezone.now()
                     # Same as the request-drain path: the selected market is
                     # explicit, never inferred.
                     scope_service.refresh_content(
-                        movie, country=resolve_source_country()
+                        movie, country=current_country
                     )
                 summary.refreshed += 1
-                summary.remaining_budget -= 1
             except RateLimitExceeded:
                 summary.note_rate_limited_source(slug)
                 summary.skipped_rate_limited += 1
@@ -599,11 +578,20 @@ def process_watchlist_refresh(
                         movie.tmdb_id, slug, exc.kind, exc.retry_after, exc.quota,
                     )
             except UpstreamTitleNotFound as exc:
-                # Not a fault: the upstream catalogue simply does not carry this
-                # title. Counted separately from real errors so a permanently
-                # absent title never looks like a broken refresh in the run
-                # summary. It stays stale, so the sweep will re-attempt it on a
-                # later run — see the report note on residual sweep retries.
+                # The same scoped evidence as a queued definitive miss. The
+                # shared history reader owns reuse and supersession policy;
+                # transient failures never enter this evidence path.
+                RefreshRequest.objects.create(
+                    movie=movie,
+                    source=slug,
+                    country=current_country,
+                    priority=RefreshPriority.BACKGROUND,
+                    status=RefreshRequestStatus.DONE,
+                    outcome=RefreshRequestOutcome.TITLE_NOT_FOUND,
+                    attempts=1,
+                    requested_at=requested_at,
+                    completed_at=timezone.now(),
+                )
                 summary.skipped_upstream_missing += 1
                 logger.info(
                     "Upstream has no record of tmdb_id=%s source=%s: %s",
@@ -617,7 +605,13 @@ def process_watchlist_refresh(
                 summary.errors += 1
 
     run.rows_refreshed = summary.refreshed
-    run.rows_skipped = summary.skipped_cached + summary.skipped_budget_exhausted + summary.skipped_rate_limited
+    run.rows_skipped = (
+        summary.skipped_cached
+        + summary.skipped_budget_exhausted
+        + summary.skipped_rate_limited
+        + summary.skipped_policy_gated
+        + summary.skipped_upstream_missing
+    )
     run.rate_limited = summary.rate_limited
     run.finished_at = timezone.now()
     run.save()

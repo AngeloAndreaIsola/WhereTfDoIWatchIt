@@ -205,8 +205,9 @@ class ProviderSystemTests(TestCase):
         items = scraper.run(query="Inception")
         self.assertEqual(items, [])
 
+    @patch("tracker.scrapers.base.TMDbClient.search", return_value=[])
     @patch("tracker.scrapers.adapters.KissKHScraper.fetch_url")
-    def test_scraper_import_url_endpoint(self, mock_fetch):
+    def test_scraper_import_url_endpoint(self, mock_fetch, mock_search):
         mock_fetch.return_value = [
             {
                 "id": 101,

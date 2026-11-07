@@ -149,7 +149,7 @@ describe("frontend page smoke tests", () => {
     const user = userEvent.setup();
     render(React.createElement(AmbiguousPage));
 
-    await user.click(await screen.findByLabelText(/Dune.*2021/s));
+    await user.click(await screen.findByLabelText(/Dune[\s\S]*2021/));
     await user.click(screen.getByRole("button", { name: /Confirm & Save Selections/i }));
 
     await waitFor(() => expect(routerPush).toHaveBeenCalledWith("/watchlist"));

@@ -25,7 +25,7 @@ evidence reader otherwise present identically as "the report is wrong".
 """
 from django.test import SimpleTestCase
 
-from tracker.models import AvailabilityResolutionReason
+from tracker.models import AvailabilityResolutionReason, RefreshRequestOutcome
 from tracker.services.availability_report import (
     ABSENCE_REASONS,
     INFORMATION_GAP_REASONS,
@@ -68,13 +68,26 @@ class ClassifySourceTests(SimpleTestCase):
         # "everyone answered" rule reachable for this source.
         self.assertIn(reason, ABSENCE_REASONS)
 
-    def test_done_without_offer_is_a_definitive_negative(self):
+    def test_done_unknown_without_offer_is_not_a_definitive_negative(self):
         self.assertEqual(
             classify_source(
                 produced_active_offer=False,
                 permanent_miss=False,
                 request_status="done",
                 quota_exhausted=False,
+                outcome=RefreshRequestOutcome.UNKNOWN,
+            ),
+            ("skipped", R.NOT_APPLICABLE),
+        )
+
+    def test_done_no_offer_without_offer_is_a_definitive_negative(self):
+        self.assertEqual(
+            classify_source(
+                produced_active_offer=False,
+                permanent_miss=False,
+                request_status="done",
+                quota_exhausted=False,
+                outcome=RefreshRequestOutcome.NO_OFFER,
             ),
             ("completed", R.NO_OFFER),
         )

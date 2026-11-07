@@ -45,6 +45,7 @@ from tracker.models import (
     BlockedReason,
     Movie,
     RefreshRequest,
+    RefreshRequestOutcome,
     RefreshRequestStatus,
     WatchlistItem,
 )
@@ -169,7 +170,7 @@ class CompletedResultTests(ResultBase):
         batch = uuid.uuid4()
         run = make_run(batch=batch, movie_ids=[self.movie])
         for source in (WM, MI, YT):
-            add_request(self.movie, source, RefreshRequestStatus.DONE, batch)
+            add_request(self.movie, source, RefreshRequestStatus.DONE, batch, outcome=RefreshRequestOutcome.NO_OFFER)
             self.source_row(run, source, "completed")
 
         status = self.finalise(run)

@@ -1558,11 +1558,16 @@ class JustWatchPartitionTests(TestCase):
                          "a failed partition must stay retryable")
 
     def test_summary_shape_with_no_partitions(self):
-        # No enabled country/provider pair exists here, so the coordinator must
-        # return an empty, well-formed summary instead of raising.
-        summary = refresh_justwatch_partitions(max_partitions=1)
+        # Migrations seed enabled pairs. Supply the empty plan explicitly so
+        # this shape test cannot discover a live partition and call a provider.
+        service, calls = self._fake_service({})
+        summary = refresh_justwatch_partitions(
+            partitions=[], max_partitions=1, refresh_service=service,
+            source=self._stub_source(),
+        )
         self.assertIn("results", summary)
         self.assertIn("errors", summary)
+        self.assertEqual(calls, [])
 
 
 def mapping(provider, integration, external_id, country=""):
