@@ -358,10 +358,6 @@ def _permanent_miss_sources(movie_ids: list[int], country: str | None = None) ->
             continue
         candidates.append((movie_id, src or DEFAULT_SOURCE_SLUG, requested_at, pk, row_country))
 
-    # A permanent miss is superseded only by newer *authoritative* evidence
-    # (a DONE row) for the same movie/source/country. Pending or transient
-    # failures alone do not invalidate it.
-    superseded: set[tuple[int, str, int]] = set()
     # Build max (requested_at, pk) among DONE rows per (movie, source, country).
     done_max: dict[tuple[int, str, str | None], tuple] = {}
     qs2 = RefreshRequest.objects.filter(movie_id__in=movie_ids, status=RefreshRequestStatus.DONE)
