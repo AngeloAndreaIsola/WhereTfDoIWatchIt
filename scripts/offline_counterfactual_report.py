@@ -371,16 +371,13 @@ def run_batch(
         "remaining_with_savings": SA_DAILY_QUOTA - metered_on,
     }
 
-    # Simulated SQL metrics (would be real if connected to DB)
-    # Based on: 1 query per title for offers + 1 per batch for movie list
-    n_queries = 1 + count   # movie list + per-title offer lookup
-    avg_ms = 2.5            # realistic for indexed lookups
+    # SQL metrics: not measured (offline, no DB connection).
     sql = {
-        "total_queries": n_queries,
-        "total_time_ms": round(n_queries * avg_ms, 1),
-        "avg_query_ms": avg_ms,
-        "queries_per_title": round(n_queries / count, 2),
-        "note": "Simulated — real metrics require live DB connection",
+        "total_queries": "not_measured",
+        "total_time_ms": "not_measured",
+        "avg_query_ms": "not_measured",
+        "queries_per_title": "not_measured",
+        "note": "SQL metrics not_measured: offline report does not connect to a database. Run against an isolated DB to obtain real measurements.",
     }
 
     elapsed = time.perf_counter() - t0
