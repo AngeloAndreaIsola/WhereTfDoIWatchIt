@@ -19,11 +19,14 @@ What "reconciled" means here:
   when its raw lifecycle flag is set, its availability window is open at
   ``now``, and its provider content does not resolve to some other TMDB id.
   The effective offer is available when at least one observation is.
- * **Freshness is advisory.** The freshness of an observation is classified
-  against its source's declared refresh window — a per-source policy
-  (``availability.freshness``) that ``Source.configuration`` can override per
-  source. A source that declares neither reports ``unknown`` rather than
-  silently fresh.
+ * **Freshness qualifies positive evidence.** The freshness of an observation
+  is classified against its source's declared refresh window — a per-source
+  policy (``availability.freshness``) that ``Source.configuration`` can
+  override per source. A source that declares neither reports ``unknown``
+  rather than silently fresh. ``currently_available`` keeps its lifecycle and
+  window meaning; the additive ``evidence`` field says whether that positive
+  is recently verified, stale ("last seen"), or uncorroborated, and only
+  ``verified`` may be presented as current watchable availability.
 
 Query shape is deliberately fixed: one row query plus one bulk lookup each for
 mappings, cross-content claims and sync runs — no per-offer query.
@@ -37,7 +40,7 @@ from typing import Iterable, Optional
 from django.db.models import Exists, OuterRef
 from django.utils import timezone
 
-from ..domain.enums import ConflictKind, ContentType, FreshnessState, SyncStatus
+from ..domain.enums import AvailabilityEvidence, ConflictKind, ContentType, FreshnessState, SyncStatus
 from ..domain.reconciliation import (
     OfferObservation,
     PriceObservation,
@@ -286,6 +289,7 @@ class AvailabilityReconciliationService:
             mapping_doubt=detail,
             price=own_price,
             source_prices=source_prices,
+            window_open=window_open,
         )
 
     def _reconcile_group(self, group, subgroups):
@@ -410,6 +414,8 @@ class AvailabilityReconciliationService:
         if price_conflict is not None:
             conflicts.append(price_conflict)
 
+        evidence, last_verified_at, last_seen_available_at = _evidence_values(observations)
+
         return ReconciledOffer(
             provider=group.provider,
             country=group.country,
@@ -434,6 +440,9 @@ class AvailabilityReconciliationService:
             price=price,
             price_is_from=price_is_from,
             prices=prices,
+            evidence=evidence,
+            last_verified_at=last_verified_at,
+            last_seen_available_at=last_seen_available_at,
         )
 
     def _price_value(self, group, observations, prices):
@@ -611,6 +620,41 @@ class AvailabilityReconciliationService:
                 )
             )
         ).count()
+
+
+_EVIDENCE_STRENGTH = (
+    AvailabilityEvidence.VERIFIED,
+    AvailabilityEvidence.STALE,
+    AvailabilityEvidence.UNKNOWN,
+    AvailabilityEvidence.UNAVAILABLE,
+)
+_POSITIVE_EVIDENCE = frozenset(_EVIDENCE_STRENGTH[:3])
+
+
+def _evidence_values(observations):
+    """Strongest evidence of one offer plus its verification timestamps.
+
+    Sources are evaluated independently: one source's fresh observation makes
+    the offer verified, but never makes another source's stale row fresh.
+    """
+    by_evidence = {obs.offer_id: obs.evidence for obs in observations}
+    evidence = min(
+        by_evidence.values(), key=_EVIDENCE_STRENGTH.index,
+        default=AvailabilityEvidence.UNAVAILABLE,
+    )
+    verified = [
+        obs.last_seen for obs in observations
+        if by_evidence[obs.offer_id] == AvailabilityEvidence.VERIFIED
+    ]
+    positive = [
+        obs.last_seen for obs in observations
+        if by_evidence[obs.offer_id] in _POSITIVE_EVIDENCE
+    ]
+    return (
+        evidence,
+        max(verified, default=None),
+        max(positive, default=None),
+    )
 
 
 def _aware(value: datetime) -> datetime:

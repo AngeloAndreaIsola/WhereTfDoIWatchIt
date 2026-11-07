@@ -70,26 +70,26 @@ export function AvailabilityStateMessage({
   const evidence = availability?.evidence;
   const titleSignals = (availability?.title_signals ?? []).filter((s) => s.provider);
 
-  // A source reported the title as available, but no concrete offer exists to
-  // show. This must never read as a playable option (the requirement the
-  // evidence split exists for), and it must not fall through to "unknown" —
-  // a source *did* answer.
+  // Retain historical provenance, but only current trusted signals support
+  // a present-tense claim. Neither kind of signal is a playable offer.
   if (evidence === "title_signal" && state !== "unavailable" && !refreshing) {
-    const availableOn = Array.from(
-      new Set([
-        ...(availability?.available_on ?? []),
-        ...titleSignals.map((s) => s.provider),
-      ].filter(Boolean)),
-    );
+    const trustedSignals = titleSignals.filter((s) => s.trusted === true);
+    const availableOn = Array.from(new Set([
+      ...(availability?.available_on ?? []),
+      ...trustedSignals.map((s) => s.provider),
+    ].filter(Boolean)));
+    const trusted = availableOn.length > 0;
     return (
       <div>
         <p className="font-medium text-amber-700 dark:text-amber-300">
-          Reported available — no current offer to show.
+          {trusted
+            ? "Reported available — no current offer to show."
+            : "Historical availability report — current availability unverified."}
         </p>
         <p className="mt-1 text-gray-600 dark:text-gray-400">
-          {availableOn.length > 0
+          {trusted
             ? `A source reports this title on ${availableOn.join(", ")}, but no concrete offer could be matched to a service in our catalogue yet.`
-            : "A source reported this title as available, but no concrete offer could be displayed yet."}{" "}
+            : `An earlier source report${titleSignals.length ? ` for ${Array.from(new Set(titleSignals.map((s) => s.provider))).join(", ")}` : ""} has not been verified as current availability.`}{" "}
           <span className="text-gray-500 dark:text-gray-500">
             That is a report, not yet a playable option.
           </span>

@@ -52,14 +52,16 @@ Roles
 
 ``BROAD_AGGREGATOR``
     JustWatch, Watchmode. Resells many providers' catalogues, so it widens
-    coverage far beyond any single first-party source, and it is unmetered.
+    coverage far beyond any single first-party source. While JustWatch is
+    unmetered, Watchmode operates under a finite monthly plan quota (2,500
+    calls/mo; local budget 2,200) managed by the quota ledger.
     Explicitly **not** ordered against each other: both are consulted, and
     neither waits for the other.
 
 ``METERED_AGGREGATOR``
     Streaming Availability. Same shape as a broad aggregator, but every call
-    consumes a scarce daily budget, so it is consulted **only for titles no
-    cheaper source has resolved**.
+    consumes a scarce daily budget (100 req/day), so it is consulted **only
+    for titles no cheaper source has resolved**.
 
 The ladder, and the reason it is not a chain
 ---------------------------------------------
@@ -163,7 +165,7 @@ SOURCE_ROLES: dict[str, AvailabilityRole] = {
     "rai_play": AvailabilityRole.COLLECTOR,
     "pbs": AvailabilityRole.COLLECTOR,
     "abc_iview": AvailabilityRole.COLLECTOR,
-    # --- broad aggregators: unmetered, wide coverage ----------------------
+    # --- broad aggregators: multi-provider coverage (Watchmode has finite quota) -
     "justwatch": AvailabilityRole.BROAD_AGGREGATOR,
     "watchmode": AvailabilityRole.BROAD_AGGREGATOR,
     # --- metered aggregator: scarce daily budget, consulted last ----------

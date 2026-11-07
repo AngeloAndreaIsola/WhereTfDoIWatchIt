@@ -149,6 +149,121 @@ class RefreshState:
 
 
 # ---------------------------------------------------------------------------
+# Provider aliases and normalization
+# ---------------------------------------------------------------------------
+#: Explicit, verified alias mappings from external, technical, or legacy
+#: representations to canonical provider slugs.
+#:
+#: Only verified 1:1 synonyms for the exact same entitlement and access type
+#: are permitted. Distinct tiers, add-ons, channels, or rental storefronts
+#: (e.g. viaplay vs viaplay_sports, prime vs amazon channels, apple vs apple_tv_store)
+#: are separate providers and must NEVER be aliased.
+SAFE_PROVIDER_ALIASES: dict[str, str] = {
+    # Curated profile / identical entitlement aliases
+    "netflixkids": "netflix",
+    "netflix_kids": "netflix",
+    "netflix-kids": "netflix",
+    "netflix kids": "netflix",
+    # Amazon Prime Video variants
+    "amazonprimevideo": "prime",
+    "amazonprime": "prime",
+    "prime-video": "prime",
+    "prime_video": "prime",
+    "prime video": "prime",
+    # Apple TV+ subscription variants (distinct from apple_tv_store / apple_tv_amazon)
+    "appletvplus": "apple",
+    "appletv": "apple",
+    "apple-tv-plus": "apple",
+    "apple tv+": "apple",
+    # Disney+ variants
+    "disneyplus": "disney",
+    "disney-plus": "disney",
+    "disney_plus": "disney",
+    "disney+": "disney",
+    # Max / HBO variants (sa_id="hbo", canonical slug="max"; distinct from max_amazon)
+    "hbo": "max",
+    "hbomax": "max",
+    "hbo-max": "max",
+    "hbo_max": "max",
+    "hbo max": "max",
+    # Paramount+ variants
+    "paramountplus": "paramount",
+    "paramount-plus": "paramount",
+    "paramount_plus": "paramount",
+    "paramount+": "paramount",
+    # Peacock variants
+    "peacocktv": "peacock",
+    "peacock-tv": "peacock",
+    "peacock_tv": "peacock",
+    "peacock tv": "peacock",
+    # Tubi variants
+    "tubitv": "tubi",
+    "tubi-tv": "tubi",
+    "tubi_tv": "tubi",
+    # Pluto TV variants
+    "plutotv": "pluto_tv",
+    "pluto-tv": "pluto_tv",
+    "pluto tv": "pluto_tv",
+    # Mediaset Infinity variants
+    "mediasetplay": "mediaset_infinity",
+    "mediaset-infinity": "mediaset_infinity",
+    "mediaset infinity": "mediaset_infinity",
+    # BBC iPlayer variants (migration 0033 merged legacy alias "bbc")
+    "bbc": "bbc_iplayer",
+    "bbc-iplayer": "bbc_iplayer",
+    "bbc iplayer": "bbc_iplayer",
+    # RaiPlay variants (migration 0033 merged legacy alias "rai-play")
+    "rai-play": "raiplay",
+    "rai_play": "raiplay",
+    "rai play": "raiplay",
+    # NHK World variants (migration 0033 merged legacy alias "nhk")
+    "nhk": "nhk_world",
+    # Viaplay Sports variants (distinct from base viaplay)
+    "viaplaysports": "viaplay_sports",
+    "viaplay sports": "viaplay_sports",
+    # Rakuten TV (JustWatch "wuaki")
+    "wuaki": "rakuten_tv",
+    # YouTube Free variants (distinct from paid youtubetv)
+    "youtubefree": "youtube",
+    "youtube free": "youtube",
+    # YouTube TV
+    "youtube tv": "youtubetv",
+    # Canal+ variants
+    "canalplus": "canal_plus",
+    "canal-plus": "canal_plus",
+    "canal+": "canal_plus",
+    # Film1 variants
+    "film1nl": "film1",
+    # NPO Plus variants
+    "npoplus": "npo_plus",
+    "npo plus": "npo_plus",
+    # Pathé Thuis variants
+    "pathe": "pathe_thuis",
+    # Curiosity Stream variants
+    "curiositystream": "curiosity_stream",
+    "curiosity": "curiosity_stream",
+    # JustWatch TV / South Park / WOW / IFFR / Magellan
+    "justwatchtv": "justwatch_tv",
+    "southpark": "south_park",
+    "wowpresentsplus": "wow_presents_plus",
+    "iffrunleashed": "iffr_unleashed",
+    "magellantv": "magellan_tv",
+}
+
+
+def normalize_service_slug(slug: str) -> str:
+    """Normalize a provider or service slug to its canonical identifier.
+
+    Applies exact lowercase trimming and explicit, verified 1:1 alias mappings.
+    Never uses substring containment or heuristic fuzzy matching.
+    """
+    s = (slug or "").lower().strip()
+    if not s:
+        return ""
+    return SAFE_PROVIDER_ALIASES.get(s, s)
+
+
+# ---------------------------------------------------------------------------
 # Entitlement: what the user's selected services grant
 # ---------------------------------------------------------------------------
 @dataclass
@@ -165,19 +280,19 @@ class UserAccess:
     synthetic: bool = False
 
     def _match(self, slug: str, bucket: set[str]) -> bool:
-        s = (slug or "").lower().strip()
+        s = normalize_service_slug(slug)
         if not s or not bucket:
             return False
         if s in bucket:
             return True
-        return any(b and len(b) >= 3 and (b in s or s in b) for b in bucket)
+        return any(normalize_service_slug(b) == s for b in bucket)
 
     def entitles(self, slug: str, access_type: str) -> bool:
         """Does the user's declared access cover this offer's access type?"""
         if access_type == AccessType.SUBSCRIPTION:
             return self._match(slug, self.included)
         if access_type == AccessType.ADDON:
-            return self._match(slug, self.addon) or self._match(slug, self.included)
+            return self._match(slug, self.addon)
         if access_type in FREE_ACCESS_TYPES:
             return (
                 self._match(slug, self.free)
@@ -203,7 +318,8 @@ class UserAccess:
 
 def build_explicit_access(slugs: Iterable[str]) -> UserAccess:
     """Access from an explicit slug/name set (used by callers that pass one)."""
-    values = {(s or "").lower().strip() for s in slugs or () if s}
+    values = {normalize_service_slug(s) for s in slugs or () if s}
+    values.discard("")
     return UserAccess(
         included=set(values), addon=set(), free=set(values),
         rent_buy=set(), names=set(values), synthetic=True,
@@ -215,8 +331,8 @@ def build_user_access(user_id: int = 1) -> UserAccess:
 
     ``access_mode`` decides the bucket; ``none`` means "explicitly not owned"
     and grants nothing. Providers the app treats as always-available
-    (broadcaster VOD, scraper sources) still auto-count, and rows that only
-    carry a free-text name match loosely, exactly as before.
+    (broadcaster VOD, scraper sources) still auto-count. Name-only rows
+    preserve their declared ``access_mode``; unknown modes are ignored.
     """
     access = UserAccess()
     targets = {
@@ -227,20 +343,29 @@ def build_user_access(user_id: int = 1) -> UserAccess:
     }
     rows = Subscription.objects.filter(user_id=user_id).select_related("provider")
     for sub in rows:
-        mode = (getattr(sub, "access_mode", None) or SubscriptionAccessMode.INCLUDED)
-        mode = str(mode).lower().strip()
+        raw_mode = getattr(sub, "access_mode", None)
+        mode = str(raw_mode).lower().strip() if raw_mode is not None else SubscriptionAccessMode.INCLUDED
         if mode == SubscriptionAccessMode.NONE:
             continue
-        target = targets.get(mode, access.included)
+        target = targets.get(mode)
+        if target is None:
+            # Unknown access mode must never silently grant included entitlement
+            continue
         slug = (sub.provider.slug.lower().strip() if sub.provider_id else "")
         name = (sub.name or "").lower().strip()
         if slug:
-            target.add(slug)
-        if name:
+            canon_slug = normalize_service_slug(slug)
+            if canon_slug:
+                target.add(canon_slug)
+        else:
+            # Name-only rows preserve their declared access_mode.
+            if name:
+                access.names.add(name)
+                canon_name = normalize_service_slug(name)
+                if canon_name:
+                    target.add(canon_name)
+        if name and slug:
             access.names.add(name)
-            # Name-only rows have no provider to bucket; keep them in included
-            # so the loose name match still works.
-            (target if slug else access.included).add(name)
 
     auto = Provider.objects.filter(
         is_enabled=True,
@@ -252,7 +377,7 @@ def build_user_access(user_id: int = 1) -> UserAccess:
         ],
     ).values_list("slug", "category")
     for slug, category in auto:
-        s = (slug or "").lower().strip()
+        s = normalize_service_slug(slug)
         if not s:
             continue
         # Ad-supported and public-service catalogues are free by definition
@@ -456,14 +581,15 @@ def classify_offer(
     # that base platform: selecting the channel never grants the base, and
     # holding the base never grants every channel. The requirement is surfaced
     # on the offer itself (``required_base``) so the UI can say what is missing.
-    provider = provider_map.get((service or "").lower().strip())
+    clean_service = (service or "").lower().strip()
+    provider = provider_map.get(clean_service) or provider_map.get(normalize_service_slug(clean_service))
     is_addon = False
     base_slug = ""
     base_display = ""
     if provider is not None:
         channel_base = getattr(provider, "addon_parent_slug", "") or ""
         if channel_base:
-            base_provider = provider_map.get(channel_base)
+            base_provider = provider_map.get(channel_base) or provider_map.get(normalize_service_slug(channel_base))
             is_addon = True
             base_slug = channel_base
             base_display = (
@@ -507,11 +633,13 @@ def classify_offer(
             reasons.append(
                 f"No active subscription for {presented.service_display or service}"
             )
-    if not is_lang_match:
-        reasons.append(
-            "Language information unknown" if not has_lang_info
-            else "Does not satisfy language rules"
-        )
+    if is_lang_match is None:
+        reasons.append("Language information unknown")
+    elif is_lang_match is False:
+        if not has_lang_info:
+            reasons.append("Language information unknown")
+        else:
+            reasons.append("Does not satisfy language rules")
     if locality == Locality.OUT_OF_REACH:
         cc = country or "?"
         if reach.vpn_regions:

@@ -33,6 +33,7 @@ from tracker.models import (
     Provider,
     ProviderCategory,
     RefreshRequest,
+    RefreshRequestOutcome,
     RefreshRequestStatus,
     ScrapedContentMapping,
 )
@@ -108,7 +109,7 @@ def unavailable_everywhere(movie):
     for slug in _title_level_slugs():
         RefreshRequest.objects.update_or_create(
             movie=movie, source=slug,
-            defaults={"status": RefreshRequestStatus.DONE},
+            defaults={"status": RefreshRequestStatus.DONE, "outcome": RefreshRequestOutcome.NO_OFFER},
         )
     return movie
 
@@ -171,7 +172,7 @@ class AvailabilityEvidenceClassTests(TestCase):
             "signal_only",
             [s["provider"] for s in verdict["title_signals"]],
         )
-        self.assertIn("signal_only", verdict["available_on"])
+        self.assertNotIn("signal_only", verdict["available_on"])
         # The page's offer list is empty; the evidence is what stops it reading
         # as a playable option or as "unknown".
         self.assertNotEqual(verdict["evidence"], "offers")

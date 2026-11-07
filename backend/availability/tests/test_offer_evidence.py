@@ -46,7 +46,9 @@ from tracker.services.access import (
     build_reach,
     classify_offer,
 )
-from tracker.services.availability_reads import get_local_offers
+from tracker.services.availability_reads import get_local_offers, get_offer_evidence
+
+from .freshness_helpers import declare_freshness
 
 from .source_stubs import StubSource
 from .source_stubs import fetch_result as _response
@@ -72,6 +74,10 @@ class EvidencePipelineMixin:
         self.evidence = OfferEvidenceRepository()
         self.prices = OfferPriceRepository()
         self.runs = SyncRunRepository()
+        declare_freshness(
+            self, "source-a", "source-b", "legacy-src", "legacy-src-2",
+            "legacy-only", "legacy-transition",
+        )
 
     # -- write path -------------------------------------------------------
     def refresh(self, slug, *offers, **snapshot):
@@ -496,14 +502,17 @@ class StaleEvidenceTests(EvidencePipelineMixin, TestCase):
         Offer.objects.update(last_seen=old, observed_at=old)
 
         offer = self.shared()
-        # No scheduler revokes evidence: freshness is exposed (last_seen), not
-        # enforced, matching the pre-existing offer lifecycle.
+        # No scheduler revokes evidence: the raw lifecycle and timestamps are
+        # untouched. Freshness only qualifies how it is presented: the offer
+        # is "last seen", not current, and never becomes unavailable.
         self.assertTrue(offer.currently_available)
         self.assertLess(
             OfferEvidence.objects.get(source__slug="source-a").last_seen,
             timezone.now() - dt.timedelta(days=399),
         )
-        self.assertEqual(len(get_local_offers(self.movie)), 1)
+        self.assertEqual(get_local_offers(self.movie), [])
+        [last_known] = get_offer_evidence(self.movie).last_known
+        self.assertEqual(last_known.availability_evidence, "stale")
 
         # An authoritative absence is the one thing that revokes it.
         self.remove("source-a")

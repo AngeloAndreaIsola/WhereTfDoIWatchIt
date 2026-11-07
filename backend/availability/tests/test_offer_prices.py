@@ -44,6 +44,7 @@ from tracker.services.availability_reads import get_local_offers
 from tracker.services.offers import Offer as TrackerOffer
 from tracker.services.ranking import rank_offers
 
+from .freshness_helpers import declare_freshness
 from .reconciliation_fixtures import ReconciliationFixtureMixin
 from .source_stubs import StubSource
 from .source_stubs import fetch_result as _response
@@ -666,6 +667,7 @@ class PriceReadPathTests(TestCase):
         self.source, _ = Source.objects.get_or_create(
             slug="read-src", defaults={"name": "Source"}
         )
+        declare_freshness(self, "read-src")
         self.offer = Offer.objects.create(
             provider=self.provider, country=self.country, source=self.source,
             content_type=ContentType.MOVIE, tmdb_id=550,
@@ -720,6 +722,7 @@ class PriceDoesNotAffectAccessTests(TestCase):
         self.source, _ = Source.objects.get_or_create(
             slug="access-src", defaults={"name": "Source"}
         )
+        declare_freshness(self, "access-src")
         self.movie = Movie.objects.create(tmdb_id=550, title="Fight Club", year=1999)
 
     def _rent_offer(self, with_price):

@@ -31,6 +31,17 @@ export function formatRelativeTime(iso?: string | null): string {
   return formatAbsolute(then);
 }
 
+/**
+ * "Last seen" label for stale/unverified availability evidence. Unlike
+ * {@link formatRelativeTime}, a missing timestamp means "date unknown".
+ */
+export function formatLastSeen(iso?: string | null): string {
+  if (!iso) return "Last seen: date unknown";
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "Last seen: date unknown";
+  return `Last seen ${formatAbsolute(then)}`;
+}
+
 function formatAbsolute(timestamp: number): string {
   return new Date(timestamp).toLocaleDateString(undefined, {
     year: "numeric",

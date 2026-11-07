@@ -10,6 +10,7 @@ from unittest.mock import patch
 from django.test import TestCase
 
 from availability.domain.enums import ContentType, OfferType
+from availability.tests.freshness_helpers import declare_freshness
 from availability.tests.reconciliation_fixtures import ReconciliationFixtureMixin
 from tracker.models import Movie
 from tracker.services.availability_reads import get_local_offers
@@ -19,6 +20,7 @@ from tracker.services.offers import Offer
 class LocalOffersReconciliationTests(ReconciliationFixtureMixin, TestCase):
     def setUp(self):
         super().setUp()
+        declare_freshness(self, "recon-source-a", "recon-source-b")
         self.movie = Movie.objects.create(tmdb_id=550, title="Fight Club", year=1999)
 
     def test_only_available_offers_reach_the_tracker(self):

@@ -253,41 +253,53 @@ def _catalogue_slugs() -> list[str]:
     )
 
 
-def _terminal_status_evidence(movie_ids: list[int], batch=None) -> dict[int, dict[str, str]]:
-    """``{movie_id: {source: terminal status}}`` from the newest row per pair.
+def _latest_request_evidence(movie_ids: list[int], batch=None, country: str | None = None) -> dict[int, dict[str, dict]]:
+    """Structured newest-row evidence per (movie, source).
 
-    A title can accumulate many request rows per source over its life
-    (re-stamped pending rows, retries, permanent-failure markers), so the
-    *newest* row per (title, source) is the current evidence. Reading the
-    oldest instead is how a title that has since been checked still reports
-    as failed.
-
-    ``batch`` restricts the read to one run's stamped rows. It is not an
-    optimisation: without it, a report of the *current* run is decided by
-    historical rows, and the per-source totals become the sum of every check
-    the title has ever had (measured: 987 Mediaset and 985 YouTube rows for
-    a 191-title watchlist, against 191 titles).
+    Returns ``{movie_id: {source: {status, blocked_reason, outcome,
+    requested_at, request_id}}}``. Reuses the single-query newest-row
+    algorithm. ``_terminal_status_evidence`` is a compatibility wrapper.
     """
-    newest: dict[int, dict[str, tuple[str, object]]] = defaultdict(dict)
+    newest: dict[int, dict[str, tuple]] = defaultdict(dict)
     qs = RefreshRequest.objects.filter(movie_id__in=movie_ids)
     if batch is not None:
         qs = qs.filter(batch=batch)
-    for movie_id, src, status, requested_at, pk in qs.values_list(
-        "movie_id", "source", "status", "requested_at", "id"
+    if country is not None:
+        qs = qs.filter(country=country.upper())
+    for movie_id, src, status, blocked_reason, outcome, requested_at, pk in qs.values_list(
+        "movie_id", "source", "status", "blocked_reason", "outcome", "requested_at", "id"
     ).iterator():
         key = src or DEFAULT_SOURCE_SLUG
         prev = newest[movie_id].get(key)
-        candidate = (status, (requested_at, pk))
-        if prev is None or candidate[1] > prev[1]:
+        candidate = ((requested_at, pk), status, blocked_reason, outcome, requested_at, pk)
+        if prev is None or candidate[0] > prev[0]:
             newest[movie_id][key] = candidate
+    out: dict[int, dict[str, dict]] = {}
+    for mid, per in newest.items():
+        out[mid] = {}
+        for src, cand in per.items():
+            _ts, status, br, outcome, requested_at, pk = cand
+            out[mid][src] = {
+                "status": status,
+                "blocked_reason": br or "",
+                "outcome": outcome or "",
+                "requested_at": requested_at,
+                "request_id": pk,
+            }
+    return out
+
+
+def _terminal_status_evidence(movie_ids: list[int], batch=None, country: str | None = None) -> dict[int, dict[str, str]]:
+    """Compatibility wrapper returning ``{movie_id: {source: status}}``."""
+    structured = _latest_request_evidence(movie_ids, batch=batch, country=country)
     return {
-        mid: {src: value[0] for src, value in per.items()}
-        for mid, per in newest.items()
+        mid: {src: info["status"] for src, info in per.items()}
+        for mid, per in structured.items()
     }
 
 
 def _terminal_status_by_source(
-    movie_ids: list[int], batch=None
+    movie_ids: list[int], batch=None, country: str | None = None
 ) -> dict[str, dict[int, str]]:
     """``{source: {movie_id: newest status}}`` — the transpose of
     :func:`_terminal_status_evidence`.
@@ -309,7 +321,7 @@ def _terminal_status_by_source(
     argument that is silently ignored is worse than no argument, because it
     reads as "this view is run-scoped" when it is not.
     """
-    per_movie = _terminal_status_evidence(movie_ids, batch=batch)
+    per_movie = _terminal_status_evidence(movie_ids, batch=batch, country=country)
     by_source: dict[str, dict[int, str]] = defaultdict(dict)
     for movie_id, per_src in per_movie.items():
         for src, status in per_src.items():
@@ -317,7 +329,7 @@ def _terminal_status_by_source(
     return by_source
 
 
-def _permanent_miss_sources(movie_ids: list[int]) -> dict[int, set[str]]:
+def _permanent_miss_sources(movie_ids: list[int], country: str | None = None) -> dict[int, set[str]]:
     """``{movie_id: {source}}`` where a title is a *permanent* upstream 404.
 
     ``UpstreamTitleNotFound`` is the one terminal error that must never be
@@ -327,18 +339,50 @@ def _permanent_miss_sources(movie_ids: list[int]) -> dict[int, set[str]]:
     is what keeps a transient network 404 from being written off forever.
     """
     out: dict[int, set[str]] = defaultdict(set)
-    for movie_id, src in RefreshRequest.objects.filter(movie_id__in=movie_ids).filter(
-        Q(
-            status=RefreshRequestStatus.DONE,
-            outcome=RefreshRequestOutcome.TITLE_NOT_FOUND,
+    # Collect permanent-miss candidates with their ordering key.
+    candidates: list[tuple[int, str, object, int, str | None]] = []
+    qs = RefreshRequest.objects.filter(movie_id__in=movie_ids)
+    if country is not None:
+        qs = qs.filter(country=country.upper())
+    for movie_id, src, status, outcome, last_error, requested_at, pk, row_country in qs.values_list(
+        "movie_id", "source", "status", "outcome", "last_error", "requested_at", "id", "country"
+    ).iterator():
+        is_permanent = (
+            status == RefreshRequestStatus.DONE
+            and outcome == RefreshRequestOutcome.TITLE_NOT_FOUND
+        ) or (
+            status == RefreshRequestStatus.FAILED
+            and (last_error or "").startswith("UpstreamTitleNotFound")
         )
-        # Compatibility for database rows created before migration 0044.
-        | Q(
-            status=RefreshRequestStatus.FAILED,
-            last_error__startswith="UpstreamTitleNotFound",
-        )
-    ).values_list("movie_id", "source"):
-        out[movie_id].add(src or DEFAULT_SOURCE_SLUG)
+        if not is_permanent:
+            continue
+        candidates.append((movie_id, src or DEFAULT_SOURCE_SLUG, requested_at, pk, row_country))
+
+    # Build max (requested_at, pk) among DONE rows per (movie, source, country).
+    done_max: dict[tuple[int, str, str | None], tuple] = {}
+    qs2 = RefreshRequest.objects.filter(movie_id__in=movie_ids, status=RefreshRequestStatus.DONE)
+    if country is not None:
+        qs2 = qs2.filter(country=country.upper())
+    for movie_id, src, outcome, requested_at, pk, row_country in qs2.values_list(
+        "movie_id", "source", "outcome", "requested_at", "id", "country"
+    ).iterator():
+        if outcome not in (
+            RefreshRequestOutcome.OFFERS_FOUND,
+            RefreshRequestOutcome.NO_OFFER,
+            RefreshRequestOutcome.TITLE_NOT_FOUND,
+        ):
+            continue
+        key = (movie_id, src or DEFAULT_SOURCE_SLUG, row_country)
+        cand_key = (requested_at, pk)
+        if key not in done_max or cand_key > done_max[key]:
+            done_max[key] = cand_key
+
+    for movie_id, src, requested_at, pk, row_country in candidates:
+        key = (movie_id, src, row_country)
+        if key in done_max and (requested_at, pk) < done_max[key]:
+            # superseded by newer authoritative evidence
+            continue
+        out[movie_id].add(src)
     return out
 
 
@@ -352,146 +396,174 @@ def _movie_tmdb_map(movie_ids: list[int]) -> dict[int, int]:
     return dict(Movie.objects.filter(id__in=movie_ids).values_list("id", "tmdb_id"))
 
 
-def _active_offers_by_source(movie_ids: list[int]) -> tuple[dict[int, set[str]], set[int]]:
-    """``({movie_id: {sources with an ACTIVE offer}}, {movie_id})``.
+def _offer_is_current(offer, now=None) -> bool:
+    if not getattr(offer, "currently_available", False):
+        return False
+    from django.utils import timezone as _tz
+    moment = now or _tz.now()
+    available_until = getattr(offer, "available_until", None)
+    if available_until is not None and available_until < moment:
+        return False
+    available_from = getattr(offer, "available_from", None)
+    if available_from is not None and available_from > moment:
+        return False
+    from availability.freshness import freshness_state, FreshnessState
+    src = offer.source
+    state = freshness_state(
+        src.slug,
+        offer.last_seen,
+        configuration=getattr(src, "configuration", None) or {},
+        now=moment,
+    )
+    return state == FreshnessState.FRESH
 
-    Filtered on ``currently_available=True``, unlike
-    :func:`_offers_by_source` (which reports raw presence for diagnostics).
-    The distinction is load-bearing and was a real bug: an offer that has
-    since been withdrawn — a film that left a service — still exists as a row,
-    so an unfiltered read keeps reporting a title as ``available`` from a
-    source that has demonstrably said it is not there. Worse, it made the
-    headline state depend on which read was consulted: source evidence saw
-    the stale row while provider evidence (already filtered) did not, so one
-    title could be simultaneously "resolved by SA" and "available on nobody".
 
-    Both sides of the classification now read this one filtered function, so
-    they cannot disagree.
-    """
-    by_tmdb: dict[int, list[int]] = defaultdict(list)
-    for movie_id, tmdb_id in _movie_tmdb_map(movie_ids).items():
+def _active_offers_by_source(movie_ids: list[int], country: str | None = None) -> tuple[dict[int, set[str]], set[int]]:
+    by_key: dict[tuple[int, str], list[int]] = defaultdict(list)
+    for movie_id, tmdb_id, content_type in Movie.objects.filter(id__in=movie_ids).values_list("id", "tmdb_id", "content_type"):
         if tmdb_id:
-            by_tmdb[tmdb_id].append(movie_id)
+            by_key[(tmdb_id, content_type or "movie")].append(movie_id)
 
     per_movie: dict[int, set[str]] = defaultdict(set)
     active: set[int] = set()
-    for tmdb_id, slug in Offer.objects.filter(
-        tmdb_id__in=set(by_tmdb), currently_available=True
-    ).values_list("tmdb_id", "source__slug").iterator():
-        for movie_id in by_tmdb.get(tmdb_id, ()):
-            per_movie[movie_id].add(slug)
+    qs = Offer.objects.filter(
+        tmdb_id__in={k[0] for k in by_key}, currently_available=True
+    ).select_related("source")
+    if country:
+        qs = qs.filter(country__code=country.upper())
+    for offer in qs:
+        if not _offer_is_current(offer):
+            continue
+        for movie_id in by_key.get((offer.tmdb_id, offer.content_type or "movie"), ()):
+            per_movie[movie_id].add(offer.source.slug)
             active.add(movie_id)
     return per_movie, active
 
 
-def _offers_by_source(movie_ids: list[int]) -> tuple[dict[int, set[str]], set[int]]:
-    """``({movie_id: {sources with ANY offer row}}, {movie_id with any offer})``.
-
-    Unfiltered — includes withdrawn offers. Use this for diagnostics ("which
-    sources have ever spoken about this title?") and
-    :func:`_active_offers_by_source` for anything that decides a state.
-    """
-    by_tmdb: dict[int, list[int]] = defaultdict(list)
-    for movie_id, tmdb_id in _movie_tmdb_map(movie_ids).items():
+def _offers_by_source(movie_ids: list[int], country: str | None = None) -> tuple[dict[int, set[str]], set[int]]:
+    by_key: dict[tuple[int, str], list[int]] = defaultdict(list)
+    for movie_id, tmdb_id, content_type in Movie.objects.filter(id__in=movie_ids).values_list("id", "tmdb_id", "content_type"):
         if tmdb_id:
-            by_tmdb[tmdb_id].append(movie_id)
+            by_key[(tmdb_id, content_type or "movie")].append(movie_id)
 
     per_movie: dict[int, set[str]] = defaultdict(set)
     any_offer: set[int] = set()
-    for tmdb_id, slug in Offer.objects.filter(
-        tmdb_id__in=set(by_tmdb)
-    ).values_list("tmdb_id", "source__slug").iterator():
-        for movie_id in by_tmdb.get(tmdb_id, ()):
+    qs = Offer.objects.filter(tmdb_id__in={k[0] for k in by_key})
+    if country:
+        qs = qs.filter(country__code=country.upper())
+    for tmdb_id, content_type, slug in qs.values_list("tmdb_id", "content_type", "source__slug").iterator():
+        for movie_id in by_key.get((tmdb_id, content_type or "movie"), ()):
             per_movie[movie_id].add(slug)
             any_offer.add(movie_id)
     return per_movie, any_offer
 
 
-def _offered_providers(movie_ids: list[int]) -> dict[int, set[str]]:
-    """``{movie_id: {provider slugs}}`` — the "available on X" answer."""
-    by_tmdb: dict[int, list[int]] = defaultdict(list)
-    for movie_id, tmdb_id in _movie_tmdb_map(movie_ids).items():
+def _offered_providers(movie_ids: list[int], country: str | None = None) -> dict[int, set[str]]:
+    by_key: dict[tuple[int, str], list[int]] = defaultdict(list)
+    for movie_id, tmdb_id, content_type in Movie.objects.filter(id__in=movie_ids).values_list("id", "tmdb_id", "content_type"):
         if tmdb_id:
-            by_tmdb[tmdb_id].append(movie_id)
+            by_key[(tmdb_id, content_type or "movie")].append(movie_id)
 
     out: dict[int, set[str]] = defaultdict(set)
-    for tmdb_id, provider in Offer.objects.filter(
-        tmdb_id__in=set(by_tmdb), currently_available=True
-    ).values_list("tmdb_id", "provider__slug").iterator():
-        for movie_id in by_tmdb.get(tmdb_id, ()):
-            out[movie_id].add(provider)
+    qs = Offer.objects.filter(
+        tmdb_id__in={k[0] for k in by_key}, currently_available=True
+    ).select_related("source", "provider")
+    if country:
+        qs = qs.filter(country__code=country.upper())
+    for offer in qs:
+        if not _offer_is_current(offer):
+            continue
+        for movie_id in by_key.get((offer.tmdb_id, offer.content_type or "movie"), ()):
+            out[movie_id].add(offer.provider.slug)
     return out
 
 
-def _active_offer_count(movie_ids: list[int]) -> dict[int, int]:
-    """``{movie_id: number of currently-available canonical offers}``."""
-    by_tmdb: dict[int, list[int]] = defaultdict(list)
-    for movie_id, tmdb_id in _movie_tmdb_map(movie_ids).items():
+def _active_offer_count(movie_ids: list[int], country: str | None = None) -> dict[int, int]:
+    by_key: dict[tuple[int, str], list[int]] = defaultdict(list)
+    for movie_id, tmdb_id, content_type in Movie.objects.filter(id__in=movie_ids).values_list("id", "tmdb_id", "content_type"):
         if tmdb_id:
-            by_tmdb[tmdb_id].append(movie_id)
+            by_key[(tmdb_id, content_type or "movie")].append(movie_id)
 
     counts: dict[int, int] = defaultdict(int)
-    for tmdb_id, total in (
-        Offer.objects.filter(tmdb_id__in=set(by_tmdb), currently_available=True)
-        .values("tmdb_id")
-        .annotate(total=Count("id"))
-        .values_list("tmdb_id", "total")
-    ):
-        for movie_id in by_tmdb.get(tmdb_id, ()):
-            counts[movie_id] += total
+    qs = Offer.objects.filter(
+        tmdb_id__in={k[0] for k in by_key}, currently_available=True
+    ).select_related("source")
+    if country:
+        qs = qs.filter(country__code=country.upper())
+    for offer in qs:
+        if not _offer_is_current(offer):
+            continue
+        for movie_id in by_key.get((offer.tmdb_id, offer.content_type or "movie"), ()):
+            counts[movie_id] += 1
     return counts
 
 
-def _title_availability_signals(movie_ids: list[int]) -> dict[int, list[dict]]:
-    """Title-level availability claims from sources that produced no offer.
+def _title_availability_signals(movie_ids: list[int], country: str | None = None) -> dict[int, list[dict]]:
+    """Preserve positive claims without manufacturing canonical offers.
 
-    A scraper row with ``is_available=True``, or a legacy ``Availability`` row,
-    is *explicit positive evidence from a source* that the title is there — but
-    it is not a displayable, playable offer. Reading these separately is what
-    lets the app distinguish "a source reports this title as available" from
-    "here is a concrete offer you can watch", and stops the first from being
-    rendered as the second (or as a flat ``unknown``).
+    Only a confirmed mapping with a fresh scrape is trusted at title level.
+    ``updated_at`` is bookkeeping, never an observation timestamp. Legacy
+    Availability rows have no confirmation provenance or declared freshness
+    policy: keep them as display-only, unknown-trust history, even when recent.
+    Every signal is non-playable; only canonical Offer rows resolve the title.
     """
+    from availability.freshness import FreshnessState, freshness_state
+
+    def is_fresh(slug, observed_at):
+        return observed_at is not None and freshness_state(slug, observed_at) == FreshnessState.FRESH
+    target = (country or "").upper().strip() if country else None
     out: dict[int, list[dict]] = defaultdict(list)
-    for movie_id, slug, country, seen in (
-        ScrapedContentMapping.objects.filter(
-            movie_id__in=movie_ids, is_available=True
-        )
-        .exclude(provider__isnull=True)
-        .values_list("movie_id", "provider__slug", "country_code", "updated_at")
-        .iterator()
+    scraper_qs = ScrapedContentMapping.objects.filter(
+        movie_id__in=movie_ids, is_available=True
+    ).exclude(provider__isnull=True)
+    if target is not None:
+        scraper_qs = scraper_qs.filter(country_code__iexact=target)
+    for movie_id, slug, row_country, scraped_at, confirmed in (
+        scraper_qs.values_list("movie_id", "provider__slug", "country_code", "last_scraped_at", "is_confirmed").iterator()
     ):
+        seen = scraped_at
+        fresh = is_fresh("legacy_scraper", seen)
         out[movie_id].append(
             {
                 "provider": slug or "",
-                "country": (country or "").upper(),
+                "country": (row_country or "").upper(),
                 "offer_type": "",
                 "source": "legacy_scraper",
                 "checked_at": seen,
+                "confirmed": bool(confirmed),
+                "fresh": fresh,
+                "trusted": bool(confirmed) and fresh,
+                "trust": "confirmed_mapping" if confirmed else "unconfirmed_mapping",
+                "playable": False,
             }
         )
-    for movie_id, slug, country, offer_type, seen in (
-        Availability.objects.filter(movie_id__in=movie_ids, is_available=True)
-        .select_related("region")
-        .values_list(
+    legacy_qs = Availability.objects.filter(movie_id__in=movie_ids, is_available=True).select_related("region")
+    if target is not None:
+        legacy_qs = legacy_qs.filter(region__country__iexact=target)
+    for movie_id, slug, row_country, offer_type, seen in (
+        legacy_qs.values_list(
             "movie_id", "region__provider", "region__country",
             "offer_type", "last_checked_at",
-        )
-        .iterator()
+        ).iterator()
     ):
         out[movie_id].append(
             {
                 "provider": slug or "",
-                "country": (country or "").upper(),
+                "country": (row_country or "").upper(),
                 "offer_type": offer_type or "",
                 "source": "legacy_availability",
                 "checked_at": seen,
+                "confirmed": False,
+                "fresh": is_fresh("legacy_availability", seen),
+                "trusted": False,
+                "trust": "legacy_unknown",
+                "playable": False,
             }
         )
     return out
 
 
-def _last_attempted_per_source(movie_ids: list[int], batch=None) -> dict[tuple[int, str], object]:
+def _last_attempted_per_source(movie_ids: list[int], batch=None, country: str | None = None) -> dict[tuple[int, str], object]:
     """``{(movie_id, source): when the source last touched this title}``.
 
     Distinct from :func:`_last_checked_per_source`, which reads
@@ -525,6 +597,8 @@ def _last_attempted_per_source(movie_ids: list[int], batch=None) -> dict[tuple[i
     qs = RefreshRequest.objects.filter(movie_id__in=movie_ids)
     if batch is not None:
         qs = qs.filter(batch=batch)
+    if country is not None:
+        qs = qs.filter(country=country.upper())
     for movie_id, src, requested_at, completed_at, pk in qs.values_list(
         "movie_id", "source", "requested_at", "completed_at", "id"
     ).iterator():
@@ -537,7 +611,7 @@ def _last_attempted_per_source(movie_ids: list[int], batch=None) -> dict[tuple[i
     return {key: value[0] for key, value in newest.items() if value[0] is not None}
 
 
-def _last_checked_per_source(movie_ids: list[int]) -> dict[tuple[int, str], object]:
+def _last_checked_per_source(movie_ids: list[int], country: str | None = None) -> dict[tuple[int, str], object]:
     """``{(movie_id, source): newest Offer.last_seen}`` — an *answer* stamp.
 
     Only meaningful for a source that produced an offer. For a source that
@@ -552,9 +626,10 @@ def _last_checked_per_source(movie_ids: list[int]) -> dict[tuple[int, str], obje
             by_tmdb[tmdb_id].append(movie_id)
 
     newest: dict[tuple[int, str], object] = {}
-    for tmdb_id, slug, seen in Offer.objects.filter(
-        tmdb_id__in=set(by_tmdb)
-    ).values_list("tmdb_id", "source__slug", "last_seen").iterator():
+    qs = Offer.objects.filter(tmdb_id__in=set(by_tmdb))
+    if country:
+        qs = qs.filter(country__code=country.upper())
+    for tmdb_id, slug, seen in qs.values_list("tmdb_id", "source__slug", "last_seen").iterator():
         for movie_id in by_tmdb.get(tmdb_id, ()):
             key = (movie_id, slug)
             prev = newest.get(key)
@@ -569,6 +644,8 @@ def classify_source(
     permanent_miss: bool,
     request_status: str | None,
     quota_exhausted: bool,
+    blocked_reason: str | None = None,
+    outcome: str | None = None,
 ) -> tuple[str, str]:
     """One source's verdict for one title: ``(status, reason)``.
 
@@ -602,20 +679,27 @@ def classify_source(
     if permanent_miss:
         return "completed", AvailabilityResolutionReason.TITLE_NOT_FOUND
     if request_status == RefreshRequestStatus.DONE:
-        return "completed", AvailabilityResolutionReason.NO_OFFER
+        if outcome == "title_not_found":
+            return "completed", AvailabilityResolutionReason.TITLE_NOT_FOUND
+        if outcome == "offers_found":
+            # produced_active_offer already handled above (RESOLVED). No active
+            # offer now means stale historical evidence, not a fresh NO_OFFER.
+            return "skipped", AvailabilityResolutionReason.NOT_APPLICABLE
+        if outcome == "no_offer":
+            return "completed", AvailabilityResolutionReason.NO_OFFER
+        # Unknown/unexpected outcomes must not become a definitive negative.
+        return "skipped", AvailabilityResolutionReason.NOT_APPLICABLE
     if request_status == RefreshRequestStatus.FAILED:
         return "failed", AvailabilityResolutionReason.SOURCE_UNAVAILABLE
     if request_status == RefreshRequestStatus.BLOCKED:
-        # Deliberately not attempted, and deliberately **not** a failure and
-        # **not** a negative answer. `policy_not_needed` in particular says
-        # nothing about whether the title exists: a cheaper source already
-        # answered, so this source being silent is the *intended* outcome and
-        # the title's own state is decided by that other source's evidence.
-        #
-        # It is reported as `skipped` rather than `unknown` because "no
-        # information" would wrongly demote a resolved title. The classifier
-        # reads offers and definitive answers, never request statuses, so a
-        # title blocked here still reports AVAILABLE from its collector.
+        # Preserve the actual blocked reason where available. POLICY_NOT_NEEDED
+        # stays NOT_APPLICABLE (it says nothing about the title). Other blocked
+        # reasons (quota, disabled, cancelled) keep their identity so reports
+        # and policy decisions can distinguish them.
+        if blocked_reason == "policy_not_needed":
+            return "skipped", AvailabilityResolutionReason.NOT_APPLICABLE
+        if blocked_reason == "quota_exhausted":
+            return "skipped", AvailabilityResolutionReason.QUOTA_EXHAUSTED
         return "skipped", AvailabilityResolutionReason.NOT_APPLICABLE
     if request_status == RefreshRequestStatus.PENDING:
         if quota_exhausted:
@@ -705,13 +789,13 @@ def classify_title(source_rows: list[dict]) -> tuple[str, str]:
     return state, reason
 
 
-def title_source_report(movie_ids, batch=None) -> dict[int, dict]:
+def title_source_report(movie_ids, batch=None, country: str | None = None) -> dict[int, dict]:
     """Per-title, per-source verdicts — the honest answer to "why unknown?".
 
     Returns ``{movie_id: {
         "state": "available" | "unavailable" | "unknown",
         "available_on": [provider_slug, ...],
-        "sources": [{source, label, tier, status, reason, available, checked_at}],
+        "sources": [{source, label, tier, status, reason, blocked_reason, available, checked_at}],
         "reason": <headline reason or "">,
         "resolved_sources": [...], "unresolved_sources": [...],
     }}``
@@ -727,14 +811,16 @@ def title_source_report(movie_ids, batch=None) -> dict[int, dict]:
         return {}
 
     title_slugs = _title_level_slugs()
-    evidence = _terminal_status_evidence(movie_ids, batch=batch)
-    permanent = _permanent_miss_sources(movie_ids)
-    offers_by_source, active_offer_movies = _active_offers_by_source(movie_ids)
-    providers = _offered_providers(movie_ids)
-    offer_counts = _active_offer_count(movie_ids)
-    signals_by_movie = _title_availability_signals(movie_ids)
-    last_checked = _last_checked_per_source(movie_ids)
-    last_attempted = _last_attempted_per_source(movie_ids, batch=batch)
+    # Request evidence is market provenance. A scoped report may use only
+    # exact-country rows; blank historical rows are intentionally unknown.
+    evidence = _latest_request_evidence(movie_ids, batch=batch, country=country)
+    permanent = _permanent_miss_sources(movie_ids, country=country)
+    offers_by_source, active_offer_movies = _active_offers_by_source(movie_ids, country=country)
+    providers = _offered_providers(movie_ids, country=country)
+    offer_counts = _active_offer_count(movie_ids, country=country)
+    signals_by_movie = _title_availability_signals(movie_ids, country=country)
+    last_checked = _last_checked_per_source(movie_ids, country=country)
+    last_attempted = _last_attempted_per_source(movie_ids, batch=batch, country=country)
     blocked = {s: (source_quota(s) or {}) for s in title_slugs}
     exhausted = {s for s, q in blocked.items() if q.get("exhausted")}
 
@@ -756,11 +842,14 @@ def title_source_report(movie_ids, batch=None) -> dict[int, dict]:
 
         src_rows = []
         for slug in title_slugs:
+            info = per_src.get(slug) or {}
             status_out, reason = classify_source(
                 produced_active_offer=slug in offer_sources,
                 permanent_miss=slug in permanent.get(movie_id, set()),
-                request_status=per_src.get(slug),
+                request_status=info.get("status"),
                 quota_exhausted=slug in exhausted,
+                blocked_reason=info.get("blocked_reason"),
+                outcome=info.get("outcome"),
             )
             src_rows.append(
                 {
@@ -771,6 +860,7 @@ def title_source_report(movie_ids, batch=None) -> dict[int, dict]:
                     "kind": "title",
                     "status": status_out,
                     "reason": reason,
+                    "blocked_reason": info.get("blocked_reason", ""),
                     "available": reason == AvailabilityResolutionReason.RESOLVED,
                     # Two separate stamps. `checked_at` needs an *answer*
                     # (Offer.last_seen), `last_attempted_at` only needs an
@@ -795,6 +885,7 @@ def title_source_report(movie_ids, batch=None) -> dict[int, dict]:
                     "kind": "catalogue" if source_tier(slug) == 2 else "aggregated",
                     "status": "completed",
                     "reason": AvailabilityResolutionReason.RESOLVED,
+                    "blocked_reason": (per_src.get(slug) or {}).get("blocked_reason", ""),
                     "available": True,
                     "checked_at": last_checked.get((movie_id, slug)),
                     "last_attempted_at": last_attempted.get((movie_id, slug)),
@@ -826,7 +917,8 @@ def title_source_report(movie_ids, batch=None) -> dict[int, dict]:
 
         available_on = set(providers.get(movie_id, set()))
         available_on.update(
-            s["provider"] for s in title_signals if s["provider"]
+            s["provider"] for s in title_signals
+            if s["provider"] and s["trusted"]
         )
 
         report[movie_id] = {
@@ -857,7 +949,7 @@ def unknown_breakdown(movie_ids) -> dict[str, int]:
     return dict(counts.most_common())
 
 
-def source_progress(movie_ids, batch=None) -> list[dict]:
+def source_progress(movie_ids, batch=None, country: str | None = None) -> list[dict]:
     """Per-source roll-up: how much work each source owes, owes, is blocked on.
 
     The "source-first" report from the plan. Each entry answers three
@@ -882,7 +974,7 @@ def source_progress(movie_ids, batch=None) -> list[dict]:
     if not movie_ids:
         return []
     title_slugs = _title_level_slugs()
-    terminal = _terminal_status_by_source(movie_ids, batch=batch)
+    terminal = _terminal_status_by_source(movie_ids, batch=batch, country=country)
 
     rows: list[dict] = []
     for slug in title_slugs:
@@ -903,10 +995,13 @@ def source_progress(movie_ids, batch=None) -> list[dict]:
             1 for s in by_status.values() if s == RefreshRequestStatus.BLOCKED
         )
         quota = source_quota(slug)
-        produced = Offer.objects.filter(
+        produced_qs = Offer.objects.filter(
             tmdb_id__in=Movie.objects.filter(id__in=movie_ids).values("tmdb_id"),
             source__slug=slug,
-        ).count()
+        )
+        if country:
+            produced_qs = produced_qs.filter(country__code=country.upper())
+        produced = produced_qs.count()
 
         if total == 0:
             status = "not_applicable"
@@ -1044,7 +1139,7 @@ def catalogue_progress() -> list[dict]:
     return rows
 
 
-def build_run_summary(movie_ids, batch=None) -> dict:
+def build_run_summary(movie_ids, batch=None, country: str | None = None) -> dict:
     """The whole availability picture: per-source progress plus title outcomes.
 
     Shape::
@@ -1073,9 +1168,9 @@ def build_run_summary(movie_ids, batch=None) -> dict:
     hides exactly the faults the report exists to surface.
     """
     movie_ids = list(movie_ids)
-    sources = source_progress(movie_ids, batch=batch)
+    sources = source_progress(movie_ids, batch=batch, country=country)
     collectors = catalogue_progress()
-    report = title_source_report(movie_ids, batch=batch)
+    report = title_source_report(movie_ids, batch=batch, country=country)
     states = Counter(entry["state"] for entry in report.values())
     return {
         "sources": sources,
@@ -1094,7 +1189,7 @@ def build_run_summary(movie_ids, batch=None) -> dict:
                 if e["state"] == TitleAvailabilityState.UNKNOWN
             ).most_common()
         },
-        "stale_failures": stale_failure_breakdown(movie_ids),
+        "stale_failures": stale_failure_breakdown(movie_ids, country=country),
         # Internal: consumed by the policy counterfactual so it does not
         # re-derive a per-title classification with its own queries.
         "_states": {mid: e["state"] for mid, e in report.items()},
@@ -1105,7 +1200,7 @@ def build_run_summary(movie_ids, batch=None) -> dict:
     }
 
 
-def stale_failure_breakdown(movie_ids) -> dict[str, int]:
+def stale_failure_breakdown(movie_ids, country: str | None = None) -> dict:
     """Unknown titles carrying an older failure, split by that failure's kind.
 
     ``{"permanent": n, "transient": n}`` — how many unknown titles have a
@@ -1114,7 +1209,7 @@ def stale_failure_breakdown(movie_ids) -> dict[str, int]:
     """
     newest = _terminal_status_evidence(movie_ids)
     unknown_ids = [
-        mid for mid, e in title_source_report(movie_ids).items()
+        mid for mid, e in title_source_report(movie_ids, country=country).items()
         if e["state"] == TitleAvailabilityState.UNKNOWN
     ]
     if not unknown_ids:
@@ -1145,16 +1240,17 @@ def record_run(
     batch=None,
     movie_ids=None,
     source_policy=None,
+    country: str | None = None,
     status: str = "queued",
 ) -> AvailabilityRefresh:
     """Create (or adopt) the run row for a refresh and freeze its scope."""
     refresh, created = AvailabilityRefresh.objects.get_or_create(
         batch=batch,
         run_type=run_type,
-        defaults={"status": status, "started_at": timezone.now()},
+        defaults={"status": status, "started_at": timezone.now(), "country": (country or "").upper()},
     ) if batch is not None else (
         AvailabilityRefresh.objects.create(
-            run_type=run_type, status=status, started_at=timezone.now()
+            run_type=run_type, status=status, started_at=timezone.now(), country=(country or "").upper()
         ),
         True,
     )
@@ -1235,7 +1331,11 @@ def sync_run_progress(refresh: AvailabilityRefresh, movie_ids, batch=None) -> Av
     property is what lets the frontend recover a run after a reload by
     simply asking for it again.
     """
-    summary = build_run_summary(movie_ids, batch=batch if batch is not None else refresh.batch)
+    run_batch = batch if batch is not None else refresh.batch
+    summary = build_run_summary(
+        movie_ids, batch=run_batch,
+        country=refresh.country or None,
+    )
     rows = summary["sources"] + summary["collectors"]
 
     for row in rows:

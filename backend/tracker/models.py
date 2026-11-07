@@ -702,6 +702,7 @@ class RefreshRequest(models.Model):
         Movie, on_delete=models.CASCADE, related_name="refresh_requests"
     )
     source = models.CharField(max_length=50, blank=True, default="", db_index=True)
+    country = models.CharField(max_length=2, blank=True, default="", db_index=True)
     priority = models.IntegerField(
         choices=RefreshPriority.choices, default=RefreshPriority.STALE
     )
@@ -753,9 +754,9 @@ class RefreshRequest(models.Model):
         ordering = ["priority", "requested_at"]
         constraints = [
             models.UniqueConstraint(
-                fields=["movie", "source"],
+                fields=["movie", "source", "country"],
                 condition=models.Q(status="pending"),
-                name="uniq_refreshrequest_pending_movie_source",
+                name="uniq_refreshrequest_pending_movie_source_country",
             ),
             # `blocked` and its reason are one fact stated twice; the database
             # is the right place to keep them consistent because every code
@@ -968,6 +969,9 @@ class AvailabilityRefresh(models.Model):
     # The uuid stamped onto every RefreshRequest this run touched. Nullable
     # because a catalogue-only run owns no title requests.
     batch = models.UUIDField(null=True, blank=True, db_index=True)
+    # A run is a market-specific observation. Blank is retained only for
+    # historical/global runs; it must never answer a requested market.
+    country = models.CharField(max_length=2, blank=True, default="", db_index=True)
     title_filter = models.JSONField(default=list, blank=True)
     # Which sources this run is allowed to consult, in tier order. Frozen at
     # creation so a run's scope is auditable after the fact even if the

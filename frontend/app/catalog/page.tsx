@@ -8,6 +8,7 @@ import { VpnWatchModal } from "@/components/VpnWatchModal";
 import { WhyCantIWatchModal, ExcludedOffer } from "@/components/WhyCantIWatchModal";
 import { Pagination } from "@/components/Pagination";
 import LanguageBadge from "@/components/LanguageBadge";
+import { formatLastSeen } from "@/lib/time";
 import { extractViewerLanguages, useViewerPreferences } from "@/components/ViewerPreferencesProvider";
 import { useCurrentLocation } from "@/components/CurrentLocationProvider";
 import type {
@@ -431,6 +432,14 @@ function CatalogPageClient() {
                           {isOfficial && (
                             <span className="px-2 py-0.5 rounded-md text-xs font-bold bg-black/70 text-white backdrop-blur-sm">
                               {symbol} {label}
+                            </span>
+                          )}
+                          {isOfficial && status === "needs_recheck" && (
+                            <span
+                              data-testid="last-seen"
+                              className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-black/60 text-white"
+                            >
+                              {formatLastSeen(watchRes.last_seen_at)}
                             </span>
                           )}
                         </div>

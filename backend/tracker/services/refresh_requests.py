@@ -79,7 +79,6 @@ from .bulk_refresh import (
     BulkRefreshSummary,
     _is_spent,
     is_stale,
-    permanently_absent_scopes,
     title_level_source_slugs,
 )
 from .preferences import resolve_source_country
@@ -135,7 +134,7 @@ def has_canonical_offers(movie) -> bool:
     return Offer.objects.filter(tmdb_id=movie.tmdb_id).exists()
 
 
-def recently_attempted(movie, source: str = "") -> bool:
+def recently_attempted(movie, source: str = "", country: str = "") -> bool:
     """True when this scope already had a completed attempt within the window.
 
     Guards the enqueue side against churn: a drain that found nothing leaves
@@ -155,6 +154,7 @@ def recently_attempted(movie, source: str = "") -> bool:
     return RefreshRequest.objects.filter(
         movie=movie,
         source__in=scopes,
+        country=(country or "").strip().upper(),
         status__in=[RefreshRequestStatus.DONE, RefreshRequestStatus.FAILED],
         completed_at__gte=timezone.now() - RECENT_ATTEMPT_WINDOW,
     ).exists()
@@ -165,6 +165,7 @@ def request_availability_refresh(
     priority: int = RefreshPriority.STALE,
     *,
     source: str = "",
+    country: str | None = None,
     if_stale: bool = True,
     batch: uuid.UUID | None = None,
 ) -> RefreshRequest | None:
@@ -191,10 +192,15 @@ def request_availability_refresh(
     Never raises: an enqueue failure is logged and swallowed so it cannot
     break the user action that triggered it.
     """
+    # A missing request-specific country inherits the selected user market;
+    # an explicit empty value remains unknown evidence rather than guessing.
+    country = (
+        resolve_source_country() if country is None else str(country).strip().upper()
+    ) or ""
     try:
-        if if_stale and not is_stale(movie, source=source):
+        if if_stale and not is_stale(movie, source=source, country=country or None):
             return None
-        if if_stale and recently_attempted(movie, source):
+        if if_stale and recently_attempted(movie, source, country):
             # Already fetched (or failed) moments ago for this scope — the
             # title may legitimately still be stale because the provider has
             # nothing for it; do not open a new attempt on every read.
@@ -204,35 +210,48 @@ def request_availability_refresh(
         if not has_canonical_offers(movie):
             effective_priority = min(priority, RefreshPriority.NEW)
 
-        # Adopt a pending legacy default-scope row instead of queueing beside
-        # it. ``""`` and ``streaming_availability`` resolve to the same source
-        # (``resolve_request_source``), so creating a second pending row would
-        # make the worker execute the same scope twice — spending the quota
-        # twice for one logical check and double-counting it in the batch.
-        # Re-stamping the legacy row to its explicit slug is what makes the
-        # migration happen naturally on the next explicit refresh, without a
-        # data backfill.
-        legacy_scope = ""
+        # Empty source is a legacy alias for the default source. Let the
+        # partial unique constraint arbitrate concurrent adoption safely.
         if source == DEFAULT_SOURCE_SLUG:
-            pending_scopes = RefreshRequest.objects.filter(
-                movie=movie, status=RefreshRequestStatus.PENDING
-            ).values_list("source", flat=True)
-            if legacy_scope in pending_scopes and DEFAULT_SOURCE_SLUG not in pending_scopes:
-                legacy = RefreshRequest.objects.get(
-                    movie=movie, source=legacy_scope,
-                    status=RefreshRequestStatus.PENDING,
-                )
-                legacy.source = DEFAULT_SOURCE_SLUG
-                legacy.priority = min(legacy.priority, effective_priority)
-                if batch is not None:
-                    legacy.batch = batch
-                legacy.save(update_fields=["source", "priority", "batch"])
-                return legacy
+            legacy_qs = RefreshRequest.objects.filter(
+                movie=movie,
+                source="",
+                country__in=[country, ""],
+                status=RefreshRequestStatus.PENDING,
+            )
+            if legacy_qs.exists():
+                try:
+                    adopted = legacy_qs.update(source=DEFAULT_SOURCE_SLUG, country=country)
+                except IntegrityError:
+                    legacy_qs.delete()
+                    adopted = 0
+                if adopted:
+                    RefreshRequest.objects.filter(
+                        movie=movie,
+                        source=DEFAULT_SOURCE_SLUG,
+                        country=country,
+                        status=RefreshRequestStatus.PENDING,
+                        priority__gt=effective_priority,
+                    ).update(priority=effective_priority)
+                    if batch is not None:
+                        RefreshRequest.objects.filter(
+                            movie=movie,
+                            source=DEFAULT_SOURCE_SLUG,
+                            country=country,
+                            status=RefreshRequestStatus.PENDING,
+                        ).update(batch=batch)
+                    return RefreshRequest.objects.get(
+                        movie=movie,
+                        source=DEFAULT_SOURCE_SLUG,
+                        country=country,
+                        status=RefreshRequestStatus.PENDING,
+                    )
 
         try:
             request, created = RefreshRequest.objects.get_or_create(
                 movie=movie,
                 source=source,
+                country=country,
                 status=RefreshRequestStatus.PENDING,
                 defaults={"priority": effective_priority, "batch": batch},
             )
@@ -240,21 +259,23 @@ def request_availability_refresh(
             # Concurrent event won the partial unique constraint; the row we
             # want already exists — fall through to the upgrade check below.
             request, created = RefreshRequest.objects.get(
-                movie=movie, source=source, status=RefreshRequestStatus.PENDING
+                movie=movie, source=source, country=country, status=RefreshRequestStatus.PENDING
             ), False
 
         if not created:
-            update_fields: list[str] = []
-            if effective_priority < request.priority:
-                request.priority = effective_priority
-                update_fields.append("priority")
-            if batch is not None and request.batch != batch:
-                # Re-stamp: this pending row now belongs to the newest bulk
-                # run (last click wins — its progress loop is the live one).
-                request.batch = batch
-                update_fields.append("batch")
-            if update_fields:
-                request.save(update_fields=update_fields)
+            # A conditional database update cannot overwrite a concurrent
+            # priority upgrade with the stale value this caller read.
+            RefreshRequest.objects.filter(
+                pk=request.pk,
+                status=RefreshRequestStatus.PENDING,
+                priority__gt=effective_priority,
+            ).update(priority=effective_priority)
+            if batch is not None:
+                # Last bulk click owns progress without touching priority.
+                RefreshRequest.objects.filter(
+                    pk=request.pk, status=RefreshRequestStatus.PENDING
+                ).update(batch=batch)
+            request.refresh_from_db()
         return request
     except Exception:  # noqa: BLE001 - enqueue must never break the caller
         logger.exception(
@@ -321,6 +342,7 @@ def request_title_refresh(
     if_stale: bool = True,
     sources: Optional[list[str]] = None,
     batch: uuid.UUID | None = None,
+    country: str | None = None,
 ) -> dict:
     """Fan a **single** title out to every eligible title-level source.
 
@@ -347,6 +369,9 @@ def request_title_refresh(
     Returns ``{"sources": <allowed slugs>, "queued": <rows touched>,
     "skipped": {source: reason}}``.
     """
+    country = (
+        resolve_source_country() if country is None else str(country).strip().upper()
+    ) or ""
     base_sources = (
         list(sources) if sources is not None else title_level_source_slugs()
     )
@@ -354,9 +379,10 @@ def request_title_refresh(
     from .availability_report import title_source_report
     from .source_policy import decide_sources_for_title
 
-    report_entry = title_source_report([movie.pk]).get(movie.pk, {})
+    report_entry = title_source_report([movie.pk], country=country).get(movie.pk, {})
     decision = decide_sources_for_title(
-        report_entry, applicable_slugs=base_sources
+        report_entry, applicable_slugs=base_sources,
+        ladder_switch=(False if priority == RefreshPriority.EXPLICIT else None),
     )
     allowed = list(decision["allowed_sources"])
 
@@ -368,6 +394,7 @@ def request_title_refresh(
             if_stale=if_stale,
             source=source,
             batch=batch,
+            country=country,
         )
         if row is not None:
             queued += 1
@@ -384,6 +411,7 @@ def request_watchlist_refresh(
     priority: int = RefreshPriority.EXPLICIT,
     if_stale: bool = False,
     sources: Optional[list[str]] = None,
+    country: str | None = None,
 ) -> dict:
     """Queue an availability refresh for every title on a user's watchlist.
 
@@ -441,6 +469,9 @@ def request_watchlist_refresh(
     off restores the previous scheduling byte for byte.
     """
     batch = uuid.uuid4()
+    country = (
+        resolve_source_country() if country is None else str(country).strip().upper()
+    ) or ""
     base_sources = list(sources) if sources is not None else title_level_source_slugs()
     movie_ids = list(
         WatchlistItem.objects.filter(user_id=user_id)
@@ -453,7 +484,7 @@ def request_watchlist_refresh(
     from .availability_report import title_source_report
     from .source_policy import decide_sources_for_title
 
-    report = title_source_report(movie_ids) if movie_ids else {}
+    report = title_source_report(movie_ids, country=country) if movie_ids else {}
 
     # `applicable` is the union across titles (which sources this run touches
     # at all); `skipped_by_source` records per-source skip counts so the
@@ -464,7 +495,8 @@ def request_watchlist_refresh(
 
     for _movie_id, movie in Movie.objects.in_bulk(movie_ids).items():
         decision = decide_sources_for_title(
-            report.get(movie.pk, {}), applicable_slugs=base_sources
+            report.get(movie.pk, {}), applicable_slugs=base_sources,
+            ladder_switch=(False if priority == RefreshPriority.EXPLICIT else None),
         )
         allowed = list(decision["allowed_sources"])
         for source, reason in decision["skipped_sources"].items():
@@ -479,6 +511,7 @@ def request_watchlist_refresh(
                 if_stale=if_stale,
                 source=source,
                 batch=batch,
+                country=country,
             )
 
     # `queued` counts what this batch actually owns. Counting the union of
@@ -488,6 +521,7 @@ def request_watchlist_refresh(
     queued = RefreshRequest.objects.filter(
         movie_id__in=movie_ids,
         source__in=applicable,
+        country=country,
         status=RefreshRequestStatus.PENDING,
         batch=batch,
     ).count()
@@ -633,27 +667,22 @@ def _finish(
 
 
 def _successful_outcome(request: RefreshRequest, source: str) -> str:
-    """Return the durable result of a successful title-level fetch.
-
-    A refresh can complete without creating an offer.  That is a negative
-    observation, not an error, and must not be reconstructed later from a
-    missing row.  We query only this source's active canonical observations so
-    an offer from another source cannot turn this source's negative into a
-    false positive.
-    """
+    qs = Offer.objects.filter(
+        tmdb_id=request.movie.tmdb_id,
+        source__slug=source,
+        currently_available=True,
+    )
+    if request.country:
+        qs = qs.filter(country__code=request.country)
     return (
         RefreshRequestOutcome.OFFERS_FOUND
-        if Offer.objects.filter(
-            tmdb_id=request.movie.tmdb_id,
-            source__slug=source,
-            currently_available=True,
-        ).exists()
+        if qs.exists()
         else RefreshRequestOutcome.NO_OFFER
     )
 
 
 def _metered_source_is_unnecessary(
-    movie, source: str, priority, explicitly_named_source: bool = True
+    movie, source: str, priority, explicitly_named_source: bool = True, country: str | None = None
 ) -> bool:
     """Whether this metered request should never have been spent.
 
@@ -712,13 +741,51 @@ def _metered_source_is_unnecessary(
 
     from .availability_report import title_source_report
 
-    entry = title_source_report([movie.pk]).get(movie.pk)
+    entry = title_source_report([movie.pk], country=country).get(movie.pk)
     if not entry:
         # No classification available: never block a request on missing data.
         return False
     return source_policy.decide_sources_for_title(entry).get(
         "skipped_sources", {}
     ).get(source) == source_policy.PolicySkipReason.NOT_NEEDED.value
+
+
+def _permanent_negative_scopes(requests) -> set[tuple[int, str, str]]:
+    """Read reusable negatives once per market for one bounded candidate page.
+
+    This snapshot is local to the page, never shared across ticks. Supersession
+    still uses the report's country/source-aware history reader. Explicit and
+    unscoped requests cannot reuse negative evidence and need no history read.
+    """
+    from .availability_report import _permanent_miss_sources
+
+    movie_ids_by_country: dict[str, set[int]] = {}
+    for request in requests:
+        if request.country and request.priority != RefreshPriority.EXPLICIT:
+            movie_ids_by_country.setdefault(request.country.upper(), set()).add(request.movie_id)
+    return {
+        (movie_id, source, country)
+        for country, movie_ids in movie_ids_by_country.items()
+        for movie_id, sources in _permanent_miss_sources(list(movie_ids), country=country).items()
+        for source in sources
+    }
+
+
+def _has_reusable_permanent_negative(
+    request: RefreshRequest,
+    *,
+    permanent_negative_scopes: set[tuple[int, str, str]] | None = None,
+) -> bool:
+    """Use a 404 only in its observed market; unknown is never global."""
+    from .availability_report import _permanent_miss_sources
+
+    source = resolve_request_source(request)
+    if not request.country:
+        return False
+    if permanent_negative_scopes is not None:
+        return (request.movie_id, source, request.country.upper()) in permanent_negative_scopes
+    misses = _permanent_miss_sources([request.movie_id], country=request.country)
+    return source in misses.get(request.movie_id, set())
 
 
 def _drain_one(
@@ -730,6 +797,7 @@ def _drain_one(
     rate_limit_hit: bool,
     limiter_overrides: dict[str, RateLimiter] | None = None,
     quota_circuit: SourceQuotaCircuit | None = None,
+    permanent_negative_scopes: set[tuple[int, str, str]] | None = None,
 ) -> bool:
     """Process one pending request under the run's guards.
 
@@ -798,7 +866,7 @@ def _drain_one(
     # title-level classifier reads evidence, not request statuses, so it still
     # reports such a title as resolved.
     if _metered_source_is_unnecessary(
-        movie, source, request.priority, explicitly_named_source=bool(request.source)
+        movie, source, request.priority, explicitly_named_source=bool(request.source), country=str(request.country) or None
     ):
         request.settle(
             RefreshRequestStatus.BLOCKED,
@@ -815,7 +883,9 @@ def _drain_one(
     # unless the user explicitly asked for a new check right now.
     if (
         request.priority != RefreshPriority.EXPLICIT
-        and not is_stale(movie, source=request.source)
+        and not is_stale(
+            movie, source=request.source, country=request.country or None
+        )
     ):
         _finish(request, RefreshRequestStatus.DONE)
         summary.skipped_cached += 1
@@ -829,7 +899,9 @@ def _drain_one(
     # whether the catalogue has since picked the title up.
     if (
         request.priority != RefreshPriority.EXPLICIT
-        and resolve_request_source(request) in permanently_absent_scopes(movie.tmdb_id)
+        and _has_reusable_permanent_negative(
+            request, permanent_negative_scopes=permanent_negative_scopes
+        )
     ):
         request.attempts += 1
         # The source already supplied a definitive negative answer.  This is
@@ -933,11 +1005,14 @@ def _drain_one(
 
     try:
         with source_budget(scope_limiter, source=source):
+            # Charge attempts only after local source capacity is reserved.
+            # source_budget already owns the quota ledger; do not reserve twice.
+            summary.remaining_budget -= 1
             # The user's selected market travels with the request. Sources that
             # answer per country (JustWatch) cannot be called without it, and
             # ones that answer globally (Streaming Availability) ignore it.
             _service_for_scope(request.source, service).refresh_content(
-                movie, country=resolve_source_country()
+                movie, country=request.country or resolve_source_country()
             )
     except RateLimitExceeded:
         summary.note_rate_limited_source(source)
@@ -1037,7 +1112,6 @@ def _drain_one(
         outcome=_successful_outcome(request, source),
     )
     summary.refreshed += 1
-    summary.remaining_budget -= 1
     summary.requests_drained += 1
     return rate_limit_hit
 
@@ -1183,6 +1257,7 @@ def drain_refresh_requests(
         if not pending:
             break
         scanned += len(pending)
+        permanent_negatives = _permanent_negative_scopes(pending)
         # Resume strictly after the last row of this page on the next call.
         cursor = (pending[-1].priority, pending[-1].requested_at, pending[-1].pk)
 
@@ -1215,7 +1290,19 @@ def drain_refresh_requests(
                 rate_limit_hit=rate_limit_hit,
                 limiter_overrides=limiters,
                 quota_circuit=quota_circuit,
+                permanent_negative_scopes=permanent_negatives,
             )
+            # A named scope and a legacy empty scope can coexist for the same
+            # source. An earlier explicit refresh in this page may therefore
+            # supersede the cached miss before its background alias runs.
+            scope = (request.movie_id, source, request.country.upper())
+            if request.status == RefreshRequestStatus.DONE:
+                if request.outcome == RefreshRequestOutcome.TITLE_NOT_FOUND:
+                    permanent_negatives.add(scope)
+                elif request.outcome in (
+                    RefreshRequestOutcome.OFFERS_FOUND, RefreshRequestOutcome.NO_OFFER
+                ):
+                    permanent_negatives.discard(scope)
             # A source that just refused stops offering candidates on the next
             # page; the ones already in hand are drained by name below.
             if source in summary.rate_limited_sources:
@@ -1382,6 +1469,8 @@ def process_refresh_queue(
         summary.skipped_cached
         + summary.skipped_budget_exhausted
         + summary.skipped_rate_limited
+        + summary.skipped_policy_gated
+        + summary.skipped_upstream_missing
     )
     run.rate_limited = summary.rate_limited
     run.finished_at = timezone.now()

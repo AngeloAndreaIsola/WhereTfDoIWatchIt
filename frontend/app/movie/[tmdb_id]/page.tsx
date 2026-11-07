@@ -9,6 +9,7 @@ import { useCurrentLocation } from "@/components/CurrentLocationProvider";
 import MovieEditModal from "@/components/MovieEditModal";
 import RefreshAvailabilityButton from "@/components/RefreshAvailabilityButton";
 import AvailabilityState from "@/components/AvailabilityState";
+import LastKnownOffers from "@/components/LastKnownOffers";
 import type { PrimeOffer, PrimeMovieResponse } from "@/lib/api";
 import { fetchPrimeMovieOffers, addToWatchlist, markMovieWatched, unmarkMovieWatched, removeWatchlistItem, requestAvailabilityRefresh } from "@/lib/api";
 import type { LinkTmdbResponse } from "@/lib/api";
@@ -579,10 +580,12 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
                 // The empty-offers state is driven by the backend verdict, not
                 // assumed: an unchecked title must not read as "unavailable".
                 <>
-                  <AvailabilityState
-                    availability={data.availability}
-                    refreshing={false}
-                  />
+                  {(data.last_known_offers ?? []).length === 0 && (
+                    <AvailabilityState
+                      availability={data.availability}
+                      refreshing={false}
+                    />
+                  )}
                   {data.refresh_pending && (
                     <p className="mt-2 text-center text-xs text-gray-500 dark:text-gray-500">
                       An availability refresh is still queued.
@@ -650,6 +653,13 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
                 );
               })()
             )}
+            <LastKnownOffers
+              offers={data.last_known_offers}
+              tmdbId={tmdbId}
+              preferredAudio={preferences.audio_languages}
+              preferredSubtitles={preferences.subtitle_languages}
+              currentCountry={currentCountry}
+            />
           </section>
 
           {/* Rent / buy: canonical availability that needs an extra payment,

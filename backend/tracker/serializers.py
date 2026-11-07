@@ -432,6 +432,10 @@ class RankedOfferSerializer(serializers.Serializer):
     #: read path carries.
     price = serializers.DictField(required=False, allow_null=True)
     prices = serializers.ListField(child=serializers.DictField(), required=False)
+    #: ``verified`` (recently confirmed), ``stale`` (last seen, needs recheck)
+    #: or ``unknown`` (uncorroborated). ``offers`` only ever holds verified rows.
+    availability_evidence = serializers.CharField(required=False, default="verified")
+    last_seen_at = serializers.CharField(required=False, allow_null=True, default=None)
 
 
 class CountrySummarySerializer(serializers.Serializer):
@@ -448,6 +452,7 @@ class WatchlistReportSummarySerializer(serializers.Serializer):
     total_movies = serializers.IntegerField()
     available_movies = serializers.IntegerField()
     unavailable_movies = serializers.IntegerField()
+    needs_recheck_movies = serializers.IntegerField(required=False, default=0)
     countries = CountrySummarySerializer(many=True)
     services = ServiceSummarySerializer(many=True)
 

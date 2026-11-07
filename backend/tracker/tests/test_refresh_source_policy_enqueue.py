@@ -45,6 +45,7 @@ from tracker.models import (
     Provider,
     RefreshRequest,
     RefreshRequestStatus,
+    RefreshPriority,
     WatchlistItem,
 )
 from tracker.services import availability_report as ar
@@ -202,19 +203,20 @@ class EnqueueGatingTests(TestCase):
         add_to_watchlist(self.movie)
 
     def _sa_rows(self) -> int:
-        return RefreshRequest.objects.filter(movie=self.movie, source=SA).count()
+        return RefreshRequest.objects.filter(movie=self.movie, source=SA, status=RefreshRequestStatus.PENDING).count()
 
     def test_no_metered_row_when_the_title_is_already_resolved(self):
         """THE test. A resolved title must not create a metered request."""
         offer_for(self.movie, WM)
         with self._gate_on():
-            result = rr.request_watchlist_refresh(user_id=1)
+            result = rr.request_watchlist_refresh(user_id=1, priority=RefreshPriority.STALE)
         self.assertEqual(self._sa_rows(), 0)
         self.assertGreater(result["queued"], 0, "the free sources still run")
 
     def test_a_metered_row_is_created_when_all_free_sources_say_no(self):
         for slug in rr.title_level_source_slugs():
-            say_definitely_negative(self.movie, slug)
+            if slug != SA:
+                say_definitely_negative(self.movie, slug)
         with self._gate_on():
             rr.request_watchlist_refresh(user_id=1)
         self.assertEqual(self._sa_rows(), 1)
@@ -235,7 +237,7 @@ class EnqueueGatingTests(TestCase):
     def test_a_resolved_title_creates_rows_only_for_free_sources(self):
         offer_for(self.movie, WM)
         with self._gate_on():
-            result = rr.request_watchlist_refresh(user_id=1)
+            result = rr.request_watchlist_refresh(user_id=1, priority=RefreshPriority.STALE)
         created = set(
             RefreshRequest.objects.filter(movie=self.movie).values_list("source", flat=True)
         )

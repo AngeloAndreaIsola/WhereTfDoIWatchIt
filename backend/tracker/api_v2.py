@@ -328,7 +328,7 @@ def unofficial_scrape(request):
     }, status=status.HTTP_201_CREATED)
 
 
-def _title_availability(movie_id):
+def _title_availability(movie_id, country=None):
     """The classifier's verdict for one title, as plain JSON.
 
     Both detail pages render availability from this endpoint, and an empty
@@ -345,7 +345,9 @@ def _title_availability(movie_id):
     and metrics endpoints use, so this endpoint cannot disagree with them.
     Absent data is UNKNOWN, never UNAVAILABLE.
     """
-    verdict = title_source_report([movie_id]).get(movie_id, {})
+    if country is None:
+        country = ""
+    verdict = title_source_report([movie_id], country=str(country).upper() if country else None).get(movie_id, {})
     state = verdict.get("state") or TitleAvailabilityState.UNKNOWN
     return {
         "state": state,
@@ -366,6 +368,7 @@ def _title_availability(movie_id):
                 "label": row.get("label"),
                 "status": row.get("status"),
                 "reason": _reason_value(row.get("reason")),
+                "blocked_reason": row.get("blocked_reason", ""),
                 "available": row.get("available"),
                 "checked_at": row.get("checked_at"),
             }
@@ -416,6 +419,13 @@ def unofficial_movie_offers(request, tmdb_id: int):
             except (TypeError, ValueError):
                 season = None
 
+    country = (
+        request.GET.get("current_country")
+        or request.GET.get("country")
+        or resolve_preferences(user_id=1).get("current_country")
+        or ""
+    )
+
     movie_payload = {
         "tmdb_id": movie.tmdb_id,
         "title": movie.title,
@@ -428,7 +438,7 @@ def unofficial_movie_offers(request, tmdb_id: int):
             "movie": movie_payload,
             "offers": [],
             "selected_season": season,
-            "availability": _title_availability(movie.id),
+            "availability": _title_availability(movie.id, country=country),
         })
 
     pref_dict = resolve_preferences(user_id=1)
@@ -468,7 +478,7 @@ def unofficial_movie_offers(request, tmdb_id: int):
         "movie": movie_payload,
         "offers": offers_out,
         "selected_season": None,
-        "availability": _title_availability(movie.id),
+        "availability": _title_availability(movie.id, country=country),
     })
 
 

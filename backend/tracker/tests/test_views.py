@@ -321,6 +321,7 @@ class WatchlistReportEndpointTests(TestCase):
             "total_movies": 0,
             "available_movies": 0,
             "unavailable_movies": 0,
+            "needs_recheck_movies": 0,
             "countries": [],
             "services": [],
         })

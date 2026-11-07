@@ -6,12 +6,18 @@ from typing import Optional
 
 from django.db.models import Q, QuerySet
 from tracker.models import Movie, Preference
-from tracker.services.availability_reads import get_local_offers, get_local_offers_bulk
+from tracker.services.availability_reads import (
+    OfferEvidence,
+    get_offer_evidence,
+    get_offer_evidence_bulk,
+)
 from tracker.services.access import build_explicit_access, build_user_access
 from tracker.models import Provider
 from tracker.services.watchability import (
     WatchabilityStatus,
+    describe_last_known,
     evaluate_watchability,
+    qualify_watchability,
 )
 
 logger = logging.getLogger(__name__)
@@ -176,16 +182,16 @@ def apply_composable_filters(
     # it once for the title set, and share entitlement/provider context across
     # every classification instead of issuing the same two queries per title.
     try:
-        offers_by_movie = get_local_offers_bulk(movie_list)
+        evidence_by_movie = get_offer_evidence_bulk(movie_list)
     except Exception:  # noqa: BLE001 - a report must degrade to per-title reads
         logger.exception("Bulk canonical offer read failed; falling back to isolated reads")
-        offers_by_movie = {}
+        evidence_by_movie = {}
         for movie in movie_list:
             try:
-                offers_by_movie[movie.id] = get_local_offers(movie)
+                evidence_by_movie[movie.id] = get_offer_evidence(movie)
             except Exception:  # noqa: BLE001 - one corrupt title must not hide peers
                 logger.exception("Offer read failed for movie %s", movie.tmdb_id)
-                offers_by_movie[movie.id] = []
+                evidence_by_movie[movie.id] = OfferEvidence([], [])
     access = (
         build_explicit_access(user_subscriptions)
         if user_subscriptions is not None
@@ -195,7 +201,7 @@ def apply_composable_filters(
 
     evaluated_items = []
     for m in movie_list:
-        offers = offers_by_movie.get(m.id, [])
+        offers, last_known_offers = evidence_by_movie.get(m.id) or OfferEvidence([], [])
         watch_res = evaluate_watchability(
             m,
             offers,
@@ -206,21 +212,39 @@ def apply_composable_filters(
             access=access,
             provider_map=provider_map,
         )
+        # Stale/unverified positives qualify a "nothing current" verdict as
+        # 🕓 needs recheck; they never make a title watchable.
+        qualify_watchability(
+            watch_res,
+            describe_last_known(
+                m,
+                last_known_offers,
+                preference,
+                current_country=current_country,
+                user_subscriptions=user_subscriptions,
+                access=access,
+                provider_map=provider_map,
+            ),
+        )
+        # Provider/country/quality filters describe *where* a title has been
+        # seen, so last-known offers keep it discoverable; whether it is
+        # watchable now is decided by the status filters below.
+        evidence_offers = list(offers) + list(last_known_offers)
 
         # Apply Provider Filter
         if provider_slug_set:
             all_services = {
                 (getattr(o, "service", None) or (o.get("service") if isinstance(o, dict) else "") or "").lower()
-                for o in offers
+                for o in evidence_offers
             }
-            if not any(ps in s or s in ps for ps in provider_slug_set for s in all_services):
+            if not any(ps == s for ps in provider_slug_set for s in all_services):
                 continue
 
         # Apply Country Filter
         if country_filter:
             all_countries = {
                 (getattr(o, "country", None) or (o.get("country") if isinstance(o, dict) else "") or "").upper()
-                for o in offers
+                for o in evidence_offers
             }
             if country_filter not in all_countries:
                 continue
@@ -245,6 +269,8 @@ def apply_composable_filters(
                 continue
             elif status_filter == "not_watchable" and watch_res.status != WatchabilityStatus.NOT_WATCHABLE:
                 continue
+            elif status_filter == "needs_recheck" and watch_res.status != WatchabilityStatus.NEEDS_RECHECK:
+                continue
 
         # Apply Access-Type Filter (subscription/addon/free/free_with_ads/rent/buy)
         if access_filter_set:
@@ -258,7 +284,7 @@ def apply_composable_filters(
         if quality_filter_set:
             movie_qualities = {
                 (getattr(o, "quality", None) or (o.get("quality") if isinstance(o, dict) else "") or "").lower()
-                for o in offers
+                for o in evidence_offers
             }
             if not any(q in quality_filter_set for q in movie_qualities):
                 continue
@@ -269,6 +295,7 @@ def apply_composable_filters(
             # used for the verdict, so a caller never needs to reconcile the
             # same title a second time just to build summary fields.
             "offers": offers,
+            "last_known_offers": last_known_offers,
             "watchability": watch_res,
         })
 

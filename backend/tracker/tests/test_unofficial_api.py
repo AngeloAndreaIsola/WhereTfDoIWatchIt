@@ -280,6 +280,7 @@ class UnofficialOffersContractTests(TestCase):
                 "is_language_match", "ranking",
                 "service_display", "source_indicator",
                 "price", "prices",
+                "availability_evidence", "last_seen_at",
             },
         )
         self.assertIsNone(offer["price"])

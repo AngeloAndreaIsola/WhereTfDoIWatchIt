@@ -61,6 +61,7 @@ from tracker.services.filtering import apply_composable_filters
 from tracker.services.unified_catalogue import resolve_catalogue_scope, unofficial_catalogue_items
 from tracker.services.watchability import (
     QUALIFYING_OFFER_TYPES,
+    WatchabilityStatus,
     evaluate_watchability,
 )
 from tracker.services.access import SubscriptionAccessMode
@@ -94,7 +95,7 @@ from .services.bulk_refresh import (
     stale_catalogue_sources,
     title_level_source_slugs,
 )
-from .services.availability_reads import get_local_offers
+from .services.availability_reads import get_local_offers, get_offer_evidence
 from .services.availability_metrics import (
     WINDOW_DAYS,
     availability_metrics as collect_availability_metrics,
@@ -432,7 +433,7 @@ def movie_availability(request, tmdb_id: int):
 
     preference = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
 
-    offers = get_local_offers(movie)
+    offers, last_known = get_offer_evidence(movie)
     ranked = rank_offers(offers, preference)
 
     user_data = UserMovieData.objects.filter(user_id=1, movie=movie).first()
@@ -449,6 +450,10 @@ def movie_availability(request, tmdb_id: int):
                 "offers": len(offers),
             },
             "offers": RankedOfferSerializer([offer.to_dict() for offer in ranked], many=True).data,
+            # Stale/unverified positives: history ("last seen"), never current.
+            "last_known_offers": RankedOfferSerializer(
+                [offer.to_dict() for offer in rank_offers(last_known, preference)], many=True
+            ).data,
         }
     )
 
@@ -478,6 +483,7 @@ def refresh_availability(request, tmdb_id: int):
         movie,
         priority=RefreshPriority.EXPLICIT,
         if_stale=False,
+        country=_active_country(request),
     )
 
     pending = RefreshRequest.objects.filter(
@@ -1185,7 +1191,7 @@ def scraper_confirm_match(request):
     ingest_scraped_mapping(mapping)
     # Manual match = explicit user intent: if the canonical path has no
     # availability for this TMDb id yet, request an asynchronous refresh.
-    request_availability_refresh(movie, priority=RefreshPriority.EXPLICIT)
+    request_availability_refresh(movie, priority=RefreshPriority.EXPLICIT, country=_active_country(request))
 
     return Response(ScrapedContentMappingSerializer(mapping).data)
 
@@ -1345,7 +1351,7 @@ def watchlist_resolve(request):
         )
         # Event-driven refresh: resolved selections become eligible for
         # canonical availability refresh (idempotent, local-only).
-        request_availability_refresh(movie, priority=RefreshPriority.WATCHLIST)
+        request_availability_refresh(movie, priority=RefreshPriority.WATCHLIST, country=_active_country(request))
         watchlist_items.append(item)
 
     return Response(
@@ -1389,6 +1395,7 @@ def watchlist_report(request):
     country_movie_sets: dict[str, set[int]] = {}
     service_movie_sets: dict[str, set[int]] = {}
     available_movies_count = 0
+    needs_recheck_movies_count = 0
     user_data_by_movie = {
         row.movie_id: row
         for row in UserMovieData.objects.filter(
@@ -1418,6 +1425,8 @@ def watchlist_report(request):
 
         if countries or watch_res.status in ("watchable_here", "watchable_vpn"):
             available_movies_count += 1
+        elif watch_res.status == WatchabilityStatus.NEEDS_RECHECK:
+            needs_recheck_movies_count += 1
 
         for c in countries:
             country_movie_sets.setdefault(c, set()).add(movie.id)
@@ -1439,7 +1448,9 @@ def watchlist_report(request):
         )
 
     total_movies = len(report)
-    unavailable_movies_count = total_movies - available_movies_count
+    unavailable_movies_count = (
+        total_movies - available_movies_count - needs_recheck_movies_count
+    )
 
     country_list = [
         {"country": c, "count": len(m_set)}
@@ -1457,6 +1468,8 @@ def watchlist_report(request):
         "total_movies": total_movies,
         "available_movies": available_movies_count,
         "unavailable_movies": unavailable_movies_count,
+        # Only stale/unverified evidence: neither available nor unavailable.
+        "needs_recheck_movies": needs_recheck_movies_count,
         "countries": country_list,
         "services": service_list,
     }
@@ -1647,7 +1660,7 @@ def watchlist_refresh_explicit(request):
     toward the status endpoint's progress, while earlier refreshes never do.
     """
     started_at = timezone.now()
-    result = request_watchlist_refresh(user_id=1)
+    result = request_watchlist_refresh(user_id=1, country=_active_country(request))
 
     if result["total_watchlist"] and not result["queued"]:
         # request_watchlist_refresh swallows enqueue failures (same contract
@@ -1668,6 +1681,7 @@ def watchlist_refresh_explicit(request):
         batch=result.get("batch"),
         movie_ids=movie_ids,
         source_policy=title_level_source_slugs(),
+        country=_active_country(request),
     )
 
     stale_catalogue = stale_catalogue_sources()
@@ -1961,7 +1975,13 @@ def availability_report(request):
     movie_ids = _watchlist_movie_ids()
     batch_raw = request.GET.get("batch")
     batch = batch_raw or None
-    summary = build_run_summary(movie_ids, batch=batch)
+    country = (
+        request.GET.get("current_country")
+        or request.GET.get("country")
+        or resolve_preferences(user_id=1).get("current_country")
+        or None
+    )
+    summary = build_run_summary(movie_ids, batch=batch, country=country)
     counterfactual = source_policy.counterfactual(
         summary.pop("_states"), summary.pop("_resolved_sources")
     )
@@ -2038,7 +2058,13 @@ def availability_title_report(request, tmdb_id: int):
         return Response(
             {"error": "movie not found"}, status=status.HTTP_404_NOT_FOUND
         )
-    report = title_source_report([movie.pk]).get(movie.pk, {})
+    access_country = (
+        request.query_params.get("current_country")
+        or request.query_params.get("country")
+        or resolve_preferences(user_id=1).get("current_country")
+        or ""
+    )
+    report = title_source_report([movie.pk], country=str(access_country).upper() if access_country else None).get(movie.pk, {})
     from .services.availability_report import catalogue_progress
 
     return Response(
@@ -2108,7 +2134,7 @@ def availability_refresh_start(request):
     from the id rather than losing the run.
     """
     started_at = timezone.now()
-    result = request_watchlist_refresh(user_id=1)
+    result = request_watchlist_refresh(user_id=1, country=_active_country(request))
 
     if result["total_watchlist"] and not result["queued"]:
         return Response(
@@ -2484,7 +2510,11 @@ def _prime_detail_response(request, item: Movie, key: str) -> Response:
     # (capability-driven — catalogue-only collectors are structurally excluded
     # and no catalogue crawl can happen). Reusing ``request_title_refresh``
     # keeps the dedup, cooldown and metered-source policy identical here.
-    request_title_refresh(item, priority=RefreshPriority.RECENTLY_VIEWED)
+    request_title_refresh(
+        item,
+        priority=RefreshPriority.RECENTLY_VIEWED,
+        country=_current_country(request),
+    )
 
     user_data = UserMovieData.objects.filter(user_id=1, movie=item).first()
     is_in_watchlist = WatchlistItem.objects.filter(user_id=1, movie=item).exists()
@@ -2501,12 +2531,19 @@ def _prime_detail_response(request, item: Movie, key: str) -> Response:
     from tracker.services.access import resolve_title as access_resolve_title
     from tracker.services.preferences import build_preference
 
+    from tracker.services.watchability import describe_last_known, qualify_watchability_dict
+
     access_pref = build_preference(1)
+    access_country = _current_country(request) or access_pref.current_country
+    current_offers, last_known_offers = get_offer_evidence(item, season=season)
     access_verdict = access_resolve_title(
         item,
-        get_local_offers(item, season=season),
+        current_offers,
         access_pref,
-        current_country=_current_country(request) or access_pref.current_country,
+        current_country=access_country,
+    )
+    last_known = describe_last_known(
+        item, last_known_offers, access_pref, current_country=access_country
     )
 
     payload = {
@@ -2520,7 +2557,12 @@ def _prime_detail_response(request, item: Movie, key: str) -> Response:
         # detail page and the watchlist can therefore never disagree about
         # whether a title is watchable, reachable via VPN, purchase-only or
         # genuinely unavailable.
-        "watchability": access_verdict.to_watchability_dict(),
+        "watchability": qualify_watchability_dict(
+            access_verdict.to_watchability_dict(), last_known
+        ),
+        # Stale ("last seen") or uncorroborated positive offers, classified by
+        # the same resolver. History only: never part of ``offers``/counts.
+        "last_known_offers": last_known.offers if last_known else [],
         # Rent/buy offers are surfaced separately (never in ``offers``, which
         # stays subscription/free by design) so "available only for an
         # additional payment" is distinguishable from "included".
@@ -2531,7 +2573,7 @@ def _prime_detail_response(request, item: Movie, key: str) -> Response:
         # unavailable" apart from "the evidence never resolved" without
         # inventing a second classifier. Absence of this field is read by the
         # frontend as unknown, never as unavailable.
-        "availability": title_source_report([item.pk]).get(item.pk),
+        "availability": title_source_report([item.pk], country=str(access_country) if access_country else None).get(item.pk),
         # True while this title still waits in the refresh queue — the
         # frontend polls on it ("Checking availability…") until the worker
         # drains the request and canonical offers land.
@@ -2727,7 +2769,11 @@ def movie_detail(request, pk: int):
     # catalogue-only collectors are structurally excluded and no catalogue
     # crawl is triggered). One default-scope check cannot answer a market only
     # JustWatch covers, which is why an opened title used to stay unknown.
-    request_title_refresh(movie, priority=RefreshPriority.RECENTLY_VIEWED)
+    request_title_refresh(
+        movie,
+        priority=RefreshPriority.RECENTLY_VIEWED,
+        country=_current_country(request),
+    )
 
     user_data = UserMovieData.objects.filter(user_id=1, movie=movie).first()
     watch_events = MovieWatchEvent.objects.filter(user_id=1, movie=movie).order_by("-watched_date", "-created_at")
@@ -2786,7 +2832,7 @@ def link_tmdb(request, pk: int):
             Availability.objects.filter(movie=movie).delete()
             # The canonical offers now key on a TMDb id that has likely never
             # been fetched — request a refresh (local insert, async drain).
-            request_availability_refresh(movie, priority=RefreshPriority.EXPLICIT)
+            request_availability_refresh(movie, priority=RefreshPriority.EXPLICIT, country=_active_country(request))
 
     return Response({
         "message": f"Linked to TMDB {details.tmdb_id}",
@@ -2870,7 +2916,9 @@ def add_to_watchlist(request):
             # transaction — the response never waits for a provider; the
             # budgeted refresh run drains it later.
             request_availability_refresh(
-                watchlist_item.movie, priority=RefreshPriority.WATCHLIST
+                watchlist_item.movie,
+                priority=RefreshPriority.WATCHLIST,
+                country=_active_country(request),
             )
 
         # Create UserMovieData entry if not exists
@@ -2975,7 +3023,11 @@ def mark_movie_watched(request, tmdb_id: int):
         # accurate. Freshness-guarded (a title checked within the stale
         # window enqueues nothing) and never-fetched titles still bump to
         # NEW — a local insert only, the response never waits for a fetch.
-        request_availability_refresh(movie, priority=RefreshPriority.WATCHED)
+        request_availability_refresh(
+            movie,
+            priority=RefreshPriority.WATCHED,
+            country=_active_country(request),
+        )
 
         return Response({
             "message": "Movie marked as watched",
