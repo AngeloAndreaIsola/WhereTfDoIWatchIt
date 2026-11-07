@@ -8,7 +8,8 @@ from typing import Any
 
 from django.conf import settings
 from django.db import connection, transaction
-from django.db.models import Count, Max, Q, Subquery
+from django.db.models import Count, Exists, F, Max, OuterRef, Q, Subquery
+from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.views.decorators.http import require_GET
@@ -2936,6 +2937,95 @@ def add_to_watchlist(request):
     except Exception as exc:
         logger.exception("Failed to add movie to watchlist for tmdb_id=%s", tmdb_id)
         return Response({"error": f"Failed to add to watchlist: {exc}"}, status=502)
+
+@api_view(["GET"])
+def watched_list(request):
+    """GET /api/watched/ — Paginated list of titles the user has watched."""
+    user_id = 1
+
+    def positive_int(name, default):
+        raw = request.GET.get(name, str(default))
+        try:
+            return max(1, int(raw)) if raw.isdecimal() else default
+        except ValueError:
+            # Python also rejects decimal strings beyond its integer digit limit.
+            return default
+
+    page = positive_int("page", 1)
+    page_size = min(positive_int("page_size", 24), 100)
+
+    qs = UserMovieData.objects.filter(user_id=user_id, is_watched=True).select_related("movie")
+
+    content_type = request.GET.get("content_type")
+    if content_type in ("movie", "series"):
+        qs = qs.filter(movie__content_type=content_type)
+
+    search = (request.GET.get("search") or "").strip()
+    if search:
+        qs = qs.filter(movie__title__icontains=search)
+
+    total_count = qs.count()
+    total_pages = max(1, (total_count + page_size - 1) // page_size)
+    pagination = {
+        "count": total_count,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+        "has_next": page < total_pages,
+        "has_previous": page > 1,
+    }
+    start = (page - 1) * page_size
+    # Avoid sending an arbitrarily large OFFSET to the database.
+    if start >= total_count:
+        return Response({"results": [], "pagination": pagination})
+
+    # Isolate event aggregation from watchlist sources to avoid join fan-out.
+    events = (
+        MovieWatchEvent.objects.filter(user_id=user_id, movie_id=OuterRef("movie_id"))
+        .order_by()
+        .values("movie_id")
+        .annotate(watch_count=Count("pk"), last_watched_at=Max("watched_date"))
+    )
+    qs = qs.annotate(
+        watch_count=Coalesce(Subquery(events.values("watch_count")), 1),
+        last_watched_at=Coalesce(Subquery(events.values("last_watched_at")), F("watched_date")),
+        is_in_watchlist=Exists(
+            WatchlistItem.objects.filter(user_id=user_id, movie_id=OuterRef("movie_id"))
+        ),
+    )
+    sort = request.GET.get("sort", "last_watched")
+    secondary_order = ("movie__title", "movie__tmdb_id")
+    if sort == "title":
+        qs = qs.order_by(*secondary_order)
+    elif sort == "rating":
+        qs = qs.order_by(F("rating").desc(nulls_last=True), *secondary_order)
+    else:
+        qs = qs.order_by(F("last_watched_at").desc(nulls_last=True), *secondary_order)
+
+    results = []
+    for r in qs[start:start + page_size]:
+        m = r.movie
+        results.append({
+            "movie": {
+                "tmdb_id": m.tmdb_id,
+                "title": m.title,
+                "year": m.year,
+                "content_type": m.content_type,
+                "poster_path": getattr(m, "poster_path", None),
+            },
+            "user_data": {
+                "is_watched": r.is_watched,
+                "rating": r.rating,
+                "review": r.review,
+                "watched_date": r.watched_date.isoformat() if r.watched_date else None,
+            },
+            "watch_count": r.watch_count,
+            "last_watched_at": r.last_watched_at.isoformat() if r.last_watched_at else None,
+            "is_in_watchlist": r.is_in_watchlist,
+        })
+
+    return Response({"results": results, "pagination": pagination})
+
 
 @api_view(["POST"])
 def mark_movie_watched(request, tmdb_id: int):

@@ -1564,3 +1564,47 @@ export async function removeWatchlistItem(
   }
   return res.json();
 }
+
+export interface WatchedMovie {
+  tmdb_id: number;
+  title: string;
+  year: number | null;
+  content_type: string;
+  poster_path: string | null;
+}
+
+export interface WatchedUserData {
+  is_watched: boolean;
+  rating: number | null;
+  review: string;
+  watched_date: string | null;
+}
+
+export interface WatchedItem {
+  movie: WatchedMovie;
+  user_data: WatchedUserData;
+  watch_count: number;
+  last_watched_at: string | null;
+  is_in_watchlist: boolean;
+}
+
+export interface WatchedPagination {
+  count: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+  has_next: boolean;
+  has_previous: boolean;
+}
+
+export interface WatchedListResponse {
+  results: WatchedItem[];
+  pagination: WatchedPagination;
+}
+
+export async function fetchWatched(params?: Record<string, string>): Promise<WatchedListResponse> {
+  const qs = params ? new URLSearchParams(params).toString() : "";
+  const res = await fetch(`/api/watched/${qs ? "?" + qs : ""}`);
+  if (!res.ok) throw new Error(`fetchWatched failed: ${res.status}`);
+  return res.json();
+}

@@ -28,7 +28,7 @@ vi.mock("next/navigation", () => ({
   }),
 }));
 
-/* Virtual mock for @/app/movie/[tmdb_id]/page if absent on current branch */
+/* Local movie-detail stub for error-state tests. */
 vi.mock(
   "@/app/movie/[tmdb_id]/page",
   () => {
