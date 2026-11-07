@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from typing import Optional, Any
+from urllib.parse import urlencode
 
 from bs4 import BeautifulSoup
 
@@ -26,7 +27,7 @@ class NHKScraper(BaseScraper):
         if not query:
             url = "https://www3.nhk.or.jp/nhkworld/"
         else:
-            url = f"https://www3.nhk.or.jp/nhkworld/search/?q={query}"
+            url = f"https://www3.nhk.or.jp/nhkworld/search/?{urlencode({'q': query})}"
 
         raw_data = self.fetch_url(url, headers={"User-Agent": "Mozilla/5.0 (compatible; WhereTfDoIWatchIt/1.0)"})
         if not raw_data:

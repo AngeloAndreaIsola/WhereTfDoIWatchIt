@@ -9,11 +9,20 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
-from django.test import SimpleTestCase
+import requests
+from django.test import SimpleTestCase, TestCase
 
+from tracker.models import ApiCallCounter, ApiCallLedger
+from tracker.services.rate_limit import (
+    MonthlyRateLimitExceeded,
+    RateLimiter,
+    source_budget,
+)
 from tracker.services.streaming_api import (
     StreamingAvailabilityClient,
+    UpstreamTitleNotFound,
     service_display_name,
 )
 
@@ -114,6 +123,143 @@ class PrimeOfferTypeTests(SimpleTestCase):
 
         self.assertNotIn("CA", surviving_countries)  # Prime Video Channel
         self.assertNotIn("AT", surviving_countries)  # purchase offer
+
+
+class UpstreamNotFoundTests(SimpleTestCase):
+    """A 404 must be signalled as a PERMANENT miss, not a transient fault.
+
+    The distinction decides whether the caller retries. Every retry of an absent
+    title re-earns the same 404 while spending metered API budget, so the client
+    translates 404 at the HTTP boundary into ``UpstreamTitleNotFound`` — and
+    leaves every other failure as an ordinary exception, so transient faults
+    (5xx, 429, timeouts) keep their retry ladder.
+    """
+
+    class _Resp:
+        def __init__(self, status_code):
+            self.status_code = status_code
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise requests.HTTPError(f"{self.status_code} error")
+
+        def json(self):
+            return {"streamingOptions": {}}
+
+    def _client_get(self, status_code):
+        # Transport/parser tests deliberately opt out of DB-backed quota
+        # accounting; production callers use the default budget seam.
+        client = StreamingAvailabilityClient(api_key="test-key", budget=None)
+        with patch(
+            "tracker.services.streaming_api.requests.get",
+            return_value=self._Resp(status_code),
+        ):
+            return client.get_availability(1234, content_type="movie")
+
+    def test_404_raises_upstream_title_not_found(self):
+        with self.assertRaises(UpstreamTitleNotFound) as ctx:
+            self._client_get(404)
+        self.assertEqual(ctx.exception.status_code, 404)
+        self.assertIn("1234", str(ctx.exception))
+
+    def test_5xx_stays_a_plain_transient_exception(self):
+        with self.assertRaises(requests.HTTPError):
+            self._client_get(503)
+
+    def test_429_stays_a_plain_transient_exception(self):
+        # A rate-limit response is worth retrying, so it must NOT be
+        # misclassified as "title absent" and skipped.
+        with self.assertRaises(requests.HTTPError):
+            self._client_get(429)
+
+    def test_upstream_not_found_is_not_an_http_error(self):
+        # Deliberately not a requests.HTTPError subclass: callers must be able
+        # to tell "provider has no such title" from "the request went wrong".
+        self.assertFalse(issubclass(UpstreamTitleNotFound, requests.HTTPError))
+
+
+class StreamingAvailabilityBudgetTests(TestCase):
+    """The HTTP boundary cannot bypass the daily/monthly budget."""
+
+    service = "streaming_availability"
+
+    def setUp(self):
+        ApiCallCounter.objects.filter(service=self.service).delete()
+        ApiCallLedger.objects.filter(service=self.service).delete()
+
+    def test_failed_request_consumes_budget_and_blocks_the_next_http_call(self):
+        limiter = RateLimiter(
+            self.service, daily_limit=100, monthly_limit=1
+        )
+        response = MagicMock(status_code=503)
+        response.raise_for_status.side_effect = requests.HTTPError("503")
+
+        with patch(
+            "tracker.services.rate_limit.rate_limiter_for", return_value=limiter
+        ), patch(
+            "tracker.services.streaming_api.requests.get", return_value=response
+        ) as http_get:
+            client = StreamingAvailabilityClient(api_key="test-key")
+            with self.assertRaises(requests.HTTPError):
+                client.get_availability(1)
+            # The 503 consumed the only monthly reservation; the next call is
+            # refused before a second upstream request exists.
+            with self.assertRaises(MonthlyRateLimitExceeded):
+                client.get_availability(2)
+
+        self.assertEqual(http_get.call_count, 1)
+        self.assertEqual(
+            ApiCallLedger.objects.get(service=self.service).count, 1
+        )
+
+    def test_each_real_http_attempt_consumes_exactly_one_reservation(self):
+        limiter = RateLimiter(
+            self.service, daily_limit=100, monthly_limit=10
+        )
+        response = MagicMock(status_code=200)
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"streamingOptions": {}}
+
+        with patch(
+            "tracker.services.rate_limit.rate_limiter_for", return_value=limiter
+        ), patch(
+            "tracker.services.streaming_api.requests.get", return_value=response
+        ) as http_get:
+            client = StreamingAvailabilityClient(api_key="test-key")
+            client.get_availability(1)
+            client.get_availability(2)
+
+        self.assertEqual(http_get.call_count, 2)
+        self.assertEqual(
+            ApiCallCounter.objects.get(service=self.service).count, 2
+        )
+        self.assertEqual(
+            ApiCallLedger.objects.get(service=self.service).count, 2
+        )
+        self.assertEqual(limiter.monthly_used(), 2)
+
+    def test_coordinator_reservation_is_not_charged_twice(self):
+        limiter = RateLimiter(
+            self.service, daily_limit=100, monthly_limit=10
+        )
+        response = MagicMock(status_code=200)
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"streamingOptions": {}}
+
+        with patch(
+            "tracker.services.streaming_api.requests.get", return_value=response
+        ):
+            client = StreamingAvailabilityClient(api_key="test-key")
+            with source_budget(limiter, source=self.service):
+                client.get_availability(1)
+
+        self.assertEqual(
+            ApiCallCounter.objects.get(service=self.service).count, 1
+        )
+        self.assertEqual(
+            ApiCallLedger.objects.get(service=self.service).count, 1
+        )
+        self.assertEqual(limiter.monthly_used(), 1)
 
 
 class ServiceDisplayNameTests(SimpleTestCase):

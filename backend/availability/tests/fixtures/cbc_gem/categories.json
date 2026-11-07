@@ -1,0 +1,282 @@
+{
+ "all-films": {
+  "1": {
+   "pageNumber": 1,
+   "pageSize": 2,
+   "results": [
+    {
+     "badge": {
+      "message": "NEW",
+      "type": "Default"
+     },
+     "cardOptions": [
+      "Favourite",
+      "SeeMore"
+     ],
+     "closedCaptionAvailable": false,
+     "description": "In the 1980s Beirut, Mason Skiles is a former U.S. diplomat who is called back into service to save a colleague from the group that is possibly responsible for his own family's death. Meanwhile, a CIA field agent who is working undercover at the American embassy is tasked with keeping Mason alive and ensuring that the mission is a success. Starring Jon Hamm, Rosamund Pike.",
+     "grantedRight": "None",
+     "images": {
+      "background": {
+       "size": "Normal",
+       "url": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_beirut_ott_background_v01.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+      },
+      "card": {
+       "size": "Normal",
+       "url": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_beirut_ott_program_v01.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+      },
+      "logo": {
+       "size": "Bigger",
+       "url": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_beirut_ott_logo_v01.png?impolicy=ott&im=Resize=(_Size_)&quality=75"
+      }
+     },
+     "infoTitle": "Action and Adventure | 110 min",
+     "isFavouriteSupported": true,
+     "isLegacyLiveEvent": true,
+     "key": "2424982278",
+     "permission": {
+      "catalog": "Gem",
+      "requiredScope": "gem:member",
+      "tier": "Member"
+     },
+     "tier": "Member",
+     "title": "Beirut",
+     "type": "Show",
+     "url": "beirut",
+     "videoDescriptionAvailable": false
+    },
+    {
+     "badge": {
+      "message": "COMING SOON",
+      "type": "Default"
+     },
+     "cardOptions": [
+      "Favourite",
+      "SeeMore"
+     ],
+     "closedCaptionAvailable": false,
+     "description": "When her plans suddenly change, young Waverly takes an impulsive detour to a small Canadian town. After nearly drowning at a beach party, she soon finds herself falling in love with the handsome lifeguard who rescued her.",
+     "grantedRight": "None",
+     "images": {
+      "background": {
+       "size": "Normal",
+       "url": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_float_ott_background_v01.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+      },
+      "card": {
+       "size": "Normal",
+       "url": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_float_ott_program_v01.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+      },
+      "logo": {
+       "size": "Bigger",
+       "url": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_float_ott_logo_v01.png?impolicy=ott&im=Resize=(_Size_)&quality=75"
+      }
+     },
+     "infoTitle": "Drama | 0 s",
+     "isFavouriteSupported": true,
+     "isLegacyLiveEvent": true,
+     "key": "2424982280",
+     "permission": {
+      "catalog": "Gem",
+      "requiredScope": "gem:standard",
+      "tier": "Standard"
+     },
+     "tier": "Standard",
+     "title": "Float",
+     "type": "Show",
+     "url": "float",
+     "videoDescriptionAvailable": false
+    }
+   ],
+   "totalPages": 1,
+   "totalRecords": 2
+  }
+ },
+ "kids-all": {
+  "1": {
+   "pageNumber": 1,
+   "pageSize": 1,
+   "results": [
+    {
+     "badge": {
+      "message": "NEW SEASON",
+      "type": "Default"
+     },
+     "cardOptions": [
+      "Favourite",
+      "SeeMore"
+     ],
+     "closedCaptionAvailable": false,
+     "description": "A young Inuk woman wants to build a new future for herself after a spontaneous and extremely public exit from her marriage. It won't be easy in a small Arctic town where everybody knows your business.",
+     "grantedRight": "None",
+     "images": {
+      "background": {
+       "size": "Normal",
+       "url": "https://images.gem.cbc.ca/v1/synps-cbc/show/perso/cbc_northofnorth_ott_background_v03.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+      },
+      "card": {
+       "size": "Normal",
+       "url": "https://images.gem.cbc.ca/v1/synps-cbc/show/perso/cbc_northofnorth_ott_program_v02.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+      },
+      "logo": {
+       "size": "Bigger",
+       "url": "https://images.gem.cbc.ca/v1/synps-cbc/show/perso/cbc_northofnorth_ott_logo_v02.png?impolicy=ott&im=Resize=(_Size_)&quality=75"
+      }
+     },
+     "infoTitle": "Comedy | 2 seasons",
+     "isFavouriteSupported": true,
+     "isLegacyLiveEvent": true,
+     "key": "2424975344",
+     "permission": {
+      "catalog": "Gem",
+      "requiredScope": "gem:member",
+      "tier": "Member"
+     },
+     "tier": "Member",
+     "title": "North of North",
+     "type": "Show",
+     "url": "north-of-north",
+     "videoDescriptionAvailable": false
+    }
+   ],
+   "totalPages": 1,
+   "totalRecords": 1
+  }
+ },
+ "shows": {
+  "1": {
+   "pageNumber": 1,
+   "pageSize": 2,
+   "results": [
+    {
+     "badge": {
+      "message": "NEW SEASON",
+      "type": "Default"
+     },
+     "cardOptions": [
+      "Favourite",
+      "SeeMore"
+     ],
+     "closedCaptionAvailable": false,
+     "description": "A young Inuk woman wants to build a new future for herself after a spontaneous and extremely public exit from her marriage. It won't be easy in a small Arctic town where everybody knows your business.",
+     "grantedRight": "None",
+     "images": {
+      "background": {
+       "size": "Normal",
+       "url": "https://images.gem.cbc.ca/v1/synps-cbc/show/perso/cbc_northofnorth_ott_background_v03.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+      },
+      "card": {
+       "size": "Normal",
+       "url": "https://images.gem.cbc.ca/v1/synps-cbc/show/perso/cbc_northofnorth_ott_program_v02.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+      },
+      "logo": {
+       "size": "Bigger",
+       "url": "https://images.gem.cbc.ca/v1/synps-cbc/show/perso/cbc_northofnorth_ott_logo_v02.png?impolicy=ott&im=Resize=(_Size_)&quality=75"
+      }
+     },
+     "infoTitle": "Comedy | 2 seasons",
+     "isFavouriteSupported": true,
+     "isLegacyLiveEvent": true,
+     "key": "2424975344",
+     "permission": {
+      "catalog": "Gem",
+      "requiredScope": "gem:member",
+      "tier": "Member"
+     },
+     "tier": "Member",
+     "title": "North of North",
+     "type": "Show",
+     "url": "north-of-north",
+     "videoDescriptionAvailable": false
+    },
+    {
+     "badge": {
+      "message": "NEW EPISODES",
+      "type": "Default"
+     },
+     "cardOptions": [
+      "Favourite",
+      "SeeMore"
+     ],
+     "closedCaptionAvailable": false,
+     "description": "The UK's longest-running TV soap, Coronation Street focuses on the everyday lives of working class people in Manchester, England.",
+     "grantedRight": "None",
+     "images": {
+      "background": {
+       "size": "Normal",
+       "url": "https://images.gem.cbc.ca/v1/synps-cbc/show/perso/cbc_coronation_street_ott_background_v01.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+      },
+      "card": {
+       "size": "Normal",
+       "url": "https://images.gem.cbc.ca/v1/synps-cbc/show/perso/cbc_coronation_street_ott_program_v01.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+      },
+      "logo": {
+       "size": "Bigger",
+       "url": "https://images.gem.cbc.ca/v1/synps-cbc/show/perso/cbc_coronation_street_ott_logo_v01.png?impolicy=ott&im=Resize=(_Size_)&quality=75"
+      }
+     },
+     "infoTitle": "Drama | 21 episodes",
+     "isFavouriteSupported": true,
+     "isLegacyLiveEvent": true,
+     "key": "2424970764",
+     "permission": {
+      "catalog": "Gem",
+      "requiredScope": "gem:member",
+      "tier": "Member"
+     },
+     "tier": "Member",
+     "title": "Coronation Street",
+     "type": "Show",
+     "url": "coronation-street",
+     "videoDescriptionAvailable": false
+    }
+   ],
+   "totalPages": 2,
+   "totalRecords": 3
+  },
+  "2": {
+   "pageNumber": 2,
+   "pageSize": 1,
+   "results": [
+    {
+     "cardOptions": [
+      "Favourite",
+      "SeeMore"
+     ],
+     "closedCaptionAvailable": false,
+     "description": "Set in the late 1890s and early 1900s, critically-acclaimed series MURDOCH MYSTERIES explores the world of William Murdoch, a dashing detective who uses inventive forensic techniques to solve crimes.",
+     "grantedRight": "None",
+     "images": {
+      "background": {
+       "size": "Normal",
+       "url": "https://images.gem.cbc.ca/v1/synps-cbc/show/perso/cbc_murdoch_mysteries_ott_background_v07.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+      },
+      "card": {
+       "size": "Normal",
+       "url": "https://images.gem.cbc.ca/v1/synps-cbc/show/perso/cbc_murdoch_mysteries_ott_program_v08.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+      },
+      "logo": {
+       "size": "Normal",
+       "url": "https://images.gem.cbc.ca/v1/synps-cbc/show/perso/cbc_murdoch_mysteries_ott_logo_v04.png?impolicy=ott&im=Resize=(_Size_)&quality=75"
+      }
+     },
+     "infoTitle": "Crime and Police | 20 seasons",
+     "isFavouriteSupported": true,
+     "isLegacyLiveEvent": true,
+     "key": "2424970666",
+     "permission": {
+      "catalog": "Gem",
+      "requiredScope": "gem:member",
+      "tier": "Member"
+     },
+     "tier": "Member",
+     "title": "Murdoch Mysteries",
+     "type": "Show",
+     "url": "murdoch-mysteries",
+     "videoDescriptionAvailable": false
+    }
+   ],
+   "totalPages": 2,
+   "totalRecords": 3
+  }
+ }
+}

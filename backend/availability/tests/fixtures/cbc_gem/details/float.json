@@ -1,0 +1,161 @@
+{
+ "content": [
+  {
+   "lineups": [
+    {
+     "items": [
+      {
+       "callToActionTitle": "Trailer",
+       "closedCaptionAvailable": true,
+       "completionTime": 127000,
+       "description": "When her plans suddenly change, young Waverly takes an impulsive detour to a small Canadian town. After nearly drowning at a beach party, she soon finds herself falling in love with the handsome lifeguard who rescued her.",
+       "episodeNumber": 1,
+       "formattedIdMedia": "996924",
+       "idMedia": 996924,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_floatt01_thumbnail_v01.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "infoTitle": "2023",
+       "isPlaybackStatusSupported": false,
+       "links": {
+        "action": "Exit"
+       },
+       "mediaType": "Trailer",
+       "metadata": {
+        "availabilityDate": "2026-09-28",
+        "copyright": "",
+        "country": "Canada",
+        "credits": [
+         {
+          "peoples": "Sherren Lee",
+          "title": "Director(s)"
+         },
+         {
+          "peoples": "Jesse LaVercombe",
+          "title": "Writer(s)"
+         },
+         {
+          "peoples": "Andrea Bang, Robbie Amell",
+          "title": "Actor(s)"
+         }
+        ],
+        "duration": 137,
+        "media": {
+         "availabilityDate": "2026-09-28",
+         "copyright": "",
+         "country": "Canada",
+         "credits": [
+          {
+           "peoples": "Sherren Lee",
+           "title": "Director(s)"
+          },
+          {
+           "peoples": "Jesse LaVercombe",
+           "title": "Writer(s)"
+          },
+          {
+           "peoples": "Andrea Bang, Robbie Amell",
+           "title": "Actor(s)"
+          }
+         ],
+         "duration": 137,
+         "productionYear": 2023,
+         "rating": "PG"
+        },
+        "productionYear": 2023,
+        "rating": "PG"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:standard",
+        "tier": "Standard"
+       },
+       "tier": "Standard",
+       "title": "Trailer",
+       "type": "Trailer",
+       "uniqueIdentifier": "EPISODE2425279056",
+       "url": "float/s01b01",
+       "videoDescriptionAvailable": true
+      }
+     ],
+     "permission": {
+      "catalog": "Gem",
+      "requiredScope": "gem:standard",
+      "tier": "Standard"
+     },
+     "seasonNumber": 1,
+     "selectedTrailerUrl": "float/s01b01",
+     "tier": "Standard",
+     "title": "Season 1",
+     "url": "float/s01"
+    }
+   ],
+   "seasonTitle": "Extras",
+   "title": "Extras"
+  }
+ ],
+ "contentType": "Standalone",
+ "description": "When her plans suddenly change, young Waverly takes an impulsive detour to a small Canadian town. After nearly drowning at a beach party, she soon finds herself falling in love with the handsome lifeguard who rescued her.",
+ "hasOnlyATrailer": true,
+ "images": {
+  "background": {
+   "size": "Normal",
+   "url": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_float_ott_background_v01.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+  },
+  "logo": {
+   "size": "Bigger",
+   "url": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_float_ott_logo_v01.png?impolicy=ott&im=Resize=(_Size_)&quality=75"
+  }
+ },
+ "requestedType": "Show",
+ "selectedUrl": "float/s01b01",
+ "structuredMetadata": {
+  "@context": "http://schema.org",
+  "@type": "Movie",
+  "abstract": "When her plans suddenly change, young Waverly takes an impulsive detour to a small Canadian town. After nearly drowning at a beach party, she soon finds herself falling in love with the handsome lifeguard who rescued her.",
+  "actor": [
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Andrea Bang"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Robbie Amell"
+   }
+  ],
+  "author": [],
+  "contentRating": "PG",
+  "countryOfOrigin": {
+   "@context": "http://schema.org",
+   "@type": "Country",
+   "name": "Canada"
+  },
+  "director": [
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Sherren Lee"
+   }
+  ],
+  "genre": [
+   "Drame"
+  ],
+  "image": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_float_ott_background_v01.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75",
+  "inLanguage": "en-CA",
+  "name": "Float",
+  "producer": [],
+  "trailer": {
+   "@context": "http://schema.org",
+   "@type": "VideoObject",
+   "duration": "PT0H2M",
+   "embedUrl": "https://gem.cbc.ca/float/s01b01"
+  },
+  "url": "https://gem.cbc.ca/float"
+ },
+ "title": "Float"
+}

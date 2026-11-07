@@ -31,6 +31,25 @@ from tracker.languages import normalize_language_code
 
 logger = logging.getLogger(__name__)
 
+
+class UpstreamTitleNotFound(Exception):
+    """The upstream catalogue has no record of this title at all (HTTP 404).
+
+    Distinct from a transport failure on purpose. A 404 means *this provider
+    does not carry this title* — a statement about the world that will still be
+    true on the next attempt, an hour later or a month later. Retrying it can
+    never succeed, and every retry spends metered API budget to relearn the
+    same fact, so callers treat it as a **permanent** outcome: fail the request
+    immediately instead of burning ``MAX_ATTEMPTS`` calls on a guaranteed no.
+
+    Anything else (429, 5xx, timeouts, connection resets) stays a plain
+    exception, because those *are* transient and worth retrying.
+    """
+
+    def __init__(self, message: str, *, status_code: int = 404):
+        super().__init__(message)
+        self.status_code = status_code
+
 RAPIDAPI_HOST = "streaming-availability.p.rapidapi.com"
 DEFAULT_TIMEOUT = 15
 ALLOWED_OFFER_TYPES = {"subscription", "free"}
@@ -80,11 +99,17 @@ def _norm_lang(code: Optional[str]) -> Optional[str]:
     return normalize_language_code(str(code))
 
 
-def _extract_langs(items, code_getter) -> list[str]:
-    """Normalize + de-dupe a list of language entries, preserving order."""
+def _extract_langs(items, code_getter) -> Optional[list[str]]:
+    """Normalize + de-dupe a list of language entries, preserving order.
+
+    Returns None when the payload carries no language metadata at all, so
+    "unknown languages" stays distinguishable from a known-empty list ([]).
+    """
+    if items is None:
+        return None
     out: list[str] = []
     seen: set[str] = set()
-    for item in items or []:
+    for item in items:
         norm = _norm_lang(code_getter(item))
         if norm and norm not in seen:
             seen.add(norm)
@@ -117,8 +142,9 @@ class StreamingOffer:
     offer_type: str  # "subscription" | "free"
     quality: Optional[str] = None
     link: Optional[str] = None
-    audio_languages: list[str] = field(default_factory=list)
-    subtitle_languages: list[str] = field(default_factory=list)
+    # None = the source exposed no language metadata; [] = known to have none.
+    audio_languages: Optional[list[str]] = None
+    subtitle_languages: Optional[list[str]] = None
 
 
 @dataclass
@@ -198,14 +224,40 @@ def resolve_season_number(
     return number
 
 
+#: Sentinel for "use the production budget seam". ``budget=None`` explicitly
+#: disables reservation for a transport-only test/parser client.
+_BUDGET_UNSET = object()
+
+
 class StreamingAvailabilityClient:
-    def __init__(self, api_key: Optional[str] = None, timeout: int = DEFAULT_TIMEOUT):
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        timeout: int = DEFAULT_TIMEOUT,
+        *,
+        budget=_BUDGET_UNSET,
+    ):
         # Read the key from the environment directly. settings.RAPIDAPI_KEY is
         # itself defined as os.environ.get("RAPIDAPI_KEY", ""); reading env here
         # is equivalent and avoids recursing into the lazy settings proxy in
         # tests that substitute django.conf.settings.
         self.api_key = api_key or os.environ.get("RAPIDAPI_KEY", "")
         self.timeout = timeout
+        # Every production call must reserve SA's daily + monthly budget at the
+        # HTTP boundary. The coordinator's reservation context prevents this
+        # from charging the same refresh twice. Tests that only exercise URL or
+        # parser behaviour can pass ``budget=None`` explicitly.
+        self._budget = budget
+
+    def _reserve_budget(self) -> None:
+        if self._budget is _BUDGET_UNSET:
+            # Imported lazily so importing this transport module during Django
+            # app loading never pulls in the model layer early.
+            from .rate_limit import reserve_streaming_availability_call
+
+            reserve_streaming_availability_call()
+        elif callable(self._budget):
+            self._budget()
 
     def get_availability(self, tmdb_id: int, content_type: str = "movie") -> StreamingResult:
         # v4 /shows/{show_type}/{tmdbId} returns every country's options in one call;
@@ -217,7 +269,21 @@ class StreamingAvailabilityClient:
             "x-rapidapi-key": self.api_key,
             "x-rapidapi-host": RAPIDAPI_HOST,
         }
+        # Reserve immediately before the only HTTP request this client makes.
+        # A 404/5xx/timeout still consumed upstream quota, so the reservation
+        # stays charged; a local refusal raises before any request is issued.
+        self._reserve_budget()
         resp = requests.get(url, headers=headers, timeout=self.timeout)
+        # A 404 is the one upstream answer that is a permanent fact about the
+        # title rather than a transient fault, so it is translated into the
+        # dedicated signal here — at the boundary where the status code is
+        # still visible — instead of surfacing as a generic HTTPError that
+        # every caller would have to re-classify.
+        if resp.status_code == 404:
+            raise UpstreamTitleNotFound(
+                f"Streaming Availability has no record of {show_type} {tmdb_id} "
+                f"(404 from {url})"
+            )
         resp.raise_for_status()
         data = resp.json()
         offers = self._parse_offers(data)

@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 import logging
+import uuid
+from datetime import datetime, time, timedelta, timezone as dt_timezone
 from typing import Any
 
 from django.conf import settings
 from django.db import connection, transaction
+from django.db.models import Count, Max, Q, Subquery
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from django.views.decorators.http import require_GET
 from rest_framework import status
 from rest_framework.decorators import api_view, parser_classes
@@ -16,6 +20,10 @@ from rest_framework.response import Response
 from .languages import normalize_language_code
 from .models import (
     Availability,
+    AvailabilityRefresh,
+    AvailabilityRefreshStatus,
+    AvailabilityRefreshType,
+    AvailabilityResolutionReason,
     ExternalProviderMapping,
     LanguageEntry,
     LanguageInfo,
@@ -23,11 +31,16 @@ from .models import (
     MovieWatchEvent,
     Preference,
     Provider,
+    RefreshPriority,
+    RefreshRequest,
+    RefreshRequestStatus,
     Region,
     ScrapedContentMapping,
     Subscription,
     UserMovieData,
     WatchlistItem,
+    provider_domain_root,
+    provider_domain_root_expr,
 )
 from .serializers import (
     LanguageInfoSerializer,
@@ -43,9 +56,18 @@ from .serializers import (
     WatchlistItemSerializer,
     WatchlistReportRowSerializer,
 )
-from tracker.scrapers import SCRAPER_REGISTRY, ContentMatcher, ScrapedItem, resolve_scraper_class
+from tracker.scrapers import ContentMatcher, ScrapedItem
 from tracker.services.filtering import apply_composable_filters
-from tracker.services.watchability import evaluate_watchability, get_user_subscriptions
+from tracker.services.unified_catalogue import resolve_catalogue_scope, unofficial_catalogue_items
+from tracker.services.watchability import (
+    QUALIFYING_OFFER_TYPES,
+    WatchabilityStatus,
+    evaluate_watchability,
+)
+from tracker.services.access import SubscriptionAccessMode
+from availability.services.legacy_ingest import ingest_scraped_mapping
+from availability.services.write_barrier import MaintenanceInProgress, writer_barrier
+from availability.sources import DEFAULT_SOURCE_SLUG
 import math
 
 
@@ -68,8 +90,45 @@ def paginate_list(items: list, page: int, page_size: int) -> tuple[list, dict]:
         "has_previous": page > 1,
     }
     return page_items, pagination
-from .services.bulk_refresh import process_watchlist_refresh
-from .services.cache import AvailabilityCache
+from .services.bulk_refresh import (
+    process_watchlist_refresh,
+    stale_catalogue_sources,
+    title_level_source_slugs,
+)
+from .services.availability_reads import get_local_offers, get_offer_evidence
+from .services.availability_metrics import (
+    WINDOW_DAYS,
+    availability_metrics as collect_availability_metrics,
+)
+from .services.availability_report import (
+    active_refresh,
+    build_run_summary,
+    record_run,
+    source_label,
+    sync_run_progress,
+    title_source_report,
+)
+from .services import source_policy
+from .services.refresh_lifecycle import TERMINAL_STATUSES
+from .services.provider_status import (
+    CATALOGUE,
+    SCRAPER,
+    provider_card_status,
+    refresh_target,
+)
+from .services.rate_limit import rate_limiter_for
+from .services.refresh_requests import (
+    refresh_states_for,
+    request_availability_refresh,
+    request_catalogue_refresh,
+    request_title_refresh,
+    request_watchlist_refresh,
+)
+from .services.scraper_runner import run_provider_scraper
+from .services.scraper_selection import (
+    ScraperExecutionIneligible,
+    select_provider_scraper,
+)
 from .services.letterboxd import (
     LetterboxdFetchError,
     LetterboxdInvalidURLError,
@@ -81,7 +140,6 @@ from .services.letterboxd import (
 )
 from .services.ranking import rank_offers
 from .services.preferences import resolve_preferences
-from .services.rate_limit import RateLimitExceeded
 from .services.enrichment import enrich_movie_from_tmdb, resolve_or_create_movie, sync_movie_fields
 from .services.tmdb import TMDbClient, TMDbItem, TMDbMovie
 from .services.watchlist_export import (
@@ -168,16 +226,19 @@ def genres_list(request):
 @api_view(["GET"])
 def homepage_feed(request):
     """GET /api/homepage/ — returns only watchable titles (🟢 Watchable here & 🟡 Watchable with VPN) with pagination."""
-    curr_country = request.GET.get("country") or "US"
+    curr_country = _active_country(request)
     pref = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
-    user_subs = get_user_subscriptions(user_id=1)
 
     movies = Movie.objects.all().order_by("-id")
+    # The resolver builds the access map from ``Subscription`` rows, exactly as
+    # the detail page does. Passing the legacy flat slug set here would route
+    # list surfaces through ``build_explicit_access``, which ignores
+    # ``access_mode`` and AVOD/FAST auto-entitlement — the detail↔list
+    # disagreement this redesign exists to remove.
     evaluated, _ = apply_composable_filters(
         movies,
         request.GET,
         pref,
-        user_subscriptions=user_subs,
         current_country=curr_country,
     )
 
@@ -202,67 +263,13 @@ def homepage_feed(request):
 @api_view(["GET"])
 def unified_catalog(request):
     """GET /api/catalog/unified/ — Unified catalog endpoint merging official and unofficial sources."""
-    curr_country = request.GET.get("current_country") or request.GET.get("country") or "US"
+    curr_country = _active_country(request)
     pref = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
-    user_subs = get_user_subscriptions(user_id=1)
 
-    raw_providers = request.GET.get("providers") or request.GET.get("provider") or ""
-    raw_categories = request.GET.get("provider_categories") or ""
-
-    requested_slugs: set[str] = set()
-    if raw_providers:
-        for p in raw_providers.split(","):
-            if p.strip():
-                requested_slugs.add(p.strip().lower())
-
-    if raw_categories:
-        cats = [c.strip().lower() for c in raw_categories.split(",") if c.strip()]
-        cat_providers = Provider.objects.filter(is_enabled=True)
-        cat_slugs = set()
-        for c in cats:
-            if c == "major":
-                cat_slugs.update(cat_providers.filter(is_major=True).values_list("slug", flat=True))
-            elif c in ("bvod", "free"):
-                cat_slugs.update(cat_providers.filter(category="bvod", is_major=False).values_list("slug", flat=True))
-            elif c in ("scraper", "unofficial"):
-                cat_slugs.update(cat_providers.filter(category="scraper").values_list("slug", flat=True))
-            else:
-                cat_slugs.update(cat_providers.filter(category=c).values_list("slug", flat=True))
-        requested_slugs.update({s.lower() for s in cat_slugs})
-
-    allowed_provider_slugs = requested_slugs if (raw_providers or raw_categories) else None
-
-    # Determine whether official or scraper or both should be queried
-    include_official = True
-    include_scraper = True
-    if allowed_provider_slugs is not None:
-        official_providers = set(
-            Provider.objects.filter(is_enabled=True)
-            .filter(is_major=True)
-            .values_list("slug", flat=True)
-        ) | set(
-            Provider.objects.filter(is_enabled=True, category__in=["bvod", "avod", "tvod", "fast"])
-            .values_list("slug", flat=True)
-        )
-        scraper_providers = set(
-            Provider.objects.filter(is_enabled=True, category="scraper")
-            .values_list("slug", flat=True)
-        )
-
-        # Also include any provider matching allowed_provider_slugs
-        matched_official = False
-        matched_scraper = False
-
-        for slug in allowed_provider_slugs:
-            if slug in official_providers or Provider.objects.filter(slug__iexact=slug, category__in=["official", "bvod", "avod", "tvod", "fast"]).exists():
-                matched_official = True
-            if slug in scraper_providers or Provider.objects.filter(slug__iexact=slug, category="scraper").exists():
-                matched_scraper = True
-
-        # If user explicitly selected provider(s), only query matching source types
-        if matched_official or matched_scraper:
-            include_official = matched_official
-            include_scraper = matched_scraper
+    scope = resolve_catalogue_scope(request.GET)
+    allowed_provider_slugs = scope.allowed_provider_slugs
+    include_official = scope.include_official
+    include_scraper = scope.include_scraper
 
     unified_items = []
     seen_tmdb_ids = set()
@@ -274,7 +281,6 @@ def unified_catalog(request):
             movies,
             request.GET,
             pref,
-            user_subscriptions=user_subs,
             current_country=curr_country,
             allowed_provider_slugs=allowed_provider_slugs,
         )
@@ -316,71 +322,15 @@ def unified_catalog(request):
                 "watch_url": watch_url,
             })
 
-    # 2. Fetch Scraper Content Mappings
+    # 2. Fetch Unofficial Catalog Items (canonical, via the scraper bridge)
     if include_scraper:
-        qs = ScrapedContentMapping.objects.select_related("provider", "movie").filter(
-            provider__is_enabled=True,
-            is_available=True,
+        unified_items.extend(
+            unofficial_catalogue_items(
+                request.GET,
+                allowed_provider_slugs=allowed_provider_slugs,
+                exclude_tmdb_ids=seen_tmdb_ids,
+            )
         )
-
-        # Apply provider filtering
-        if allowed_provider_slugs is not None:
-            qs = qs.filter(provider__slug__in=list(allowed_provider_slugs))
-
-        # Text search filter
-        q = (request.GET.get("q") or request.GET.get("query") or "").strip()
-        if q:
-            qs = qs.filter(scraped_title__icontains=q)
-
-        # Country filter
-        country_code = (request.GET.get("country") or "").strip().upper()
-        if country_code:
-            qs = qs.filter(provider__country_code=country_code) | qs.filter(country_code=country_code)
-
-        # Year filter
-        year_min = request.GET.get("year_min")
-        year_max = request.GET.get("year_max")
-        if year_min and str(year_min).isdigit():
-            qs = qs.filter(scraped_year__gte=int(year_min))
-        if year_max and str(year_max).isdigit():
-            qs = qs.filter(scraped_year__lte=int(year_max))
-
-        qs = qs.order_by("-updated_at")
-
-        for mapping in qs:
-            m = mapping.movie
-            # If movie is already in official catalog results, deduplicate / skip or merge
-            if m and m.tmdb_id in seen_tmdb_ids:
-                continue
-
-            payload = mapping.raw_payload or {}
-            audio = [str(a).upper() for a in (payload.get("audio_languages") or payload.get("audio") or [])]
-            subs = [str(s).upper() for s in (payload.get("subtitle_languages") or payload.get("subtitles") or [])]
-
-            unified_items.append({
-                "id": f"scraper_{mapping.id}",
-                "tmdb_id": m.tmdb_id if m else None,
-                "source": "scraper",
-                "source_indicator": mapping.provider.source_indicator or "Scraper",
-                "title": m.title if m else mapping.scraped_title,
-                "year": m.year if m else mapping.scraped_year,
-                "poster_path": m.poster_path if m else "",
-                "content_type": m.content_type if m else (payload.get("content_type") or "movie"),
-                "provider": {
-                    "slug": mapping.provider.slug,
-                    "name": mapping.provider.name,
-                    "category": mapping.provider.category,
-                },
-                "watchability": None,
-                "unofficial_details": {
-                    "scraped_url": mapping.scraped_url,
-                    "confidence_score": mapping.confidence_score,
-                    "is_confirmed": mapping.is_confirmed,
-                    "audio_languages": audio,
-                    "subtitle_languages": subs,
-                },
-                "watch_url": mapping.scraped_url,
-            })
 
     # Sort combined results if sort_by parameter is provided
     sort_by = (request.GET.get("sort_by") or request.GET.get("sort") or "").lower().strip()
@@ -483,13 +433,7 @@ def movie_availability(request, tmdb_id: int):
 
     preference = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
 
-    try:
-        cache = AvailabilityCache()
-        status_obj = cache.get_or_refresh(movie)
-    except RateLimitExceeded as exc:
-        return Response({"error": str(exc), "rate_limited": True}, status=429)
-
-    offers = cache.read_offers(movie)
+    offers, last_known = get_offer_evidence(movie)
     ranked = rank_offers(offers, preference)
 
     user_data = UserMovieData.objects.filter(user_id=1, movie=movie).first()
@@ -501,55 +445,381 @@ def movie_availability(request, tmdb_id: int):
             "user_data": UserMovieDataSerializer(user_data).data if user_data else None,
             "watch_events": MovieWatchEventSerializer(watch_events, many=True).data,
             "cache": {
-                "refreshed": status_obj.refreshed,
-                "reason": status_obj.reason,
-                "offers": status_obj.offers_written,
+                "refreshed": False,
+                "reason": "local",
+                "offers": len(offers),
             },
             "offers": RankedOfferSerializer([offer.to_dict() for offer in ranked], many=True).data,
+            # Stale/unverified positives: history ("last seen"), never current.
+            "last_known_offers": RankedOfferSerializer(
+                [offer.to_dict() for offer in rank_offers(last_known, preference)], many=True
+            ).data,
         }
+    )
+
+
+@api_view(["POST"])
+def refresh_availability(request, tmdb_id: int):
+    """POST /api/movie/<tmdb_id>/refresh/ — queue an explicit availability refresh.
+
+    The backend for the manual "Refresh availability" button on the
+    movie/series detail pages. One endpoint serves both pages: movies and
+    series are the same tracked title row and share the canonical
+    availability pipeline, so the refresh mechanism is identical.
+
+    Enqueue-only by contract — the HTTP request never contacts a provider.
+    It creates (or upgrades, preserving deduplication) at most one pending
+    ``RefreshRequest`` at ``RefreshPriority.EXPLICIT`` and answers
+    immediately; the existing ``refresh_worker`` drains the queue and the
+    ``AvailabilityRefreshService`` writes the canonical offers, which the
+    frontend then picks up by refetching the detail payload. Enqueueing with
+    ``if_stale=False`` forces the refresh even when the current offers still
+    read as fresh — the whole point of a manual refresh — while the partial
+    unique constraint keeps repeated clicks on the same pending row.
+    """
+    movie = get_object_or_404(Movie, tmdb_id=tmdb_id)
+
+    refresh_request = request_availability_refresh(
+        movie,
+        priority=RefreshPriority.EXPLICIT,
+        if_stale=False,
+        country=_active_country(request),
+    )
+
+    pending = RefreshRequest.objects.filter(
+        movie=movie, status=RefreshRequestStatus.PENDING
+    ).exists()
+    if not pending and refresh_request is None:
+        # request_availability_refresh swallows enqueue failures so it can
+        # never break a read; for an explicit user action the failure must
+        # surface instead of masquerading as a queued refresh.
+        return Response(
+            {"error": "failed to queue availability refresh"}, status=500
+        )
+
+    return Response(
+        {
+            "message": "Availability refresh queued",
+            "tmdb_id": movie.tmdb_id,
+            "content_type": movie.content_type,
+            "refresh_pending": True,
+            "refresh_status": RefreshRequestStatus.PENDING,
+            "priority": int(RefreshPriority.EXPLICIT),
+            "request_id": refresh_request.pk if refresh_request else None,
+        },
+        status=status.HTTP_202_ACCEPTED,
     )
 
 
 @api_view(["GET"])
 def providers_list(request):
-    """List canonical providers catalog with subscription state for user_id=1."""
+    """List canonical providers catalog with subscription state for user_id=1.
+
+    Also carries every operational field the square source cards render (last
+    run, available items, refresh target, refreshing state) so the page can
+    paint N cards from one response — see ``tracker.services.provider_status``
+    for the batched computation and the refresh-target rules.
+    """
     category = request.GET.get("category")
     is_major = request.GET.get("is_major")
 
-    qs = Provider.objects.filter(is_enabled=True).prefetch_related("external_mappings").order_by("id")
+    qs = (
+        # Every service our sources can actually cover: either already active
+        # (``is_enabled``) or discovered in the JustWatch catalogue (has a
+        # ``justwatch`` external mapping). Including the discovered-but-disabled
+        # ones is what makes the service-access manager *catalogue-driven*: a
+        # newly found service is visible and selectable, while still defaulting
+        # to inactive until the user declares access to it.
+        Provider.objects.filter(
+            Q(is_enabled=True) | Q(external_mappings__integration_name="justwatch")
+        )
+        .distinct()
+        .prefetch_related("external_mappings")
+        # Batched scraped-item count: the serializer prefers this annotation
+        # over its per-object fallback count.
+        .annotate(scraped_total=Count("scraped_mappings", distinct=True))
+        .order_by("id")
+    )
     if category:
         qs = qs.filter(category=category.lower())
     if is_major is not None:
         qs = qs.filter(is_major=is_major.lower() in ("true", "1"))
 
+    providers = list(qs)
+
     user_sub_provider_ids = set(
         Subscription.objects.filter(user_id=1, provider__isnull=False).values_list("provider_id", flat=True)
     )
+    user_access_modes = dict(
+        Subscription.objects.filter(user_id=1, provider__isnull=False).values_list("provider_id", "access_mode")
+    )
 
     serializer = ProviderSerializer(
-        qs, many=True, context={"user_subscribed_ids": user_sub_provider_ids}
+        providers,
+        many=True,
+        context={
+            "user_subscribed_ids": user_sub_provider_ids,
+            "user_access_modes": user_access_modes,
+            "provider_status": provider_card_status(providers),
+        },
     )
     return Response(serializer.data)
 
 
 @api_view(["POST"])
+def providers_sync(request):
+    """Reconcile the local provider catalogue from JustWatch's provider list.
+
+    Idempotent and additive: creates *disabled* ``Provider`` rows for newly
+    discovered services and upserts the per-country ``justwatch`` external
+    mappings the refresh service resolves offers through. Never touches
+    ``Subscription`` rows. ``country`` (body, repeated or comma-separated)
+    limits the markets walked; default is every enabled country.
+    """
+    from .services.provider_catalogue import run_sync_provider_catalogue
+
+    raw = (request.data or {}).get("country") if isinstance(request.data, dict) else None
+    if raw is None:
+        countries = None
+    elif isinstance(raw, (list, tuple)):
+        countries = [str(c) for c in raw]
+    else:
+        countries = [part for part in str(raw).split(",")]
+
+    report = run_sync_provider_catalogue(countries)
+    return Response(report)
+
+
+@api_view(["GET"])
+def provider_packages(request):
+    """Inspect the persisted JustWatch package catalogue — resolved or not.
+
+    Requirement 4.4: an unresolved package must be *inspectable* with a
+    structured reason, not merely absent from a count. Filters: ``country``
+    (comma-separated), ``status`` (``mapped``/``alias``/``addon``/``unresolved``),
+    ``reason`` (a ``PackageReasonCode``), and ``resolved=true|false``. Read-only;
+    it never triggers a sync and never touches availability.
+    """
+    from tracker.models import (
+        PackageResolutionStatus,
+        ProviderCataloguePackage,
+    )
+
+    qs = ProviderCataloguePackage.objects.all().order_by("country", "technical_name")
+    raw_country = request.GET.get("country")
+    if raw_country:
+        codes = [c.strip().upper() for c in raw_country.split(",") if c.strip()]
+        qs = qs.filter(country__in=codes)
+    status = (request.GET.get("status") or "").strip().lower()
+    if status:
+        qs = qs.filter(resolution_status=status)
+    reason = (request.GET.get("reason") or "").strip().lower()
+    if reason:
+        qs = qs.filter(reason_code=reason)
+    resolved = (request.GET.get("resolved") or "").strip().lower()
+    if resolved in ("true", "1"):
+        qs = qs.exclude(resolution_status=PackageResolutionStatus.UNRESOLVED)
+    elif resolved in ("false", "0"):
+        qs = qs.filter(resolution_status=PackageResolutionStatus.UNRESOLVED)
+
+    rows = [
+        {
+            "country": row.country,
+            "package_id": row.package_id,
+            "technical_name": row.technical_name,
+            "clear_name": row.clear_name,
+            "short_name": row.short_name,
+            "monetization_types": row.monetization_types,
+            "resolution_status": row.resolution_status,
+            "reason_code": row.reason_code,
+            "reason": row.reason,
+            "resolved_provider_slug": row.resolved_provider_slug,
+            "first_seen": row.first_seen,
+            "last_seen": row.last_seen,
+        }
+        for row in qs[:1000]
+    ]
+    return Response({"count": len(rows), "results": rows})
+
+
+@api_view(["POST"])
 def provider_toggle(request, slug: str):
-    """Toggle user subscription state for a provider by slug."""
-    provider = get_object_or_404(Provider, slug__iexact=slug, is_enabled=True)
+    """Own/unown a provider, or set the user's *access mode* for it.
+
+    Two contracts share this endpoint so nothing existing breaks:
+
+    * **Bodyless POST** — legacy flip: subscribed → unsubscribe, else
+      subscribe as ``included``. What the source cards have always done.
+    * **POST with ``access_mode``** — set-mode (idempotent): ``included``,
+      ``addon``, ``free``, ``rent_buy`` record *how* the user holds the
+      service, while ``none`` removes it. This is the write path behind the
+      service-access manager UI, where "subscribe/unsubscribe" is not a toggle
+      but a declared state.
+
+    A mapped-but-disabled provider (discovered by catalogue sync, not yet
+    active) is addressable here too: declaring access to it flips it to active,
+    because owning a service is exactly the signal that its catalogue should be
+    collected. Un-declaring leaves ``is_enabled`` alone — the service stays
+    browsable, only the user's claim to it is removed.
+    """
+    provider = get_object_or_404(
+        Provider.objects.filter(
+            Q(is_enabled=True) | Q(external_mappings__integration_name="justwatch")
+        ).distinct(),
+        slug__iexact=slug,
+    )
+    data = request.data if isinstance(request.data, dict) else {}
+
+    def _activate():
+        # Idempotent: only touches the row when it is still inactive.
+        if not provider.is_enabled:
+            provider.is_enabled = True
+            provider.save(update_fields=["is_enabled"])
+
     sub = Subscription.objects.filter(user_id=1, provider=provider).first()
 
-    if sub:
-        sub.delete()
-        is_subscribed = False
-    else:
+    if "access_mode" not in data:
+        if sub:
+            sub.delete()
+            return Response({
+                "provider": provider.slug,
+                "is_subscribed": False,
+                "access_mode": SubscriptionAccessMode.NONE,
+                "message": f"Unsubscribed from {provider.name}",
+            })
         Subscription.objects.create(user_id=1, provider=provider, name=provider.name)
-        is_subscribed = True
+        _activate()
+        return Response({
+            "provider": provider.slug,
+            "is_subscribed": True,
+            "access_mode": SubscriptionAccessMode.INCLUDED,
+            "message": f"Subscribed to {provider.name}",
+        })
 
+    requested = str(data.get("access_mode") or "included").lower().strip()
+    valid_modes = {choice for choice, _ in SubscriptionAccessMode.CHOICES}
+    if requested not in valid_modes:
+        return Response(
+            {"error": f"Invalid access_mode '{requested}'."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if requested == SubscriptionAccessMode.NONE:
+        if sub:
+            sub.delete()
+        return Response({
+            "provider": provider.slug,
+            "is_subscribed": False,
+            "access_mode": SubscriptionAccessMode.NONE,
+            "message": f"Marked {provider.name} as not owned",
+        })
+
+    if sub:
+        sub.access_mode = requested
+        sub.save(update_fields=["access_mode"])
+        created = False
+    else:
+        sub = Subscription.objects.create(
+            user_id=1, provider=provider, name=provider.name, access_mode=requested
+        )
+        created = True
+
+    _activate()
     return Response({
         "provider": provider.slug,
-        "is_subscribed": is_subscribed,
-        "message": f"{'Subscribed to' if is_subscribed else 'Unsubscribed from'} {provider.name}"
+        "is_subscribed": True,
+        "access_mode": requested,
+        "created": created,
+        "message": f"{'Subscribed to' if created else 'Updated'} {provider.name}",
     })
+
+
+@api_view(["POST"])
+def provider_refresh(request, slug: str):
+    """POST /api/providers/<slug>/refresh/ — run this one source's collector.
+
+    Source-specific by construction: the target comes from the same registry
+    mapping the cards use (``provider_status.refresh_target``) and is never a
+    request parameter, so one press can only ever run one collector:
+
+    - catalogue sources enqueue the existing ``CatalogueRefreshRequest``
+      marker; the running ``refresh_worker`` drains it through
+      ``process_catalogue_refresh(source_slug=...)`` under the per-source
+      advisory lock. Enqueue-only by contract (202 ``queued: true``), so the
+      HTTP request never contacts a provider;
+    - scraper providers run their own scraper synchronously through
+      ``run_provider_scraper`` — the same execution path
+      ``/api/scrapers/run/`` uses (200 with the scraped count).
+
+    Subscription state is deliberately untouched: refreshing and the
+    active/inactive toggle are independent concepts, and a failed refresh
+    records its error on the source's ``RefreshRun`` instead of pretending
+    it succeeded.
+    """
+    provider = get_object_or_404(Provider, slug__iexact=slug, is_enabled=True)
+    refresh_kind, source_slug = refresh_target(provider)
+
+    if refresh_kind == CATALOGUE:
+        marker = request_catalogue_refresh([source_slug])
+        return Response(
+            {
+                "provider": provider.slug,
+                "kind": CATALOGUE,
+                "source": source_slug,
+                "queued": True,
+                "refreshing": True,
+                "marker_id": marker.pk,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+    if refresh_kind == SCRAPER:
+        try:
+            items = run_provider_scraper(provider)
+        except ScraperExecutionIneligible as exc:
+            return Response(exc.payload(), status=status.HTTP_409_CONFLICT)
+        except Exception as exc:  # noqa: BLE001 - surface the collector error to the card
+            logger.exception(
+                "provider_refresh_scraper_failed provider=%s error=%s",
+                provider.slug, exc,
+            )
+            return Response(
+                {
+                    "provider": provider.slug,
+                    "kind": SCRAPER,
+                    "queued": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        # run_provider_scraper stamps provider.last_scraped_at on this same
+        # instance as part of its persistence pass.
+        return Response(
+            {
+                "provider": provider.slug,
+                "kind": SCRAPER,
+                "queued": False,
+                "count": len(items),
+                "last_run": provider.last_scraped_at,
+            }
+        )
+
+    # A registry entry can disappear between the card read and this request.
+    # Ask the shared selector for the same fail-closed contract instead of
+    # letting a retired named scraper fall through to GenericURLAdapter.
+    try:
+        select_provider_scraper(provider)
+    except ScraperExecutionIneligible as exc:
+        return Response(exc.payload(), status=status.HTTP_409_CONFLICT)
+    return Response(
+        {
+            "code": "refresh_target_unavailable",
+            "error": f"No refresh target is registered for '{provider.slug}'.",
+            "provider": provider.slug,
+            "alternative": None,
+        },
+        status=status.HTTP_409_CONFLICT,
+    )
 
 
 @api_view(["GET", "POST"])
@@ -563,19 +833,27 @@ def subscriptions_list_create(request):
     serializer.is_valid(raise_exception=True)
     validated = serializer.validated_data
     resolved_p = validated.get("resolved_provider")
+    access_mode = validated.get("access_mode") or "included"
 
     if resolved_p:
         sub, created = Subscription.objects.get_or_create(
             user_id=1,
             provider=resolved_p,
-            defaults={"name": resolved_p.name},
+            defaults={"name": resolved_p.name, "access_mode": access_mode},
         )
+        if not created and sub.access_mode != access_mode:
+            sub.access_mode = access_mode
+            sub.save(update_fields=["access_mode"])
     else:
         name_clean = (validated.get("name") or "").strip()
         sub, created = Subscription.objects.get_or_create(
             user_id=1,
             name=name_clean,
+            defaults={"access_mode": access_mode},
         )
+        if not created and sub.access_mode != access_mode:
+            sub.access_mode = access_mode
+            sub.save(update_fields=["access_mode"])
 
     return Response(SubscriptionSerializer(sub).data, status=status.HTTP_201_CREATED)
 
@@ -585,7 +863,13 @@ from django.utils import timezone
 
 
 def detect_provider_from_url(url: str) -> tuple[Provider, str]:
-    """Dynamically get or create a scraper provider from any URL."""
+    """Dynamically get or create a scraper provider from any URL.
+
+    The lookup goes through the provider's *domain root* first, so a URL on a
+    site that already has a provider row (e.g. bbc.co.uk/iplayer) reuses it
+    instead of minting a second row from the domain's first label — the
+    historical source of duplicate provider cards.
+    """
     parsed = urlparse(url.strip())
     domain = parsed.netloc.lower() or parsed.path.split("/")[0].lower()
     domain_clean = domain.replace("www.", "")
@@ -597,20 +881,32 @@ def detect_provider_from_url(url: str) -> tuple[Provider, str]:
     slug = domain_clean.split(".")[0]
     name = domain_clean.capitalize()
 
-    provider, _ = Provider.objects.get_or_create(
-        slug=slug,
-        defaults={
-            "name": name,
-            "category": "scraper",
-            "is_major": False,
-            "is_enabled": True,
-            "icon_name": slug,
-            "domain": domain_clean,
-        },
+    existing = (
+        Provider.objects.annotate(_domain_root=provider_domain_root_expr())
+        .filter(_domain_root=provider_domain_root(domain_clean))
+        .order_by("id")
+        .first()
     )
-    if not provider.domain:
-        provider.domain = domain_clean
-        provider.save()
+    if existing is not None:
+        if not existing.domain:
+            existing.domain = domain_clean
+            existing.save()
+        provider = existing
+    else:
+        provider, _ = Provider.objects.get_or_create(
+            slug=slug,
+            defaults={
+                "name": name,
+                "category": "scraper",
+                "is_major": False,
+                "is_enabled": True,
+                "icon_name": slug,
+                "domain": domain_clean,
+            },
+        )
+        if not provider.domain:
+            provider.domain = domain_clean
+            provider.save()
 
     parts = [p for p in parsed.path.split("/") if p]
     query = parts[-1].replace("-", " ").replace("_", " ") if parts else name
@@ -620,8 +916,6 @@ def detect_provider_from_url(url: str) -> tuple[Provider, str]:
 @api_view(["POST"])
 def scraper_import_url(request):
     """Import a small provider/source by URL, trigger the scraper, and register source."""
-    from tracker.scrapers.adapters import GenericURLAdapter
-
     data = request.data if isinstance(request.data, dict) else {}
     url = (data.get("url") or "").strip()
     if not url:
@@ -632,11 +926,10 @@ def scraper_import_url(request):
     except Exception as exc:
         return Response({"error": str(exc)}, status=400)
 
-    scraper_cls = resolve_scraper_class(provider.slug)
-    if scraper_cls:
-        scraper = scraper_cls()
-    else:
-        scraper = GenericURLAdapter(provider_slug=provider.slug, domain=provider.domain or "example.com")
+    try:
+        scraper = select_provider_scraper(provider).scraper
+    except ScraperExecutionIneligible as exc:
+        return Response(exc.payload(), status=status.HTTP_409_CONFLICT)
 
     items = scraper.run(query=query)
 
@@ -685,8 +978,6 @@ def scraper_import_url(request):
 @api_view(["POST"])
 def scraper_run(request):
     """Trigger a scraper run for a given scraper provider slug."""
-    from tracker.scrapers.adapters import GenericURLAdapter
-
     data = request.data if isinstance(request.data, dict) else {}
     provider_slug = data.get("provider_slug") or data.get("slug") or ""
     query = data.get("query")
@@ -700,31 +991,12 @@ def scraper_run(request):
     if not provider:
         return Response({"error": f"Provider '{provider_slug}' not found"}, status=404)
 
-    scraper_cls = resolve_scraper_class(provider.slug)
-    if scraper_cls:
-        scraper = scraper_cls()
-    else:
-        scraper = GenericURLAdapter(provider_slug=provider.slug, domain=provider.domain or "example.com")
-
-    items = scraper.run(query=query)
-
-    provider.last_scraped_at = timezone.now()
-    provider.save()
-
-    # Ensure all scraped items are saved to database mappings for provider stats
-    for item in items:
-        payload = dict(item.raw_payload) if isinstance(item.raw_payload, dict) else {}
-        payload.setdefault("content_type", item.content_type)
-        ScrapedContentMapping.objects.get_or_create(
-            provider=provider,
-            scraped_title=item.title,
-            scraped_year=item.year,
-            defaults={
-                "scraped_url": item.source_url,
-                "raw_payload": payload,
-                "is_available": item.availability,
-            },
-        )
+    # Shared with POST /api/providers/<slug>/refresh/: same scraper
+    # execution, same persistence, same bridge onto the canonical catalogue.
+    try:
+        items = run_provider_scraper(provider, query=query)
+    except ScraperExecutionIneligible as exc:
+        return Response(exc.payload(), status=status.HTTP_409_CONFLICT)
 
     matcher = ContentMatcher()
     results = []
@@ -759,27 +1031,56 @@ def scraper_run(request):
 @api_view(["DELETE"])
 def provider_delete(request, slug: str):
     """Delete a custom scraper provider and its scraped mappings."""
+    from availability.models import (
+        ContentMapping,
+        Offer as AvailabilityOffer,
+        ProviderContent,
+        SyncCursor,
+        SyncRun,
+    )
+
     provider = get_object_or_404(Provider, slug__iexact=slug)
     if provider.is_major:
         return Response({"error": "Major canonical providers cannot be deleted."}, status=400)
 
-    provider.delete()
+    # The availability tables PROTECT their provider, so the canonical rows
+    # this provider owns are removed first (the legacy mappings cascade away
+    # with the provider itself).  The shared writer barrier is acquired before
+    # the transaction opens and held through its commit, so this deletion can
+    # never race an availability refresh or the remediation.  The nested
+    # projection deletion fired by the ``ScrapedContentMapping`` cascade reuses
+    # this acquisition (``writer_barrier`` is re-entrant); it never takes a
+    # second session lock.
+    try:
+        with writer_barrier(f"provider deletion for {provider.slug}"):
+            with transaction.atomic():
+                ContentMapping.objects.filter(provider=provider).delete()
+                ProviderContent.objects.filter(provider=provider).delete()
+                AvailabilityOffer.objects.filter(provider=provider).delete()
+                SyncRun.objects.filter(provider=provider).delete()
+                SyncCursor.objects.filter(provider=provider).delete()
+                provider.delete()
+    except MaintenanceInProgress as exc:
+        logger.warning(
+            "provider_delete_refused provider=%s reason=%s", provider.slug, exc
+        )
+        return Response(
+            {"error": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE
+        )
     return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 @api_view(["GET"])
 def catalog_list(request):
     """GET /api/catalog/ — List all tracked catalog items with composable filters, watchability & pagination."""
-    curr_country = request.GET.get("country") or "US"
+    curr_country = _active_country(request)
     pref = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
-    user_subs = get_user_subscriptions(user_id=1)
 
     movies = Movie.objects.all().order_by("-id")
     evaluated, _ = apply_composable_filters(
         movies,
         request.GET,
         pref,
-        user_subscriptions=user_subs,
         current_country=curr_country,
     )
 
@@ -885,6 +1186,12 @@ def scraper_confirm_match(request):
     mapping.is_confirmed = True
     mapping.confidence_score = 1.0
     mapping.save()
+    # Re-project the confirmed mapping so the canonical row carries the
+    # manual match (MatchMethod.MANUAL) the catalogue reads back.
+    ingest_scraped_mapping(mapping)
+    # Manual match = explicit user intent: if the canonical path has no
+    # availability for this TMDb id yet, request an asynchronous refresh.
+    request_availability_refresh(movie, priority=RefreshPriority.EXPLICIT, country=_active_country(request))
 
     return Response(ScrapedContentMappingSerializer(mapping).data)
 
@@ -1042,6 +1349,9 @@ def watchlist_resolve(request):
             movie=movie,
             source="letterboxd_resolved",
         )
+        # Event-driven refresh: resolved selections become eligible for
+        # canonical availability refresh (idempotent, local-only).
+        request_availability_refresh(movie, priority=RefreshPriority.WATCHLIST, country=_active_country(request))
         watchlist_items.append(item)
 
     return Response(
@@ -1056,9 +1366,8 @@ def watchlist_resolve(request):
 @api_view(["GET"])
 def watchlist_report(request):
     """Return aggregated report for watchlist items (user_id=1) with full watchability evaluation, composable filters & pagination."""
-    curr_country = request.GET.get("current_country") or request.query_params.get("current_country") or request.GET.get("country") or "US"
+    curr_country = _active_country(request)
     preference = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
-    user_subs = get_user_subscriptions(user_id=1)
 
     items = (
         WatchlistItem.objects.select_related("movie")
@@ -1067,32 +1376,46 @@ def watchlist_report(request):
     )
     watchlist_movies = [item.movie for item in items]
 
+    # What the refresh queue knows about each title (pending/checked/failed/
+    # never_checked): threaded into the watchability evaluation so a title
+    # with no offers reads 🔵 Checking… while its refresh is queued, ⚫ Not
+    # available once checked, and ⚪ Unknown only when never fetched.
+    refresh_states = refresh_states_for({m.id for m in watchlist_movies})
+
     # Apply composable filters to the watchlist movies
     evaluated_filtered, _ = apply_composable_filters(
         watchlist_movies,
         request.GET,
         preference,
-        user_subscriptions=user_subs,
         current_country=curr_country,
+        refresh_states=refresh_states,
     )
-
-    cache = AvailabilityCache()
 
     report = []
     country_movie_sets: dict[str, set[int]] = {}
     service_movie_sets: dict[str, set[int]] = {}
     available_movies_count = 0
+    needs_recheck_movies_count = 0
+    user_data_by_movie = {
+        row.movie_id: row
+        for row in UserMovieData.objects.filter(
+            user_id=1,
+            movie_id__in=[item["movie"].id for item in evaluated_filtered],
+        )
+    }
 
     for eval_item in evaluated_filtered:
         movie = eval_item["movie"]
         watch_res = eval_item["watchability"]
 
         # Check if movie is marked as watched for watchlist status
-        user_data = UserMovieData.objects.filter(user_id=1, movie=movie).first()
+        user_data = user_data_by_movie.get(movie.id)
         is_watched = bool(user_data and user_data.is_watched)
 
-        # Skip filtering offers - just use ranked offers for country/service breakdown
-        raw_offers = cache.read_offers(movie)
+        # ``apply_composable_filters`` already performed one bulk canonical
+        # read for this report.  Reusing that same list keeps report summaries
+        # in lockstep with the badge and avoids a second N+1 reconciliation.
+        raw_offers = eval_item["offers"]
         ranked = rank_offers(raw_offers, preference, current_country=curr_country)
 
         countries = sorted(list({r.country.upper() for r in ranked if r.country}))
@@ -1102,6 +1425,8 @@ def watchlist_report(request):
 
         if countries or watch_res.status in ("watchable_here", "watchable_vpn"):
             available_movies_count += 1
+        elif watch_res.status == WatchabilityStatus.NEEDS_RECHECK:
+            needs_recheck_movies_count += 1
 
         for c in countries:
             country_movie_sets.setdefault(c, set()).add(movie.id)
@@ -1123,7 +1448,9 @@ def watchlist_report(request):
         )
 
     total_movies = len(report)
-    unavailable_movies_count = total_movies - available_movies_count
+    unavailable_movies_count = (
+        total_movies - available_movies_count - needs_recheck_movies_count
+    )
 
     country_list = [
         {"country": c, "count": len(m_set)}
@@ -1141,6 +1468,8 @@ def watchlist_report(request):
         "total_movies": total_movies,
         "available_movies": available_movies_count,
         "unavailable_movies": unavailable_movies_count,
+        # Only stale/unverified evidence: neither available nor unavailable.
+        "needs_recheck_movies": needs_recheck_movies_count,
         "countries": country_list,
         "services": service_list,
     }
@@ -1301,6 +1630,552 @@ def watchlist_refresh(request):
         return Response(summary, status=status.HTTP_429_TOO_MANY_REQUESTS)
 
     return Response(summary, status=status.HTTP_200_OK)
+
+
+@api_view(["POST"])
+def watchlist_refresh_explicit(request):
+    """POST /api/watchlist/refresh-explicit/ — queue a bulk explicit refresh.
+
+    Backend for the watchlist page's "Refresh all availability" action. The
+    single-title refresh endpoint does one title; this one enqueues every
+    watchlisted title at ``RefreshPriority.EXPLICIT`` in one local pass and
+    answers immediately — enqueue-only by contract, so the HTTP request
+    never contacts a provider and never spends API budget. The existing
+    ``refresh_worker`` drains the queue under the shared rate limit and
+    daily budget; the frontend polls ``refresh-status`` for progress.
+
+    The run owns a ``batch`` uuid stamped onto every request it touches, so
+    the progress endpoint counts *this run's* backlog — repeated clicks and
+    rows opened earlier by other events collapse into the same batch.
+
+    Catalogue-capable sources (the scheduled whole-catalogue syncers) are
+    not per-title work: when any of them reads stale, a
+    ``CatalogueRefreshRequest`` marker is queued too and the worker syncs
+    those whole catalogues after the title queue — so "Refresh all" genuinely
+    covers every source, not only the default title-targeted one.
+    ``catalogue_queued`` reports which.
+
+    ``now`` is the server epoch captured *before* the enqueue pass, so every
+    completion this run produces (including ones racing the response) counts
+    toward the status endpoint's progress, while earlier refreshes never do.
+    """
+    started_at = timezone.now()
+    result = request_watchlist_refresh(user_id=1, country=_active_country(request))
+
+    if result["total_watchlist"] and not result["queued"]:
+        # request_watchlist_refresh swallows enqueue failures (same contract
+        # as the per-title path); for an explicit user action a total
+        # failure must surface instead of reporting a phantom success.
+        return Response(
+            {"error": "failed to queue availability refresh"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    # Record the run before the catalogue marker so the marker can be
+    # attributed to it. ``/api/availability/refreshes/`` already does this; the
+    # explicit watchlist path did not, which is why an explicit "Refresh all"
+    # left 601 RefreshRequests whose batch had no AvailabilityRefresh row.
+    movie_ids = _watchlist_movie_ids()
+    refresh = record_run(
+        AvailabilityRefreshType.WATCHLIST,
+        batch=result.get("batch"),
+        movie_ids=movie_ids,
+        source_policy=title_level_source_slugs(),
+        country=_active_country(request),
+    )
+
+    stale_catalogue = stale_catalogue_sources()
+    if stale_catalogue:
+        request_catalogue_refresh(stale_catalogue, availability_refresh=refresh)
+
+    return Response(
+        {
+            **result,
+            "refresh_id": refresh.pk,
+            "now": started_at.timestamp(),
+            "catalogue_queued": stale_catalogue,
+        },
+        status=status.HTTP_202_ACCEPTED,
+    )
+
+
+def _next_utc_midnight_ts() -> float:
+    """Epoch seconds of the next UTC midnight — where the daily quota resets."""
+    now = datetime.now(dt_timezone.utc)
+    tomorrow = now.date() + timedelta(days=1)
+    midnight = datetime.combine(tomorrow, time.min, tzinfo=dt_timezone.utc)
+    return midnight.timestamp()
+
+
+@api_view(["GET"])
+def watchlist_refresh_status(request):
+    """GET /api/watchlist/refresh-status/?since=<epoch>[&batch=<uuid>] — bulk progress.
+
+    Counts the watchlist titles' refresh requests, split into ``pending``
+    (still queued for the worker) plus ``refreshed`` (done) and ``failed``.
+
+    **Source fan-out.** Refresh All now queues one request per (title, source)
+    across every registered title-level source, so a run's unit of work is a
+    *source check*, not a title — ``total`` and the three counts are all in
+    checks, and ``titles``/``checks_per_title`` let the UI say so honestly
+    instead of implying one check per title. With ``batch`` (the enqueue
+    response's ``batch`` uuid) every count is scoped to that run's stamped
+    rows across **all** sources: ``pending`` then means "this button's
+    backlog", never unrelated requests queued elsewhere — repeated clicks
+    re-stamp rows, so the newest batch always sees the full queue it owns.
+    Without ``batch`` the legacy unscoped behavior stands.
+
+    Legacy ``source=""`` batches keep working: those rows are counted like any
+    other source-scoped row, so an in-flight batch queued before source
+    fan-out still reports real progress rather than zero.
+
+    **Rate limiting is per source**, so the response names the blocked sources
+    (``rate_limited_sources``) instead of claiming the whole watchlist is
+    blocked. ``rate_limited`` stays for backwards compatibility and means
+    "at least one source is waiting for its quota" — it is never used to claim
+    nothing else is progressing. ``source_quotas`` reports the remaining
+    budget per source and omits unmetered sources entirely (there is no quota
+    to report for them, so none is invented).
+    """
+    since_raw = request.GET.get("since")
+    try:
+        since_ts = float(since_raw)
+    except (TypeError, ValueError):
+        return Response(
+            {"error": "since must be an epoch timestamp"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    since = datetime.fromtimestamp(since_ts, tz=dt_timezone.utc)
+
+    batch_raw = request.GET.get("batch")
+    batch_id = None
+    if batch_raw:
+        try:
+            batch_id = uuid.UUID(batch_raw)
+        except ValueError:
+            return Response(
+                {"error": "batch must be a UUID"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    watchlist_movie_ids = WatchlistItem.objects.filter(user_id=1).values("movie_id")
+    # No ``source`` filter: a run owns one row per (title, source), and this
+    # endpoint must aggregate all of them — the legacy ``source=""`` rows and
+    # every explicit slug alike.
+    scope = RefreshRequest.objects.filter(
+        movie_id__in=Subquery(watchlist_movie_ids),
+    )
+    if batch_id is not None:
+        batch_scope = scope.filter(batch=batch_id)
+        pending = batch_scope.filter(status=RefreshRequestStatus.PENDING).count()
+        refreshed = batch_scope.filter(status=RefreshRequestStatus.DONE).count()
+        failed = batch_scope.filter(status=RefreshRequestStatus.FAILED).count()
+        total = batch_scope.count()
+    else:
+        # No run boundary was supplied, so this endpoint is reporting global
+        # progress. "Outstanding" must therefore mean *outstanding work some
+        # live run still owns* — not "any pending row that ever existed".
+        #
+        # These are different, and conflating them is a live defect. Two runs
+        # (5 and 6) were recorded `partial` under the pre-P6a contract while
+        # still owning 476 pending rows. Those rows are historical and runnable:
+        # no source is out of budget, so they were never legitimately settled,
+        # and inventing an outcome for them would falsify the record. They are
+        # left untouched — but they must not be counted as work in flight,
+        # because there is no active run and the frontend would render 382
+        # pending requests as a refresh currently progressing.
+        #
+        # A row belongs to live work if either (a) a non-terminal refresh owns
+        # it, or (b) it has no batch at all.
+        #
+        # Case (b) matters and was missed in the first pass of this fix. A
+        # single-title refresh — the detail page, an import, cron — is queued
+        # with `batch=NULL` and is genuinely outstanding work that no run
+        # "owns". Excluding it made the endpoint report zero pending for a
+        # watchlist with a real queued title, which is the mirror image of the
+        # bug being fixed. So: exclude rows sitting behind a *terminal* run, and
+        # keep everything else.
+        #
+        # `since` still bounds *completion* counts; ownership bounds pending.
+        terminal_batches = AvailabilityRefresh.objects.filter(
+            status__in=TERMINAL_STATUSES
+        ).exclude(batch=None).values_list("batch", flat=True)
+
+        pending = scope.filter(status=RefreshRequestStatus.PENDING).exclude(
+            batch__in=terminal_batches
+        ).count()
+        refreshed = scope.filter(
+            status=RefreshRequestStatus.DONE, completed_at__gte=since
+        ).count()
+        failed = scope.filter(
+            status=RefreshRequestStatus.FAILED, completed_at__gte=since
+        ).count()
+        # Without a batch there is no run boundary, so the comparable total is
+        # everything still outstanding plus what completed since ``since``.
+        total = pending + refreshed + failed
+
+    # Which sources are out of budget, and what is left for each. Computed
+    # from the limiters themselves so this endpoint can never disagree with
+    # the worker about what is blocked.
+    source_quotas = {}
+    for slug in title_level_source_slugs():
+        limiter = rate_limiter_for(slug)
+        remaining = limiter.remaining()
+        monthly_remaining = limiter.monthly_remaining()
+        if remaining is None and monthly_remaining is None:
+            continue  # unmetered: no quota to report, none invented
+        monthly_resets_at = limiter.monthly_resets_at()
+        accounting_since = limiter.monthly_accounting_since()
+        source_quotas[slug] = {
+            # Kept for existing clients: this is the daily headroom.
+            "remaining": remaining,
+            "limit": limiter.daily_limit,
+            "exhausted": limiter.is_exhausted(),
+            "monthly_used": limiter.monthly_used(),
+            "monthly_remaining": monthly_remaining,
+            "monthly_limit": limiter.monthly_limit,
+            "monthly_window_days": limiter.monthly_window_days,
+            "monthly_accounting_since": (
+                accounting_since.isoformat() if accounting_since else None
+            ),
+            "monthly_resets_at": (
+                monthly_resets_at.timestamp() if monthly_resets_at else None
+            ),
+        }
+    rate_limited_sources = sorted(
+        slug for slug, quota in source_quotas.items() if quota["exhausted"]
+    )
+
+    # How many titles this run covers, so the UI can distinguish "3 of 29
+    # titles" from "60 of 87 checks". Only meaningful for a batched run.
+    #
+    # ``checks_per_title`` counts the distinct sources actually queued per
+    # title rather than dividing total by titles: rows settle over time, so a
+    # mean would drift mid-run (571/191 = 2.98) even though nothing about the
+    # fan-out changed. The distinct-source count is the actual fan-out width
+    # and stays exact.
+    titles = 0
+    checks_per_title = 0
+    if batch_id is not None:
+        batched = scope.filter(batch=batch_id)
+        titles = batched.values("movie_id").distinct().count()
+        per_title_sources = (
+            batched.values("movie_id")
+            .annotate(n=Count("source", distinct=True))
+            .aggregate(m=Max("n"))["m"]
+        )
+        checks_per_title = per_title_sources or 0
+
+    return Response(
+        {
+            "total": total,
+            "pending": pending,
+            "refreshed": refreshed,
+            "failed": failed,
+            "titles": titles,
+            "checks_per_title": checks_per_title,
+            "since": since_ts,
+            "batch": str(batch_id) if batch_id else None,
+            # "at least one source is waiting for its quota" — never "the whole
+            # refresh is blocked".
+            "rate_limited": bool(rate_limited_sources),
+            "rate_limited_sources": rate_limited_sources,
+            "source_quotas": source_quotas,
+            "resets_at": _next_utc_midnight_ts(),
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+# --- source-first availability observability ------------------------------
+
+
+def _watchlist_movie_ids() -> list[int]:
+    return list(
+        WatchlistItem.objects.filter(user_id=1).values_list("movie_id", flat=True)
+    )
+
+
+def _serialize_refresh(refresh, movie_ids) -> dict:
+    """One refresh run as the UI consumes it, with live per-source progress.
+
+    **Progress counters are recomputed on read; the run *status* is not.**
+    That split is deliberate and is the fix for the design this replaced.
+
+    Recomputing the per-source and title counters is what makes a poll after
+    a browser reload show exactly what the button showed before it, and it is
+    derived purely from persisted state, so it cannot be wrong. But
+    ``status`` is a *lifecycle* fact written by the worker (see
+    :mod:`tracker.services.refresh_lifecycle`) and is read straight off the
+    row. A reader that inferred "no pending requests, therefore completed"
+    would be making the transition itself — which is how a run gets marked
+    COMPLETED by a GET request, and how a crashed run gets quietly reported
+    as a success.
+    """
+    if refresh.status not in TERMINAL_STATUSES:
+        # Not terminal yet: refresh the progress rows so the UI can show what
+        # is moving, but leave the status to the worker.
+        sync_run_progress(refresh, movie_ids, batch=refresh.batch)
+    return {
+        "id": refresh.pk,
+        "type": refresh.run_type,
+        "status": refresh.status,
+        "batch": str(refresh.batch) if refresh.batch else None,
+        "created_at": refresh.created_at,
+        "started_at": refresh.started_at,
+        "finished_at": refresh.finished_at,
+        "is_active": refresh.is_active,
+        "total_titles": refresh.total_titles,
+        "completed_titles": refresh.completed_titles,
+        "available_titles": refresh.available_titles,
+        "unavailable_titles": refresh.unavailable_titles,
+        "unknown_titles": refresh.unknown_titles,
+        "failed_titles": refresh.failed_titles,
+        "unknown_reasons": refresh.unknown_reasons,
+        "policy": source_policy.policy_description(),
+        "sources": [
+            {
+                "source": row.source,
+                "label": source_label(row.source),
+                "tier": row.tier,
+                "kind": row.kind,
+                "status": row.status,
+                "reason": row.reason,
+                "total": row.total,
+                "completed": row.completed,
+                "successful": row.successful,
+                "failed": row.failed,
+                "unknown": row.unknown,
+                "queued": row.queued,
+                "error": row.error,
+            }
+            for row in refresh.sources.all()
+        ],
+    }
+
+
+@api_view(["GET"])
+def availability_report(request):
+    """GET /api/availability/report/ — the source-first availability picture.
+
+    Answers, in one read, the two questions the old button-state could not:
+
+    - "what is running, what is queued, what succeeded, and which source
+      produced the result" — ``sources`` (per-title checks) and ``collectors``
+      (whole-catalogue syncs, reported separately because a catalogue source
+      cannot answer a question about one film);
+    - "why are these titles still unknown" — ``unknown_reasons``, a
+      ``{reason: count}`` map over the same evidence the per-title breakdown
+      uses.
+
+    Also returns ``policy`` and ``counterfactual`` so the source hierarchy
+    is never implicit: the user can see which ladder is active and what
+    switching it would cost before switching it.
+    """
+    movie_ids = _watchlist_movie_ids()
+    batch_raw = request.GET.get("batch")
+    batch = batch_raw or None
+    country = (
+        request.GET.get("current_country")
+        or request.GET.get("country")
+        or resolve_preferences(user_id=1).get("current_country")
+        or None
+    )
+    summary = build_run_summary(movie_ids, batch=batch, country=country)
+    counterfactual = source_policy.counterfactual(
+        summary.pop("_states"), summary.pop("_resolved_sources")
+    )
+    return Response(
+        {
+            **summary,
+            "policy": source_policy.policy_description(),
+            "counterfactual": counterfactual,
+            "resets_at": _next_utc_midnight_ts(),
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["GET"])
+def availability_metrics(request):
+    """GET /api/availability/metrics/ — seven-day operational metrics.
+
+    Separate from ``/api/availability/report/`` on purpose. The report answers
+    "what is true about availability right now, per title"; this answers "how
+    has the refresh machinery itself been behaving lately". Mixing them would
+    make the report heavier for every consumer just to serve a dashboard.
+
+    Entirely observational: ``availability_metrics`` reads persisted state and
+    makes no upstream call, so this endpoint is safe to poll and costs no quota.
+
+    Three presentation rules, applied here rather than left to the dashboard,
+    because a client that cannot see the difference will render it wrongly:
+
+    * ``null`` means *no data*, ``0`` means *measured zero*. A window with no
+      runs reports ``completion_rate: null``, not ``0.0``.
+    * Sources that never executed are returned with ``never_executed: true`` and
+      null counters, so "never ran" is never confused with "ran and found
+      nothing".
+    * Refresh failure is read from ``status='failed'`` alone, never inferred
+      from unknown-title counts.
+    """
+    days_param = request.GET.get("days")
+    days = WINDOW_DAYS
+    if days_param:
+        try:
+            days = max(1, min(int(days_param), 90))
+        except (TypeError, ValueError):
+            return Response(
+                {"error": f"days must be an integer; got {days_param!r}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+    return Response(
+        collect_availability_metrics(days=days), status=status.HTTP_200_OK
+    )
+
+
+@api_view(["GET"])
+def availability_title_report(request, tmdb_id: int):
+    """GET /api/availability/report/<tmdb_id>/ — one title's per-source verdicts.
+
+    The per-title half of the plan's "Availability sources checked" panel:
+
+        ✓ JustWatch          checked 14:32
+        ✓ YouTube            checked 14:31
+        — BBC iPlayer        not applicable (catalogue source)
+        ⏳ Streaming API      queued — quota exhausted
+
+        Result: Available on BBC iPlayer
+
+    The headline is the *title's* state, which is ``available`` if **any**
+    source produced an offer regardless of how many others are silent — the
+    one behaviour the old single ``unknown`` could not express, and the one
+    that stops a blocked source from being reported as absence of
+    availability.
+    """
+    movie = Movie.objects.filter(tmdb_id=tmdb_id).first()
+    if movie is None:
+        return Response(
+            {"error": "movie not found"}, status=status.HTTP_404_NOT_FOUND
+        )
+    access_country = (
+        request.query_params.get("current_country")
+        or request.query_params.get("country")
+        or resolve_preferences(user_id=1).get("current_country")
+        or ""
+    )
+    report = title_source_report([movie.pk], country=str(access_country).upper() if access_country else None).get(movie.pk, {})
+    from .services.availability_report import catalogue_progress
+
+    return Response(
+        {
+            "tmdb_id": movie.tmdb_id,
+            "title": movie.title,
+            **report,
+            "collectors": catalogue_progress(),
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["GET"])
+def availability_refresh_list(request):
+    """GET /api/availability/refreshes/?active=true — runs a page load can resume.
+
+    This is the endpoint that makes a browser reload harmless. The frontend
+    does not own the state of a long-running refresh: it asks for the active
+    run, redraws it, and keeps polling.
+
+    ``results`` is always the recent history, newest first, and ``active`` is
+    the newest non-terminal run (or ``null``). The two are deliberately
+    independent: the frontend's *job* is "attach to whatever is running", and
+    a page load that also wants to show the last finished run must not have
+    to make a second request. Filtering ``results`` down to active-only would
+    mean a reload after the run finished shows an empty list and no outcome
+    at all — losing exactly the information the panel exists to surface.
+
+    Reading this endpoint never changes a run's status. The worker owns the
+    lifecycle; see ``refresh_lifecycle.AvailabilityRefreshLifecycle``.
+    """
+    runs = AvailabilityRefresh.objects.all()[:20]
+    movie_ids = _watchlist_movie_ids()
+    current = active_refresh()
+    return Response(
+        {
+            "results": [_serialize_refresh(run, movie_ids) for run in runs],
+            "active": _serialize_refresh(current, movie_ids) if current else None,
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["GET"])
+def availability_refresh_detail(request, pk: int):
+    """GET /api/availability/refreshes/<pk>/ — one run, reconstructable from the DB."""
+    refresh = AvailabilityRefresh.objects.filter(pk=pk).first()
+    if refresh is None:
+        return Response(
+            {"error": "refresh not found"}, status=status.HTTP_404_NOT_FOUND
+        )
+    return Response(
+        _serialize_refresh(refresh, _watchlist_movie_ids()),
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["POST"])
+def availability_refresh_start(request):
+    """POST /api/availability/refresh/ — queue a run and return its id.
+
+    Enqueue-only by contract, exactly like the existing
+    ``refresh-explicit`` endpoint: the HTTP request never contacts a
+    provider. It returns ``{refresh_id, batch, ...}`` and the client polls
+    ``GET /api/availability/refreshes/<refresh_id>/`` — so a reload resumes
+    from the id rather than losing the run.
+    """
+    started_at = timezone.now()
+    result = request_watchlist_refresh(user_id=1, country=_active_country(request))
+
+    if result["total_watchlist"] and not result["queued"]:
+        return Response(
+            {"error": "failed to queue availability refresh"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    stale_catalogue = stale_catalogue_sources()
+
+    movie_ids = _watchlist_movie_ids()
+    # The run's frozen policy is the union of sources it may consult across
+    # its titles — the same set the enqueue just decided from. Note this is
+    # `title_level_source_slugs()`, not the role set: a catalogue-driven
+    # source has no per-title request row, so recording it as run scope would
+    # be a claim about scheduling the queue cannot honour.
+    refresh = record_run(
+        AvailabilityRefreshType.WATCHLIST,
+        batch=result.get("batch"),
+        movie_ids=movie_ids,
+        source_policy=title_level_source_slugs(),
+    )
+    # The marker is queued first here (the run is recorded just above), so it is
+    # associated afterwards. A marker already pending from an earlier refresh
+    # keeps its existing links and simply gains this one: coalescing means one
+    # marker can legitimately represent several refreshes.
+    if stale_catalogue:
+        request_catalogue_refresh(
+            stale_catalogue, availability_refresh=refresh
+        )
+
+    sync_run_progress(refresh, movie_ids, batch=refresh.batch)
+    return Response(
+        {
+            "refresh_id": refresh.pk,
+            **result,
+            "now": started_at.timestamp(),
+            "catalogue_queued": stale_catalogue,
+            "refresh": _serialize_refresh(refresh, movie_ids),
+        },
+        status=status.HTTP_202_ACCEPTED,
+    )
 
 
 @api_view(["GET"])
@@ -1471,6 +2346,24 @@ def _current_country(request) -> str:
     )
 
 
+def _active_country(request) -> str:
+    """Active country for the list surfaces (homepage, catalog, watchlist).
+
+    Mirrors :func:`_current_country` (the detail pages) but also honours the
+    legacy ``country`` parameter. All four surfaces must evaluate the same
+    country, or the same title reads 🟢 "Watchable here" on its detail page and
+    🟡 "Watchable with VPN" in the watchlist — the movie 615457 report. They
+    used to default to a hard-coded "US" while the detail page used the user's
+    saved country (NL), so a local offer looked foreign.
+    """
+    return (
+        request.GET.get("current_country")
+        or request.GET.get("country")
+        or resolve_preferences(user_id=1).get("current_country")
+        or "US"
+    )
+
+
 def _load_content_item(tmdb_id: int, content_type: str) -> Movie | None:
     """Load the tracked row for tmdb_id, resolving it through TMDb when missing.
 
@@ -1548,9 +2441,11 @@ def _build_prime_offers(request, movie: Movie, season: int | None = None) -> lis
     rows are show-level and carry no season signal.
     """
     from tracker.models import ProviderCategory
-    from tracker.services.offers import Offer
     from tracker.services.presentation import present_offer
     from tracker.services.ranking import rank_offers
+    from tracker.services.scraped_offers import BVOD_CATEGORIES, get_scraped_offers
+    from tracker.services.access import build_reach, build_user_access, classify_offer
+    from tracker.services.preferences import build_preference
 
     from .services.offer_pipeline import OfficialOffersPipeline
 
@@ -1567,34 +2462,17 @@ def _build_prime_offers(request, movie: Movie, season: int | None = None) -> lis
     if season is not None:
         return offers_out
 
-    # Include BVOD scraped offers in the main offers list
-    bvod_categories = ["bvod", "avod", "tvod", "fast"]
-    scraped = ScrapedContentMapping.objects.filter(
-        movie=movie,
-        is_available=True,
-        provider__category__in=bvod_categories,
-        provider__is_enabled=True,
-    ).select_related("provider")
-
-    if scraped:
+    # Include BVOD scraped offers in the main offers list — read through the
+    # canonical catalogue (provider observations + ContentMapping resolution)
+    # instead of the legacy ScrapedContentMapping table.
+    bvod_offers, provider_map = get_scraped_offers(
+        movie, provider_categories=BVOD_CATEGORIES
+    )
+    if bvod_offers:
         preference = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
-        provider_map = {p.provider.slug: p.provider for p in scraped}
-        bvod_offers = []
-        for mapping in scraped:
-            payload = mapping.raw_payload or {}
-            audio = payload.get("audio_languages", []) if isinstance(payload, dict) else []
-            subs = payload.get("subtitle_languages", []) if isinstance(payload, dict) else []
-            bvod_offers.append(Offer.from_dict({
-                "country": payload.get("country", "") if isinstance(payload, dict) else "",
-                "service": mapping.provider.slug,
-                "offer_type": "free",
-                "quality": mapping.provider.config.get("quality") if mapping.provider.config else "",
-                "url": mapping.scraped_url,
-                "audio": [str(a).upper() for a in audio],
-                "subs": [str(s).upper() for s in subs],
-                "is_scraped_source": True,
-            }))
-
+        classify_pref = build_preference(1)
+        access = build_user_access(1)
+        reach = build_reach(classify_pref, current_country)
         ranked = rank_offers(bvod_offers, preference, current_country=current_country)
         for offer in ranked:
             presented = present_offer(offer, provider_map)
@@ -1602,6 +2480,20 @@ def _build_prime_offers(request, movie: Movie, season: int | None = None) -> lis
             offer_dict["service"] = presented.service_display
             offer_dict["source_indicator"] = presented.source_indicator
             offer_dict["country"] = presented.country
+            classified = classify_offer(
+                offer, access=access, preference=classify_pref,
+                reach=reach, provider_map=provider_map,
+            )
+            offer_dict["access_type"] = classified.access_type
+            offer_dict["access_label"] = classified.access_label
+            offer_dict["locality"] = classified.locality
+            offer_dict["is_accessible"] = classified.is_accessible
+            offer_dict["is_entitled"] = classified.is_entitled
+            offer_dict["requires_payment"] = classified.requires_payment
+            offer_dict["is_addon"] = classified.is_addon
+            offer_dict["required_base"] = classified.required_base
+            offer_dict["required_base_display"] = classified.required_base_display
+            offer_dict["rejection_reasons"] = classified.rejection_reasons
             offers_out.append(offer_dict)
 
     return offers_out
@@ -1609,16 +2501,89 @@ def _build_prime_offers(request, movie: Movie, season: int | None = None) -> lis
 
 def _prime_detail_response(request, item: Movie, key: str) -> Response:
     """Shared detail payload for prime_movie / prime_series, keyed by ``key``."""
+    # Refresh-on-view (Phase B): this is the title detail page the frontend
+    # opens. Local offers are returned immediately; a stale/missing title
+    # gets an asynchronous refresh request, never a synchronous fetch.
+    #
+    # Fan out to every eligible title-level source, exactly as ``movie_detail``
+    # does, so both detail entry points schedule the same targeted lookups
+    # (capability-driven — catalogue-only collectors are structurally excluded
+    # and no catalogue crawl can happen). Reusing ``request_title_refresh``
+    # keeps the dedup, cooldown and metered-source policy identical here.
+    request_title_refresh(
+        item,
+        priority=RefreshPriority.RECENTLY_VIEWED,
+        country=_current_country(request),
+    )
+
     user_data = UserMovieData.objects.filter(user_id=1, movie=item).first()
     is_in_watchlist = WatchlistItem.objects.filter(user_id=1, movie=item).exists()
     watch_events = MovieWatchEvent.objects.filter(user_id=1, movie=item).order_by("-watched_date", "-created_at")
     season = _requested_season(request, item)
+    pending = RefreshRequest.objects.filter(
+        movie=item, status=RefreshRequestStatus.PENDING
+    ).exists()
+    latest = (
+        RefreshRequest.objects.filter(movie=item)
+        .order_by("-requested_at", "-pk")
+        .first()
+    )
+    from tracker.services.access import resolve_title as access_resolve_title
+    from tracker.services.preferences import build_preference
+
+    from tracker.services.watchability import describe_last_known, qualify_watchability_dict
+
+    access_pref = build_preference(1)
+    access_country = _current_country(request) or access_pref.current_country
+    current_offers, last_known_offers = get_offer_evidence(item, season=season)
+    access_verdict = access_resolve_title(
+        item,
+        current_offers,
+        access_pref,
+        current_country=access_country,
+    )
+    last_known = describe_last_known(
+        item, last_known_offers, access_pref, current_country=access_country
+    )
+
     payload = {
         key: MovieDetailSerializer(item).data,
         "user_data": UserMovieDataSerializer(user_data).data if user_data else None,
         "is_in_watchlist": is_in_watchlist,
         "watch_events": MovieWatchEventSerializer(watch_events, many=True).data,
         "offers": _build_prime_offers(request, item, season=season),
+        # The single access verdict for this title, computed by the same
+        # resolver the watchlist badge uses (tracker.services.access). The
+        # detail page and the watchlist can therefore never disagree about
+        # whether a title is watchable, reachable via VPN, purchase-only or
+        # genuinely unavailable.
+        "watchability": qualify_watchability_dict(
+            access_verdict.to_watchability_dict(), last_known
+        ),
+        # Stale ("last seen") or uncorroborated positive offers, classified by
+        # the same resolver. History only: never part of ``offers``/counts.
+        "last_known_offers": last_known.offers if last_known else [],
+        # Rent/buy offers are surfaced separately (never in ``offers``, which
+        # stays subscription/free by design) so "available only for an
+        # additional payment" is distinguishable from "included".
+        "purchase_offers": [c.to_dict() for c in access_verdict.purchase_offers],
+        # The canonical availability verdict for this title, exactly as the
+        # availability report computes it. Present so an empty ``offers`` list
+        # is never ambiguous: the detail page can tell "checked and genuinely
+        # unavailable" apart from "the evidence never resolved" without
+        # inventing a second classifier. Absence of this field is read by the
+        # frontend as unknown, never as unavailable.
+        "availability": title_source_report([item.pk], country=str(access_country) if access_country else None).get(item.pk),
+        # True while this title still waits in the refresh queue — the
+        # frontend polls on it ("Checking availability…") until the worker
+        # drains the request and canonical offers land.
+        "refresh_pending": pending,
+        # Status of the newest request for this title ("pending" / "done" /
+        # "failed", null when never requested) straight off the same
+        # RefreshRequest rows the queue maintains — so the frontend can tell
+        # a completed refresh from one the worker gave up on, without a
+        # second status system.
+        "refresh_status": latest.status if latest else None,
     }
     if key == "series":
         payload["seasons"] = _season_summaries(item)
@@ -1732,18 +2697,10 @@ def watch_redirect(request, tmdb_id: int):
         if name:
             subscribed_slugs.add(name.lower())
 
-    cache = AvailabilityCache()
-    try:
-        cache.get_or_refresh(movie)
-    except RateLimitExceeded:
-        pass
-    except Exception:
-        logger.exception("Live availability refresh failed for watch redirect tmdb %s", tmdb_id)
-
-    offers = cache.read_offers(movie)
+    offers = get_local_offers(movie)
     qualifying = [
         o for o in offers
-        if (o.offer_type or "").lower() in ("subscription", "free")
+        if (o.offer_type or "").lower() in QUALIFYING_OFFER_TYPES
     ]
 
     if subscribed_slugs:
@@ -1804,6 +2761,20 @@ def movie_detail(request, pk: int):
     except Exception:
         logger.exception("TMDb details fetch failed for movie %s", pk)
 
+    # Refresh-on-view (Phase B): opening a title is meaningful user intent.
+    # The local availability is served above; a stale/missing title only
+    # *requests* an asynchronous refresh here — the response never waits.
+    #
+    # Fan out to every eligible title-level source (capability-driven, so
+    # catalogue-only collectors are structurally excluded and no catalogue
+    # crawl is triggered). One default-scope check cannot answer a market only
+    # JustWatch covers, which is why an opened title used to stay unknown.
+    request_title_refresh(
+        movie,
+        priority=RefreshPriority.RECENTLY_VIEWED,
+        country=_current_country(request),
+    )
+
     user_data = UserMovieData.objects.filter(user_id=1, movie=movie).first()
     watch_events = MovieWatchEvent.objects.filter(user_id=1, movie=movie).order_by("-watched_date", "-created_at")
 
@@ -1859,6 +2830,9 @@ def link_tmdb(request, pk: int):
         # Invalidate cached availability for the old tmdb_id if it differs
         if old_tmdb_id != details.tmdb_id:
             Availability.objects.filter(movie=movie).delete()
+            # The canonical offers now key on a TMDb id that has likely never
+            # been fetched — request a refresh (local insert, async drain).
+            request_availability_refresh(movie, priority=RefreshPriority.EXPLICIT, country=_active_country(request))
 
     return Response({
         "message": f"Linked to TMDB {details.tmdb_id}",
@@ -1937,6 +2911,14 @@ def add_to_watchlist(request):
                 user_id=1,
                 movie=movie,
                 source="manual",
+            )
+            # Event-driven refresh (Phase B): local insert in the same
+            # transaction — the response never waits for a provider; the
+            # budgeted refresh run drains it later.
+            request_availability_refresh(
+                watchlist_item.movie,
+                priority=RefreshPriority.WATCHLIST,
+                country=_active_country(request),
             )
 
         # Create UserMovieData entry if not exists
@@ -2036,6 +3018,16 @@ def mark_movie_watched(request, tmdb_id: int):
                     "rewatch": rewatch,
                 },
             )
+
+        # Refresh-on-watch: the title just became history worth keeping
+        # accurate. Freshness-guarded (a title checked within the stale
+        # window enqueues nothing) and never-fetched titles still bump to
+        # NEW — a local insert only, the response never waits for a fetch.
+        request_availability_refresh(
+            movie,
+            priority=RefreshPriority.WATCHED,
+            country=_active_country(request),
+        )
 
         return Response({
             "message": "Movie marked as watched",

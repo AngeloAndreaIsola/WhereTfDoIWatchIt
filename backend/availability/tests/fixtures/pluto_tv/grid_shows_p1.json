@@ -1,0 +1,42 @@
+{
+  "data": {
+    "carouselData": {
+      "success": true,
+      "result": {
+        "title": "All Shows",
+        "total": 2,
+        "rows": 24,
+        "skipped": 0,
+        "hasMore": false,
+        "data": [
+          {
+            "contentType": "show",
+            "href": "/shows/washed/",
+            "id": "970001417",
+            "thumb": "https://service-staging.cf.yimg.com/i/p/f/970001417_v1_h462_w308.jpg",
+            "tileType": "show",
+            "orientation": "portrait",
+            "title": "#Washed",
+            "description": "Celebrities and everyday people recount the strangest ways they got clean.",
+            "genre": "Reality",
+            "numSeasons": 1,
+            "premiereDate": ""
+          },
+          {
+            "contentType": "show",
+            "href": "/shows/arrow-ptv3/",
+            "id": "4910002",
+            "thumb": "https://service-staging.cf.yimg.com/i/p/f/4910002_v1_h462_w308.jpg",
+            "tileType": "show",
+            "orientation": "portrait",
+            "title": "Arrow",
+            "description": "A spoiled billionaire playboy is missing and presumed dead, until he returns honed as a vigilante.",
+            "genre": "Drama",
+            "numSeasons": 8,
+            "premiereDate": "2012-10-10T00:00:00.000Z"
+          }
+        ]
+      }
+    }
+  }
+}

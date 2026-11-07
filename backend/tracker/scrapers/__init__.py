@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from tracker.scrapers.base import BaseScraper, ScrapedItem, ContentMatcher
-from tracker.scrapers.bbc import BBCScraper
 from tracker.scrapers.nhk import NHKScraper
 from tracker.scrapers.rai_play import RaiPlayScraper
 from tracker.scrapers.adapters import (
@@ -12,15 +11,14 @@ from tracker.scrapers.adapters import (
 )
 
 # Scraper registry: maps provider slug -> dotted import path, resolved lazily
-# by api_v2._resolve_scraper(). The priority sources (RaiPlay, BBC, NHK) live in
-# dedicated classes; the legacy independent-source scrapers (KissKH, HydraHD,
-# AnimeWorld) remain available for secondary providers.
+# by api_v2._resolve_scraper(). The priority sources (RaiPlay, NHK) live in
+# dedicated classes (BBC iPlayer was retired in favor of its canonical catalogue
+# source BBCIPlayerSource); the legacy independent-source scrapers (KissKH,
+# HydraHD, AnimeWorld) remain available for secondary providers. One entry per
+# provider — the old alias slugs (rai-play, bbc, nhk) were duplicate provider
+# rows and no longer exist (migration 0033_merge_duplicate_providers).
 SCRAPER_REGISTRY = {
-    "bbc_iplayer": "tracker.scrapers.bbc.BBCScraper",
-    "bbc": "tracker.scrapers.bbc.BBCScraper",
     "nhk_world": "tracker.scrapers.nhk.NHKScraper",
-    "nhk": "tracker.scrapers.nhk.NHKScraper",
-    "rai-play": "tracker.scrapers.rai_play.RaiPlayScraper",
     "raiplay": "tracker.scrapers.rai_play.RaiPlayScraper",
     "kisskh": "tracker.scrapers.adapters.KissKHScraper",
     "hydrahd": "tracker.scrapers.adapters.HydraHDScraper",
@@ -33,7 +31,6 @@ __all__ = [
     "ContentMatcher",
     "SCRAPER_REGISTRY",
     "resolve_scraper_class",
-    "BBCScraper",
     "NHKScraper",
     "RaiPlayScraper",
     "KissKHScraper",

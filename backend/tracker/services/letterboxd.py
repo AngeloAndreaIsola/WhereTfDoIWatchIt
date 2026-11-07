@@ -37,7 +37,8 @@ import requests
 from bs4 import BeautifulSoup
 from django.conf import settings
 
-from ..models import Movie, MovieWatchEvent, UserMovieData, WatchlistItem
+from ..models import Movie, MovieWatchEvent, RefreshPriority, UserMovieData, WatchlistItem
+from .refresh_requests import request_import_refresh
 from .tmdb import TMDbClient, TMDbMovie
 
 logger = logging.getLogger(__name__)
@@ -678,6 +679,11 @@ def import_rows(
     for row in rows:
         title_key = (row.title.lower().strip(), row.year)
         movie: Optional[Movie] = None
+        # Whether this row introduces new content / a new watchlist item —
+        # the gate that decides if the row may request an availability
+        # refresh (see request_import_refresh below).
+        movie_created = False
+        item_created = False
 
         if row.uri and row.uri in local_movies_by_uri:
             movie = local_movies_by_uri[row.uri]
@@ -730,6 +736,7 @@ def import_rows(
                 tmdb_id=pick.tmdb_id,
                 defaults={"title": pick.title, "year": pick.year, "poster_path": pick.poster_path or ""},
             )
+            movie_created = created
             if not created and pick.poster_path and not movie.poster_path:
                 movie.poster_path = pick.poster_path
                 movie.save()
@@ -745,7 +752,7 @@ def import_rows(
             item = WatchlistItem.objects.filter(user_id=user_id, movie=movie).first()
             if item is None:
                 item_source = getattr(row, "source", None) or source
-                item, _ = WatchlistItem.objects.get_or_create(
+                item, item_created = WatchlistItem.objects.get_or_create(
                     movie=movie, source=item_source, defaults={"user_id": user_id}
                 )
             result.resolved.append(item)
@@ -791,6 +798,24 @@ def import_rows(
                 event.rewatch = row.rewatch
                 event.save()
             result.diary_events_count += 1
+
+        # Event-driven refresh (Phase B): only titles entering the catalogue
+        # (new content row or new watchlist item) or titles with no canonical
+        # availability data request a refresh. Fresh titles are skipped
+        # inside the helper and already-seen stale titles are left to the
+        # scheduled sweep, so a large import never floods the queue.
+        if row.file_type == "watchlist":
+            request_import_refresh(
+                movie,
+                priority=RefreshPriority.WATCHLIST,
+                entering=movie_created or item_created,
+            )
+        else:
+            request_import_refresh(
+                movie,
+                priority=RefreshPriority.BACKGROUND,
+                entering=movie_created,
+            )
 
     return result
 

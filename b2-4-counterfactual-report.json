@@ -1,0 +1,114 @@
+{
+  "actual_quota_spend": "not_measured",
+  "actual_requests": "not_measured",
+  "actual_savings": "not_measured",
+  "batch_number": 1,
+  "gate_off_summary": {
+    "IT": {
+      "justwatch": 100,
+      "mediaset_infinity": 100,
+      "streaming_availability": 100,
+      "watchmode": 100,
+      "youtube": 100
+    },
+    "JP": {
+      "justwatch": 100,
+      "mediaset_infinity": 100,
+      "streaming_availability": 100,
+      "watchmode": 100,
+      "youtube": 100
+    },
+    "NL": {
+      "justwatch": 100,
+      "mediaset_infinity": 100,
+      "streaming_availability": 100,
+      "watchmode": 100,
+      "youtube": 100
+    }
+  },
+  "gate_on_summary": {
+    "IT": {
+      "justwatch": 100,
+      "mediaset_infinity": 100,
+      "streaming_availability": 21,
+      "streaming_availability (not_needed)": 79,
+      "watchmode": 100,
+      "youtube": 100
+    },
+    "JP": {
+      "justwatch": 100,
+      "mediaset_infinity": 100,
+      "streaming_availability": 21,
+      "streaming_availability (not_needed)": 79,
+      "watchmode": 100,
+      "youtube": 100
+    },
+    "NL": {
+      "justwatch": 100,
+      "mediaset_infinity": 100,
+      "streaming_availability": 12,
+      "streaming_availability (not_needed)": 88,
+      "watchmode": 100,
+      "youtube": 100
+    }
+  },
+  "hypothetical_eligibility": {
+    "answer_projection_basis": "hypothetical_removal_of_metered_evidence",
+    "answer_projection_country": "NL",
+    "basis": "synthetic_policy_eligibility_only",
+    "by_country": {
+      "IT": {
+        "metered_eligible_gate_off": 100,
+        "metered_eligible_gate_on": 21
+      },
+      "JP": {
+        "metered_eligible_gate_off": 100,
+        "metered_eligible_gate_on": 21
+      },
+      "NL": {
+        "metered_eligible_gate_off": 100,
+        "metered_eligible_gate_on": 12
+      }
+    },
+    "unit": "eligible_titles_per_country"
+  },
+  "nl_it_jp_breakdown": {
+    "IT": {
+      "available": 59,
+      "metered_eligible_gate_off": 100,
+      "metered_eligible_gate_on": 21,
+      "offers": 131,
+      "titles": 100,
+      "with_lang_match": 100
+    },
+    "JP": {
+      "available": 56,
+      "metered_eligible_gate_off": 100,
+      "metered_eligible_gate_on": 21,
+      "offers": 126,
+      "titles": 100,
+      "with_lang_match": 100
+    },
+    "NL": {
+      "available": 64,
+      "metered_eligible_gate_off": 100,
+      "metered_eligible_gate_on": 12,
+      "offers": 143,
+      "titles": 100,
+      "with_lang_match": 100
+    }
+  },
+  "policy_observations": [
+    "Gate ON skips fresh metered-only positive answers under current production policy. This fixture does not simulate observation expiry or infer a defect from unavailable classifications. Answer-loss counts project removal of metered evidence, not actual saved calls or the immediate gate decision."
+  ],
+  "sql_metrics": {
+    "avg_query_ms": "not_measured",
+    "execution_time_ms": "not_measured",
+    "total_queries": "not_measured",
+    "total_time_ms": "not_measured"
+  },
+  "synthetic": true,
+  "titles_losing_answer": 16,
+  "titles_still_resolved": 48,
+  "total_titles": 100
+}

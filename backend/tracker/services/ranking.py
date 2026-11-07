@@ -34,6 +34,10 @@ class RankedOffer:
     quality_rank: int = 99
     is_language_match: bool = True
     score: tuple = field(default_factory=tuple)
+    price: Optional[dict] = None
+    prices: list[dict] = field(default_factory=list)
+    availability_evidence: str = "verified"
+    last_seen_at: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -51,6 +55,10 @@ class RankedOffer:
                 "quality_rank": self.quality_rank,
                 "is_language_match": self.is_language_match,
             },
+            "price": self.price,
+            "prices": self.prices,
+            "availability_evidence": self.availability_evidence,
+            "last_seen_at": self.last_seen_at,
         }
 
 
@@ -100,6 +108,10 @@ def rank_offers(
                 quality_rank=scored.quality_rank,
                 is_language_match=scored.is_match,
                 score=scored.score_tuple,
+                price=offer.price,
+                prices=list(offer.prices or []),
+                availability_evidence=getattr(offer, "availability_evidence", "verified"),
+                last_seen_at=getattr(offer, "last_seen_at", None),
             )
         )
     ranked.sort(key=lambda r: (0 if local_country and r.country == local_country else 1, r.score))

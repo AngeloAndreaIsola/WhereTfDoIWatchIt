@@ -1,0 +1,84 @@
+{
+ "data": {
+  "getSearchPage": {
+   "areaContainersConnection": {
+    "areaContainers": [
+     {
+      "areas": [
+       {
+        "sections": [
+         {
+          "collections": [
+           {
+            "itemsConnection": {
+             "items": [
+              {
+               "__typename": "VideoItem",
+               "guid": "F314406101000102",
+               "cardTitle": "Chopin - Notturno a Parigi",
+               "editorialType": "Movie",
+               "url": "https://mediasetinfinity.mediaset.it/movie/chopinnotturnoaparigi/chopin-notturno-a-parigi_F314406101000102",
+               "cardLink": {
+                "value": "https://mediasetinfinity.mediaset.it/movie/chopinnotturnoaparigi/chopin-notturno-a-parigi_F314406101000102",
+                "referenceId": "F314406101000102",
+                "referenceType": "movie"
+               },
+               "channelLabels": [
+                {
+                 "id": "Noleggio"
+                }
+               ]
+              },
+              {
+               "__typename": "VideoItem",
+               "guid": "F003490401000101",
+               "cardTitle": "La moglie giovane",
+               "editorialType": "Movie",
+               "url": "https://mediasetinfinity.mediaset.it/movie/lamogliegiovane/la-moglie-giovane_F003490401000101",
+               "cardLink": {
+                "value": "https://mediasetinfinity.mediaset.it/movie/lamogliegiovane/la-moglie-giovane_F003490401000101",
+                "referenceId": "F003490401000101",
+                "referenceType": "movie"
+               },
+               "channelLabels": [
+                {
+                 "id": "InfNero"
+                }
+               ]
+              },
+              {
+               "__typename": "VideoItem",
+               "guid": "F312378301000104",
+               "cardTitle": "The fox",
+               "editorialType": "Movie",
+               "url": "https://mediasetinfinity.mediaset.it/movie/thefox/the-fox_F312378301000104",
+               "cardLink": {
+                "value": "https://mediasetinfinity.mediaset.it/movie/thefox/the-fox_F312378301000104",
+                "referenceId": "F312378301000104",
+                "referenceType": "movie"
+               },
+               "channelLabels": [
+                {
+                 "id": "Infinity"
+                }
+               ]
+              }
+             ],
+             "pageInfo": {
+              "endCursor": "2",
+              "hasNextPage": false,
+              "context": "{\"a\":{\"layout\":\"GRID\",\"template\":\"POSTER\"},\"pt\":\"search\"}"
+             }
+            }
+           }
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  }
+ }
+}

@@ -16,15 +16,19 @@ This document provides the complete API contract specification for the **WhereTf
 
 1. **Streaming Availability API Quota**:
    - The Streaming Availability API provider has a strict free-tier daily rate limit of **100 requests per day**.
-   - To respect this constraint, all availability requests use a cache-first strategy via `AvailabilityCache`.
+   - The quota is consumed only by budgeted refreshes (the `refresh_availability` cron job and `POST /api/watchlist/refresh/`), never by a read and never by merely *requesting* a refresh: event-driven `RefreshRequest` rows (watchlist adds, imports, refresh-on-view, the manual `POST /api/movie/<tmdb_id>/refresh/`, the bulk `POST /api/watchlist/refresh-explicit/`) are drained inside those same budgeted runs and share their budget, rate limiter and `RefreshRun` audit row.
 
-2. **Caching Strategy**:
-   - `GET /api/movie/<tmdb_id>/availability/` and `GET /api/watchlist/report/` check the database cache for movie availability before making any external API calls.
-   - Cached responses return cache status metadata (`refreshed`, `reason`, `offers`).
-   - If a refresh is required but the daily rate limit count has been reached, the backend returns HTTP **429 Too Many Requests** with `{"error": "...", "rate_limited": true}`.
+2. **Reads are local**:
+   - Read endpoints (`GET /api/movie/<tmdb_id>/availability/`, `GET /api/watchlist/report/`, `GET /api/watch/<tmdb_id>/`, `GET /api/catalog/unified/`, …) answer from canonical Postgres rows — reconciled offers for availability, `ProviderContent`/`ContentMapping` for the catalogue. They never call an external API, never trigger a refresh, and cannot return HTTP 429 for rate-limit reasons.
+   - Title-detail reads (`GET /api/movie/<pk>/`, `GET /api/prime/movie|series/<id>/`) may *queue* an asynchronous refresh for a stale or never-fetched title: that enqueue is a local database insert inside the request, so the response is still served entirely from local rows and never waits on a provider.
+   - The availability response still carries a `cache` status block (`refreshed`, `reason`, `offers`); `reason` is `"local"` because the read is served from local canonical offers.
 
-3. **External API Calls**:
+3. **Where 429 can still happen**:
+   - `POST /api/watchlist/refresh/` performs a budgeted live refresh; when the daily quota is exhausted it returns HTTP **429 Too Many Requests** with a summary body whose `rate_limited` flag is `true`. Example: [`docs/examples/api/error_429_response.json`](examples/api/error_429_response.json)
+
+4. **External API Calls**:
    - `GET /api/search/` makes external calls to TMDb API using `TMDB_API_KEY`. Network failures return HTTP **502 Bad Gateway**.
+   - `POST /api/scrapers/run/` executes a scraper against its public site on demand; this is unrelated to the Streaming Availability quota.
 
 ---
 
@@ -36,12 +40,17 @@ This document provides the complete API contract specification for the **WhereTf
 | `GET` | `/api/health_full/` | Legacy / compatibility alias for `/api/health/`. |
 | `GET` | `/api/search/` | Search TMDb for movies and TV series by title (optional `type`: `movie`/`series`/`all`). |
 | `GET` | `/api/movie/<tmdb_id>/availability/` | Fetch cached, ranked streaming availability for a movie. |
+| `POST` | `/api/movie/<tmdb_id>/refresh/` | Queue an explicit availability refresh for one movie or series (manual button; enqueue-only, `202`). |
 | `GET` | `/api/preferences/` | Read user streaming preferences. |
 | `PUT` | `/api/preferences/` | Update user streaming preferences. |
 | `GET` | `/api/watchlist/` | List user watchlist items. |
 | `POST` | `/api/watchlist/` | Upload and parse Letterboxd CSV watchlist file. |
 | `POST` | `/api/watchlist/resolve/` | Resolve selected ambiguous/confirmed movies into watchlist. |
 | `GET` | `/api/watchlist/report/` | Generate aggregated availability report for watchlist items. |
+| `POST` | `/api/watchlist/refresh/` | Run a budgeted live availability refresh (returns `429` when rate-limited). |
+| `POST` | `/api/watchlist/refresh-explicit/` | Queue an explicit bulk refresh for every watchlisted title (enqueue-only, `202`). Returns a `batch` id for progress scoping and lists any stale catalogue sources queued alongside. |
+| `GET` | `/api/watchlist/refresh-status/` | Progress counters (`pending` / `refreshed` / `failed`) for a bulk refresh — scoped by `since` epoch and/or `batch` id — plus the shared daily quota (`rate_limited` / `quota_*` / `resets_at`). |
+| `GET` | `/api/catalog/unified/` | Unified catalogue: official titles with watchability merged with scraper sources, filtered and paginated. |
 | `GET` | `/api/prime/popular/` | Return trending/popular movies from TMDb for the homepage browse grid. |
 | `GET` | `/api/prime/movie/<tmdb_id>/` | Return ranked Prime Video availability offers for a single movie. |
 | `GET` | `/api/prime/series/<tmdb_id>/` | Return ranked Prime Video availability offers for a single TV series. |
@@ -108,7 +117,7 @@ This document provides the complete API contract specification for the **WhereTf
   - `tmdb_id` *(required, integer)*: The TMDb ID of the movie.
 - **Notes on Caching & Quota**:
   - The movie must already be tracked in the local database (e.g., added via watchlist or resolved).
-  - Uses `AvailabilityCache` to serve cached data or fetch fresh offer data if stale.
+  - Served entirely from local canonical offers (reconciled `Offer` rows) — a read never triggers a live upstream fetch; availability refreshes run separately via cron.
 - **Response**: `200 OK`
   - Example: [`docs/examples/api/movie_availability_response.json`](examples/api/movie_availability_response.json)
   ```json
@@ -120,7 +129,7 @@ This document provides the complete API contract specification for the **WhereTf
     },
     "cache": {
       "refreshed": false,
-      "reason": "fresh",
+      "reason": "local",
       "offers": 2
     },
     "offers": [
@@ -141,7 +150,6 @@ This document provides the complete API contract specification for the **WhereTf
   ```
 - **Error Responses**:
   - `404 Not Found`: Movie is not tracked in the database yet. Example: [`docs/examples/api/error_404_response.json`](examples/api/error_404_response.json)
-  - `429 Too Many Requests`: Streaming Availability API rate limit exceeded during cache refresh attempt. Example: [`docs/examples/api/error_429_response.json`](examples/api/error_429_response.json)
 
 ---
 
@@ -208,6 +216,7 @@ This document provides the complete API contract specification for the **WhereTf
   - Ambiguous matches (e.g. multiple TMDb search candidates) are returned in `ambiguous`.
   - Unmatched rows are returned in `skipped`.
   - Canonical rows apply their `status`: `watchlist` rows create `WatchlistItem`s, `watched` rows set `UserMovieData.is_watched = True`.
+  - Titles *entering* the catalogue (new `Movie` or new `WatchlistItem`) — or titles with no canonical availability at all — queue an asynchronous availability refresh (`RefreshRequest`); fresh titles and already-seen stale titles are left to the scheduled sweep, so a large import never floods the refresh budget. The response itself never waits on a provider.
 - **Response**: `200 OK`
   - Example: [`docs/examples/api/watchlist_import_response.json`](examples/api/watchlist_import_response.json)
   ```json
@@ -253,6 +262,7 @@ This document provides the complete API contract specification for the **WhereTf
 
 #### `POST /api/watchlist/resolve/`
 - **Purpose**: Resolve user-selected movie candidates (from ambiguous Letterboxd matches or manual searches) into database `Movie` and `WatchlistItem` records (`source="letterboxd_resolved"`).
+- **Behavior**: each resolved title also queues an asynchronous availability refresh (`RefreshRequest`, watchlist priority). The enqueue is a local insert — repeated resolves collapse into one pending request, fresh titles are skipped, and no provider is contacted while answering the request.
 - **Request Body**: JSON object with `selections` list.
   - Example Request Body: [`docs/examples/api/watchlist_resolve_request.json`](examples/api/watchlist_resolve_request.json)
   ```json
@@ -296,8 +306,9 @@ This document provides the complete API contract specification for the **WhereTf
 #### `GET /api/watchlist/report/`
 - **Purpose**: Return an aggregated availability overview for all watchlist movies belonging to `user_id=1`.
 - **Behavior & Performance**:
-  - Iterates through watchlist movies and checks `AvailabilityCache`.
-  - Determines all available country codes (uppercase), the best country match, and best streaming service for each movie.
+  - Iterates through watchlist movies reading local canonical offers (reconciled `Offer` rows) — no external API calls.
+  - Each `watchability` object carries the title's queue evidence in `refresh_state` (`pending` / `checked` / `failed` / `never_checked`), which only matters when no offers are stored: a queued title reads `status: "checking"` (🔵 Checking availability…), a checked-but-empty one `status: "not_watchable"` with label "Not available" (⚫), a failed attempt "Unknown — last check failed" (⚪), and only a never-fetched title plain "Unknown" (⚪). Known offers always win — a queued re-check never hides a 🟢/🟡/⚫ verdict (the state stays visible on `refresh_state`).
+  - Determines all available country codes (uppercase), the best country match, and best streaming service for each movie; supports the same composable filters as the unified catalogue (`q`, `content_type`, `year_min`/`year_max`, `country`, `providers`, `status`, `quality`, `genre`, `actors`, `score_min`) plus pagination (`page`, `page_size`).
 - **Response**: `200 OK`
   - Example: [`docs/examples/api/watchlist_report_response.json`](examples/api/watchlist_report_response.json)
   ```json
@@ -312,9 +323,13 @@ This document provides the complete API contract specification for the **WhereTf
         },
         "available_countries": ["GB", "US"],
         "best_country": "US",
-        "best_service": "Netflix"
+        "best_service": "Netflix",
+        "watchability": { "status": "watchable_here", "status_label": "…", "refresh_state": "checked", "best_offer": {} },
+        "is_watched": false,
+        "user_data": null
       }
     ],
+    "pagination": { "count": 2, "page": 1, "page_size": 24, "total_pages": 1, "has_next": false, "has_previous": false },
     "summary": {
       "total_movies": 2,
       "available_movies": 1,
@@ -324,8 +339,6 @@ This document provides the complete API contract specification for the **WhereTf
     }
   }
   ```
-- **Error Responses**:
-  - `429 Too Many Requests`: Triggered if a fresh lookup is required and the Streaming Availability API rate limit is reached. Example: [`docs/examples/api/error_429_response.json`](examples/api/error_429_response.json)
 
 ---
 
@@ -366,7 +379,7 @@ This document provides the complete API contract specification for the **WhereTf
 - **Purpose**: Return ranked Prime Video (provider=`amazon`) availability offers for a single movie, filtered to `subscription`/`free` offer types only, ranked by strict priority: audio language match (JA > EN) → subtitle language match (EN > JA) → quality (4K > HDR > HD > SD) → country code (alphabetical tiebreak).
 - **Path Parameters**:
   - `tmdb_id` *(required, integer)*: The TMDb ID of the movie.
-- **Environment**: `PRIME_LIVE_FETCH` (default `true`). When `true`, a cache miss triggers a live Streaming Availability API call. When `false`, only cached `Availability` rows are returned.
+- **Data source**: served entirely from cached availability rows — a detail request never triggers a live upstream fetch. If the title is stale or was never fetched, the read *queues* an asynchronous refresh (`RefreshRequest`, detail-view priority) that the budgeted refresh run drains later; the response still returns the local rows immediately. This applies to `GET /api/prime/movie/<tmdb_id>/`, `GET /api/prime/series/<tmdb_id>/` and `GET /api/movie/<pk>/` alike. The payload reports the queue state for this title: `refresh_pending` (any pending request — the frontend polls until it clears) and `refresh_status` (status of the newest request: `pending` / `done` / `failed`, `null` when never requested). A manual refresh is queued with `POST /api/movie/<tmdb_id>/refresh/` (section 13).
 - **Response**: `200 OK`
   - Example: [`docs/examples/api/prime_movie_response.json`](examples/api/prime_movie_response.json)
   ```json
@@ -455,3 +468,182 @@ This document provides the complete API contract specification for the **WhereTf
   ```json
   { "found": false, "movie": { "tmdb_id": 999999, "title": null, "year": null }, "message": "Movie not found" }
   ```
+
+---
+
+### 12. Watchlist Availability Refresh
+
+#### `POST /api/watchlist/refresh/`
+- **Purpose**: Run a budgeted live refresh of stale availability for watchlist movies (`user_id=1`). This is the only endpoint that can consume Streaming Availability API quota at request time — all GET reads stay local. The run first drains pending event-driven `RefreshRequest` rows (watchlist adds, imports, refresh-on-view) in priority order, then refreshes the background stale sweep candidates with whatever budget remains.
+- **Request Body**: JSON (`budget` optional).
+  - `budget` *(optional, integer, default 10, max 90)*: number of live refreshes to perform. Values outside `1..90`, booleans and non-integers are rejected with `400`.
+- **Response**: `200 OK`
+  ```json
+  {
+    "attempted": 12,
+    "refreshed": 9,
+    "skipped_cached": 3,
+    "skipped_budget_exhausted": 0,
+    "skipped_rate_limited": 0,
+    "errors": 0,
+    "budget": 10,
+    "remaining_budget": 1,
+    "rate_limited": false,
+    "requests_drained": 2,
+    "requests_pending": 1
+  }
+  ```
+  `requests_drained` counts `RefreshRequest` rows settled by this run (`done` or `failed`); `requests_pending` is the backlog left queued for a later run. Both fields are additive — `refreshed`/`skipped_*` also include drained work, and `attempted` still counts only sweep candidates.
+- **Error Responses**:
+  - `400 Bad Request`: invalid `budget` (non-positive, > 90, non-integer, or boolean).
+  - `429 Too Many Requests`: daily API quota exhausted before/at the start of the run; body is the same summary shape with `"rate_limited": true`. Example: [`docs/examples/api/error_429_response.json`](examples/api/error_429_response.json)
+
+---
+
+### 13. Explicit Title Refresh (Manual Button)
+
+#### `POST /api/movie/<tmdb_id>/refresh/`
+- **Purpose**: Queue an explicit availability refresh for one tracked title — the backend for the manual "Refresh availability" button on the movie and series detail pages. One endpoint serves both pages: movies and series are the same tracked-title model and share the canonical availability pipeline.
+- **Path Parameters**:
+  - `tmdb_id` *(required, integer)*: The TMDb ID of the movie or series.
+- **Request Body**: none (an empty JSON object is accepted).
+- **Behavior**: enqueue-only — the HTTP request never contacts a provider. It creates (or upgrades, deduplicated) a single pending `RefreshRequest` at `EXPLICIT` priority with `if_stale=False` and answers immediately; the existing refresh worker drains it with the same rate limiter, daily budget and `RefreshRun` audit row as every other refresh path. `EXPLICIT` is the one priority that makes the drain perform a new availability check even while the current offers still read as fresh — a manual refresh is never skipped by the freshness short-circuit. Repeated clicks collapse into the same pending request (partial unique constraint); a queued lower-priority request for the title is upgraded to `EXPLICIT`.
+- **Response**: `202 Accepted`
+  ```json
+  {
+    "message": "Availability refresh queued",
+    "tmdb_id": 27205,
+    "content_type": "movie",
+    "refresh_pending": true,
+    "refresh_status": "pending",
+    "priority": 10,
+    "request_id": 123
+  }
+  ```
+- **Completion detection**: poll `GET /api/prime/movie/<tmdb_id>/` or `GET /api/prime/series/<tmdb_id>/` (every ~4 s) until `refresh_pending` is `false` (section 9); `refresh_status` then reports the newest request's outcome (`done` or `failed`). Existing offers stay on screen until the worker writes the new canonical ones.
+- **Error Responses**:
+  - `404 Not Found`: no tracked title with that `tmdb_id`.
+  - `500 Internal Server Error`: the enqueue failed — surfaced instead of pretending the refresh was queued.
+
+---
+
+### 14. Watchlist Bulk Explicit Refresh (Refresh All Button)
+
+#### `POST /api/watchlist/refresh-explicit/`
+- **Purpose**: Backend for the "Refresh all availability" button on the watchlist page. One enqueue-only request queues a bulk explicit refresh for every distinct watchlisted title — the HTTP request never contacts a provider and never consumes API quota.
+- **Request Body**: none (an empty JSON object is accepted).
+- **Behavior**: for each distinct watchlisted `movie_id` (`user_id=1`) it calls the same enqueue path as the per-title button (`request_availability_refresh` with `priority=EXPLICIT`, `if_stale=False`, `source=""`): fresh titles are still re-checked (the `EXPLICIT` priority bypasses the freshness short-circuit in the drain), repeated clicks and already-pending titles collapse into the same pending row (partial unique constraint), queued lower-priority requests are upgraded to `EXPLICIT`, and never-fetched titles are bumped. Every request the run touches is stamped with a freshly generated `batch` uuid (re-stamping rows opened by earlier events — last click wins) so the status endpoint can count *this run's* backlog. When any catalogue-capable source (whole-catalogue syncers such as CBC Gem, Prime, BBC iPlayer) reads stale, a single `CatalogueRefreshRequest` marker is queued too and the refresh worker runs those syncs after draining the title queue — they spend no API quota. The existing refresh worker drains the backlog with the same rate limiter, daily budget and `RefreshRun` audit row as every other path — when the daily quota is exhausted the backlog simply drains over the following days.
+- **Response**: `202 Accepted`
+  ```json
+  {
+    "queued": 354,
+    "total_watchlist": 354,
+    "now": 1790943478.142056,
+    "batch": "0f6b2a1e-8f6d-4c62-9a41-2f1f6f6c9a11",
+    "catalogue_queued": ["cbc_gem", "prime_video"]
+  }
+  ```
+  `queued` is the number of pending `source=""` requests after the enqueue (i.e. the polling target); `total_watchlist` is the number of distinct watchlisted titles; `now` is the server epoch timestamp to pass as `since` to the status endpoint; `batch` is this run's id — pass it as `batch` to the status endpoint; `catalogue_queued` lists the stale catalogue sources queued for a worker-side sync (`[]` when none were stale).
+- **Error Responses**:
+  - `500 Internal Server Error`: `{"error": "failed to queue availability refresh"}` — only when there are watchlisted titles but not a single request could be queued (surfaced instead of pretending work was queued).
+
+#### `GET /api/watchlist/refresh-status/`
+- **Purpose**: Progress counters for the bulk refresh, polled by the watchlist button (every ~5 s) until `pending` reaches 0 or the UI's poll timeout expires. Also reports the shared daily API quota so the UI can say "quota used, resumes tomorrow" instead of implying a failure.
+- **Query Parameters**:
+  - `since` *(required, epoch seconds — e.g. the `now` value from the enqueue response)*: counts only completions at or after this instant, so each click tracks its own run.
+  - `batch` *(optional UUID — e.g. the `batch` value from the enqueue response)*: scopes **every** counter to requests stamped with that run's id — `pending` then means "this button's backlog", never requests queued elsewhere; `refreshed`/`failed` are scoped to the batch without the `since` cutoff. Repeated clicks re-stamp rows, so the newest batch always sees the queue it owns.
+- **Response**: `200 OK`
+  ```json
+  {
+    "pending": 334,
+    "refreshed": 20,
+    "failed": 1,
+    "since": 1790943478.0,
+    "batch": "0f6b2a1e-8f6d-4c62-9a41-2f1f6f6c9a11",
+    "rate_limited": false,
+    "quota_remaining": 41,
+    "quota_limit": 100,
+    "resets_at": 1791004800.0
+  }
+  ```
+  All counters are scoped to watchlisted titles and `source=""` requests: `pending` (still queued), `refreshed` (`done` with `completed_at >= since`, or any `done` stamped with `batch`), `failed` (same rule for `failed`). Quota fields: `rate_limited` (the shared daily quota is exhausted for now), `quota_remaining` / `quota_limit` (calls left today / per UTC day), `resets_at` (epoch of the next UTC midnight).
+- **Error Responses**:
+  - `400 Bad Request`: missing or non-numeric `since` (`{"error": "since must be an epoch timestamp"}`), or a `batch` that is not a valid UUID (`{"error": "batch must be a UUID"}`).
+
+---
+
+### 15. Unified Catalogue
+
+#### `GET /api/catalog/unified/`
+- **Purpose**: One paginated feed merging the official catalogue (tracked `Movie` rows with watchability) and the unofficial scraper catalogue, powering the catalog page.
+- **Data source**: fully local — official items come from canonical offers/reconciliation, scraper items from canonical `ProviderContent`/`ContentMapping` rows. The endpoint never calls TMDb, never fetches availability and never runs a scraper; stale rows are served as-is until the scheduled refresh updates them. Legacy `ScrapedContentMapping` rows reach the response only through the ingestion bridge (`availability.services.legacy_ingest`), not by being read.
+- **Query Parameters** *(all optional)*:
+  - `q` / `query`: case-insensitive substring match on title (and overview on the official half).
+  - `year`, `year_min`, `year_max`: exact year or range (digits; non-digits ignored).
+  - `country`: ISO country code; matches a scraper row's own country or its provider's country, and offer countries on the official half.
+  - `content_type` (`movie`/`series`/`tv`), `genre` (id or name), `actors` (JSON array) / `actor_id` (comma-separated), `status`, `quality`, `watchable`, `score_min`: official-half composable filters.
+  - `providers` / `provider`: comma-separated provider slugs. Selecting only scraper providers returns only scraper items; selecting only official providers returns only official items; selecting both (or neither) returns both.
+  - `provider_categories`: comma-separated categories — `major`, `bvod`/`free`, `scraper`/`unofficial`, or a raw provider category; expanded to slugs like `providers`.
+  - `current_country` / `country`: user's country for watchability ranking (defaults to `US`).
+  - `sort_by` / `sort`: `rating_desc`/`rating_high`, `rating_asc`/`rating_low`, `year_desc`/`year_newest`, `year_asc`/`year_oldest`, `title_asc`/`title`, `title_desc`/`-title`.
+  - `page` (default 1), `page_size` (default 24, max 100).
+- **Deduplication**: a scraper row whose `tmdb_id` already appears in the official half is suppressed (one title, one row).
+- **Response**: `200 OK` — pagination envelope (`count`, `page`, `page_size`, `total_pages`, `has_next`, `has_previous`) plus `results[]`:
+  ```json
+  {
+    "count": 2,
+    "page": 1,
+    "page_size": 24,
+    "total_pages": 1,
+    "has_next": false,
+    "has_previous": false,
+    "results": [
+      {
+        "id": "official_101",
+        "tmdb_id": 27205,
+        "source": "official",
+        "source_indicator": "SVOD",
+        "title": "Inception",
+        "year": 2010,
+        "poster_path": "/9gk7adHYeDvHkCSEqAvQNLV5Uge.jpg",
+        "content_type": "movie",
+        "provider": { "slug": "netflix", "name": "Netflix", "category": "official" },
+        "watchability": {
+          "status": "watchable_here",
+          "status_label": "Available",
+          "status_symbol": "🟢",
+          "best_offer": { "country": "US", "service": "netflix", "url": "https://...", "is_current_country": true },
+          "watchable_offers": [],
+          "excluded_offers": [],
+          "explanation": []
+        },
+        "unofficial_details": null,
+        "watch_url": "https://..."
+      },
+      {
+        "id": "scraper_42",
+        "tmdb_id": null,
+        "source": "scraper",
+        "source_indicator": "Scraper",
+        "title": "Some Unresolved Show",
+        "year": 2024,
+        "poster_path": "",
+        "content_type": "series",
+        "provider": { "slug": "hydrahd", "name": "HydraHD", "category": "scraper" },
+        "watchability": null,
+        "unofficial_details": {
+          "scraped_url": "https://hydrahd.ws/watch/123",
+          "confidence_score": 0.0,
+          "is_confirmed": false,
+          "audio_languages": [],
+          "subtitle_languages": []
+        },
+        "watch_url": "https://hydrahd.ws/watch/123"
+      }
+    ]
+  }
+  ```
+- **Item semantics**:
+  - Official items: `watchability` carries the full evaluation (`status`, `best_offer`, `watchable_offers`, `excluded_offers`, `explanation`); `unofficial_details` is `null`.
+  - Scraper items: `watchability` is always `null`; `unofficial_details` carries the scraped URL, TMDb match confidence (`confidence_score`), whether the match was manually confirmed (`is_confirmed`), and any known audio/subtitle languages.
+  - For a scraper row resolved to a tracked movie, display fields (`title`, `year`, `poster_path`, `content_type`) come from the canonical `Movie` row — never the scraped strings.

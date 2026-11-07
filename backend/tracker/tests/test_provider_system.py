@@ -76,10 +76,10 @@ class ProviderSystemTests(TestCase):
             )
             self.assertEqual(provider.category, ProviderCategory.SCRAPER)
 
-        # Public broadcasters (bbc_iplayer, rai-play, nhk_world) are BVOD
+        # Public broadcasters (bbc_iplayer, raiplay, nhk_world) are BVOD
         # providers, not scrapers. Assert the migration's effect by re-asserting
         # the category (idempotent — matches what migration 0018 guarantees).
-        for slug in ("bbc_iplayer", "rai-play", "nhk_world"):
+        for slug in ("bbc_iplayer", "raiplay", "nhk_world"):
             provider = Provider.objects.filter(slug=slug).first()
             self.assertIsNotNone(provider, f"{slug} should exist")
             provider.category = ProviderCategory.BVOD
@@ -95,7 +95,15 @@ class ProviderSystemTests(TestCase):
         disney_item = next(p for p in data if p["slug"] == "disney")
         self.assertEqual(disney_item["name"], "Disney+")
         self.assertFalse(disney_item["is_subscribed"])
-        self.assertEqual(len(disney_item["external_mappings"]), 1)
+        # One unscoped Streaming Availability id, plus the per-country
+        # JustWatch package ids seeded by availability.0006. The invariant
+        # under test is that the country-independent mapping still resolves
+        # exactly once -- not that the total is 1.
+        sa_mappings = [
+            m for m in disney_item["external_mappings"]
+            if m["integration_name"] == "streaming_availability"
+        ]
+        self.assertEqual(len(sa_mappings), 1)
 
     def test_provider_toggle_endpoint_and_persistence(self):
         # Active toggle
@@ -197,8 +205,9 @@ class ProviderSystemTests(TestCase):
         items = scraper.run(query="Inception")
         self.assertEqual(items, [])
 
+    @patch("tracker.scrapers.base.TMDbClient.search", return_value=[])
     @patch("tracker.scrapers.adapters.KissKHScraper.fetch_url")
-    def test_scraper_import_url_endpoint(self, mock_fetch):
+    def test_scraper_import_url_endpoint(self, mock_fetch, mock_search):
         mock_fetch.return_value = [
             {
                 "id": 101,

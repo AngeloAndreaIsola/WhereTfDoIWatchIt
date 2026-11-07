@@ -7,21 +7,14 @@ without timing out.
 from __future__ import annotations
 
 from datetime import timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from django.test import TestCase
 from django.utils import timezone
 
-from tracker.models import (
-    Availability,
-    LanguageEntry,
-    LanguageInfo,
-    Movie,
-    Preference,
-    Region,
-    WatchlistItem,
-)
-from tracker.services.cache import AvailabilityCache
+from availability.models import Offer
+from tracker.models import Movie, Preference, WatchlistItem
+from tracker.tests.availability_factories import local_offer
 
 
 class WatchlistReportNonBlockingTests(TestCase):
@@ -44,228 +37,129 @@ class WatchlistReportNonBlockingTests(TestCase):
             candidate_countries=["US"],
         )
 
-    def _create_fresh_availability(self, movie: Movie, country: str = "US", provider: str = "prime"):
+    def _create_fresh_availability(self, movie: Movie):
         """Create fresh (non-stale) availability for a movie."""
-        region, _ = Region.objects.get_or_create(provider=provider, country=country)
-        Availability.objects.update_or_create(
-            movie=movie,
-            region=region,
-            defaults={
-                "last_checked_at": timezone.now(),
-                "is_available": True,
-                "offer_type": "subscription",
-                "quality": "hd",
-            },
+        local_offer(
+            movie,
+            country="US",
+            service="prime",
+            audio_languages=["EN"],
+            subtitle_languages=["EN"],
         )
-        info, _ = LanguageInfo.objects.get_or_create(movie=movie, region=region)
-        LanguageEntry.objects.get_or_create(language_info=info, kind="audio", language_code="EN")
-        LanguageEntry.objects.get_or_create(language_info=info, kind="subtitle", language_code="EN")
 
-    def _create_stale_availability(self, movie: Movie, country: str = "US", provider: str = "prime"):
+    def _create_stale_availability(self, movie: Movie):
         """Create stale availability for a movie."""
-        region, _ = Region.objects.get_or_create(provider=provider, country=country)
-        Availability.objects.update_or_create(
-            movie=movie,
-            region=region,
-            defaults={
-                "last_checked_at": timezone.now() - timedelta(hours=48),  # Stale after 24h
-                "is_available": True,
-                "offer_type": "subscription",
-                "quality": "hd",
-            },
+        offer = local_offer(
+            movie,
+            country="US",
+            service="prime",
+            audio_languages=["EN"],
         )
-        info, _ = LanguageInfo.objects.get_or_create(movie=movie, region=region)
-        LanguageEntry.objects.get_or_create(language_info=info, kind="audio", language_code="EN")
+        Offer.objects.filter(pk=offer.pk).update(
+            last_seen=timezone.now() - timedelta(hours=48)  # Stale after 24h
+        )
 
-    @patch("tracker.views.AvailabilityCache")
-    def test_report_with_fresh_cached_data_does_not_call_external_api(self, mock_cache_class):
+    @patch("tracker.services.streaming_api.StreamingAvailabilityClient.get_availability")
+    def test_report_with_fresh_cached_data_does_not_call_external_api(self, mock_get_availability):
         """Report with fresh cached data should not trigger external API calls."""
         self._create_fresh_availability(self.movie1)
         self._create_fresh_availability(self.movie2)
         self._create_fresh_availability(self.movie3)
 
-        # Create a real cache instance but mock the streaming API client
-        cache = AvailabilityCache()
-        mock_client = MagicMock()
-        cache.client = mock_client
-        mock_cache_class.return_value = cache
-
         resp = self.client.get("/api/watchlist/report/")
 
         self.assertEqual(resp.status_code, 200)
         # External API should never be called for fresh data
-        mock_client.get_availability.assert_not_called()
+        mock_get_availability.assert_not_called()
 
         data = resp.json()
         self.assertEqual(len(data["report"]), 3)
         self.assertEqual(data["summary"]["available_movies"], 3)
 
-    @patch("tracker.views.AvailabilityCache")
-    def test_report_with_stale_data_does_not_block(self, mock_cache_class):
+    @patch("tracker.services.streaming_api.StreamingAvailabilityClient.get_availability")
+    def test_report_with_stale_data_does_not_block(self, mock_get_availability):
         """Report with stale cached data should not block on refresh."""
         self._create_stale_availability(self.movie1)
         self._create_stale_availability(self.movie2)
-
-        # Create a real cache instance but mock the streaming API client
-        cache = AvailabilityCache()
-        mock_client = MagicMock()
-        cache.client = mock_client
-        mock_cache_class.return_value = cache
 
         resp = self.client.get("/api/watchlist/report/")
 
         self.assertEqual(resp.status_code, 200)
         # External API should NOT be called even for stale data
-        mock_client.get_availability.assert_not_called()
+        mock_get_availability.assert_not_called()
 
         # Stale data should still be returned
         data = resp.json()
         self.assertEqual(len(data["report"]), 3)
-        # Movies with stale availability should still appear
-        self.assertEqual(data["summary"]["available_movies"], 2)
+        # Stale availability stays discoverable as "needs recheck", but is
+        # not counted as currently available (nor as unavailable).
+        self.assertEqual(data["summary"]["available_movies"], 0)
+        self.assertEqual(data["summary"]["needs_recheck_movies"], 2)
+        self.assertEqual(data["summary"]["unavailable_movies"], 1)
 
-    @patch("tracker.views.AvailabilityCache")
-    def test_report_with_missing_data_does_not_block(self, mock_cache_class):
+    @patch("tracker.services.streaming_api.StreamingAvailabilityClient.get_availability")
+    def test_report_with_missing_data_does_not_block(self, mock_get_availability):
         """Report with missing cached data should not block waiting for API."""
         # No availability created for any movie (all missing)
-
-        cache = AvailabilityCache()
-        mock_client = MagicMock()
-        cache.client = mock_client
-        mock_cache_class.return_value = cache
 
         resp = self.client.get("/api/watchlist/report/")
 
         self.assertEqual(resp.status_code, 200)
         # External API should NOT be called for missing data
-        mock_client.get_availability.assert_not_called()
+        mock_get_availability.assert_not_called()
 
         data = resp.json()
         self.assertEqual(len(data["report"]), 3)
         # No movies should have availability
         self.assertEqual(data["summary"]["available_movies"], 0)
 
-    @patch("tracker.views.AvailabilityCache")
-    def test_report_with_mixed_cache_states(self, mock_cache_class):
+    @patch("tracker.services.streaming_api.StreamingAvailabilityClient.get_availability")
+    def test_report_with_mixed_cache_states(self, mock_get_availability):
         """Report handles mix of fresh, stale, and missing data without blocking."""
         self._create_fresh_availability(self.movie1)
         self._create_stale_availability(self.movie2)
         # movie3 has no availability (missing)
 
-        cache = AvailabilityCache()
-        mock_client = MagicMock()
-        cache.client = mock_client
-        mock_cache_class.return_value = cache
-
         resp = self.client.get("/api/watchlist/report/")
 
         self.assertEqual(resp.status_code, 200)
         # External API should NOT be called regardless of cache state mix
-        mock_client.get_availability.assert_not_called()
+        mock_get_availability.assert_not_called()
 
         data = resp.json()
         self.assertEqual(len(data["report"]), 3)
-        # Two movies have some availability
-        self.assertEqual(data["summary"]["available_movies"], 2)
+        # Fresh counts as available; stale is qualified, missing is neither.
+        self.assertEqual(data["summary"]["available_movies"], 1)
+        self.assertEqual(data["summary"]["needs_recheck_movies"], 1)
+        self.assertEqual(data["summary"]["unavailable_movies"], 1)
 
-    @patch("tracker.views.AvailabilityCache.get_cached_only")
-    def test_external_api_failure_does_not_crash_report(self, mock_get_cached):
-        """External API failures should not crash the entire report."""
-        # Simulate get_cached_only raising an exception
-        mock_get_cached.side_effect = Exception("External API timeout")
-
-        # Report should still return successfully
-        resp = self.client.get("/api/watchlist/report/")
+    def test_external_api_failure_does_not_crash_report(self):
+        """Offer read failures should not crash the entire report."""
+        # Simulate the canonical offer read raising an exception
+        with patch(
+            "tracker.views.get_local_offers",
+            side_effect=Exception("External API timeout"),
+        ):
+            # Report should still return successfully
+            resp = self.client.get("/api/watchlist/report/")
 
         # Should not return 500, should handle gracefully
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
-        # Report should still be generated (though movies may have no availability)
+        # Report should still be generated (movies appear without availability)
         self.assertIn("report", data)
+        self.assertEqual(len(data["report"]), 3)
 
-    @patch("tracker.views.AvailabilityCache.get_cached_only")
-    def test_partial_cache_failure_does_not_crash_report(self, mock_get_cached):
-        """Partial cache failures should not crash the entire report."""
-        self._create_fresh_availability(self.movie1)
-
-        # First call succeeds, second fails, third succeeds
-        call_count = [0]
-
-        def side_effect(movie):
-            call_count[0] += 1
-            if call_count[0] == 2:
-                raise Exception("Cache read failure")
-            cache = AvailabilityCache()
-            return cache.get_cached_only(movie)
-
-        mock_get_cached.side_effect = side_effect
-
-        resp = self.client.get("/api/watchlist/report/")
+    def test_bulk_cache_failure_does_not_crash_report(self):
+        """A failed batched read falls back safely to isolated local reads."""
+        with patch(
+            "tracker.services.filtering.get_offer_evidence_bulk",
+            side_effect=Exception("Cache read failure"),
+        ):
+            resp = self.client.get("/api/watchlist/report/")
 
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
-        # Report should still be generated
+        # Report should still be generated for every movie
         self.assertIn("report", data)
-
-
-class AvailabilityCacheNonBlockingMethodTests(TestCase):
-    """Test AvailabilityCache.get_cached_only method."""
-
-    def setUp(self):
-        self.movie = Movie.objects.create(tmdb_id=123, title="Test Movie", year=2020)
-        self.cache = AvailabilityCache()
-
-    def test_get_cached_only_with_fresh_data(self):
-        """get_cached_only returns fresh status without calling API."""
-        region = Region.objects.create(provider="prime", country="US")
-        Availability.objects.create(
-            movie=self.movie,
-            region=region,
-            last_checked_at=timezone.now(),
-            is_available=True,
-            offer_type="subscription",
-            quality="hd",
-        )
-
-        with patch.object(self.cache.client, "get_availability") as mock_api:
-            status = self.cache.get_cached_only(self.movie)
-
-            # Should not call external API
-            mock_api.assert_not_called()
-            self.assertEqual(status.reason, "fresh")
-            self.assertEqual(status.offers_written, 1)
-            self.assertFalse(status.refreshed)
-
-    def test_get_cached_only_with_stale_data(self):
-        """get_cached_only returns stale status without calling API."""
-        region = Region.objects.create(provider="prime", country="US")
-        Availability.objects.create(
-            movie=self.movie,
-            region=region,
-            last_checked_at=timezone.now() - timedelta(hours=48),
-            is_available=True,
-            offer_type="subscription",
-            quality="hd",
-        )
-
-        with patch.object(self.cache.client, "get_availability") as mock_api:
-            status = self.cache.get_cached_only(self.movie)
-
-            # Should not call external API even for stale data
-            mock_api.assert_not_called()
-            self.assertEqual(status.reason, "stale")
-            self.assertEqual(status.offers_written, 1)
-            self.assertFalse(status.refreshed)
-
-    def test_get_cached_only_with_missing_data(self):
-        """get_cached_only returns missing status without calling API."""
-        # No availability created
-
-        with patch.object(self.cache.client, "get_availability") as mock_api:
-            status = self.cache.get_cached_only(self.movie)
-
-            # Should not call external API for missing data
-            mock_api.assert_not_called()
-            self.assertEqual(status.reason, "missing")
-            self.assertEqual(status.offers_written, 0)
-            self.assertFalse(status.refreshed)
+        self.assertEqual(len(data["report"]), 3)

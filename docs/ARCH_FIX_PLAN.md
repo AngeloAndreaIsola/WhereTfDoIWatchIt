@@ -1,4 +1,11 @@
-# Architecture Fix — Implementation Plan
+# Historical Architecture Fix — Implementation Plan
+
+> Historical planning record, not current architecture documentation. The
+> candidate work described below was completed or superseded by the canonical
+> availability/read-path work. In particular, `tmdb_matcher.py` was never an
+> implementation (it was an unused comment-only placeholder) and was removed
+> in P3. Consult `docs/AVAILABILITY_REDESIGN_REPORT.md` and the source/tests
+> for current behavior; do not execute this plan as a migration guide.
 
 Completed: Candidate 1 (enrichment scatter) — `e6e3ce8`.
 Completed: Candidate 4 (presentation seam) — `b21130e`.

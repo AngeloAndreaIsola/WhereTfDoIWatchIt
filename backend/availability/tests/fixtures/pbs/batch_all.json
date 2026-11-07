@@ -1,0 +1,190 @@
+{
+ "data": {
+  "showsBatch": [
+   {
+    "show": {
+     "slug": "expired-show",
+     "title": "Expired Show"
+    },
+    "fullLengthAssets": [
+     {
+      "slug": "expired-show-special",
+      "title": "Expired Special",
+      "isMvod": false,
+      "availability": "expired",
+      "videoType": "FULL_LENGTH",
+      "seasonOrdinal": 1,
+      "episodeOrdinal": 1,
+      "premiereDate": "2020-01-01",
+      "expireDate": "2021-01-01",
+      "language": "en"
+     }
+    ]
+   },
+   {
+    "show": {
+     "slug": "extra-show",
+     "title": "Extra Show"
+    },
+    "fullLengthAssets": [
+     {
+      "slug": "extra-show-trailer",
+      "title": "Extra Show Trailer",
+      "isMvod": false,
+      "availability": "available",
+      "videoType": "PREVIEW",
+      "seasonOrdinal": null,
+      "episodeOrdinal": null,
+      "premiereDate": null,
+      "expireDate": null,
+      "language": "en"
+     },
+     {
+      "slug": "extra-show-bts",
+      "title": "Behind the Scenes",
+      "isMvod": false,
+      "availability": "available",
+      "videoType": "FULL_LENGTH",
+      "seasonOrdinal": null,
+      "episodeOrdinal": null,
+      "premiereDate": "2026-01-01",
+      "expireDate": null,
+      "language": "en"
+     }
+    ]
+   },
+   {
+    "show": {
+     "slug": "frontline",
+     "title": "FRONTLINE"
+    },
+    "fullLengthAssets": [
+     {
+      "slug": "frontline-s53e01",
+      "title": "The Age of AI",
+      "isMvod": true,
+      "availability": "available",
+      "videoType": "FULL_LENGTH",
+      "seasonOrdinal": 53,
+      "episodeOrdinal": 1,
+      "premiereDate": "2026-09-15",
+      "expireDate": null,
+      "language": "en"
+     }
+    ]
+   },
+   {
+    "show": {
+     "slug": "nova",
+     "title": "NOVA"
+    },
+    "fullLengthAssets": [
+     {
+      "slug": "nova-s50e01",
+      "title": "Dark Secrets of the Deep",
+      "isMvod": false,
+      "availability": "available",
+      "videoType": "FULL_LENGTH",
+      "seasonOrdinal": 50,
+      "episodeOrdinal": 1,
+      "premiereDate": "2026-09-30",
+      "expireDate": "2026-10-27",
+      "language": "en"
+     }
+    ]
+   },
+   {
+    "show": {
+     "slug": "nature",
+     "title": "Nature"
+    },
+    "fullLengthAssets": [
+     {
+      "slug": "nature-s53e11",
+      "title": "Hidden Habits of Hippos",
+      "isMvod": false,
+      "availability": "available",
+      "videoType": "FULL_LENGTH",
+      "seasonOrdinal": 53,
+      "episodeOrdinal": 11,
+      "premiereDate": "2026-09-30",
+      "expireDate": "2026-10-29",
+      "language": "en"
+     },
+     {
+      "slug": "nature-s53e10",
+      "title": "Forest of the Lynx",
+      "isMvod": false,
+      "availability": "available",
+      "videoType": "FULL_LENGTH",
+      "seasonOrdinal": 53,
+      "episodeOrdinal": 10,
+      "premiereDate": "2026-09-23",
+      "expireDate": "2026-10-22",
+      "language": "en"
+     },
+     {
+      "slug": "nature-s52e01",
+      "title": "Deep Ocean Hostage",
+      "isMvod": true,
+      "availability": "available",
+      "videoType": "FULL_LENGTH",
+      "seasonOrdinal": 52,
+      "episodeOrdinal": 1,
+      "premiereDate": "2025-10-08",
+      "expireDate": "2026-12-31",
+      "language": "en"
+     },
+     {
+      "slug": "nature-music-video",
+      "title": "Nature Music Video",
+      "isMvod": false,
+      "availability": "available",
+      "videoType": "CLIP",
+      "seasonOrdinal": null,
+      "episodeOrdinal": null,
+      "premiereDate": "2026-09-25",
+      "expireDate": null,
+      "language": "en"
+     },
+     {
+      "slug": "nature-interview",
+      "title": "Nature Interview",
+      "isMvod": false,
+      "availability": "available",
+      "videoType": "FULL_LENGTH",
+      "seasonOrdinal": null,
+      "episodeOrdinal": null,
+      "premiereDate": "2026-01-01",
+      "expireDate": null,
+      "language": "en"
+     },
+     {
+      "slug": "nature-expired-old",
+      "title": "Old Episode",
+      "isMvod": false,
+      "availability": "expired",
+      "videoType": "FULL_LENGTH",
+      "seasonOrdinal": 53,
+      "episodeOrdinal": 9,
+      "premiereDate": "2026-06-01",
+      "expireDate": "2026-07-01",
+      "language": "en"
+     },
+     {
+      "slug": "nature-half-ordinal",
+      "title": "Half Ordinal Special",
+      "isMvod": false,
+      "availability": "available",
+      "videoType": "FULL_LENGTH",
+      "seasonOrdinal": 54,
+      "episodeOrdinal": null,
+      "premiereDate": "2026-09-01",
+      "expireDate": null,
+      "language": "en"
+     }
+    ]
+   }
+  ]
+ }
+}

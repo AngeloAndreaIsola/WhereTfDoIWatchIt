@@ -82,9 +82,25 @@ class ExternalProviderMappingSerializer(serializers.ModelSerializer):
 class ProviderSerializer(serializers.ModelSerializer):
     external_mappings = ExternalProviderMappingSerializer(many=True, read_only=True)
     is_subscribed = serializers.SerializerMethodField()
+    access_mode = serializers.SerializerMethodField()
     scraped_content_count = serializers.SerializerMethodField()
     source_indicator = serializers.SerializerMethodField()
     has_scraper = serializers.SerializerMethodField()
+    # Square-card operational fields, batched by the subscriptions endpoint
+    # (see tracker.services.provider_status): one aggregate pass for the whole
+    # list instead of one query per card.
+    refresh_kind = serializers.SerializerMethodField()
+    source_slug = serializers.SerializerMethodField()
+    last_run = serializers.SerializerMethodField()
+    last_run_error = serializers.SerializerMethodField()
+    available_items = serializers.SerializerMethodField()
+    refreshing = serializers.SerializerMethodField()
+    #: Add-on relationship: the channel's base platform (slug + display name)
+    #: and whether this row is an add-on at all. A channel and its platform are
+    #: separately selectable, so the UI needs both to group and to explain.
+    is_addon = serializers.SerializerMethodField()
+    parent = serializers.SerializerMethodField()
+    parent_name = serializers.SerializerMethodField()
 
     class Meta:
         model = Provider
@@ -100,11 +116,57 @@ class ProviderSerializer(serializers.ModelSerializer):
             "country_code",
             "last_scraped_at",
             "is_subscribed",
+            "access_mode",
             "scraped_content_count",
             "source_indicator",
             "has_scraper",
+            "refresh_kind",
+            "source_slug",
+            "last_run",
+            "last_run_error",
+            "available_items",
+            "refreshing",
+            "is_addon",
+            "parent",
+            "parent_name",
             "external_mappings",
         ]
+
+    def _card_status(self, obj: Provider) -> dict:
+        """Batched status from context; registry-only fallback without it.
+
+        ``GET /api/providers/`` passes ``provider_status`` (every field, one
+        fixed set of queries). Serializers built elsewhere — nested
+        subscriptions, imports, the v2 catalogue — resolve only the
+        registry-derived fields so they never issue per-object aggregates.
+        """
+        batched = self.context.get("provider_status")
+        if batched is not None and obj.id in batched:
+            return batched[obj.id]
+        cache = self.context.setdefault("_card_status_fallback", {})
+        if obj.id not in cache:
+            from tracker.services.provider_status import minimal_card_status
+
+            cache[obj.id] = minimal_card_status(obj)
+        return cache[obj.id]
+
+    def get_refresh_kind(self, obj: Provider):
+        return self._card_status(obj)["refresh_kind"]
+
+    def get_source_slug(self, obj: Provider):
+        return self._card_status(obj)["source_slug"]
+
+    def get_last_run(self, obj: Provider):
+        return self._card_status(obj)["last_run"]
+
+    def get_last_run_error(self, obj: Provider):
+        return self._card_status(obj)["last_run_error"]
+
+    def get_available_items(self, obj: Provider):
+        return self._card_status(obj)["available_items"]
+
+    def get_refreshing(self, obj: Provider):
+        return self._card_status(obj)["refreshing"]
 
     def get_source_indicator(self, obj: Provider) -> str:
         return obj.source_indicator
@@ -115,12 +177,42 @@ class ProviderSerializer(serializers.ModelSerializer):
             return obj.id in user_subscribed_ids
         return Subscription.objects.filter(user_id=1, provider__id=obj.id).exists()
 
+    def get_access_mode(self, obj: Provider):
+        """The user's declared access mode for this provider (or ``None``)."""
+        modes = self.context.get("user_access_modes")
+        if modes is not None:
+            return modes.get(obj.id)
+        sub = Subscription.objects.filter(user_id=1, provider=obj).only("access_mode").first()
+        return sub.access_mode if sub else None
+
     def get_scraped_content_count(self, obj: Provider) -> int:
+        annotated = getattr(obj, "scraped_total", None)
+        if annotated is not None:
+            return annotated
         return obj.scraped_mappings.count()
 
     def get_has_scraper(self, obj: Provider) -> bool:
         from tracker.scrapers import resolve_scraper_class
         return resolve_scraper_class(obj.slug) is not None
+
+    def get_is_addon(self, obj: Provider) -> bool:
+        return obj.is_addon
+
+    def get_parent(self, obj: Provider):
+        """Canonical slug of the base platform, or ``None`` for standalone."""
+        return obj.addon_parent_slug or None
+
+    def get_parent_name(self, obj: Provider):
+        slug = obj.addon_parent_slug
+        if not slug:
+            return None
+        names = self.context.get("provider_names")
+        if names is not None:
+            return names.get(slug, slug)
+        return (
+            Provider.objects.filter(slug=slug).values_list("name", flat=True).first()
+            or slug
+        )
 
 
 class SubscriptionSerializer(serializers.ModelSerializer):
@@ -130,7 +222,7 @@ class SubscriptionSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Subscription
-        fields = ["id", "name", "provider", "provider_id", "provider_slug"]
+        fields = ["id", "name", "provider", "provider_id", "provider_slug", "access_mode"]
         extra_kwargs = {
             "name": {"validators": [], "required": False, "allow_blank": True},
         }
@@ -221,10 +313,11 @@ class PreferenceSerializer(serializers.ModelSerializer):
     )
     current_country = serializers.CharField(max_length=2, required=False, allow_blank=True)
     language_rule = serializers.JSONField(required=False, allow_null=True)
+    vpn_enabled = serializers.BooleanField(required=False)
 
     class Meta:
         model = Preference
-        fields = ["audio_languages", "subtitle_languages", "candidate_countries", "current_country", "language_rule"]
+        fields = ["audio_languages", "subtitle_languages", "candidate_countries", "current_country", "language_rule", "vpn_enabled"]
 
     def validate_audio_languages(self, value: list) -> list[str]:
         return validate_language_codes(value)
@@ -334,6 +427,15 @@ class RankedOfferSerializer(serializers.Serializer):
     audio_languages = serializers.ListField(child=serializers.CharField())
     subtitle_languages = serializers.ListField(child=serializers.CharField())
     ranking = serializers.DictField()
+    #: Structured price (amount + currency + provenance) or null. Present so the
+    #: legacy ranked-offers endpoint does not silently drop what the canonical
+    #: read path carries.
+    price = serializers.DictField(required=False, allow_null=True)
+    prices = serializers.ListField(child=serializers.DictField(), required=False)
+    #: ``verified`` (recently confirmed), ``stale`` (last seen, needs recheck)
+    #: or ``unknown`` (uncorroborated). ``offers`` only ever holds verified rows.
+    availability_evidence = serializers.CharField(required=False, default="verified")
+    last_seen_at = serializers.CharField(required=False, allow_null=True, default=None)
 
 
 class CountrySummarySerializer(serializers.Serializer):
@@ -350,6 +452,7 @@ class WatchlistReportSummarySerializer(serializers.Serializer):
     total_movies = serializers.IntegerField()
     available_movies = serializers.IntegerField()
     unavailable_movies = serializers.IntegerField()
+    needs_recheck_movies = serializers.IntegerField(required=False, default=0)
     countries = CountrySummarySerializer(many=True)
     services = ServiceSummarySerializer(many=True)
 

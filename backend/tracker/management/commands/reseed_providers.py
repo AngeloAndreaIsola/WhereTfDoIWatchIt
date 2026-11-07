@@ -3,10 +3,16 @@
 Replays the canonical provider inserts from migrations/commands:
 - migration 0007 (MAJOR_PROVIDERS + initial SCRAPER_PROVIDERS)
 - migration 0011 (FREE_PROVIDERS: European public broadcasters & global free)
-- migration 0012 (rai-play, bbc, nhk unofficial seeds)
 - migration 0014 (move bbc_iplayer -> free)
 - migration 0018 (NHK -> free)
+- migration 0032 (youtube -> free)
+- migration 0040 (rakuten_tv -> avod, JustWatch ``wuaki``)
 - seed_unofficial_providers command (kisskh, hydrahd, animeworld)
+
+The alias providers from migration 0012 (rai-play, bbc, nhk) are deliberately
+NOT replayed: they were duplicates of raiplay / bbc_iplayer / nhk_world and
+were merged away by migration 0033, which also makes sharing a domain root
+between two provider rows impossible.
 
 Safe to run multiple times — uses get_or_create and preserves existing rows.
 """
@@ -58,6 +64,7 @@ FREE_PROVIDERS = [
     {"slug": "tv_publica", "name": "TV Pública", "icon": "tv_publica", "domain": "tvpublica.com.ar", "country": "AR"},
     {"slug": "kbs", "name": "KBS", "icon": "kbs", "domain": "kbs.co.kr", "country": "KR"},
     {"slug": "nhk_world", "name": "NHK WORLD-JAPAN", "icon": "nhk_world", "domain": "nhk.or.jp/nhkworld", "country": "JP"},
+    {"slug": "youtube", "name": "YouTube", "icon": "youtube", "domain": "youtube.com", "country": ""},
 ]
 
 UNOFFICIAL_PROVIDERS = [
@@ -66,10 +73,8 @@ UNOFFICIAL_PROVIDERS = [
     {"slug": "animeworld", "name": "AnimeWorld", "domain": "animeworld.to"},
 ]
 
-LEGACY_SCRAPERS = [
-    {"slug": "rai-play", "name": "RaiPlay", "domain": "raiplay.it", "country": "IT"},
-    {"slug": "bbc", "name": "BBC", "domain": "bbc.co.uk", "country": "GB"},
-    {"slug": "nhk", "name": "NHK", "domain": "nhk.or.jp", "country": "JP"},
+AVOD_PROVIDERS = [
+    {"slug": "rakuten_tv", "name": "Rakuten TV", "icon": "rakuten_tv", "domain": "rakuten.tv", "country": ""},
 ]
 
 
@@ -110,14 +115,15 @@ for s in UNOFFICIAL_PROVIDERS:
         "domain": s["domain"],
     })
 
-for s in LEGACY_SCRAPERS:
-    upsert(s["slug"], {
-        "name": s["name"],
-        "category": ProviderCategory.BVOD,
+for a in AVOD_PROVIDERS:
+    upsert(a["slug"], {
+        "name": a["name"],
+        "category": ProviderCategory.AVOD,
         "is_major": False,
         "is_enabled": True,
-        "domain": s["domain"],
-        "country_code": s["country"],
+        "icon_name": a["icon"],
+        "domain": a["domain"],
+        "country_code": a["country"],
     })
 
 print("total_providers", Provider.objects.count())
