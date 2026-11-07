@@ -47,6 +47,8 @@ function CatalogPageClient() {
     const score_min = searchParams.get("score_min") || "";
     const sort_by = searchParams.get("sort_by") || "";
     const access = searchParams.get("access") || "";
+    const duration_min = searchParams.get("duration_min") || "";
+    const duration_max = searchParams.get("duration_max") || "";
     const rawProviders = searchParams.get("providers") || "";
     const providers = rawProviders ? rawProviders.split(",").map((s) => s.trim()).filter(Boolean) : [];
 
@@ -77,6 +79,8 @@ function CatalogPageClient() {
         score_min,
         sort_by,
         access,
+        duration_min,
+        duration_max,
       },
       page: initialPage,
     };
@@ -153,6 +157,8 @@ function CatalogPageClient() {
     if (filters.score_min) params.set("score_min", filters.score_min);
     if (filters.sort_by) params.set("sort_by", filters.sort_by);
     if (filters.access) params.set("access", filters.access);
+    if (filters.duration_min) params.set("duration_min", filters.duration_min);
+    if (filters.duration_max) params.set("duration_max", filters.duration_max);
     if (filters.actors && filters.actors.length > 0) {
       params.set("actors", JSON.stringify(filters.actors));
     }
@@ -189,6 +195,8 @@ function CatalogPageClient() {
     if (filters.score_min) params.score_min = filters.score_min;
     if (filters.sort_by) params.sort_by = filters.sort_by;
     if (filters.access) params.access = filters.access;
+    if (filters.duration_min) params.duration_min = filters.duration_min;
+    if (filters.duration_max) params.duration_max = filters.duration_max;
     if (filters.country) params.country = filters.country;
     if (filters.actors && filters.actors.length > 0) {
       params.actor_id = filters.actors.map((a) => a.id).join(",");

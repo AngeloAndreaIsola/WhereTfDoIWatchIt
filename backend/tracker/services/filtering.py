@@ -136,6 +136,63 @@ def apply_composable_filters(
         except (ValueError, TypeError):
             pass
 
+    # 7. Duration / Runtime Filter (in minutes)
+    raw_dur_min = params.get("duration_min")
+    raw_dur_max = params.get("duration_max")
+    dur_min: Optional[int] = None
+    dur_max: Optional[int] = None
+
+    if raw_dur_min is not None and str(raw_dur_min).strip() != "":
+        try:
+            val = int(raw_dur_min)
+            if val >= 0:
+                dur_min = val
+        except (ValueError, TypeError):
+            pass
+
+    if raw_dur_max is not None and str(raw_dur_max).strip() != "":
+        try:
+            val = int(raw_dur_max)
+            if val >= 0:
+                dur_max = val
+        except (ValueError, TypeError):
+            pass
+
+    # If both min and max are specified, ensure min <= max; otherwise ignore invalid range
+    if dur_min is not None and dur_max is not None and dur_min > dur_max:
+        dur_min = None
+        dur_max = None
+
+    if dur_min is not None or dur_max is not None:
+        # Duration filter active:
+        # - Exclude titles with missing, None, zero, or negative runtime.
+        # - For TV series (content_type == "series"), our schema only stores seasons/episodes
+        #   counts in seasons_data and does not contain episode-level typical runtime.
+        #   Per specification: do not substitute an unrelated runtime field, and treat TV series
+        #   as having unknown duration when a duration filter is active (exclude them).
+        if isinstance(queryset, QuerySet):
+            q_dur = Q(content_type="movie") & Q(runtime_minutes__gt=0)
+            if dur_min is not None:
+                q_dur &= Q(runtime_minutes__gte=dur_min)
+            if dur_max is not None:
+                q_dur &= Q(runtime_minutes__lte=dur_max)
+            queryset = queryset.filter(q_dur)
+        else:
+            def _matches_duration(m) -> bool:
+                ct = getattr(m, "content_type", "movie") or "movie"
+                if ct != "movie":
+                    return False
+                rt = getattr(m, "runtime_minutes", None)
+                if rt is None or rt <= 0:
+                    return False
+                if dur_min is not None and rt < dur_min:
+                    return False
+                if dur_max is not None and rt > dur_max:
+                    return False
+                return True
+
+            queryset = [m for m in queryset if _matches_duration(m)]
+
     # Convert queryset to list if it was evaluated
     movie_list = list(queryset)
 
