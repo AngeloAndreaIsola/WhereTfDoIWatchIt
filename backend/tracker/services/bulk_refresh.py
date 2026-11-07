@@ -75,6 +75,7 @@ from ..models import (
     RefreshRequestOutcome,
     RefreshRequestStatus,
     RefreshRun,
+    RefreshPriority,
     WatchlistItem,
 )
 from .preferences import resolve_source_country
@@ -476,7 +477,7 @@ def process_watchlist_refresh(
     # module load time. The returned set owns those titles for this run —
     # settled or still queued — so the sweep below neither re-attempts nor
     # double-counts them.
-    from .refresh_requests import drain_refresh_requests
+    from .refresh_requests import drain_refresh_requests, _metered_source_is_unnecessary
 
     queue_owned = drain_refresh_requests(
         summary=summary,
@@ -543,6 +544,13 @@ def process_watchlist_refresh(
         # and the next titles, instead of the run-wide bail-out the single
         # shared limiter used to force here.
         for slug in scopes:
+            # The sweep has no queue row, but still spends the same metered
+            # budget. Re-check the same policy immediately before execution.
+            if _metered_source_is_unnecessary(
+                movie, slug, RefreshPriority.BACKGROUND, country=current_country
+            ):
+                summary.skipped_policy_gated += 1
+                continue
             if summary.remaining_budget <= 0:
                 summary.skipped_budget_exhausted += 1
                 continue

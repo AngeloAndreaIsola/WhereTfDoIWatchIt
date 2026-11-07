@@ -171,7 +171,6 @@ class B1ExplicitRefreshTests(TestCase):
         for code in ("IT",):
             Country.objects.get_or_create(code=code, defaults={"name": code})
 
-    @unittest.expectedFailure
     def test_explicit_watchlist_refresh_includes_sa_subject_to_quota(self):
         """Expected failure: desired contract that EXPLICIT bulk refreshes include SA subject to quota.
         B2 removal instructions: Remove this expectedFailure decorator and update assertion once Phase B2 explicit refresh override is deployed.
@@ -194,7 +193,6 @@ class B1ExplicitRefreshTests(TestCase):
 
         self.assertIn("streaming_availability", res["sources"])
 
-    @unittest.expectedFailure
     def test_explicit_single_title_refresh_includes_sa_subject_to_quota(self):
         """Expected failure: desired contract that EXPLICIT single-title refreshes include SA subject to quota."""
         prov, _ = Provider.objects.get_or_create(slug="wm-prov", defaults={"name": "WM"})
