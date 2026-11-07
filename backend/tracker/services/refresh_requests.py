@@ -750,22 +750,13 @@ def _metered_source_is_unnecessary(
 
 def _has_reusable_permanent_negative(request: RefreshRequest) -> bool:
     """Use a 404 only in its observed market; unknown is never global."""
+    from .availability_report import _permanent_miss_sources
+
     source = resolve_request_source(request)
-    rows = RefreshRequest.objects.filter(movie=request.movie).filter(
-        Q(
-            status=RefreshRequestStatus.DONE,
-            outcome=RefreshRequestOutcome.TITLE_NOT_FOUND,
-        )
-        | Q(
-            status=RefreshRequestStatus.FAILED,
-            last_error__startswith="UpstreamTitleNotFound",
-        )
-    ).only("source", "country")
-    rows = [row for row in rows if resolve_request_source(row) == source]
-    # Country-bound title lookups have country-bound negatives. A blank country
-    # is unknown evidence, not a universal negative; only an exact explicit
-    # country match may suppress another queued request.
-    return bool(request.country) and any(row.country == request.country for row in rows)
+    if not request.country:
+        return False
+    misses = _permanent_miss_sources([request.movie_id], country=request.country)
+    return source in misses.get(request.movie_id, set())
 
 
 def _drain_one(
