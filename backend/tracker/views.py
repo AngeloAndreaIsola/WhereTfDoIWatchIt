@@ -2959,11 +2959,11 @@ def watched_list(request):
     if sort == "title":
         results.sort(key=lambda x: (x["movie"]["title"] or "", x["movie"]["tmdb_id"]))
     elif sort == "rating":
-        results.sort(key=lambda x: (x["user_data"]["rating"] is None, -(x["user_data"]["rating"] or 0), x["movie"]["title"] or ""))
+        results.sort(key=lambda x: (x["user_data"]["rating"] is None, -(x["user_data"]["rating"] or 0), x["movie"]["title"] or "", x["movie"]["tmdb_id"]))
     else:  # last_watched
-        results.sort(key=lambda x: (x["last_watched_at"] is None, x["last_watched_at"] or "", x["movie"]["title"] or ""), reverse=False)
-        # newest first
-        results.sort(key=lambda x: (x["last_watched_at"] is None, x["last_watched_at"] or ""), reverse=True)
+        # deterministic: dated first (most recent first), undated last; secondary title + tmdb_id
+        results.sort(key=lambda x: (x["movie"]["title"] or "", x["movie"]["tmdb_id"]))
+        results.sort(key=lambda x: x["last_watched_at"] or "", reverse=True)
 
     paged, pagination = paginate_list(results, page, page_size)
     return Response({"results": paged, "pagination": pagination})

@@ -1549,10 +1549,12 @@ export interface WatchedItem {
 }
 
 export interface WatchedPagination {
+  count: number;
   page: number;
   page_size: number;
-  total: number;
   total_pages: number;
+  has_next: boolean;
+  has_previous: boolean;
 }
 
 export interface WatchedListResponse {
