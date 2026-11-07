@@ -2924,14 +2924,6 @@ def watched_list(request):
             a["last"] = ev.watched_date
     watchlisted_ids = set(WatchlistItem.objects.filter(user_id=user_id, movie_id__in=movie_ids).values_list("movie_id", flat=True))
 
-    def last_watched_value(r):
-        a = event_agg.get(r.movie_id, {})
-        d = a.get("last")
-        if d is not None:
-            return d
-        # distinguish unknown from updated_at: use None, not updated_at
-        return r.watched_date
-
     results = []
     for r in rows:
         m = r.movie
