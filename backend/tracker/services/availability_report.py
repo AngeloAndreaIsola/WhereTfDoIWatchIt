@@ -339,21 +339,48 @@ def _permanent_miss_sources(movie_ids: list[int], country: str | None = None) ->
     is what keeps a transient network 404 from being written off forever.
     """
     out: dict[int, set[str]] = defaultdict(set)
+    # Collect permanent-miss candidates with their ordering key.
+    candidates: list[tuple[int, str, object, int, str | None]] = []
     qs = RefreshRequest.objects.filter(movie_id__in=movie_ids)
     if country is not None:
         qs = qs.filter(country=country.upper())
-    for movie_id, src in qs.filter(
-        Q(
-            status=RefreshRequestStatus.DONE,
-            outcome=RefreshRequestOutcome.TITLE_NOT_FOUND,
+    for movie_id, src, status, outcome, last_error, requested_at, pk, row_country in qs.values_list(
+        "movie_id", "source", "status", "outcome", "last_error", "requested_at", "id", "country"
+    ).iterator():
+        is_permanent = (
+            status == RefreshRequestStatus.DONE
+            and outcome == RefreshRequestOutcome.TITLE_NOT_FOUND
+        ) or (
+            status == RefreshRequestStatus.FAILED
+            and (last_error or "").startswith("UpstreamTitleNotFound")
         )
-        # Compatibility for database rows created before migration 0044.
-        | Q(
-            status=RefreshRequestStatus.FAILED,
-            last_error__startswith="UpstreamTitleNotFound",
-        )
-    ).values_list("movie_id", "source"):
-        out[movie_id].add(src or DEFAULT_SOURCE_SLUG)
+        if not is_permanent:
+            continue
+        candidates.append((movie_id, src or DEFAULT_SOURCE_SLUG, requested_at, pk, row_country))
+
+    # A permanent miss is superseded only by newer *authoritative* evidence
+    # (a DONE row) for the same movie/source/country. Pending or transient
+    # failures alone do not invalidate it.
+    superseded: set[tuple[int, str, int]] = set()
+    # Build max (requested_at, pk) among DONE rows per (movie, source, country).
+    done_max: dict[tuple[int, str, str | None], tuple] = {}
+    qs2 = RefreshRequest.objects.filter(movie_id__in=movie_ids, status=RefreshRequestStatus.DONE)
+    if country is not None:
+        qs2 = qs2.filter(country=country.upper())
+    for movie_id, src, requested_at, pk, row_country in qs2.values_list(
+        "movie_id", "source", "requested_at", "id", "country"
+    ).iterator():
+        key = (movie_id, src or DEFAULT_SOURCE_SLUG, row_country)
+        cand_key = (requested_at, pk)
+        if key not in done_max or cand_key > done_max[key]:
+            done_max[key] = cand_key
+
+    for movie_id, src, requested_at, pk, row_country in candidates:
+        key = (movie_id, src, row_country)
+        if key in done_max and (requested_at, pk) < done_max[key]:
+            # superseded by newer authoritative evidence
+            continue
+        out[movie_id].add(src)
     return out
 
 
