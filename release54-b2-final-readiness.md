@@ -1,14 +1,15 @@
 # Release 54 — B2 combined integration readiness
 
-Validated on 7 November 2026 (Europe/Amsterdam). Ready for ChatGPT Web's independent review of the integration candidate, subject to the limitations below. This document does not authorize remote merges or deployment.
+Updated on 7 November 2026 (Europe/Amsterdam) after the final read-only review of `fd755da29f127c22b2a255c237b00f8ca989c98e`. The local candidate contains the P1-A, P1-B and P2-A corrections below. Production activation of the metered gate still requires the P2-B performance follow-up. Publication and a review PR await separate authorization; this document authorizes neither merging nor deployment.
 
 ## Exact revisions
 
 - PR #59 base: `d299fce499e40e61b2d5b5502c487b320260ae97` (`integration/release54-hardening`, current GitHub head when inspected).
-- Integration candidate source SHA: `beae804316ea00223a13303865e1cff86136438d`.
+- Original integration candidate source SHA: `beae804316ea00223a13303865e1cff86136438d`.
 - Candidate branch: `codex/release54-b2-final`.
 - Isolated managed worktree: `/Users/angeloandreaisola/.codex/worktrees/release54-b2-final/WhereTfDoIWatchIt`.
-- This report is packaged in a documentation-only child commit; the report-bearing branch-tip SHA is supplied in the final handoff. All executable source is identical to the tested candidate above.
+- Reviewed parent SHA: `fd755da29f127c22b2a255c237b00f8ca989c98e`.
+- The final correction code, tests and this updated report are packaged together in the new local branch-tip commit; its exact SHA is supplied in the final handoff. The older integration SHA above is historical, not the corrected source revision.
 
 | Integration order | Input PR | Exact approved input SHA | Local merge commit |
 |---|---|---|---|
@@ -18,6 +19,94 @@ Validated on 7 November 2026 (Europe/Amsterdam). Ready for ChatGPT Web's indepen
 | 4 | #67 | `668c9d050517698d61b94f64eed51c0574df75a9` | `9bcd6a7490ad797bda92c98be6e33ddd542a0998` |
 
 Integration corrections: `dfa8cfc9d7d91a6e9fc953aa53ffe7a8bbbcf801` (shared sweep supersession, combined regressions, JustWatch/TMDb test isolation), then `beae804316ea00223a13303865e1cff86136438d` (NHK test isolation).
+
+## Final review corrections
+
+The integration and four B2 worker results were reused without restarting workers or repeating merges. All pre-existing worktrees were preserved. Only the existing task-owned PostgreSQL/backend/frontend validation containers were restarted; they retain `NetworkMode=none`, no published ports, blank provider credentials and read-only candidate source mounts. PostgreSQL was reinitialized on its existing tmpfs and Django created/destroyed a fresh test database per invocation. No dependency installs or image downloads occurred.
+
+### Correctness changes
+
+- **P1-A:** queue and sweep decrement the shared run budget immediately inside `source_budget`, after local source capacity is successfully reserved and before `refresh_content`. Permanent misses, timeouts, provider faults and upstream quota responses consume attempted-call capacity. Fresh/cache, policy, reused-negative and pre-acquisition quota refusals remain free. `source_budget` still owns the single local quota reservation; real PostgreSQL daily counters and monthly ledgers are checked against exact mocked provider call counts.
+- **P1-B:** a sweep `UpstreamTitleNotFound` writes a terminal `RefreshRequest` for the exact Movie identity, source and selected country: `DONE/TITLE_NOT_FOUND`, background priority, one attempt, request-start time and completion time. The next sweep reuses that evidence without another call or duplicate evidence row. Reuse and newer `NO_OFFER`/`OFFERS_FOUND` supersession still belong exclusively to `_permanent_miss_sources`; no second negative-evidence policy was added. EXPLICIT rechecks, legacy empty-source aliases, source/country and movie/series isolation remain covered. Transient failures write no permanent sweep evidence.
+- **P2-A:** both public run entry points include policy and permanent-miss outcomes in persisted `RefreshRun.rows_skipped`. Reused sweep negatives increment only `skipped_upstream_missing`; they no longer masquerade as cache skips. Tests compare the persisted audit with every returned skip counter, including an isolated sweep containing one policy skip and one new upstream miss.
+- **P2-B:** the unchanged sweep benchmark is **47 / 3,809 / 7,609 SQL statements** at 1 / 100 / 200 candidates. **Batched report/policy evaluation is required before production activation of the metered gate.** This correction does not implement a broad performance refactor or claim production latency readiness.
+
+### Exact changed files relative to reviewed parent
+
+1. `backend/tracker/services/bulk_refresh.py` — attempted-call budget, scoped durable sweep negatives and audit accounting.
+2. `backend/tracker/services/refresh_requests.py` — attempted-call budget and queue-run audit accounting.
+3. `backend/tracker/tests/test_b2_final_corrections.py` — **48 new PostgreSQL tests** with mocked provider services, explicit budgets 1 and 2, real local daily/monthly ledgers, mixed outcomes, free skips, local denial/source isolation, permanent-negative reuse and supersession, EXPLICIT rechecks, audit reconciliation, shared queue/sweep budget and reserved fairness capacity after errors.
+4. `backend/tracker/tests/test_bulk_refresh.py` — existing error-resilience expectation now charges all three attempts (remaining 7 of 10).
+5. `release54-b2-final-readiness.md` — this updated report.
+
+### Final verification
+
+Full backend: **2,927 tests passed in 115.552s**, exit 0, using PostgreSQL (including migrations, advisory-lock and concurrency tests), with `NETWORK_GUARD_ATTEMPTS=0 []`. This is the original 2,879 tests plus 48 new correction regressions.
+
+Frontend: **25 files / 202 tests passed** (16.15s), plus lint, TypeScript (`tsc --noEmit`) and production build, exit 0. The six previously recorded lint warnings remain. `FRONTEND_NETWORK_GUARD_ATTEMPTS=0`. Frontend source is unchanged from the reviewed parent.
+
+Focused PostgreSQL suite: **189 tests passed in 24.543s**, exit 0, `NETWORK_GUARD_ATTEMPTS=0 []`. This comprises all new correction tests and the existing bulk refresh, event-driven queue, background gate, negative evidence, source policy, lifecycle terminality and combined integration modules. The initial pre-fix run reproduced the attempt leak (four calls despite limits of 1 or 2), missing sweep evidence and omitted skip accounting. One duplicate-watchlist test fixture was corrected before the accepted focused run.
+
+Persistent backend verification returned `METERED_GATE=False` and `PROVIDER_KEYS_BLANK=True`. Repository `.env.example` and both compose service defaults remain `0`. Gate ON is used only within isolated test patch contexts. All provider boundaries remain mocked/fixture-based; the backend guard rejects and counts DNS/non-Unix socket attempts even if application code swallows the exception. The frontend adds a Node preload guard across npm, Vitest, TypeScript, Next.js and child processes, with an append-only attempt file checked after the command chain. Both guards reported zero attempts. Docker network none supplies a second isolation boundary.
+
+Reproduction (reuse the environment and backend guard documented below):
+
+```sh
+docker start release54-b2-final-pg release54-b2-final-backend release54-b2-final-frontend
+docker exec -e DJANGO_ALLOWED_HOSTS=testserver,localhost,backend \
+  -e INTERNAL_FRONTEND_PROXY_HOST= release54-b2-final-backend \
+  python /tmp/run_network_free.py \
+  tracker.tests.test_b2_final_corrections tracker.tests.test_bulk_refresh \
+  tracker.tests.test_event_driven_refresh tracker.tests.test_background_metered_gate \
+  tracker.tests.test_negative_evidence_precedence tracker.tests.test_refresh_source_policy_drain \
+  tracker.tests.test_refresh_lifecycle_terminality tracker.tests.test_b2_combined_integration
+docker exec -e DJANGO_ALLOWED_HOSTS=testserver,localhost,backend \
+  -e INTERNAL_FRONTEND_PROXY_HOST= release54-b2-final-backend \
+  python /tmp/run_network_free.py
+```
+
+Frontend preload (`/tmp/network-guard.cjs` in the task container):
+
+```javascript
+const fs = require('node:fs');
+const net = require('node:net');
+const dns = require('node:dns');
+const attemptsFile = '/tmp/b2-corrections-network-attempts.jsonl';
+function blocked(kind) {
+  fs.appendFileSync(attemptsFile, JSON.stringify({ kind, pid: process.pid }) + '\n');
+  throw new Error('Network forbidden during isolated validation: ' + kind);
+}
+const originalConnect = net.Socket.prototype.connect;
+net.Socket.prototype.connect = function (...args) {
+  const normalized = Array.isArray(args[0]) ? args[0] : args;
+  const target = normalized[0];
+  if ((target && typeof target === 'object' && typeof target.path === 'string') ||
+      (typeof target === 'string' && !/^\d+$/.test(target))) {
+    return originalConnect.apply(this, args);
+  }
+  return blocked('socket.connect');
+};
+for (const name of ['lookup', 'lookupService', 'reverse', ...Object.keys(dns).filter(k => k.startsWith('resolve'))]) {
+  if (typeof dns[name] === 'function') dns[name] = () => blocked('dns.' + name);
+  if (dns.promises && typeof dns.promises[name] === 'function') dns.promises[name] = () => blocked('dns.promises.' + name);
+}
+```
+
+```sh
+docker exec -w /validation -e NODE_OPTIONS=--require=/tmp/network-guard.cjs \
+  release54-b2-final-frontend sh -c \
+  'npm test && npm run lint && ./node_modules/.bin/tsc --noEmit && npm run build; result=$?; if test -s /tmp/b2-corrections-network-attempts.jsonl; then cat /tmp/b2-corrections-network-attempts.jsonl; exit 90; fi; echo FRONTEND_NETWORK_GUARD_ATTEMPTS=0; exit "$result"'
+```
+
+Final local evidence (SHA-256):
+
+- `/tmp/release54-b2-corrections-focused.log`: `34abe20eccb19ed771ddbd84695f4a927da785e1e818a4ad2077e3cd4a84503f`.
+- `/tmp/release54-b2-corrections-backend-full.log`: `daae8b1f50b6e25124f8104e350ae8f0879edd82379601e7b87d7c106724afea`.
+- `/tmp/release54-b2-corrections-frontend.log`: `a0b1cc50bb98d8ce3bc2f4ada8a894b44847f17df1745279e49e98a8f4e301ca`.
+- `/tmp/release54-b2-network-free.py`: `ce05d20893970b5bb856803171e4d603cb08da722d3c6d40036becff684b405f`.
+- `/tmp/release54-b2-frontend-network-guard.cjs`: `ac6bf2785cc1db24686a4f1d4150a4582d7d6f1625d725f13b6fc5080c707829`.
+
+The remaining sections retain the prior integration record and baseline results. The final correction verification above supersedes their original candidate test totals. The next step is independent review of the exact corrected commit, followed by GitHub CI verification once publication and a review PR are authorized. No push, PR, merge, deployment, master update or gate activation was performed in this correction pass.
 
 ## Overlapping changes and resolutions
 
@@ -240,14 +329,14 @@ For comparison only, #68's queued-worker tests were rerun: **4 / 103 / 203** que
 
 ## Remaining limitations and remote merge recommendation
 
-- **Remote handoff blocked by automatic approval review.** Publishing `codex/release54-b2-final` to `origin` (`https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt.git`) was rejected because it would export private repository source and this request authorized local preparation rather than this specific remote publication. The push did not execute. No alternate publication mechanism was attempted. Explicit user approval is needed before this local candidate can be inspected by ChatGPT Web through GitHub.
+- **Historical publication rejection (prior integration pass).** Publishing `codex/release54-b2-final` to `origin` (`https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt.git`) was rejected because it would export private repository source and this request authorized local preparation rather than this specific remote publication. The push did not execute. No alternate publication mechanism was attempted. No publication was attempted during this correction pass. The user requested local preparation and permission before another update; explicit authorization is still needed to publish the corrected candidate.
 
-- The background-sweep query count remains linear and high at 200 candidates. No constant-query or production-latency claim is made; further batching of policy/report reads is a follow-up. The measurements intentionally distinguish the sweep from queue-drain benchmarks.
+- The background-sweep query count remains linear and high at 200 candidates. No constant-query or production-latency claim is made; batched report/policy evaluation is required before production activation of the metered gate. The measurements intentionally distinguish the sweep from queue-drain benchmarks.
 - Providers, live credentials, production data, real quota savings, deployment, and browser end-to-end flows were not exercised. All provider-facing behavior was stubbed or fixture-based. Existing frontend lint warnings remain.
 - The candidate's sweep correction must accompany the original PRs; merging only #65/#66/#68/#67 would reintroduce sweep/report supersession disagreement.
 - No GitHub Actions polling, independent final PR review, remote PR merge, master change, deployment, paid external model usage, or messages to other people were performed. The candidate branch remains local; no PR was created or merged. All pre-existing worktrees were preserved.
 
-After ChatGPT Web independently reviews the exact handoff SHA and any new CI results, recommended remote sequence is **#65 → #66 → #68 → #67** into PR #59's hardening branch, followed by the two candidate correction commits (or a reviewed equivalent follow-up PR). Verify the resulting source tree matches the candidate before advancing #59. Keep the metered gate OFF outside isolated tests. Any later merge of #59 or deployment requires its own authorization.
+The corrected branch already contains the combined integration. Review its exact new handoff SHA; do not restart the four B2 workers or redo integration. After publication and a review PR are separately authorized, ChatGPT Web can inspect the resulting commit and GitHub CI. Keep the metered gate OFF; complete batched report/policy evaluation before considering production activation. Any later merge or deployment requires its own authorization.
 
 Evidence SHA-256 `/tmp/release54-b2-backend-accepted.log`: `7046375416b61f6dee64ba473d53004e555d5df9ff3705c1a1da7f4059aef25e`.
 

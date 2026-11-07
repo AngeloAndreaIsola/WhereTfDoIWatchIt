@@ -146,7 +146,7 @@ class BulkRefreshServiceTests(TestCase):
         self.assertEqual(summary["attempted"], 3)
         self.assertEqual(summary["errors"], 1)
         self.assertEqual(summary["refreshed"], 2)
-        self.assertEqual(summary["remaining_budget"], 8)
+        self.assertEqual(summary["remaining_budget"], 7)
         self.assertFalse(summary["rate_limited"])
 
     def test_freshness_comes_from_canonical_last_seen(self):

@@ -73,6 +73,7 @@ from ..models import (
     Movie,
     RefreshRequest,
     RefreshRequestStatus,
+    RefreshRequestOutcome,
     RefreshRun,
     RefreshPriority,
     WatchlistItem,
@@ -492,18 +493,17 @@ def process_watchlist_refresh(
         # dropped here: they write no Offer row, so they would otherwise read
         # as stale forever and cost one metered call per sweep run, every run.
         absent = permanent_misses.get(movie_id, set())
-        scopes = [
-            slug
-            for slug in stale_refresh_scopes(
-                tmdb_id,
-                country=current_country,
-                content_type=movie.content_type,
-            )
-            if slug not in absent
-        ]
-        if not scopes:
+        stale_scopes = stale_refresh_scopes(
+            tmdb_id,
+            country=current_country,
+            content_type=movie.content_type,
+        )
+        if not stale_scopes:
             summary.skipped_cached += 1
             continue
+        # Reused negatives are their own outcome, never a second cache skip.
+        summary.skipped_upstream_missing += sum(slug in absent for slug in stale_scopes)
+        scopes = [slug for slug in stale_scopes if slug not in absent]
 
         # The stale scopes we may refresh, with budget and rate capacity.
         #
@@ -544,13 +544,16 @@ def process_watchlist_refresh(
             )
             try:
                 with source_budget(scope_limiter, source=slug):
+                    # Acquisition owns the local quota ledger. The run limit
+                    # separately bounds attempts, including upstream failures.
+                    summary.remaining_budget -= 1
+                    requested_at = timezone.now()
                     # Same as the request-drain path: the selected market is
                     # explicit, never inferred.
                     scope_service.refresh_content(
-                        movie, country=resolve_source_country()
+                        movie, country=current_country
                     )
                 summary.refreshed += 1
-                summary.remaining_budget -= 1
             except RateLimitExceeded:
                 summary.note_rate_limited_source(slug)
                 summary.skipped_rate_limited += 1
@@ -575,11 +578,20 @@ def process_watchlist_refresh(
                         movie.tmdb_id, slug, exc.kind, exc.retry_after, exc.quota,
                     )
             except UpstreamTitleNotFound as exc:
-                # Not a fault: the upstream catalogue simply does not carry this
-                # title. Counted separately from real errors so a permanently
-                # absent title never looks like a broken refresh in the run
-                # summary. It stays stale, so the sweep will re-attempt it on a
-                # later run — see the report note on residual sweep retries.
+                # The same scoped evidence as a queued definitive miss. The
+                # shared history reader owns reuse and supersession policy;
+                # transient failures never enter this evidence path.
+                RefreshRequest.objects.create(
+                    movie=movie,
+                    source=slug,
+                    country=current_country,
+                    priority=RefreshPriority.BACKGROUND,
+                    status=RefreshRequestStatus.DONE,
+                    outcome=RefreshRequestOutcome.TITLE_NOT_FOUND,
+                    attempts=1,
+                    requested_at=requested_at,
+                    completed_at=timezone.now(),
+                )
                 summary.skipped_upstream_missing += 1
                 logger.info(
                     "Upstream has no record of tmdb_id=%s source=%s: %s",
@@ -593,7 +605,13 @@ def process_watchlist_refresh(
                 summary.errors += 1
 
     run.rows_refreshed = summary.refreshed
-    run.rows_skipped = summary.skipped_cached + summary.skipped_budget_exhausted + summary.skipped_rate_limited
+    run.rows_skipped = (
+        summary.skipped_cached
+        + summary.skipped_budget_exhausted
+        + summary.skipped_rate_limited
+        + summary.skipped_policy_gated
+        + summary.skipped_upstream_missing
+    )
     run.rate_limited = summary.rate_limited
     run.finished_at = timezone.now()
     run.save()

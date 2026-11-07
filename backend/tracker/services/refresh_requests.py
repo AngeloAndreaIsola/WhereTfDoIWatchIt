@@ -1005,6 +1005,9 @@ def _drain_one(
 
     try:
         with source_budget(scope_limiter, source=source):
+            # Charge attempts only after local source capacity is reserved.
+            # source_budget already owns the quota ledger; do not reserve twice.
+            summary.remaining_budget -= 1
             # The user's selected market travels with the request. Sources that
             # answer per country (JustWatch) cannot be called without it, and
             # ones that answer globally (Streaming Availability) ignore it.
@@ -1109,7 +1112,6 @@ def _drain_one(
         outcome=_successful_outcome(request, source),
     )
     summary.refreshed += 1
-    summary.remaining_budget -= 1
     summary.requests_drained += 1
     return rate_limit_hit
 
@@ -1467,6 +1469,8 @@ def process_refresh_queue(
         summary.skipped_cached
         + summary.skipped_budget_exhausted
         + summary.skipped_rate_limited
+        + summary.skipped_policy_gated
+        + summary.skipped_upstream_missing
     )
     run.rate_limited = summary.rate_limited
     run.finished_at = timezone.now()
