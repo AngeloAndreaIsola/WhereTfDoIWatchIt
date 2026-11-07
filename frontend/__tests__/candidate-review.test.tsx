@@ -90,7 +90,8 @@ describe("Candidate Review Interface (Wave 2A Backend Compatibility)", () => {
     expect(screen.getByRole("button", { name: "Next" })).not.toBeDisabled();
 
     // Verify first item is rendered and selected
-    expect(screen.getByRole("heading", { name: "Pinocchio" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "Pinocchio" })).toBeInTheDocument();
+    expect(screen.getByTestId("queue-item-pc-101")).toHaveAttribute("aria-pressed", "true");
     expect(screen.getAllByText(/Tubi/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/pinocchio-2022-stream/i).length).toBeGreaterThan(0);
   });
