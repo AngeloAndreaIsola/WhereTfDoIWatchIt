@@ -27,6 +27,14 @@ export default function WatchedPage() {
 
   const abortRef = useRef<AbortController | null>(null);
 
+  // Restore filters and page when browser navigation changes the URL.
+  useEffect(() => {
+    setSearch(searchParams.get("search") || "");
+    setContentType(searchParams.get("content_type") || "all");
+    setSort(searchParams.get("sort") || "last_watched");
+    setPage(Number(searchParams.get("page") || "1"));
+  }, [searchParams]);
+
   // Sync state -> URL
   useEffect(() => {
     const params = new URLSearchParams(searchParams.toString());
@@ -62,11 +70,6 @@ export default function WatchedPage() {
     return () => ac.abort();
   }, [search, contentType, sort, page]);
 
-  // reset page on filter change
-  useEffect(() => {
-    setPage(1);
-  }, [search, contentType, sort]);
-
   const detailHref = (r: WatchedItem) =>
     r.movie.content_type === "series" ? `/tv/${r.movie.tmdb_id}` : `/movie/${r.movie.tmdb_id}`;
 
@@ -74,13 +77,13 @@ export default function WatchedPage() {
     <div className="p-6">
       <h1 className="text-2xl font-bold mb-4">Watched</h1>
       <div className="flex flex-wrap gap-3 mb-4">
-        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search title…" className="border rounded px-3 py-1.5 text-sm" />
-        <select value={contentType} onChange={(e) => setContentType(e.target.value)} className="border rounded px-3 py-1.5 text-sm">
+        <input value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} placeholder="Search title…" className="border rounded px-3 py-1.5 text-sm" />
+        <select value={contentType} onChange={(e) => { setContentType(e.target.value); setPage(1); }} className="border rounded px-3 py-1.5 text-sm">
           <option value="all">All</option>
           <option value="movie">Movies</option>
           <option value="series">Series</option>
         </select>
-        <select value={sort} onChange={(e) => setSort(e.target.value)} className="border rounded px-3 py-1.5 text-sm">
+        <select value={sort} onChange={(e) => { setSort(e.target.value); setPage(1); }} className="border rounded px-3 py-1.5 text-sm">
           {SORTS.map((s) => (
             <option key={s.value} value={s.value}>{s.label}</option>
           ))}
