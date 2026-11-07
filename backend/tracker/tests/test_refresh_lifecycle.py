@@ -38,6 +38,7 @@ from tracker.models import (
     Movie,
     Provider,
     RefreshRequest,
+    RefreshRequestOutcome,
     RefreshRequestStatus,
     WatchlistItem,
 )
@@ -94,9 +95,10 @@ def make_run(batch=None, movie_ids=None) -> AvailabilityRefresh:
     )
 
 
-def add_request(movie: Movie, source: str, status: str, batch) -> RefreshRequest:
+def add_request(movie: Movie, source: str, status: str, batch, *, outcome=RefreshRequestOutcome.UNKNOWN) -> RefreshRequest:
     return RefreshRequest.objects.create(
         movie=movie, source=source, status=status, batch=batch,
+        outcome=outcome,
         requested_at=timezone.now(),
         completed_at=timezone.now() if status != RefreshRequestStatus.PENDING else None,
     )
