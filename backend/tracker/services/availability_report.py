@@ -367,9 +367,15 @@ def _permanent_miss_sources(movie_ids: list[int], country: str | None = None) ->
     qs2 = RefreshRequest.objects.filter(movie_id__in=movie_ids, status=RefreshRequestStatus.DONE)
     if country is not None:
         qs2 = qs2.filter(country=country.upper())
-    for movie_id, src, requested_at, pk, row_country in qs2.values_list(
-        "movie_id", "source", "requested_at", "id", "country"
+    for movie_id, src, outcome, requested_at, pk, row_country in qs2.values_list(
+        "movie_id", "source", "outcome", "requested_at", "id", "country"
     ).iterator():
+        if outcome not in (
+            RefreshRequestOutcome.OFFERS_FOUND,
+            RefreshRequestOutcome.NO_OFFER,
+            RefreshRequestOutcome.TITLE_NOT_FOUND,
+        ):
+            continue
         key = (movie_id, src or DEFAULT_SOURCE_SLUG, row_country)
         cand_key = (requested_at, pk)
         if key not in done_max or cand_key > done_max[key]:
