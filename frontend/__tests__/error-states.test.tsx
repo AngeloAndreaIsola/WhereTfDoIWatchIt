@@ -96,8 +96,7 @@ vi.mock(
         return React.createElement("div", null, "Loaded");
       },
     };
-  },
-  { virtual: true }
+  }
 );
 
 function mockFetch(

@@ -210,7 +210,7 @@ describe("AvailabilityState", () => {
             offer_count: 0,
             available_on: ["videoland"],
             title_signals: [
-              { provider: "videoland", source: "legacy_scraper" },
+              { provider: "videoland", source: "legacy_scraper", trusted: true, playable: false },
             ],
           })}
         />,
@@ -220,6 +220,23 @@ describe("AvailabilityState", () => {
       expect(screen.getByText(/videoland/i)).toBeInTheDocument();
       // It must not degrade to "not known yet" — a source did answer.
       expect(screen.queryByText(/not known yet/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(FALSE_UNAVAILABLE)).not.toBeInTheDocument();
+    });
+
+    it.each(["legacy_availability", "legacy_scraper"])("labels untrusted %s signals as historical", (source) => {
+      render(
+        <AvailabilityState
+          availability={verdict("unknown", "not_checked", {
+            evidence: "title_signal",
+            offer_count: 0,
+            available_on: [],
+            title_signals: [{ provider: "videoland", source, trusted: false, playable: false }],
+          })}
+        />,
+      );
+      expect(screen.getByText(/historical availability report/i)).toBeInTheDocument();
+      expect(screen.getByText(/videoland/i)).toBeInTheDocument();
+      expect(screen.queryByText(/reported available/i)).not.toBeInTheDocument();
       expect(screen.queryByText(FALSE_UNAVAILABLE)).not.toBeInTheDocument();
     });
 

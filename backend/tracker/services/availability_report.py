@@ -465,7 +465,18 @@ def _active_offer_count(movie_ids: list[int], country: str | None = None) -> dic
 
 
 def _title_availability_signals(movie_ids: list[int], country: str | None = None) -> dict[int, list[dict]]:
-    """Title-level availability claims from sources that produced no offer."""
+    """Preserve positive claims without manufacturing canonical offers.
+
+    Only a confirmed mapping with a fresh scrape is trusted at title level.
+    ``updated_at`` is bookkeeping, never an observation timestamp. Legacy
+    Availability rows have no confirmation provenance or declared freshness
+    policy: keep them as display-only, unknown-trust history, even when recent.
+    Every signal is non-playable; only canonical Offer rows resolve the title.
+    """
+    from availability.freshness import FreshnessState, freshness_state
+
+    def is_fresh(slug, observed_at):
+        return observed_at is not None and freshness_state(slug, observed_at) == FreshnessState.FRESH
     target = (country or "").upper().strip() if country else None
     out: dict[int, list[dict]] = defaultdict(list)
     scraper_qs = ScrapedContentMapping.objects.filter(
@@ -473,10 +484,11 @@ def _title_availability_signals(movie_ids: list[int], country: str | None = None
     ).exclude(provider__isnull=True)
     if target is not None:
         scraper_qs = scraper_qs.filter(country_code__iexact=target)
-    for movie_id, slug, row_country, scraped_at, updated_at, confirmed in (
-        scraper_qs.values_list("movie_id", "provider__slug", "country_code", "last_scraped_at", "updated_at", "is_confirmed").iterator()
+    for movie_id, slug, row_country, scraped_at, confirmed in (
+        scraper_qs.values_list("movie_id", "provider__slug", "country_code", "last_scraped_at", "is_confirmed").iterator()
     ):
         seen = scraped_at
+        fresh = is_fresh("legacy_scraper", seen)
         out[movie_id].append(
             {
                 "provider": slug or "",
@@ -485,6 +497,10 @@ def _title_availability_signals(movie_ids: list[int], country: str | None = None
                 "source": "legacy_scraper",
                 "checked_at": seen,
                 "confirmed": bool(confirmed),
+                "fresh": fresh,
+                "trusted": bool(confirmed) and fresh,
+                "trust": "confirmed_mapping" if confirmed else "unconfirmed_mapping",
+                "playable": False,
             }
         )
     legacy_qs = Availability.objects.filter(movie_id__in=movie_ids, is_available=True).select_related("region")
@@ -503,6 +519,11 @@ def _title_availability_signals(movie_ids: list[int], country: str | None = None
                 "offer_type": offer_type or "",
                 "source": "legacy_availability",
                 "checked_at": seen,
+                "confirmed": False,
+                "fresh": is_fresh("legacy_availability", seen),
+                "trusted": False,
+                "trust": "legacy_unknown",
+                "playable": False,
             }
         )
     return out
@@ -847,18 +868,9 @@ def title_source_report(movie_ids, batch=None, country: str | None = None) -> di
             evidence_class = "none"
 
         available_on = set(providers.get(movie_id, set()))
-        from availability.freshness import freshness_state, FreshnessState
-        def _scraper_fresh(sig):
-            ts = sig.get("checked_at")
-            if ts is None:
-                return False
-            try:
-                return freshness_state("legacy_scraper", ts) == FreshnessState.FRESH
-            except (TypeError, ValueError):
-                return False
         available_on.update(
             s["provider"] for s in title_signals
-            if s["provider"] and s.get("confirmed") and _scraper_fresh(s)
+            if s["provider"] and s["trusted"]
         )
 
         report[movie_id] = {

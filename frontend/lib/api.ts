@@ -645,7 +645,7 @@ export interface TitleAvailabilityVerdict {
   resolved_sources: string[];
   unresolved_sources: string[];
   sources: TitleAvailabilitySource[];
-  /** Provider slugs a source reported this title as available on. */
+  /** Provider slugs supported by current canonical offers or trusted title signals. */
   available_on?: string[];
   /**
    * How the state was reached, so the page can tell a concrete offer apart
@@ -666,6 +666,11 @@ export interface TitleAvailabilityVerdict {
     offer_type?: string;
     source: string;
     checked_at?: string | null;
+    confirmed?: boolean;
+    fresh?: boolean;
+    trusted?: boolean;
+    trust?: "confirmed_mapping" | "unconfirmed_mapping" | "legacy_unknown";
+    playable?: false;
   }>;
 }
 
