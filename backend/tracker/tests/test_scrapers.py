@@ -122,8 +122,11 @@ class NHKScraperTest(TestCase):
     def setUp(self):
         self.scraper = NHKScraper()
 
-    def test_no_query_returns_empty(self):
+    @patch.object(NHKScraper, "fetch_url", return_value="<html></html>")
+    def test_no_query_returns_empty(self, mock_fetch):
         self.assertEqual(self.scraper.run(query=None), [])
+        mock_fetch.assert_called_once()
+        self.assertEqual(mock_fetch.call_args.args[0], "https://www3.nhk.or.jp/nhkworld/")
 
     @patch.object(NHKScraper, "fetch_url")
     def test_parses_program_card(self, mock_fetch):
