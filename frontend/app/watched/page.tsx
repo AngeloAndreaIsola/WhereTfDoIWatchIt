@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useSearchParams, useRouter } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Pagination } from "@/components/Pagination";
 import { fetchWatched, type WatchedItem, type WatchedListResponse } from "@/lib/api";
 
@@ -13,7 +13,6 @@ const SORTS = [
 ];
 
 export default function WatchedPage() {
-  const router = useRouter();
   const searchParams = useSearchParams();
 
   const [search, setSearch] = useState(searchParams.get("search") || "");
