@@ -368,6 +368,7 @@ def _title_availability(movie_id, country=None):
                 "label": row.get("label"),
                 "status": row.get("status"),
                 "reason": _reason_value(row.get("reason")),
+                "blocked_reason": row.get("blocked_reason", ""),
                 "available": row.get("available"),
                 "checked_at": row.get("checked_at"),
             }

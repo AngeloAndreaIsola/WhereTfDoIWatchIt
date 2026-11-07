@@ -772,7 +772,7 @@ def title_source_report(movie_ids, batch=None, country: str | None = None) -> di
     Returns ``{movie_id: {
         "state": "available" | "unavailable" | "unknown",
         "available_on": [provider_slug, ...],
-        "sources": [{source, label, tier, status, reason, available, checked_at}],
+        "sources": [{source, label, tier, status, reason, blocked_reason, available, checked_at}],
         "reason": <headline reason or "">,
         "resolved_sources": [...], "unresolved_sources": [...],
     }}``
@@ -837,6 +837,7 @@ def title_source_report(movie_ids, batch=None, country: str | None = None) -> di
                     "kind": "title",
                     "status": status_out,
                     "reason": reason,
+                    "blocked_reason": info.get("blocked_reason", ""),
                     "available": reason == AvailabilityResolutionReason.RESOLVED,
                     # Two separate stamps. `checked_at` needs an *answer*
                     # (Offer.last_seen), `last_attempted_at` only needs an
@@ -861,6 +862,7 @@ def title_source_report(movie_ids, batch=None, country: str | None = None) -> di
                     "kind": "catalogue" if source_tier(slug) == 2 else "aggregated",
                     "status": "completed",
                     "reason": AvailabilityResolutionReason.RESOLVED,
+                    "blocked_reason": (per_src.get(slug) or {}).get("blocked_reason", ""),
                     "available": True,
                     "checked_at": last_checked.get((movie_id, slug)),
                     "last_attempted_at": last_attempted.get((movie_id, slug)),
