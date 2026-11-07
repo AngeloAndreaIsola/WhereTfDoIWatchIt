@@ -35,6 +35,7 @@ from tracker.models import (
     RefreshPriority,
     Provider,
     RefreshRequest,
+    RefreshRequestOutcome,
     RefreshRequestStatus,
     RefreshRun,
 )
@@ -234,11 +235,12 @@ class AttemptedVersusCheckedStampTests(TestCase):
         self.assertEqual(len(rows), 1, f"expected one {source} row")
         return rows[0]
 
-    def _request(self, source, status, *, error="", completed=True):
+    def _request(self, source, status, *, error="", completed=True, outcome=RefreshRequestOutcome.UNKNOWN):
         return RefreshRequest.objects.create(
             movie=self.movie,
             source=source,
             status=status,
+            outcome=outcome,
             last_error=error,
             batch=self.batch,
             completed_at=timezone.now() if completed else None,
@@ -246,7 +248,7 @@ class AttemptedVersusCheckedStampTests(TestCase):
 
     def test_a_completed_no_offer_check_is_not_reported_as_never(self):
         """The regression itself: consulted, answered nothing, got a stamp."""
-        self._request("mediaset_infinity", RefreshRequestStatus.DONE)
+        self._request("mediaset_infinity", RefreshRequestStatus.DONE, outcome=RefreshRequestOutcome.NO_OFFER)
 
         row = self._row("mediaset_infinity")
         self.assertEqual(row["status"], "completed")
@@ -752,7 +754,8 @@ class SummariesTests(TestCase):
         movie = make_movie(31, "AllNegative")
         for slug in ar._title_level_slugs():
             RefreshRequest.objects.create(
-                movie=movie, source=slug, status=RefreshRequestStatus.DONE
+                movie=movie, source=slug, status=RefreshRequestStatus.DONE,
+                outcome=RefreshRequestOutcome.NO_OFFER,
             )
         with patch.object(ar, "source_quota", lambda slug: None):
             entry = ar.title_source_report([movie.pk])[movie.pk]

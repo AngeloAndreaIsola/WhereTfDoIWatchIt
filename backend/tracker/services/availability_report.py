@@ -253,43 +253,48 @@ def _catalogue_slugs() -> list[str]:
     )
 
 
-def _terminal_status_evidence(movie_ids: list[int], batch=None, country: str | None = None) -> dict[int, dict[str, str]]:
-    """``{movie_id: {source: terminal status}}`` from the newest row per pair.
+def _latest_request_evidence(movie_ids: list[int], batch=None, country: str | None = None) -> dict[int, dict[str, dict]]:
+    """Structured newest-row evidence per (movie, source).
 
-    A title can accumulate many request rows per source over its life
-    (re-stamped pending rows, retries, permanent-failure markers), so the
-    *newest* row per (title, source) is the current evidence. Reading the
-    oldest instead is how a title that has since been checked still reports
-    as failed.
-
-    ``batch`` restricts the read to one run's stamped rows. It is not an
-    optimisation: without it, a report of the *current* run is decided by
-    historical rows, and the per-source totals become the sum of every check
-    the title has ever had (measured: 987 Mediaset and 985 YouTube rows for
-    a 191-title watchlist, against 191 titles).
+    Returns ``{movie_id: {source: {status, blocked_reason, outcome,
+    requested_at, request_id}}}``. Reuses the single-query newest-row
+    algorithm. ``_terminal_status_evidence`` is a compatibility wrapper.
     """
-    newest: dict[int, dict[str, tuple[str, object]]] = defaultdict(dict)
+    newest: dict[int, dict[str, tuple]] = defaultdict(dict)
     qs = RefreshRequest.objects.filter(movie_id__in=movie_ids)
     if batch is not None:
         qs = qs.filter(batch=batch)
-    # If a run country is specified, request rows matching that country take precedence,
-    # but if none exist for that country, fall back to blank/unscoped historical requests
-    # rather than dropping them entirely, unless strictly required.
-    # Wait, the requirement states: "filter engaged refresh requests by run country; review _has_informative_blocked_work for cross-country contamination; verify NL/JP cannot settle each other."
-    # If country is provided, filtering by country=country.upper() ensures NL requests only answer NL runs.
     if country is not None:
         qs = qs.filter(country=country.upper())
-    for movie_id, src, status, requested_at, pk in qs.values_list(
-        "movie_id", "source", "status", "requested_at", "id"
+    for movie_id, src, status, blocked_reason, outcome, requested_at, pk in qs.values_list(
+        "movie_id", "source", "status", "blocked_reason", "outcome", "requested_at", "id"
     ).iterator():
         key = src or DEFAULT_SOURCE_SLUG
         prev = newest[movie_id].get(key)
-        candidate = (status, (requested_at, pk))
-        if prev is None or candidate[1] > prev[1]:
+        candidate = ((requested_at, pk), status, blocked_reason, outcome, requested_at, pk)
+        if prev is None or candidate[0] > prev[0]:
             newest[movie_id][key] = candidate
+    out: dict[int, dict[str, dict]] = {}
+    for mid, per in newest.items():
+        out[mid] = {}
+        for src, cand in per.items():
+            _ts, status, br, outcome, requested_at, pk = cand
+            out[mid][src] = {
+                "status": status,
+                "blocked_reason": br or "",
+                "outcome": outcome or "",
+                "requested_at": requested_at,
+                "request_id": pk,
+            }
+    return out
+
+
+def _terminal_status_evidence(movie_ids: list[int], batch=None, country: str | None = None) -> dict[int, dict[str, str]]:
+    """Compatibility wrapper returning ``{movie_id: {source: status}}``."""
+    structured = _latest_request_evidence(movie_ids, batch=batch, country=country)
     return {
-        mid: {src: value[0] for src, value in per.items()}
-        for mid, per in newest.items()
+        mid: {src: info["status"] for src, info in per.items()}
+        for mid, per in structured.items()
     }
 
 
@@ -334,21 +339,50 @@ def _permanent_miss_sources(movie_ids: list[int], country: str | None = None) ->
     is what keeps a transient network 404 from being written off forever.
     """
     out: dict[int, set[str]] = defaultdict(set)
+    # Collect permanent-miss candidates with their ordering key.
+    candidates: list[tuple[int, str, object, int, str | None]] = []
     qs = RefreshRequest.objects.filter(movie_id__in=movie_ids)
     if country is not None:
         qs = qs.filter(country=country.upper())
-    for movie_id, src in qs.filter(
-        Q(
-            status=RefreshRequestStatus.DONE,
-            outcome=RefreshRequestOutcome.TITLE_NOT_FOUND,
+    for movie_id, src, status, outcome, last_error, requested_at, pk, row_country in qs.values_list(
+        "movie_id", "source", "status", "outcome", "last_error", "requested_at", "id", "country"
+    ).iterator():
+        is_permanent = (
+            status == RefreshRequestStatus.DONE
+            and outcome == RefreshRequestOutcome.TITLE_NOT_FOUND
+        ) or (
+            status == RefreshRequestStatus.FAILED
+            and (last_error or "").startswith("UpstreamTitleNotFound")
         )
-        # Compatibility for database rows created before migration 0044.
-        | Q(
-            status=RefreshRequestStatus.FAILED,
-            last_error__startswith="UpstreamTitleNotFound",
-        )
-    ).values_list("movie_id", "source"):
-        out[movie_id].add(src or DEFAULT_SOURCE_SLUG)
+        if not is_permanent:
+            continue
+        candidates.append((movie_id, src or DEFAULT_SOURCE_SLUG, requested_at, pk, row_country))
+
+    # Build max (requested_at, pk) among DONE rows per (movie, source, country).
+    done_max: dict[tuple[int, str, str | None], tuple] = {}
+    qs2 = RefreshRequest.objects.filter(movie_id__in=movie_ids, status=RefreshRequestStatus.DONE)
+    if country is not None:
+        qs2 = qs2.filter(country=country.upper())
+    for movie_id, src, outcome, requested_at, pk, row_country in qs2.values_list(
+        "movie_id", "source", "outcome", "requested_at", "id", "country"
+    ).iterator():
+        if outcome not in (
+            RefreshRequestOutcome.OFFERS_FOUND,
+            RefreshRequestOutcome.NO_OFFER,
+            RefreshRequestOutcome.TITLE_NOT_FOUND,
+        ):
+            continue
+        key = (movie_id, src or DEFAULT_SOURCE_SLUG, row_country)
+        cand_key = (requested_at, pk)
+        if key not in done_max or cand_key > done_max[key]:
+            done_max[key] = cand_key
+
+    for movie_id, src, requested_at, pk, row_country in candidates:
+        key = (movie_id, src, row_country)
+        if key in done_max and (requested_at, pk) < done_max[key]:
+            # superseded by newer authoritative evidence
+            continue
+        out[movie_id].add(src)
     return out
 
 
@@ -610,6 +644,8 @@ def classify_source(
     permanent_miss: bool,
     request_status: str | None,
     quota_exhausted: bool,
+    blocked_reason: str | None = None,
+    outcome: str | None = None,
 ) -> tuple[str, str]:
     """One source's verdict for one title: ``(status, reason)``.
 
@@ -643,20 +679,27 @@ def classify_source(
     if permanent_miss:
         return "completed", AvailabilityResolutionReason.TITLE_NOT_FOUND
     if request_status == RefreshRequestStatus.DONE:
-        return "completed", AvailabilityResolutionReason.NO_OFFER
+        if outcome == "title_not_found":
+            return "completed", AvailabilityResolutionReason.TITLE_NOT_FOUND
+        if outcome == "offers_found":
+            # produced_active_offer already handled above (RESOLVED). No active
+            # offer now means stale historical evidence, not a fresh NO_OFFER.
+            return "skipped", AvailabilityResolutionReason.NOT_APPLICABLE
+        if outcome == "no_offer":
+            return "completed", AvailabilityResolutionReason.NO_OFFER
+        # Unknown/unexpected outcomes must not become a definitive negative.
+        return "skipped", AvailabilityResolutionReason.NOT_APPLICABLE
     if request_status == RefreshRequestStatus.FAILED:
         return "failed", AvailabilityResolutionReason.SOURCE_UNAVAILABLE
     if request_status == RefreshRequestStatus.BLOCKED:
-        # Deliberately not attempted, and deliberately **not** a failure and
-        # **not** a negative answer. `policy_not_needed` in particular says
-        # nothing about whether the title exists: a cheaper source already
-        # answered, so this source being silent is the *intended* outcome and
-        # the title's own state is decided by that other source's evidence.
-        #
-        # It is reported as `skipped` rather than `unknown` because "no
-        # information" would wrongly demote a resolved title. The classifier
-        # reads offers and definitive answers, never request statuses, so a
-        # title blocked here still reports AVAILABLE from its collector.
+        # Preserve the actual blocked reason where available. POLICY_NOT_NEEDED
+        # stays NOT_APPLICABLE (it says nothing about the title). Other blocked
+        # reasons (quota, disabled, cancelled) keep their identity so reports
+        # and policy decisions can distinguish them.
+        if blocked_reason == "policy_not_needed":
+            return "skipped", AvailabilityResolutionReason.NOT_APPLICABLE
+        if blocked_reason == "quota_exhausted":
+            return "skipped", AvailabilityResolutionReason.QUOTA_EXHAUSTED
         return "skipped", AvailabilityResolutionReason.NOT_APPLICABLE
     if request_status == RefreshRequestStatus.PENDING:
         if quota_exhausted:
@@ -752,7 +795,7 @@ def title_source_report(movie_ids, batch=None, country: str | None = None) -> di
     Returns ``{movie_id: {
         "state": "available" | "unavailable" | "unknown",
         "available_on": [provider_slug, ...],
-        "sources": [{source, label, tier, status, reason, available, checked_at}],
+        "sources": [{source, label, tier, status, reason, blocked_reason, available, checked_at}],
         "reason": <headline reason or "">,
         "resolved_sources": [...], "unresolved_sources": [...],
     }}``
@@ -770,7 +813,7 @@ def title_source_report(movie_ids, batch=None, country: str | None = None) -> di
     title_slugs = _title_level_slugs()
     # Request evidence is market provenance. A scoped report may use only
     # exact-country rows; blank historical rows are intentionally unknown.
-    evidence = _terminal_status_evidence(movie_ids, batch=batch, country=country)
+    evidence = _latest_request_evidence(movie_ids, batch=batch, country=country)
     permanent = _permanent_miss_sources(movie_ids, country=country)
     offers_by_source, active_offer_movies = _active_offers_by_source(movie_ids, country=country)
     providers = _offered_providers(movie_ids, country=country)
@@ -799,11 +842,14 @@ def title_source_report(movie_ids, batch=None, country: str | None = None) -> di
 
         src_rows = []
         for slug in title_slugs:
+            info = per_src.get(slug) or {}
             status_out, reason = classify_source(
                 produced_active_offer=slug in offer_sources,
                 permanent_miss=slug in permanent.get(movie_id, set()),
-                request_status=per_src.get(slug),
+                request_status=info.get("status"),
                 quota_exhausted=slug in exhausted,
+                blocked_reason=info.get("blocked_reason"),
+                outcome=info.get("outcome"),
             )
             src_rows.append(
                 {
@@ -814,6 +860,7 @@ def title_source_report(movie_ids, batch=None, country: str | None = None) -> di
                     "kind": "title",
                     "status": status_out,
                     "reason": reason,
+                    "blocked_reason": info.get("blocked_reason", ""),
                     "available": reason == AvailabilityResolutionReason.RESOLVED,
                     # Two separate stamps. `checked_at` needs an *answer*
                     # (Offer.last_seen), `last_attempted_at` only needs an
@@ -838,6 +885,7 @@ def title_source_report(movie_ids, batch=None, country: str | None = None) -> di
                     "kind": "catalogue" if source_tier(slug) == 2 else "aggregated",
                     "status": "completed",
                     "reason": AvailabilityResolutionReason.RESOLVED,
+                    "blocked_reason": (per_src.get(slug) or {}).get("blocked_reason", ""),
                     "available": True,
                     "checked_at": last_checked.get((movie_id, slug)),
                     "last_attempted_at": last_attempted.get((movie_id, slug)),

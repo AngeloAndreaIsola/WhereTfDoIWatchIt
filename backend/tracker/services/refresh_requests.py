@@ -750,24 +750,42 @@ def _metered_source_is_unnecessary(
     ).get(source) == source_policy.PolicySkipReason.NOT_NEEDED.value
 
 
-def _has_reusable_permanent_negative(request: RefreshRequest) -> bool:
+def _permanent_negative_scopes(requests) -> set[tuple[int, str, str]]:
+    """Read reusable negatives once per market for one bounded candidate page.
+
+    This snapshot is local to the page, never shared across ticks. Supersession
+    still uses the report's country/source-aware history reader. Explicit and
+    unscoped requests cannot reuse negative evidence and need no history read.
+    """
+    from .availability_report import _permanent_miss_sources
+
+    movie_ids_by_country: dict[str, set[int]] = {}
+    for request in requests:
+        if request.country and request.priority != RefreshPriority.EXPLICIT:
+            movie_ids_by_country.setdefault(request.country.upper(), set()).add(request.movie_id)
+    return {
+        (movie_id, source, country)
+        for country, movie_ids in movie_ids_by_country.items()
+        for movie_id, sources in _permanent_miss_sources(list(movie_ids), country=country).items()
+        for source in sources
+    }
+
+
+def _has_reusable_permanent_negative(
+    request: RefreshRequest,
+    *,
+    permanent_negative_scopes: set[tuple[int, str, str]] | None = None,
+) -> bool:
     """Use a 404 only in its observed market; unknown is never global."""
+    from .availability_report import _permanent_miss_sources
+
     source = resolve_request_source(request)
-    rows = RefreshRequest.objects.filter(movie=request.movie).filter(
-        Q(
-            status=RefreshRequestStatus.DONE,
-            outcome=RefreshRequestOutcome.TITLE_NOT_FOUND,
-        )
-        | Q(
-            status=RefreshRequestStatus.FAILED,
-            last_error__startswith="UpstreamTitleNotFound",
-        )
-    ).only("source", "country")
-    rows = [row for row in rows if resolve_request_source(row) == source]
-    # Country-bound title lookups have country-bound negatives. A blank country
-    # is unknown evidence, not a universal negative; only an exact explicit
-    # country match may suppress another queued request.
-    return bool(request.country) and any(row.country == request.country for row in rows)
+    if not request.country:
+        return False
+    if permanent_negative_scopes is not None:
+        return (request.movie_id, source, request.country.upper()) in permanent_negative_scopes
+    misses = _permanent_miss_sources([request.movie_id], country=request.country)
+    return source in misses.get(request.movie_id, set())
 
 
 def _drain_one(
@@ -779,6 +797,7 @@ def _drain_one(
     rate_limit_hit: bool,
     limiter_overrides: dict[str, RateLimiter] | None = None,
     quota_circuit: SourceQuotaCircuit | None = None,
+    permanent_negative_scopes: set[tuple[int, str, str]] | None = None,
 ) -> bool:
     """Process one pending request under the run's guards.
 
@@ -880,7 +899,9 @@ def _drain_one(
     # whether the catalogue has since picked the title up.
     if (
         request.priority != RefreshPriority.EXPLICIT
-        and _has_reusable_permanent_negative(request)
+        and _has_reusable_permanent_negative(
+            request, permanent_negative_scopes=permanent_negative_scopes
+        )
     ):
         request.attempts += 1
         # The source already supplied a definitive negative answer.  This is
@@ -1234,6 +1255,7 @@ def drain_refresh_requests(
         if not pending:
             break
         scanned += len(pending)
+        permanent_negatives = _permanent_negative_scopes(pending)
         # Resume strictly after the last row of this page on the next call.
         cursor = (pending[-1].priority, pending[-1].requested_at, pending[-1].pk)
 
@@ -1266,7 +1288,19 @@ def drain_refresh_requests(
                 rate_limit_hit=rate_limit_hit,
                 limiter_overrides=limiters,
                 quota_circuit=quota_circuit,
+                permanent_negative_scopes=permanent_negatives,
             )
+            # A named scope and a legacy empty scope can coexist for the same
+            # source. An earlier explicit refresh in this page may therefore
+            # supersede the cached miss before its background alias runs.
+            scope = (request.movie_id, source, request.country.upper())
+            if request.status == RefreshRequestStatus.DONE:
+                if request.outcome == RefreshRequestOutcome.TITLE_NOT_FOUND:
+                    permanent_negatives.add(scope)
+                elif request.outcome in (
+                    RefreshRequestOutcome.OFFERS_FOUND, RefreshRequestOutcome.NO_OFFER
+                ):
+                    permanent_negatives.discard(scope)
             # A source that just refused stops offering candidates on the next
             # page; the ones already in hand are drained by name below.
             if source in summary.rate_limited_sources:
