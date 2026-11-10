@@ -191,4 +191,3 @@ class RankingWT013Tests(SimpleTestCase):
         self.assertIn("source_rank", d["ranking"])
         self.assertIn("provider_rank", d["ranking"])
         self.assertIn("explanation", d["ranking"])
-        self.assertIn("is_scraped_source", d)

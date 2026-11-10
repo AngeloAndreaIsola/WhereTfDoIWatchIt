@@ -69,7 +69,6 @@ class RankedOffer:
             "prices": self.prices,
             "availability_evidence": self.availability_evidence,
             "last_seen_at": self.last_seen_at,
-            "is_scraped_source": self.is_scraped_source,
         }
 
 
