@@ -1,0 +1,125 @@
+{
+  "items": [
+    {
+      "identifier": "night_of_the_living_dead_1968",
+      "title": "Night of the Living Dead",
+      "year": 1968,
+      "mediatype": "movies",
+      "description": "A group of people hide from bloodthirsty zombies in an old farmhouse.",
+      "licenseurl": "http://creativecommons.org/publicdomain/mark/1.0/",
+      "rights": "Public Domain Mark 1.0. Film entered public domain due to lack of copyright notice on original theatrical prints.",
+      "publicdate": "2010-05-15 12:00:00",
+      "landing_page": "https://archive.org/details/night_of_the_living_dead_1968",
+      "files": [
+        {
+          "name": "notld.mp4",
+          "format": "h.264",
+          "length": "5760.0"
+        }
+      ]
+    },
+    {
+      "identifier": "charade_1963_pd",
+      "title": "Charade",
+      "year": 1963,
+      "mediatype": "movies",
+      "description": "Romance and suspense in Paris starring Cary Grant and Audrey Hepburn.",
+      "licenseurl": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "rights": "CC0 1.0 Universal Public Domain Dedication.",
+      "publicdate": "2012-08-20 10:15:00",
+      "landing_page": "https://archive.org/details/charade_1963_pd",
+      "files": [
+        {
+          "name": "charade.mp4",
+          "format": "h.264",
+          "length": "6780.0"
+        }
+      ]
+    },
+    {
+      "identifier": "the_hitch_hiker_1953_loc",
+      "title": "The Hitch-Hiker",
+      "year": 1953,
+      "mediatype": "movies",
+      "description": "Two fishermen encounter an escaped serial killer holding them hostage.",
+      "licenseurl": null,
+      "rights": "The Library of Congress is not aware of any U.S. copyright or other restrictions in this motion picture. Absent restrictions, this material is free to use and reuse in the United States.",
+      "jurisdiction": "US",
+      "publicdate": "2017-12-12 00:00:00",
+      "landing_page": "https://www.loc.gov/item/mbrs00047382/",
+      "files": [
+        {
+          "name": "hitch_hiker.mp4",
+          "format": "h.264",
+          "length": "4260.0"
+        }
+      ]
+    },
+    {
+      "identifier": "dracula_1931_ambiguous",
+      "title": "Dracula",
+      "year": 1931,
+      "mediatype": "movies",
+      "description": "Uploaded copy of classic horror film.",
+      "licenseurl": null,
+      "rights": null,
+      "publicdate": "2020-01-01 00:00:00",
+      "landing_page": "https://archive.org/details/dracula_1931_ambiguous",
+      "files": [
+        {
+          "name": "dracula.mp4",
+          "format": "h.264"
+        }
+      ]
+    },
+    {
+      "identifier": "modern_indie_cc_by",
+      "title": "Open Source Adventure",
+      "year": 2021,
+      "mediatype": "movies",
+      "description": "Creative commons film licensed under CC BY-NC-ND.",
+      "licenseurl": "https://creativecommons.org/licenses/by-nc-nd/4.0/",
+      "rights": "Creative Commons Attribution-NonCommercial-NoDerivatives 4.0 International",
+      "publicdate": "2021-06-01 00:00:00",
+      "landing_page": "https://archive.org/details/modern_indie_cc_by",
+      "files": [
+        {
+          "name": "movie.mp4",
+          "format": "h.264"
+        }
+      ]
+    },
+    {
+      "identifier": "missing_metadata_item",
+      "title": "",
+      "year": null,
+      "mediatype": "movies",
+      "description": "",
+      "licenseurl": "http://creativecommons.org/publicdomain/mark/1.0/",
+      "rights": "Public domain",
+      "publicdate": "2019-01-01 00:00:00",
+      "landing_page": "https://archive.org/details/missing_metadata_item",
+      "files": []
+    },
+    {
+      "identifier": "flash_gordon_s01e01",
+      "title": "Flash Gordon",
+      "year": 1936,
+      "mediatype": "movies",
+      "description": "Serial chapter 1: Planet of Peril.",
+      "licenseurl": "http://creativecommons.org/publicdomain/mark/1.0/",
+      "rights": "Public Domain Mark 1.0",
+      "season_number": 1,
+      "episode_number": 1,
+      "content_type": "episode",
+      "publicdate": "2015-03-10 00:00:00",
+      "landing_page": "https://archive.org/details/flash_gordon_s01e01",
+      "files": [
+        {
+          "name": "fg_e01.mp4",
+          "format": "h.264"
+        }
+      ]
+    }
+  ]
+}
