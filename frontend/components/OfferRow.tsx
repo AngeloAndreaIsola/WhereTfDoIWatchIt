@@ -230,6 +230,15 @@ export default function OfferRow({
               Language Mismatch
             </span>
           )}
+          {offer.ranking?.explanation && offer.ranking.explanation.length > 0 && (
+            <span
+              data-testid="ranking-explanation"
+              className="rounded-md bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300"
+              title={offer.ranking.explanation.join(" · ")}
+            >
+              {offer.ranking.explanation[0]}
+            </span>
+          )}
           {localityBadge ? (
             <span
               className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${localityBadge.className}`}

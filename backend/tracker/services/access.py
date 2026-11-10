@@ -797,9 +797,46 @@ def resolve_title(
         if c.requires_payment and c.is_entitled and reach.reachable(c.locality)
     ]
 
-    sort_key = lambda c: (0 if c.is_current_country else 1, c.ranking_score)  # noqa: E731
-    local.sort(key=sort_key)
-    vpn.sort(key=sort_key)
+    raw_ranking_pref = getattr(preference, "ranking_preferences", None)
+    if isinstance(raw_ranking_pref, dict) and raw_ranking_pref:
+        ranking_prefs = raw_ranking_pref
+    else:
+        from tracker.services.preferences import get_default_ranking_preferences
+        ranking_prefs = get_default_ranking_preferences()
+
+    source_priority = ranking_prefs.get("source_priority") or ["official", "local", "unofficial"]
+    prefer_official = ranking_prefs.get("prefer_official", True)
+    prefer_local = ranking_prefs.get("prefer_local", True)
+    provider_priority = [p.lower() for p in (ranking_prefs.get("provider_priority") or [])]
+
+    def _offer_sort_key(c: ClassifiedOffer):
+        # 1. Official preference
+        official_tier = 0
+        if prefer_official and c.is_scraped_source:
+            official_tier = 1
+
+        # 2. Local preference
+        local_tier = 0
+        if prefer_local:
+            local_tier = 0 if c.is_current_country else 1
+
+        # 3. Source category priority
+        category = "unofficial" if c.is_scraped_source else ("local" if c.is_current_country else "official")
+        try:
+            source_rank = source_priority.index(category)
+        except ValueError:
+            source_rank = 99
+
+        # 4. Provider priority
+        clean_service = (c.service or "").lower().strip()
+        provider_rank = 99
+        if clean_service in provider_priority:
+            provider_rank = provider_priority.index(clean_service)
+
+        return (official_tier, local_tier, source_rank, provider_rank, c.ranking_score)
+
+    local.sort(key=_offer_sort_key)
+    vpn.sort(key=_offer_sort_key)
 
     accessible = local + vpn
     excluded = [c for c in classified if c not in accessible]
