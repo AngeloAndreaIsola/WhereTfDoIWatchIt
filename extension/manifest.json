@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "WhereTfDoIWatchIt Companion",
+  "version": "0.1.0",
+  "description": "Opt-in title metadata capture and authenticated local app handshake for WhereTfDoIWatchIt",
+  "permissions": [
+    "storage",
+    "activeTab"
+  ],
+  "optional_host_permissions": [
+    "https://*.netflix.com/*",
+    "https://*.primevideo.com/*",
+    "https://*.disneyplus.com/*",
+    "https://mock-streaming.local/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "WhereTfDoIWatchIt Companion"
+  },
+  "background": {
+    "service_worker": "src/background.ts"
+  }
+}

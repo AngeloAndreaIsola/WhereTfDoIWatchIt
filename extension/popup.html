@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>WhereTfDoIWatchIt Companion</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      width: 320px;
+      margin: 0;
+      padding: 16px;
+      background: #0f172a;
+      color: #f8fafc;
+    }
+    h2 {
+      font-size: 16px;
+      margin-top: 0;
+      margin-bottom: 8px;
+    }
+    .badge {
+      display: inline-block;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .badge-ok { background: #059669; color: #ecfdf5; }
+    .badge-no { background: #dc2626; color: #fef2f2; }
+    .card {
+      background: #1e293b;
+      border-radius: 6px;
+      padding: 12px;
+      margin-top: 12px;
+    }
+    button {
+      background: #3b82f6;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      padding: 8px 12px;
+      font-size: 13px;
+      cursor: pointer;
+      width: 100%;
+      margin-top: 8px;
+    }
+    button.secondary {
+      background: #334155;
+    }
+    button:disabled {
+      background: #475569;
+      cursor: not-allowed;
+    }
+  </style>
+</head>
+<body>
+  <h2>WhereTfDoIWatchIt Companion</h2>
+  <div id="status-container">
+    <div>Permission: <span id="permission-badge" class="badge badge-no">Not Granted</span></div>
+    <div style="margin-top: 4px;">App Handshake: <span id="handshake-badge" class="badge badge-no">Disconnected</span></div>
+  </div>
+
+  <div id="actions-container" class="card">
+    <button id="btn-request-permission">Grant Permission For This Site</button>
+    <button id="btn-detect-title" class="secondary" disabled>Detect Title</button>
+    <button id="btn-send-app" disabled>Send to WhereTfDoIWatchIt</button>
+  </div>
+
+  <div id="metadata-container" class="card" style="display: none;">
+    <h3 id="meta-title" style="margin: 0 0 4px 0; font-size: 14px;"></h3>
+    <div id="meta-details" style="font-size: 12px; color: #94a3b8;"></div>
+  </div>
+
+  <script type="module" src="dist/src/popup.js"></script>
+</body>
+</html>
