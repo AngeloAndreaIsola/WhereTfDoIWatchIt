@@ -6,6 +6,8 @@ Acceptance criteria:
 - Static saved response fixtures, idempotent catalog sync, soft failures, no live APIs in tests.
 - Never assert public-domain status merely because content is hosted on Internet Archive or in a collection.
 - Never assert WORLDWIDE territorial scope from age or a bare Public Domain Mark alone.
+- Items with UNKNOWN territorial scope emit DiscoveredContent (keeping provenance for review)
+  but omit confirmed ProviderOffers for an arbitrary country.
 """
 from __future__ import annotations
 
@@ -85,7 +87,7 @@ class RightsEvaluationServiceTests(SimpleTestCase):
     """Unit tests for evaluate_item_rights and build_provenance_record."""
 
     def test_verified_public_domain_mark_and_cc0(self):
-        # Bare PDM without jurisdiction or territorial text -> UNKNOWN
+        # Bare PDM without jurisdiction or territorial text -> UNKNOWN scope, not watchable in arbitrary country
         item_bare = {
             "identifier": "bare_pdm_1968",
             "licenseurl": "http://creativecommons.org/publicdomain/mark/1.0/",
@@ -94,9 +96,11 @@ class RightsEvaluationServiceTests(SimpleTestCase):
         res_bare = evaluate_item_rights(item_bare)
         self.assertEqual(res_bare.status, RightsStatus.PUBLIC_DOMAIN)
         self.assertEqual(res_bare.territorial_scope, TerritorialScope.UNKNOWN)
-        self.assertTrue(res_bare.is_watchable_public_domain)
+        self.assertTrue(res_bare.has_public_domain_mark)
+        self.assertFalse(res_bare.is_watchable_in_country("US"))
+        self.assertFalse(res_bare.is_watchable_in_country("NL"))
 
-        # CC0 universal dedication without restrictions -> WORLDWIDE
+        # CC0 universal dedication without restrictions -> WORLDWIDE scope, watchable in US and NL
         item_cc0 = {
             "identifier": "charade_1963",
             "licenseurl": "https://creativecommons.org/publicdomain/zero/1.0/",
@@ -105,7 +109,9 @@ class RightsEvaluationServiceTests(SimpleTestCase):
         res_cc0 = evaluate_item_rights(item_cc0)
         self.assertEqual(res_cc0.status, RightsStatus.PUBLIC_DOMAIN)
         self.assertEqual(res_cc0.territorial_scope, TerritorialScope.WORLDWIDE)
-        self.assertTrue(res_cc0.is_watchable_public_domain)
+        self.assertTrue(res_cc0.has_public_domain_mark)
+        self.assertTrue(res_cc0.is_watchable_in_country("US"))
+        self.assertTrue(res_cc0.is_watchable_in_country("NL"))
 
     def test_library_of_congress_us_determination(self):
         loc_item = {
@@ -116,7 +122,9 @@ class RightsEvaluationServiceTests(SimpleTestCase):
         res = evaluate_item_rights(loc_item)
         self.assertEqual(res.status, RightsStatus.PUBLIC_DOMAIN)
         self.assertEqual(res.territorial_scope, TerritorialScope.US_ONLY)
-        self.assertTrue(res.is_watchable_public_domain)
+        self.assertTrue(res.has_public_domain_mark)
+        self.assertTrue(res.is_watchable_in_country("US"))
+        self.assertFalse(res.is_watchable_in_country("NL"))
 
     def test_territorial_conflict_and_caveats(self):
         # Work public domain in US, but protected by foreign copyright
@@ -129,7 +137,9 @@ class RightsEvaluationServiceTests(SimpleTestCase):
         res = evaluate_item_rights(conflict_item)
         self.assertEqual(res.status, RightsStatus.PUBLIC_DOMAIN)
         self.assertEqual(res.territorial_scope, TerritorialScope.US_ONLY)
-        self.assertTrue(res.is_watchable_public_domain)
+        self.assertTrue(res.has_public_domain_mark)
+        self.assertTrue(res.is_watchable_in_country("US"))
+        self.assertFalse(res.is_watchable_in_country("NL"))
 
     def test_ambiguous_and_missing_rights_flagged_unknown(self):
         bare_item = {
@@ -139,7 +149,8 @@ class RightsEvaluationServiceTests(SimpleTestCase):
         res = evaluate_item_rights(bare_item)
         self.assertEqual(res.status, RightsStatus.AMBIGUOUS_UNKNOWN)
         self.assertEqual(res.territorial_scope, TerritorialScope.UNKNOWN)
-        self.assertFalse(res.is_watchable_public_domain)
+        self.assertFalse(res.has_public_domain_mark)
+        self.assertFalse(res.is_watchable_in_country("US"))
 
     def test_restricted_license_flagged_restricted(self):
         nc_item = {
@@ -148,7 +159,8 @@ class RightsEvaluationServiceTests(SimpleTestCase):
         }
         res = evaluate_item_rights(nc_item)
         self.assertEqual(res.status, RightsStatus.RESTRICTED)
-        self.assertFalse(res.is_watchable_public_domain)
+        self.assertFalse(res.has_public_domain_mark)
+        self.assertFalse(res.is_watchable_in_country("US"))
 
     def test_provenance_preserves_rights_url_and_landing_page(self):
         item = {
@@ -213,7 +225,7 @@ class SourceContractTests(SimpleTestCase):
         tracker.record_request(success=False)
         self.assertEqual(tracker.requests_made, 2)
         self.assertTrue(tracker.budget_exhausted)
-        self.assertFalse(tracker.health_status["healthy"])  # 1 fail out of 2 requests (< 0.8)
+        self.assertFalse(tracker.health_status["healthy"])
 
     def test_fetch_halts_when_budget_exhausted(self):
         calls = []
@@ -225,11 +237,9 @@ class SourceContractTests(SimpleTestCase):
         client = PublicDomainArchiveClient(fetcher=fetcher)
         source = PublicDomainArchiveSource(client=client, max_requests=1)
 
-        # Call 1 consumes the single request
         source.fetch()
         self.assertEqual(len(calls), 1)
 
-        # Call 2: budget exhausted, returns empty result without hitting client
         res = source.fetch()
         self.assertEqual(len(calls), 1)
         self.assertEqual(res.contents, [])
@@ -245,6 +255,7 @@ class PublicDomainArchiveCollectorTests(TestCase):
             slug="internet_archive", defaults={"name": "Internet Archive", "is_enabled": True}
         )
         Country.objects.get_or_create(code="US", defaults={"name": "United States"})
+        Country.objects.get_or_create(code="NL", defaults={"name": "Netherlands"})
         # Pre-seed TMDb movie for match
         Movie.objects.create(
             tmdb_id=10331,
@@ -266,21 +277,21 @@ class PublicDomainArchiveCollectorTests(TestCase):
         client = PublicDomainArchiveClient(fetcher=fetcher)
         return PublicDomainArchiveSource(client=client, batch_size=batch_size)
 
-    def test_fetch_filters_ambiguous_and_restricted_items(self):
+    def test_fetch_separates_discovered_content_from_territorial_offers(self):
         fixture_data = load_fixture("archive_items.json")
         source = self._make_source(fixture_data)
-        res = source.fetch()
+        res = source.fetch(country="US")
 
         # In archive_items.json:
-        # - Night of the Living Dead (PD Mark US) -> watchable PD (US_ONLY)
-        # - Charade (CC0 Worldwide) -> watchable PD (WORLDWIDE)
-        # - The Hitch-Hiker (LOC US statement) -> watchable PD (US_ONLY)
-        # - Dracula (ambiguous/null) -> skipped/flagged unknown
-        # - Territorial Conflict Film (PDM US only, foreign copyright) -> watchable PD (US_ONLY)
-        # - Bare PDM Film (PDM without jurisdiction or territory) -> watchable PD (UNKNOWN territorial scope)
+        # - Night of the Living Dead (PD Mark US) -> DiscoveredContent + Offer (US)
+        # - Charade (CC0 Worldwide) -> DiscoveredContent + Offer (Worldwide -> US)
+        # - The Hitch-Hiker (LOC US statement) -> DiscoveredContent + Offer (US)
+        # - Dracula (ambiguous/null) -> skipped/flagged unknown (No content, no offer)
+        # - Territorial Conflict Film (PDM US only, foreign copyright) -> DiscoveredContent + Offer (US)
+        # - Bare PDM Film (PDM without jurisdiction or territory -> UNKNOWN scope) -> DiscoveredContent (kept for audit), NO Offer
         # - Open Source Adventure (CC BY-NC-ND) -> restricted, skipped
         # - missing metadata item -> skipped
-        # - Flash Gordon (PD Mark episode) -> watchable PD (US_ONLY)
+        # - Flash Gordon (PD Mark episode) -> DiscoveredContent + Offer (US)
         identifiers = {c.provider_content_id for c in res.contents}
         self.assertIn("night_of_the_living_dead_1968", identifiers)
         self.assertIn("charade_1963_pd", identifiers)
@@ -290,6 +301,19 @@ class PublicDomainArchiveCollectorTests(TestCase):
         self.assertIn("flash_gordon_s01e01", identifiers)
         self.assertNotIn("dracula_1931_ambiguous", identifiers)
         self.assertNotIn("modern_indie_cc_by", identifiers)
+        self.assertEqual(len(res.contents), 6)
+
+        # Offers emitted only for items watchable in US:
+        # 5 items have confirmed US rights (NOT bare_pdm_no_jurisdiction)
+        offer_ids = {o.provider_content_id for o in res.offers}
+        self.assertIn("night_of_the_living_dead_1968", offer_ids)
+        self.assertIn("charade_1963_pd", offer_ids)
+        self.assertIn("the_hitch_hiker_1953_loc", offer_ids)
+        self.assertIn("territorial_conflict_film", offer_ids)
+        self.assertIn("flash_gordon_s01e01", offer_ids)
+        # CRUCIAL: bare PDM with UNKNOWN scope emits NO positive offer for an arbitrary country
+        self.assertNotIn("bare_pdm_no_jurisdiction", offer_ids)
+        self.assertEqual(len(res.offers), 5)
 
         # Provenance check: deep link to original landing page
         notld = next(c for c in res.contents if c.provider_content_id == "night_of_the_living_dead_1968")
@@ -301,13 +325,25 @@ class PublicDomainArchiveCollectorTests(TestCase):
         self.assertEqual(fg.season_number, 1)
         self.assertEqual(fg.episode_number, 1)
 
-        # Audio language evidence check
+        # Audio language evidence check: stated language is normalized; unstated is None
         notld_offer = next(o for o in res.offers if o.provider_content_id == "night_of_the_living_dead_1968")
         self.assertEqual(notld_offer.audio_languages, ["EN"])
 
         charade_offer = next(o for o in res.offers if o.provider_content_id == "charade_1963_pd")
-        # Charade had no language field in fixture, so audio_languages must be None, NOT defaulted to ["EN"]
         self.assertIsNone(charade_offer.audio_languages)
+
+    def test_unauthorized_country_receives_no_offers_for_us_only_items(self):
+        """When queried for a foreign territory (e.g. NL), US-only items must NOT emit offers."""
+        fixture_data = load_fixture("archive_items.json")
+        source = self._make_source(fixture_data)
+        res = source.fetch(country="NL")
+
+        offer_ids = {o.provider_content_id for o in res.offers}
+        # Only Charade (CC0 Worldwide) emits an offer in NL:
+        self.assertEqual(offer_ids, {"charade_1963_pd"})
+        self.assertNotIn("the_hitch_hiker_1953_loc", offer_ids)
+        self.assertNotIn("territorial_conflict_film", offer_ids)
+        self.assertNotIn("night_of_the_living_dead_1968", offer_ids)
 
     def test_refresh_catalogue_persists_provider_content_and_offers_idempotently(self):
         fixture_data = load_fixture("archive_items.json")
@@ -315,11 +351,11 @@ class PublicDomainArchiveCollectorTests(TestCase):
         service = AvailabilityRefreshService(source=source)
 
         first_run = service.refresh_catalogue()
-        self.assertEqual(first_run.discovered, 6)
+        self.assertEqual(first_run.discovered, 5)
         # Night of the Living Dead and Charade match local catalog Movies,
-        # other 4 are unresolved offer-wise (no local Movie row)
+        # other 3 are unresolved offer-wise (no local Movie row)
         self.assertEqual(first_run.processed, 2)
-        self.assertEqual(first_run.unresolved, 4)
+        self.assertEqual(first_run.unresolved, 3)
 
         # ProviderContent rows are persisted for all 6 discovered items
         self.assertEqual(ProviderContent.objects.filter(provider__slug="internet_archive").count(), 6)

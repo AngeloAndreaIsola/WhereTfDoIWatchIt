@@ -13,6 +13,11 @@ Contract and invariants:
 - Supports real Internet Archive advancedsearch query parameters (q, fl[], rows, page, output=json)
   and responses (response.docs).
 - Accurately tracks request budget, halts on exhaustion, and does not invent unasserted audio languages.
+- Separates "item has a PD marker" from "watchable in country X":
+  An item with UNKNOWN territorial scope emits DiscoveredContent (keeping provenance for audit/review)
+  but emits NO confirmed ProviderOffer for an arbitrary country.
+  Only countries with established rights (e.g. US for US_ONLY, or any country for WORLDWIDE)
+  receive a ProviderOffer.
 """
 from __future__ import annotations
 
@@ -237,6 +242,7 @@ class PublicDomainArchiveSource(AvailabilitySource):
         contents: list[DiscoveredContent] = []
         offers: list[ProviderOffer] = []
         walked = 0
+        eval_country = country or DEFAULT_COUNTRY
 
         for raw in raw_items:
             if not isinstance(raw, dict):
@@ -258,7 +264,7 @@ class PublicDomainArchiveSource(AvailabilitySource):
                 continue
 
             # Check rights verification
-            if not evaluation.is_watchable_public_domain:
+            if not evaluation.has_public_domain_mark:
                 if evaluation.status == RightsStatus.AMBIGUOUS_UNKNOWN:
                     self.budget_tracker.ambiguous_items_flagged += 1
                     logger.info(
@@ -277,7 +283,7 @@ class PublicDomainArchiveSource(AvailabilitySource):
                     )
                 continue
 
-            # Item passed rights verification
+            # Item has valid public domain or open license indicator
             provenance = build_provenance_record(raw, evaluation)
             walked += 1
             self.budget_tracker.pd_items_accepted += 1
@@ -294,23 +300,7 @@ class PublicDomainArchiveSource(AvailabilitySource):
             episode_number = _as_int(raw.get("episode_number"))
             release_date = _parse_date(raw.get("year") or raw.get("publicdate"))
 
-            # Scoped country determination:
-            # If territorial scope is US_ONLY, attribute to US;
-            # if UNKNOWN or WORLDWIDE, respect country scope hint or fallback to default
-            target_country = (
-                "US"
-                if evaluation.territorial_scope == TerritorialScope.US_ONLY
-                else (country or DEFAULT_COUNTRY)
-            )
-
-            # Do not invent audio languages when unasserted
-            raw_lang = raw.get("language")
-            audio_languages = (
-                normalize_languages([str(raw_lang)])
-                if raw_lang
-                else None
-            )
-
+            # Always emit DiscoveredContent (keeping provenance & metadata for review/audit)
             discovered = DiscoveredContent(
                 provider_id=self.provider_slug,
                 provider_content_id=identifier,
@@ -327,25 +317,49 @@ class PublicDomainArchiveSource(AvailabilitySource):
             )
             contents.append(discovered)
 
-            offer = ProviderOffer(
-                provider_id=self.provider_slug,
-                provider_content_id=identifier,
-                country=normalize_country(target_country),
-                content_type=content_type,
-                tmdb_id=None,
-                season_number=season_number,
-                episode_number=episode_number,
-                offer_type=normalize_offer_type("free"),
-                provider_url=provenance.landing_page_url,
-                quality="",
-                audio_languages=audio_languages,
-                subtitle_languages=None,
-                available_from=None,
-                available_until=None,
-                source_record_id=identifier,
-                source_version=SOURCE_VERSION,
-            )
-            offers.append(offer)
+            # Check territorial authorization before emitting a confirmed ProviderOffer.
+            # Do NOT emit positive offers for an arbitrary country when territorial rights are UNKNOWN
+            # or do not match the target market.
+            if evaluation.is_watchable_in_country(eval_country):
+                target_country = (
+                    "US"
+                    if evaluation.territorial_scope == TerritorialScope.US_ONLY
+                    else eval_country
+                )
+                raw_lang = raw.get("language")
+                audio_languages = (
+                    normalize_languages([str(raw_lang)])
+                    if raw_lang
+                    else None
+                )
+
+                offer = ProviderOffer(
+                    provider_id=self.provider_slug,
+                    provider_content_id=identifier,
+                    country=normalize_country(target_country),
+                    content_type=content_type,
+                    tmdb_id=None,
+                    season_number=season_number,
+                    episode_number=episode_number,
+                    offer_type=normalize_offer_type("free"),
+                    provider_url=provenance.landing_page_url,
+                    quality="",
+                    audio_languages=audio_languages,
+                    subtitle_languages=None,
+                    available_from=None,
+                    available_until=None,
+                    source_record_id=identifier,
+                    source_version=SOURCE_VERSION,
+                )
+                offers.append(offer)
+            else:
+                logger.info(
+                    "%s_offer_omitted_territory_unauthorized identifier=%s scope=%s country=%s",
+                    self.slug,
+                    identifier,
+                    evaluation.territorial_scope.value,
+                    eval_country,
+                )
 
             if walked >= self.batch_size:
                 break
@@ -353,7 +367,6 @@ class PublicDomainArchiveSource(AvailabilitySource):
         # Checkpoint computation
         next_raw_cursor = payload.get("cursor")
         if not next_raw_cursor:
-            # If explicit IA response.docs with more items available
             start = (page - 1) * self.batch_size
             if num_found > (start + len(raw_items)):
                 next_raw_cursor = f"page_{page + 1}"

@@ -9,8 +9,11 @@ Core domain invariants:
    If territorial scope is ambiguous or contradictory, classify as UNKNOWN.
    Only explicit worldwide dedications (e.g. verified worldwide waiver with no regional caveats)
    can qualify as WORLDWIDE.
-5. Deep link strictly to original landing pages; do not download or copy video media.
-6. Track source budget and health metrics accurately.
+5. Separate "item has a PD marker" from "watchable in country X":
+   An item with UNKNOWN territorial scope preserves provenance and metadata in DiscoveredContent
+   for review, but does NOT publish a confirmed ProviderOffer for an arbitrary country.
+6. Deep link strictly to original landing pages; do not download or copy video media.
+7. Track source budget and health metrics accurately.
 """
 from __future__ import annotations
 
@@ -68,8 +71,19 @@ class RightsEvaluation:
     territorial_scope: TerritorialScope
     rights_statement: str
     license_url: Optional[str]
-    is_watchable_public_domain: bool
+    has_public_domain_mark: bool
     notes: str = ""
+
+    def is_watchable_in_country(self, country_code: str) -> bool:
+        """Whether this item is proven watchable as public domain in a specific country."""
+        if not self.has_public_domain_mark:
+            return False
+        if self.territorial_scope == TerritorialScope.WORLDWIDE:
+            return True
+        if self.territorial_scope == TerritorialScope.US_ONLY:
+            return country_code.strip().upper() == "US"
+        # UNKNOWN territorial scope is never watchable for an arbitrary country
+        return False
 
 
 @dataclass(frozen=True)
@@ -190,7 +204,7 @@ def evaluate_item_rights(raw_item: dict[str, Any]) -> RightsEvaluation:
                 territorial_scope=TerritorialScope.UNKNOWN,
                 rights_statement=rights_text or "Restricted CC License",
                 license_url=license_url,
-                is_watchable_public_domain=False,
+                has_public_domain_mark=False,
                 notes="Non-commercial or no-derivatives restriction present.",
             )
 
@@ -202,7 +216,7 @@ def evaluate_item_rights(raw_item: dict[str, Any]) -> RightsEvaluation:
                 territorial_scope=scope,
                 rights_statement=rights_text or "CC0 1.0 Universal Public Domain Dedication",
                 license_url=license_url,
-                is_watchable_public_domain=True,
+                has_public_domain_mark=True,
                 notes="Verified CC0 universal dedication.",
             )
 
@@ -214,7 +228,7 @@ def evaluate_item_rights(raw_item: dict[str, Any]) -> RightsEvaluation:
                 territorial_scope=scope,
                 rights_statement=rights_text or "Public Domain Mark 1.0",
                 license_url=license_url,
-                is_watchable_public_domain=True,
+                has_public_domain_mark=True,
                 notes="Public Domain Mark 1.0 with verified territorial evaluation.",
             )
 
@@ -226,7 +240,7 @@ def evaluate_item_rights(raw_item: dict[str, Any]) -> RightsEvaluation:
                 territorial_scope=scope if scope != TerritorialScope.UNKNOWN else TerritorialScope.WORLDWIDE,
                 rights_statement=rights_text or "Creative Commons Open License",
                 license_url=license_url,
-                is_watchable_public_domain=True,
+                has_public_domain_mark=True,
                 notes="Permissive Creative Commons license.",
             )
 
@@ -239,7 +253,7 @@ def evaluate_item_rights(raw_item: dict[str, Any]) -> RightsEvaluation:
             territorial_scope=scope,
             rights_statement=rights_text,
             license_url=None,
-            is_watchable_public_domain=True,
+            has_public_domain_mark=True,
             notes="Library of Congress verified US public domain determination.",
         )
 
@@ -251,7 +265,7 @@ def evaluate_item_rights(raw_item: dict[str, Any]) -> RightsEvaluation:
             territorial_scope=scope,
             rights_statement=rights_text,
             license_url=license_url,
-            is_watchable_public_domain=True,
+            has_public_domain_mark=True,
             notes="Pre-1929 publication date indicated in rights text.",
         )
 
@@ -267,7 +281,7 @@ def evaluate_item_rights(raw_item: dict[str, Any]) -> RightsEvaluation:
         territorial_scope=TerritorialScope.UNKNOWN,
         rights_statement=rights_text or "Rights status unverified / ambiguous",
         license_url=license_url,
-        is_watchable_public_domain=False,
+        has_public_domain_mark=False,
         notes="Unverified or absent rights metadata. Not asserted as public domain.",
     )
 
