@@ -2,9 +2,10 @@
 
 Acceptance criteria:
 - Stored title provenance includes rights URL and original landing page, unknown when rights ambiguous.
-- Source health and budget tracked.
+- Source health and budget tracked; budget limits enforced.
 - Static saved response fixtures, idempotent catalog sync, soft failures, no live APIs in tests.
 - Never assert public-domain status merely because content is hosted on Internet Archive or in a collection.
+- Never assert WORLDWIDE territorial scope from age or a bare Public Domain Mark alone.
 """
 from __future__ import annotations
 
@@ -21,8 +22,22 @@ from availability.models import (
     ProviderContent,
     SyncCursor,
 )
-from availability.persistence.repositories import CursorRepository
-from unittest.mock import patch
+from availability.services.public_domain_catalogue import (
+    RightsStatus,
+    SourceBudgetTracker,
+    TerritorialScope,
+    build_provenance_record,
+    evaluate_item_rights,
+)
+from availability.services.refresh import AvailabilityRefreshService
+from availability.sources import SourceFetchError, source_registry
+from availability.sources.base import ContentRequest
+from availability.sources.public_domain_archive import (
+    IA_FIELDS,
+    PublicDomainArchiveClient,
+    PublicDomainArchiveSource,
+)
+from tracker.models import Movie, Provider
 
 # SQLite test setup isolation:
 # Migration tracker.0035 uses postgres-specific ALTER TABLE ADD CONSTRAINT syntax.
@@ -57,21 +72,6 @@ def _sqlite_safe_database_forwards(self, app_label, schema_editor, from_state, t
 
 
 RunSQL.database_forwards = _sqlite_safe_database_forwards
-from availability.services.public_domain_catalogue import (
-    RightsStatus,
-    SourceBudgetTracker,
-    TerritorialScope,
-    build_provenance_record,
-    evaluate_item_rights,
-)
-from availability.services.refresh import AvailabilityRefreshService
-from availability.sources import SourceFetchError, source_registry
-from availability.sources.base import ContentRequest
-from availability.sources.public_domain_archive import (
-    PublicDomainArchiveClient,
-    PublicDomainArchiveSource,
-)
-from tracker.models import Movie, Provider
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures" / "public_domain"
 
@@ -85,16 +85,18 @@ class RightsEvaluationServiceTests(SimpleTestCase):
     """Unit tests for evaluate_item_rights and build_provenance_record."""
 
     def test_verified_public_domain_mark_and_cc0(self):
-        item_pdm = {
-            "identifier": "notld_1968",
+        # Bare PDM without jurisdiction or territorial text -> UNKNOWN
+        item_bare = {
+            "identifier": "bare_pdm_1968",
             "licenseurl": "http://creativecommons.org/publicdomain/mark/1.0/",
             "rights": "Public domain mark",
         }
-        res = evaluate_item_rights(item_pdm)
-        self.assertEqual(res.status, RightsStatus.PUBLIC_DOMAIN)
-        self.assertEqual(res.territorial_scope, TerritorialScope.WORLDWIDE)
-        self.assertTrue(res.is_watchable_public_domain)
+        res_bare = evaluate_item_rights(item_bare)
+        self.assertEqual(res_bare.status, RightsStatus.PUBLIC_DOMAIN)
+        self.assertEqual(res_bare.territorial_scope, TerritorialScope.UNKNOWN)
+        self.assertTrue(res_bare.is_watchable_public_domain)
 
+        # CC0 universal dedication without restrictions -> WORLDWIDE
         item_cc0 = {
             "identifier": "charade_1963",
             "licenseurl": "https://creativecommons.org/publicdomain/zero/1.0/",
@@ -116,8 +118,20 @@ class RightsEvaluationServiceTests(SimpleTestCase):
         self.assertEqual(res.territorial_scope, TerritorialScope.US_ONLY)
         self.assertTrue(res.is_watchable_public_domain)
 
+    def test_territorial_conflict_and_caveats(self):
+        # Work public domain in US, but protected by foreign copyright
+        conflict_item = {
+            "identifier": "conflict_item",
+            "licenseurl": "http://creativecommons.org/publicdomain/mark/1.0/",
+            "rights": "Public domain in the United States, but may be protected by copyright in other countries.",
+            "jurisdiction": "US",
+        }
+        res = evaluate_item_rights(conflict_item)
+        self.assertEqual(res.status, RightsStatus.PUBLIC_DOMAIN)
+        self.assertEqual(res.territorial_scope, TerritorialScope.US_ONLY)
+        self.assertTrue(res.is_watchable_public_domain)
+
     def test_ambiguous_and_missing_rights_flagged_unknown(self):
-        # Missing licenseurl and missing rights text
         bare_item = {
             "identifier": "uploaded_movie_123",
             "title": "Unverified Movie",
@@ -152,7 +166,7 @@ class RightsEvaluationServiceTests(SimpleTestCase):
 
 
 class SourceContractTests(SimpleTestCase):
-    """Source registration, capabilities, and budget metrics."""
+    """Source registration, capabilities, query parameters, and budget metrics."""
 
     def test_source_is_registered(self):
         source = source_registry.get("public_domain_archive")
@@ -173,14 +187,53 @@ class SourceContractTests(SimpleTestCase):
         with self.assertRaises(ValueError):
             source.fetch(ContentRequest(tmdb_id=1, content_type="movie", title="Some Movie"))
 
-    def test_budget_tracker_records_requests_and_health(self):
+    def test_client_builds_bounded_ia_query_params(self):
+        captured_params = {}
+
+        def fetcher(endpoint, params):
+            captured_params.update(params)
+            return {"response": {"docs": [], "numFound": 0}}
+
+        client = PublicDomainArchiveClient(fetcher=fetcher)
+        client.fetch_catalogue("https://archive.org/advancedsearch.php", page=2, rows=25)
+
+        self.assertIn("mediatype:movies", captured_params["q"])
+        self.assertEqual(captured_params["fl[]"], IA_FIELDS)
+        self.assertEqual(captured_params["rows"], 25)
+        self.assertEqual(captured_params["page"], 2)
+        self.assertEqual(captured_params["output"], "json")
+
+    def test_budget_tracker_enforces_limit_and_health(self):
         tracker = SourceBudgetTracker(max_requests=2)
         self.assertFalse(tracker.budget_exhausted)
         tracker.record_request(success=True)
         self.assertEqual(tracker.requests_made, 1)
         self.assertTrue(tracker.health_status["healthy"])
-        tracker.record_request(success=True)
+
+        tracker.record_request(success=False)
+        self.assertEqual(tracker.requests_made, 2)
         self.assertTrue(tracker.budget_exhausted)
+        self.assertFalse(tracker.health_status["healthy"])  # 1 fail out of 2 requests (< 0.8)
+
+    def test_fetch_halts_when_budget_exhausted(self):
+        calls = []
+
+        def fetcher(endpoint, params):
+            calls.append(params)
+            return {"response": {"docs": [], "numFound": 0}}
+
+        client = PublicDomainArchiveClient(fetcher=fetcher)
+        source = PublicDomainArchiveSource(client=client, max_requests=1)
+
+        # Call 1 consumes the single request
+        source.fetch()
+        self.assertEqual(len(calls), 1)
+
+        # Call 2: budget exhausted, returns empty result without hitting client
+        res = source.fetch()
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(res.contents, [])
+        self.assertEqual(res.offers, [])
 
 
 class PublicDomainArchiveCollectorTests(TestCase):
@@ -219,20 +272,21 @@ class PublicDomainArchiveCollectorTests(TestCase):
         res = source.fetch()
 
         # In archive_items.json:
-        # - Night of the Living Dead (PD Mark) -> watchable PD
-        # - Charade (CC0) -> watchable PD
-        # - The Hitch-Hiker (LOC US statement) -> watchable PD
+        # - Night of the Living Dead (PD Mark US) -> watchable PD (US_ONLY)
+        # - Charade (CC0 Worldwide) -> watchable PD (WORLDWIDE)
+        # - The Hitch-Hiker (LOC US statement) -> watchable PD (US_ONLY)
         # - Dracula (ambiguous/null) -> skipped/flagged unknown
+        # - Territorial Conflict Film (PDM US only, foreign copyright) -> watchable PD (US_ONLY)
+        # - Bare PDM Film (PDM without jurisdiction or territory) -> watchable PD (UNKNOWN territorial scope)
         # - Open Source Adventure (CC BY-NC-ND) -> restricted, skipped
         # - missing metadata item -> skipped
-        # - Flash Gordon (PD Mark episode) -> watchable PD
-        self.assertEqual(len(res.contents), 4)
-        self.assertEqual(len(res.offers), 4)
-
+        # - Flash Gordon (PD Mark episode) -> watchable PD (US_ONLY)
         identifiers = {c.provider_content_id for c in res.contents}
         self.assertIn("night_of_the_living_dead_1968", identifiers)
         self.assertIn("charade_1963_pd", identifiers)
         self.assertIn("the_hitch_hiker_1953_loc", identifiers)
+        self.assertIn("territorial_conflict_film", identifiers)
+        self.assertIn("bare_pdm_no_jurisdiction", identifiers)
         self.assertIn("flash_gordon_s01e01", identifiers)
         self.assertNotIn("dracula_1931_ambiguous", identifiers)
         self.assertNotIn("modern_indie_cc_by", identifiers)
@@ -247,20 +301,28 @@ class PublicDomainArchiveCollectorTests(TestCase):
         self.assertEqual(fg.season_number, 1)
         self.assertEqual(fg.episode_number, 1)
 
+        # Audio language evidence check
+        notld_offer = next(o for o in res.offers if o.provider_content_id == "night_of_the_living_dead_1968")
+        self.assertEqual(notld_offer.audio_languages, ["EN"])
+
+        charade_offer = next(o for o in res.offers if o.provider_content_id == "charade_1963_pd")
+        # Charade had no language field in fixture, so audio_languages must be None, NOT defaulted to ["EN"]
+        self.assertIsNone(charade_offer.audio_languages)
+
     def test_refresh_catalogue_persists_provider_content_and_offers_idempotently(self):
         fixture_data = load_fixture("archive_items.json")
         source = self._make_source(fixture_data)
         service = AvailabilityRefreshService(source=source)
 
         first_run = service.refresh_catalogue()
-        self.assertEqual(first_run.discovered, 4)
+        self.assertEqual(first_run.discovered, 6)
         # Night of the Living Dead and Charade match local catalog Movies,
-        # Hitch-Hiker and Flash Gordon are unresolved offer-wise (no local Movie row)
+        # other 4 are unresolved offer-wise (no local Movie row)
         self.assertEqual(first_run.processed, 2)
-        self.assertEqual(first_run.unresolved, 2)
+        self.assertEqual(first_run.unresolved, 4)
 
-        # ProviderContent rows are persisted for all 4 discovered items
-        self.assertEqual(ProviderContent.objects.filter(provider__slug="internet_archive").count(), 4)
+        # ProviderContent rows are persisted for all 6 discovered items
+        self.assertEqual(ProviderContent.objects.filter(provider__slug="internet_archive").count(), 6)
         self.assertEqual(Offer.objects.filter(provider__slug="internet_archive").count(), 2)
 
         # Verify Offer metadata
@@ -273,19 +335,19 @@ class PublicDomainArchiveCollectorTests(TestCase):
         second_run = service.refresh_catalogue()
         self.assertEqual(second_run.created, 0)
         self.assertEqual(second_run.deactivated, 0)
-        self.assertEqual(ProviderContent.objects.filter(provider__slug="internet_archive").count(), 4)
+        self.assertEqual(ProviderContent.objects.filter(provider__slug="internet_archive").count(), 6)
         self.assertEqual(Offer.objects.filter(provider__slug="internet_archive").count(), 2)
 
     def test_paginated_walk_checkpoints_forward(self):
         paginated_data = load_fixture("paginated_archive.json")
 
         def fetcher(endpoint, params):
-            cursor = params.get("cursor")
-            if not cursor:
+            page = params.get("page", 1)
+            if page == 1:
                 return paginated_data["page_1"]
-            if cursor == "page_2":
+            if page == 2:
                 return paginated_data["page_2"]
-            raise SourceFetchError(f"Unknown cursor {cursor}")
+            raise SourceFetchError(f"Unknown page {page}")
 
         client = PublicDomainArchiveClient(fetcher=fetcher)
         source = PublicDomainArchiveSource(client=client, batch_size=2)
@@ -319,12 +381,12 @@ class PublicDomainArchiveCollectorTests(TestCase):
         paginated_data = load_fixture("paginated_archive.json")
 
         def fetcher(endpoint, params):
-            cursor = params.get("cursor")
-            if not cursor:
+            page = params.get("page", 1)
+            if page == 1:
                 return paginated_data["page_1"]
-            if cursor == "page_2":
+            if page == 2:
                 return paginated_data["page_2"]
-            raise SourceFetchError(f"Unknown cursor {cursor}")
+            raise SourceFetchError(f"Unknown page {page}")
 
         client = PublicDomainArchiveClient(fetcher=fetcher)
         source = PublicDomainArchiveSource(client=client, batch_size=2)

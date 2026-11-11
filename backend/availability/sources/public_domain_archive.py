@@ -10,6 +10,9 @@ Contract and invariants:
 - Preserves rights provenance (license URL, original landing page URL, territorial scope).
 - Ingests URLs and metadata only, no streaming content or media file downloads.
 - Idempotent catalog sync with cursor checkpointing and batch limits.
+- Supports real Internet Archive advancedsearch query parameters (q, fl[], rows, page, output=json)
+  and responses (response.docs).
+- Accurately tracks request budget, halts on exhaustion, and does not invent unasserted audio languages.
 """
 from __future__ import annotations
 
@@ -54,6 +57,19 @@ PART_ITEMS = "items"
 DEFAULT_BATCH_ITEMS = 50
 DEFAULT_TIMEOUT = 30
 
+# Canonical fields requested from Internet Archive advancedsearch
+IA_FIELDS = [
+    "identifier",
+    "title",
+    "year",
+    "publicdate",
+    "mediatype",
+    "licenseurl",
+    "rights",
+    "description",
+    "language",
+]
+
 
 class PublicDomainArchiveClient:
     """HTTP client for public domain metadata catalogues.
@@ -61,16 +77,35 @@ class PublicDomainArchiveClient:
     Accepts an injectable ``fetcher`` callable for offline deterministic test fixtures.
     """
 
-    def __init__(self, *, fetcher: Optional[Callable[[str, Optional[dict]], dict]] = None, timeout: int = DEFAULT_TIMEOUT):
+    def __init__(
+        self,
+        *,
+        fetcher: Optional[Callable[[str, Optional[dict]], dict]] = None,
+        timeout: int = DEFAULT_TIMEOUT,
+    ):
         self.fetcher = fetcher
         self.timeout = timeout
 
-    def fetch_catalogue(self, endpoint: str, cursor: Optional[str] = None, params: Optional[dict] = None) -> dict:
+    def fetch_catalogue(
+        self,
+        endpoint: str,
+        page: int = 1,
+        rows: int = DEFAULT_BATCH_ITEMS,
+        query: str = "mediatype:movies AND (licenseurl:*publicdomain* OR licenseurl:*creativecommons*)",
+        params: Optional[dict] = None,
+    ) -> dict:
+        request_params: dict[str, Any] = {
+            "q": query,
+            "fl[]": IA_FIELDS,
+            "rows": rows,
+            "page": page,
+            "output": "json",
+        }
+        if params:
+            request_params.update(params)
+
         if self.fetcher is not None:
             try:
-                request_params = dict(params or {})
-                if cursor:
-                    request_params["cursor"] = cursor
                 return self.fetcher(endpoint, request_params)
             except SourceFetchError:
                 raise
@@ -79,12 +114,9 @@ class PublicDomainArchiveClient:
 
         # Default live HTTP fetcher
         try:
-            req_params = dict(params or {})
-            if cursor:
-                req_params["cursor"] = cursor
             resp = requests.get(
                 endpoint,
-                params=req_params,
+                params=request_params,
                 headers={"User-Agent": "WhereTfDoIWatchIt-PublicDomainCollector/1.0"},
                 timeout=self.timeout,
             )
@@ -109,7 +141,9 @@ class PublicDomainArchiveSource(AvailabilitySource):
     capabilities = SourceCapabilities(
         supported_providers=frozenset({DEFAULT_PROVIDER}),
         supported_countries=frozenset({DEFAULT_COUNTRY}),
-        supported_content_types=frozenset({ContentType.MOVIE, ContentType.SERIES, ContentType.EPISODE}),
+        supported_content_types=frozenset(
+            {ContentType.MOVIE, ContentType.SERIES, ContentType.EPISODE}
+        ),
         supports_incremental_sync=False,
         supports_catalogue_sync=True,
         supports_resumable_catalogue_sync=True,
@@ -126,12 +160,13 @@ class PublicDomainArchiveSource(AvailabilitySource):
         batch_size: int = DEFAULT_BATCH_ITEMS,
         provider_slug: str = DEFAULT_PROVIDER,
         catalogue_endpoint: str = "https://archive.org/advancedsearch.php",
+        max_requests: int = 100,
     ):
         self.client = client or PublicDomainArchiveClient()
         self.batch_size = max(1, int(batch_size))
         self.provider_slug = provider_slug
         self.catalogue_endpoint = catalogue_endpoint
-        self.budget_tracker = SourceBudgetTracker(max_requests=100)
+        self.budget_tracker = SourceBudgetTracker(max_requests=max_requests)
 
     def fetch(
         self,
@@ -146,6 +181,17 @@ class PublicDomainArchiveSource(AvailabilitySource):
                 f"{self.slug} is catalogue-driven: fetch the catalogue with content=None"
             )
 
+        if self.budget_tracker.budget_exhausted:
+            logger.warning("%s_budget_exhausted requests=%d", self.slug, self.budget_tracker.requests_made)
+            return SourceFetchResult(
+                contents=[],
+                offers=[],
+                authoritative=False,
+                complete_snapshot=False,
+                sync_mode=SyncMode.FULL,
+                cursor=cursor,
+            )
+
         resume = checkpoints.decode(
             cursor,
             version=CURSOR_VERSION,
@@ -154,21 +200,43 @@ class PublicDomainArchiveSource(AvailabilitySource):
         )
         anchor = resume.anchor(PART_ITEMS)
 
-        self.budget_tracker.record_request(success=True)
-        payload = self.client.fetch_catalogue(self.catalogue_endpoint, cursor=anchor)
+        # Parse current page number from anchor or default to 1
+        page = 1
+        if anchor and anchor.startswith("page_"):
+            try:
+                page = int(anchor.split("_", 1)[1])
+            except ValueError:
+                page = 1
+        elif anchor and anchor.isdigit():
+            page = int(anchor)
+
+        try:
+            payload = self.client.fetch_catalogue(
+                self.catalogue_endpoint,
+                page=page,
+                rows=self.batch_size,
+            )
+            self.budget_tracker.record_request(success=True)
+        except Exception:
+            self.budget_tracker.record_request(success=False)
+            raise
+
         if not isinstance(payload, dict):
             raise SourceFetchError(f"Unexpected payload type from {self.slug}")
 
         raw_items = payload.get("items")
+        num_found = 0
         if raw_items is None and "response" in payload:
-            raw_items = payload.get("response", {}).get("docs", [])
+            response_obj = payload.get("response") or {}
+            raw_items = response_obj.get("docs", [])
+            num_found = response_obj.get("numFound", 0)
+
         if not isinstance(raw_items, list):
             raise SourceFetchError(f"Malformed catalogue payload in {self.slug}: missing items list")
 
         contents: list[DiscoveredContent] = []
         offers: list[ProviderOffer] = []
         walked = 0
-        last_id = anchor
 
         for raw in raw_items:
             if not isinstance(raw, dict):
@@ -179,7 +247,7 @@ class PublicDomainArchiveSource(AvailabilitySource):
             identifier = str(raw.get("identifier") or "").strip()
             title = str(raw.get("title") or "").strip()
 
-            # Skip items with no title or identifier
+            # Skip items with missing identity
             if not identifier or not title:
                 logger.warning(
                     "%s_item_skipped reason=missing_identifier_or_title item=%r",
@@ -209,13 +277,11 @@ class PublicDomainArchiveSource(AvailabilitySource):
                     )
                 continue
 
-            # Content has passed rights verification
+            # Item passed rights verification
             provenance = build_provenance_record(raw, evaluation)
             walked += 1
-            last_id = identifier
             self.budget_tracker.pd_items_accepted += 1
 
-            # Determine content type and ordinals
             raw_type = str(raw.get("content_type") or raw.get("mediatype") or "movie").strip().lower()
             if raw_type == "episode" or raw.get("episode_number") is not None:
                 content_type = ContentType.EPISODE
@@ -228,11 +294,21 @@ class PublicDomainArchiveSource(AvailabilitySource):
             episode_number = _as_int(raw.get("episode_number"))
             release_date = _parse_date(raw.get("year") or raw.get("publicdate"))
 
-            # Determine applicable country
+            # Scoped country determination:
+            # If territorial scope is US_ONLY, attribute to US;
+            # if UNKNOWN or WORLDWIDE, respect country scope hint or fallback to default
             target_country = (
                 "US"
                 if evaluation.territorial_scope == TerritorialScope.US_ONLY
                 else (country or DEFAULT_COUNTRY)
+            )
+
+            # Do not invent audio languages when unasserted
+            raw_lang = raw.get("language")
+            audio_languages = (
+                normalize_languages([str(raw_lang)])
+                if raw_lang
+                else None
             )
 
             discovered = DiscoveredContent(
@@ -262,7 +338,7 @@ class PublicDomainArchiveSource(AvailabilitySource):
                 offer_type=normalize_offer_type("free"),
                 provider_url=provenance.landing_page_url,
                 quality="",
-                audio_languages=normalize_languages(["en"]),
+                audio_languages=audio_languages,
                 subtitle_languages=None,
                 available_from=None,
                 available_until=None,
@@ -274,13 +350,18 @@ class PublicDomainArchiveSource(AvailabilitySource):
             if walked >= self.batch_size:
                 break
 
-        # Checkpointing
+        # Checkpoint computation
         next_raw_cursor = payload.get("cursor")
-        if not next_raw_cursor and walked >= self.batch_size and last_id:
-            next_raw_cursor = last_id
+        if not next_raw_cursor:
+            # If explicit IA response.docs with more items available
+            start = (page - 1) * self.batch_size
+            if num_found > (start + len(raw_items)):
+                next_raw_cursor = f"page_{page + 1}"
+            elif payload.get("has_more") or (len(raw_items) >= self.batch_size and not num_found):
+                next_raw_cursor = f"page_{page + 1}"
 
         next_cursor = (
-            checkpoints.encode(CURSOR_VERSION, {PART_ITEMS: next_raw_cursor})
+            checkpoints.encode(CURSOR_VERSION, {PART_ITEMS: str(next_raw_cursor)})
             if next_raw_cursor
             else None
         )
