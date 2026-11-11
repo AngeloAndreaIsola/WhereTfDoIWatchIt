@@ -12,7 +12,7 @@ describe('Host Permission Management and Boundaries', () => {
     // Verify minimal permissions
     expect(manifest.permissions).not.toContain('<all_urls>');
     expect(manifest.permissions).not.toContain('*://*/*');
-    expect(manifest.permissions).toEqual(['storage', 'activeTab']);
+    expect(manifest.permissions).toEqual(['storage', 'activeTab', 'scripting']);
 
     // Verify optional host permissions are targeted
     expect(manifest.optional_host_permissions).toBeDefined();

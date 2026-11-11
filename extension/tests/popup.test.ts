@@ -3,7 +3,7 @@ import { PopupController, bootstrapPopup, updatePopupUI } from '../src/popup.js'
 import { HandshakeClient, MemoryStorageAdapter } from '../src/handshake.js';
 import { PermissionManager, PermissionsAPI } from '../src/permissions.js';
 import { AdapterRegistry } from '../src/adapters/index.js';
-import { MOCK_MOVIE_PAGE } from './fixtures/mock_pages.js';
+import { MOCK_MOVIE_PAGE, MOCK_SERIES_EPISODE_PAGE } from './fixtures/mock_pages.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -83,23 +83,23 @@ describe('Popup Opt-In and Controller Workflow', () => {
   });
 
   it('extracts metadata only when host permission is granted', async () => {
-    const url = new URL('https://mock-streaming.local/movie/inception');
-    const doc = new DOMParser().parseFromString(MOCK_MOVIE_PAGE, 'text/html');
+    const url = 'https://mock-streaming.local/movie/inception';
+    const siteDoc = new DOMParser().parseFromString(MOCK_MOVIE_PAGE, 'text/html');
 
     // Without permission -> blocked
-    await controller.init(url.toString());
-    const resultBlocked = await controller.detectAndInspect(doc, url);
+    await controller.init(url);
+    const resultBlocked = await controller.detectActiveTabTitle(siteDoc);
     expect(resultBlocked).toBeNull();
     expect(controller.getState().statusMessage).toContain('Permission not granted');
 
     // Grant permission
-    await controller.requestOptIn(url.toString());
-    const resultAllowed = await controller.detectAndInspect(doc, url);
+    await controller.requestOptIn(url);
+    const resultAllowed = await controller.detectActiveTabTitle(siteDoc);
     expect(resultAllowed).not.toBeNull();
     expect(resultAllowed?.title).toBe('Inception');
   });
 
-  describe('DOM Integration and UI Wiring', () => {
+  describe('DOM Integration and UI Wiring with Distinct Popup vs Active Page DOM', () => {
     let popupDoc: Document;
 
     beforeEach(() => {
@@ -148,21 +148,17 @@ describe('Popup Opt-In and Controller Workflow', () => {
       expect(btnPerm.textContent).toBe('Grant Permission For This Site');
     });
 
-    it('displays detected metadata card in DOM when detected', async () => {
-      await bootstrapPopup(popupDoc, controller);
+    it('extracts metadata from active streaming tab document (NOT popup DOM) and renders details', async () => {
+      // Mock active streaming page document (completely separate from popupDoc)
+      const activeStreamingDoc = new DOMParser().parseFromString(MOCK_SERIES_EPISODE_PAGE, 'text/html');
+
+      // Bootstrap popup with active streaming document passed as active tab fallback
+      await bootstrapPopup(popupDoc, controller, activeStreamingDoc);
 
       // Grant permission
       const btnPerm = popupDoc.getElementById('btn-request-permission') as HTMLButtonElement;
       btnPerm.click();
       await new Promise((r) => setTimeout(r, 10));
-
-      // Append mock movie elements to document for detection
-      const container = popupDoc.createElement('div');
-      container.innerHTML = `
-        <h1 data-testid="media-title">The Matrix</h1>
-        <span data-testid="media-year">1999</span>
-      `;
-      popupDoc.body.appendChild(container);
 
       // Trigger detection
       const btnDetect = popupDoc.getElementById('btn-detect-title') as HTMLButtonElement;
@@ -171,8 +167,51 @@ describe('Popup Opt-In and Controller Workflow', () => {
 
       const metaContainer = popupDoc.getElementById('metadata-container')!;
       const metaTitle = popupDoc.getElementById('meta-title')!;
+      const metaDetails = popupDoc.getElementById('meta-details')!;
+
+      // Verified extracted from activeStreamingDoc, not popupDoc
       expect(metaContainer.style.display).toBe('block');
-      expect(metaTitle.textContent).toBe('The Matrix');
+      expect(metaTitle.textContent).toBe('Breaking Bad');
+      expect(metaDetails.textContent).toContain('TV');
+      expect(metaDetails.textContent).toContain('S5:E14');
+    });
+
+    it('supports tab script executor delegation for in-browser tab isolation', async () => {
+      const mockScriptExecutor = vi.fn(async (tabId: number, urlStr: string) => {
+        return {
+          title: 'Remote Streaming Title',
+          contentType: 'movie' as const,
+          year: 2024,
+          sourceUrl: urlStr,
+          siteAdapterId: 'mock-streaming-adapter',
+          detectedAt: new Date().toISOString(),
+        };
+      });
+
+      const delegatedController = new PopupController({
+        handshakeClient,
+        permissionManager,
+        adapterRegistry,
+        scriptExecutor: mockScriptExecutor,
+      });
+
+      await bootstrapPopup(popupDoc, delegatedController);
+
+      // Grant permission
+      const btnPerm = popupDoc.getElementById('btn-request-permission') as HTMLButtonElement;
+      btnPerm.click();
+      await new Promise((r) => setTimeout(r, 10));
+
+      // Set activeTabId on state to simulate real browser active tab
+      await delegatedController.init('https://mock-streaming.local/watch/remote', 42);
+
+      const btnDetect = popupDoc.getElementById('btn-detect-title') as HTMLButtonElement;
+      btnDetect.click();
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(mockScriptExecutor).toHaveBeenCalledWith(42, 'https://mock-streaming.local/watch/remote');
+      const metaTitle = popupDoc.getElementById('meta-title')!;
+      expect(metaTitle.textContent).toBe('Remote Streaming Title');
     });
   });
 });

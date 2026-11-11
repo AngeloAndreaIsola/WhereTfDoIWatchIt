@@ -2,9 +2,11 @@ import { HandshakeClient } from './handshake.js';
 import { PermissionManager } from './permissions.js';
 import { AdapterRegistry } from './adapters/index.js';
 import { DetectedMetadata } from './types.js';
+import { extractMetadataFromTabDocument } from './content_extractor.js';
 
 export interface PopupState {
   currentUrl: string | null;
+  activeTabId: number | null;
   hasHostPermission: boolean;
   isAdapterEnabled: boolean;
   isHandshakeActive: boolean;
@@ -12,12 +14,19 @@ export interface PopupState {
   statusMessage: string | null;
 }
 
+export type TabScriptExecutor = (
+  tabId: number,
+  urlStr: string
+) => Promise<DetectedMetadata | null>;
+
 export class PopupController {
   private handshakeClient: HandshakeClient;
   private permissionManager: PermissionManager;
   private adapterRegistry: AdapterRegistry;
+  private scriptExecutor?: TabScriptExecutor;
   private state: PopupState = {
     currentUrl: null,
+    activeTabId: null,
     hasHostPermission: false,
     isAdapterEnabled: false,
     isHandshakeActive: false,
@@ -29,18 +38,21 @@ export class PopupController {
     handshakeClient: HandshakeClient;
     permissionManager: PermissionManager;
     adapterRegistry: AdapterRegistry;
+    scriptExecutor?: TabScriptExecutor;
   }) {
     this.handshakeClient = options.handshakeClient;
     this.permissionManager = options.permissionManager;
     this.adapterRegistry = options.adapterRegistry;
+    this.scriptExecutor = options.scriptExecutor;
   }
 
   getState(): PopupState {
     return { ...this.state };
   }
 
-  async init(currentUrl: string): Promise<void> {
+  async init(currentUrl: string, activeTabId: number | null = null): Promise<void> {
     this.state.currentUrl = currentUrl;
+    this.state.activeTabId = activeTabId;
     const perm = await this.permissionManager.checkHostPermission(currentUrl);
     this.state.hasHostPermission = perm.hasPermission;
 
@@ -111,19 +123,121 @@ export class PopupController {
     }
   }
 
-  async detectAndInspect(doc: Document, url: URL): Promise<DetectedMetadata | null> {
+  /**
+   * Performs explicit on-demand title detection inside the active streaming tab.
+   * Guarantees that metadata is extracted from the active streaming document, NOT the popup DOM.
+   */
+  async detectActiveTabTitle(
+    tabDocFallback?: Document
+  ): Promise<DetectedMetadata | null> {
+    if (!this.state.currentUrl) {
+      this.state.statusMessage = 'No active tab URL detected.';
+      return null;
+    }
+
     if (!this.state.hasHostPermission) {
       this.state.statusMessage = 'Permission not granted for this domain.';
       return null;
     }
 
-    const adapter = this.adapterRegistry.getAdapterForUrl(url);
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(this.state.currentUrl);
+    } catch {
+      this.state.statusMessage = 'Invalid active tab URL.';
+      return null;
+    }
+
+    const adapter = this.adapterRegistry.getAdapterForUrl(parsedUrl);
     if (!adapter) {
       this.state.statusMessage = 'No active adapter available for this domain.';
       return null;
     }
 
-    const metadata = adapter.extract(doc, url);
+    let metadata: DetectedMetadata | null = null;
+
+    // Execute extraction in active tab context
+    if (this.scriptExecutor && this.state.activeTabId != null) {
+      metadata = await this.scriptExecutor(this.state.activeTabId, this.state.currentUrl);
+    } else if (typeof chrome !== 'undefined' && chrome.scripting && this.state.activeTabId != null) {
+      // In-browser execution using chrome.scripting.executeScript
+      try {
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: this.state.activeTabId },
+          func: (urlStr: string) => {
+            const titleEl = document.querySelector('[data-testid="media-title"], .media-title, h1');
+            const rawTitle = titleEl?.textContent?.trim();
+            if (!rawTitle) return null;
+
+            const typeMeta = document.querySelector('meta[name="media-type"]')?.getAttribute('content');
+            let contentType: 'movie' | 'tv' | 'unknown' = 'unknown';
+            if (typeMeta === 'movie' || urlStr.includes('/movie/')) contentType = 'movie';
+            else if (typeMeta === 'tv' || typeMeta === 'episode' || urlStr.includes('/tv/')) contentType = 'tv';
+
+            const yearText = document.querySelector('[data-testid="media-year"], .media-year')?.textContent;
+            let year: number | null = null;
+            if (yearText) {
+              const m = yearText.match(/\b(19\d{2}|20\d{2})\b/);
+              if (m) year = parseInt(m[1], 10);
+            }
+
+            let season: number | null = null;
+            let episode: number | null = null;
+            let episodeTitle: string | null = null;
+            const seEl = document.querySelector('[data-testid="season-episode"], .season-episode');
+            if (seEl?.textContent) {
+              const seMatch = seEl.textContent.match(/S(\d+)\s*:\s*E(\d+)/i) ||
+                              seEl.textContent.match(/Season\s+(\d+)\s+Episode\s+(\d+)/i);
+              if (seMatch) {
+                season = parseInt(seMatch[1], 10);
+                episode = parseInt(seMatch[2], 10);
+                if (contentType === 'unknown') contentType = 'tv';
+              }
+            }
+
+            const epTitleEl = document.querySelector('[data-testid="episode-title"], .episode-title');
+            if (epTitleEl?.textContent?.trim()) {
+              episodeTitle = epTitleEl.textContent.trim();
+              if (contentType === 'unknown') contentType = 'tv';
+            }
+
+            let playbackProgress = null;
+            const video = document.querySelector('video') as HTMLMediaElement | null;
+            if (video && typeof video.currentTime === 'number' && typeof video.duration === 'number' && video.duration > 0) {
+              const duration = Math.round(video.duration);
+              const currentTime = Math.round(video.currentTime);
+              const progressPercent = Math.min(100, Math.max(0, Math.round((currentTime / duration) * 100)));
+              playbackProgress = { currentTime, duration, progressPercent };
+            }
+
+            return {
+              title: rawTitle,
+              contentType,
+              year,
+              season,
+              episode,
+              episodeTitle,
+              playbackProgress,
+              sourceUrl: urlStr,
+              siteAdapterId: 'mock-streaming-adapter',
+              detectedAt: new Date().toISOString(),
+            };
+          },
+          args: [this.state.currentUrl],
+        });
+
+        if (results && results[0] && results[0].result) {
+          metadata = results[0].result as DetectedMetadata;
+        }
+      } catch (err: any) {
+        this.state.statusMessage = `Failed executing script in tab: ${err.message || err}`;
+        return null;
+      }
+    } else if (tabDocFallback) {
+      // Test environment or fallback: explicit target document passed in
+      metadata = extractMetadataFromTabDocument(tabDocFallback, this.state.currentUrl, [adapter]);
+    }
+
     this.state.detectedMetadata = metadata;
     if (!metadata) {
       this.state.statusMessage = 'No title detected on current page.';
@@ -216,7 +330,8 @@ export function updatePopupUI(doc: Document, controller: PopupController): void 
  */
 export async function bootstrapPopup(
   doc: Document = document,
-  controller?: PopupController
+  controller?: PopupController,
+  activeTabDocumentFallback?: Document
 ): Promise<PopupController> {
   let activeController = controller;
 
@@ -234,16 +349,18 @@ export async function bootstrapPopup(
     });
   }
 
-  // Determine current active URL
+  // Determine current active URL & tab ID
   let currentUrl = 'https://mock-streaming.local/';
+  let activeTabId: number | null = null;
   if (typeof chrome !== 'undefined' && chrome.tabs?.query) {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tabs[0]?.url) {
       currentUrl = tabs[0].url;
+      activeTabId = tabs[0].id ?? null;
     }
   }
 
-  await activeController.init(currentUrl);
+  await activeController.init(currentUrl, activeTabId);
   updatePopupUI(doc, activeController);
 
   // Wire buttons
@@ -262,13 +379,8 @@ export async function bootstrapPopup(
   });
 
   btnDetect?.addEventListener('click', async () => {
-    try {
-      const parsed = new URL(currentUrl);
-      // In browser runtime, extraction can query active tab or inspect current DOM
-      await activeController!.detectAndInspect(doc, parsed);
-    } catch {
-      // no-op
-    }
+    // Explicit on-demand extraction targeting the active tab (never inspecting popup DOM)
+    await activeController!.detectActiveTabTitle(activeTabDocumentFallback);
     updatePopupUI(doc, activeController!);
   });
 
