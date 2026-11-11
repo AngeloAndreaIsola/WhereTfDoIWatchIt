@@ -73,6 +73,8 @@ export function isValidLocalAppOrigin(origin: string): boolean {
  * - No ambient cookie/auth capture from external sites.
  * - Capabilities are scoped (e.g. 'title:send').
  * - Revocable locally and on server.
+ * - Nonce generation fails closed if cryptographic entropy is unavailable.
+ * - Atomic local token removal without recursive lookup or infinite loops.
  */
 export class HandshakeClient {
   private localAppOrigin: string;
@@ -98,16 +100,15 @@ export class HandshakeClient {
 
   /**
    * Generates a cryptographically strong client nonce.
+   * Fails closed if Web Cryptography API is unavailable.
    */
   private generateNonce(): string {
-    const buffer = new Uint8Array(16);
-    if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
-      crypto.getRandomValues(buffer);
-    } else {
-      for (let i = 0; i < buffer.length; i++) {
-        buffer[i] = Math.floor(Math.random() * 256);
-      }
+    const cryptoObj = typeof crypto !== 'undefined' ? crypto : (globalThis as any).crypto;
+    if (!cryptoObj || typeof cryptoObj.getRandomValues !== 'function') {
+      throw new Error('Cryptographically secure random number generator is unavailable.');
     }
+    const buffer = new Uint8Array(16);
+    cryptoObj.getRandomValues(buffer);
     return Array.from(buffer)
       .map((b) => b.toString(16).padStart(2, '0'))
       .join('');
@@ -183,6 +184,7 @@ export class HandshakeClient {
 
   /**
    * Retrieve active token from storage if not expired.
+   * Avoids recursive calls: atomically purges expired tokens without calling revokeToken.
    */
   async getStoredToken(): Promise<CapabilityToken | null> {
     const raw = await this.storage.get(STORAGE_KEY_TOKEN);
@@ -190,36 +192,48 @@ export class HandshakeClient {
     try {
       const parsed = JSON.parse(raw) as CapabilityToken;
       if (parsed.expiresAt && Date.now() > parsed.expiresAt) {
-        await this.revokeToken();
+        // Purge expired token directly from storage
+        await this.storage.remove(STORAGE_KEY_TOKEN);
         return null;
       }
       return parsed;
     } catch {
-      await this.revokeToken();
+      await this.storage.remove(STORAGE_KEY_TOKEN);
       return null;
     }
   }
 
   /**
    * Revoke token locally and notify the local application.
+   * Atomically reads and deletes token from storage first, avoiding recursion.
    */
   async revokeToken(): Promise<void> {
-    const token = await this.getStoredToken();
+    const raw = await this.storage.get(STORAGE_KEY_TOKEN);
     await this.storage.remove(STORAGE_KEY_TOKEN);
 
-    if (token) {
+    if (raw) {
+      let tokenValue: string | null = null;
       try {
-        await this.fetchFn(`${this.localAppOrigin}/api/extension/handshake/revoke`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token.token}`,
-          },
-          credentials: 'omit',
-          body: JSON.stringify({ token: token.token }),
-        });
+        const parsed = JSON.parse(raw) as CapabilityToken;
+        tokenValue = parsed.token;
       } catch {
-        // Local revocation completed even if server is unreachable
+        // Token was malformed, already removed from storage
+      }
+
+      if (tokenValue) {
+        try {
+          await this.fetchFn(`${this.localAppOrigin}/api/extension/handshake/revoke`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${tokenValue}`,
+            },
+            credentials: 'omit',
+            body: JSON.stringify({ token: tokenValue }),
+          });
+        } catch {
+          // Local revocation completed even if server is unreachable
+        }
       }
     }
   }

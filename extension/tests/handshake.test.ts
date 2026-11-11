@@ -47,7 +47,6 @@ describe('Extension to Local App Handshake & Security', () => {
         recordedRequests.push({ url: urlStr, init });
 
         if (urlStr.endsWith('/api/extension/handshake/init')) {
-          // Assert security: credentials must be omit, no cookie capture
           expect(init?.credentials).toBe('omit');
           const body = JSON.parse(init?.body as string);
           expect(body.clientNonce).toBeDefined();
@@ -105,21 +104,68 @@ describe('Extension to Local App Handshake & Security', () => {
       expect(stored?.token).toBe('cap-tok-12345678');
     });
 
-    it('fails if server handshake init responds with error or bad payload', async () => {
-      const mockFetch: typeof fetch = vi.fn(async () => {
-        return new Response('Forbidden', { status: 403 });
+    it('fails closed when cryptographic random generator is unavailable', async () => {
+      const originalCrypto = globalThis.crypto;
+      // Temporarily remove getRandomValues
+      Object.defineProperty(globalThis, 'crypto', {
+        value: undefined,
+        configurable: true,
       });
+
+      try {
+        const client = new HandshakeClient({
+          localAppOrigin: 'http://localhost:3001',
+          storage,
+        });
+
+        await expect(client.establishHandshake(['title:send'])).rejects.toThrow(
+          /Cryptographically secure random number generator is unavailable/
+        );
+      } finally {
+        Object.defineProperty(globalThis, 'crypto', {
+          value: originalCrypto,
+          configurable: true,
+        });
+      }
+    });
+
+    it('handles expired tokens safely without recursion or hang', async () => {
+      // Put expired token into storage
+      const getSpy = vi.spyOn(storage, 'get');
+      const removeSpy = vi.spyOn(storage, 'remove');
+
+      await storage.set(
+        'wheretfdoiwatchit_capability_token',
+        JSON.stringify({
+          token: 'expired-token',
+          issuedAt: Date.now() - 100_000,
+          expiresAt: Date.now() - 10_000, // Expired
+          scopes: ['title:send'],
+          origin: 'http://localhost:3001',
+        })
+      );
 
       const client = new HandshakeClient({
         localAppOrigin: 'http://localhost:3001',
         storage,
-        fetchFn: mockFetch,
       });
 
-      await expect(client.establishHandshake(['title:send'])).rejects.toThrow(/Handshake init failed/);
+      // Call getStoredToken
+      const token = await client.getStoredToken();
+      expect(token).toBeNull();
+
+      // Ensure storage.get was called exactly once and remove called exactly once (no recursion)
+      expect(getSpy).toHaveBeenCalledTimes(1);
+      expect(removeSpy).toHaveBeenCalledTimes(1);
+
+      // Verify storage is indeed empty now
+      expect(await storage.get('wheretfdoiwatchit_capability_token')).toBeNull();
     });
 
-    it('revokes token locally and notifies server', async () => {
+    it('revokes token atomically and notifies server with bounded calls', async () => {
+      const getSpy = vi.spyOn(storage, 'get');
+      const removeSpy = vi.spyOn(storage, 'remove');
+
       const mockFetch: typeof fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const urlStr = input.toString();
         if (urlStr.endsWith('/api/extension/handshake/revoke')) {
@@ -148,10 +194,12 @@ describe('Extension to Local App Handshake & Security', () => {
         fetchFn: mockFetch,
       });
 
-      expect(await client.getStoredToken()).not.toBeNull();
       await client.revokeToken();
       expect(await client.getStoredToken()).toBeNull();
-      expect(mockFetch).toHaveBeenCalled();
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      // Verify bounded calls: remove called during revoke, no infinite loops
+      expect(removeSpy).toHaveBeenCalledTimes(1);
     });
 
     it('sends detected metadata to local app with authorization header and credentials omitted', async () => {

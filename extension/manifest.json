@@ -18,6 +18,6 @@
     "default_title": "WhereTfDoIWatchIt Companion"
   },
   "background": {
-    "service_worker": "src/background.ts"
+    "service_worker": "dist/src/background.js"
   }
 }
