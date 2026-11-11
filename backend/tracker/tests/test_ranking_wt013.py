@@ -246,6 +246,36 @@ class RankingWT013Tests(SimpleTestCase):
         self.assertEqual(ranked[0].service, "ScrapedOne")
         self.assertEqual(ranked[1].service, "Netflix")
 
+    def test_reordered_source_priority_with_default_flags_ranking_and_access_agreement(self):
+        """When source_priority is reordered and booleans retain defaults, ranking and access agree."""
+        pref = _pref(
+            ranking_preferences={
+                "version": 1,
+                "source_priority": ["unofficial", "local", "official"],
+                "prefer_official": True,
+                "prefer_local": True,
+                "prefer_entitled": True,
+                "provider_priority": [],
+            }
+        )
+        # Offer 1: unofficial (scraped) in US (local)
+        # Offer 2: official in IT (foreign)
+        o_unofficial = _offer("US", "ScrapedOne", is_scraped=True, audio=("EN",))
+        o_official = _offer("IT", "Netflix", is_scraped=False, audio=("EN",))
+
+        # 1. Test rank_offers ordering:
+        ranked = rank_offers([o_official, o_unofficial], pref)
+        self.assertEqual(ranked[0].service, "ScrapedOne")
+        self.assertEqual(ranked[1].service, "Netflix")
+
+        # 2. Test access.py resolve_title ordering / agreement:
+        from tracker.services.access import resolve_title, build_explicit_access
+        access = build_explicit_access(["netflix", "scrapedone"])
+        res = resolve_title(None, [o_official, o_unofficial], pref, access=access, current_country="US", provider_map={})
+        # best_offer should agree with rank_offers:
+        self.assertIsNotNone(res.best_offer)
+        self.assertEqual(res.best_offer.service, "ScrapedOne")
+
     def test_preference_serializer_reset_action(self):
         """Serializer resets to defaults when reset=True or null is passed."""
         s = PreferenceSerializer(data={"ranking_preferences": {"reset": True}})

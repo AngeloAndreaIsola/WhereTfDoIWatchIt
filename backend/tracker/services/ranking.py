@@ -79,8 +79,12 @@ def compute_source_rank(
 ) -> int:
     """Compute the position (index) of an offer based on user source_priority.
 
-    When both 'official' and 'local' can apply (e.g. an official provider in the local country),
-    we match the earliest category appearing in the user's source_priority.
+    Source category semantics:
+    - If `is_scraped`: matches "unofficial"
+    - If not `is_scraped`:
+        - If `is_local`: matches "local" if "local" appears in priority, and matches "official"
+          (takes whichever appears earlier in the user's `source_priority`)
+        - If not `is_local`: matches "official"
     """
     applicable = set()
     if is_scraped:
@@ -96,6 +100,53 @@ def compute_source_rank(
             best_rank = idx
             break
     return best_rank
+
+
+def build_offer_sort_key(
+    r: RankedOffer,
+    *,
+    source_priority: list[str],
+    prefer_official: bool,
+    prefer_local: bool,
+    prefer_entitled: bool,
+    local_country: str,
+):
+    """Canonical ranking-precedence key shared across ranking and access resolution.
+
+    Contract:
+    1. Language mismatch penalty (ineligible offers cannot rank above eligible ones).
+    2. Entitlement tier: subscription/free offers rank before rental/purchase when prefer_entitled is True.
+    3. User-configured source priority order (`source_rank` computed from `source_priority`).
+       `source_priority` directly controls precedence among source categories (e.g. official vs local vs unofficial).
+    4. Guard penalties if individual preference flags are enabled:
+       - `official_penalty`: if prefer_official is True, unofficial sources get demoted among ties.
+       - `local_penalty`: if prefer_local is True, non-local offers get demoted among ties.
+    5. Provider priority rank (user's preferred providers tiebreak within same source category).
+    6. Quality & language score tuple.
+    """
+    lang_penalty = r.score[0] if r.score else 0
+
+    entitled_tier = 0
+    if prefer_entitled and r.offer_type in ("rent", "buy"):
+        entitled_tier = 1
+
+    official_penalty = 0
+    if prefer_official and r.is_scraped_source:
+        official_penalty = 1
+
+    local_penalty = 0
+    if prefer_local and local_country and r.country != local_country:
+        local_penalty = 1
+
+    return (
+        lang_penalty,
+        entitled_tier,
+        r.source_rank,
+        official_penalty,
+        local_penalty,
+        r.provider_rank,
+        r.score,
+    )
 
 
 def rank_offers(
@@ -196,40 +247,14 @@ def rank_offers(
             )
         )
 
-    # Sort key:
-    # 1. Language mismatch penalty: scored.score_tuple[0] is 0 if match, 1 if no match / unknown
-    # 2. Feasible offer ranking:
-    #    - prefer_entitled: subscription/free offers rank ahead of rent/buy offers.
-    #    - prefer_local: local country offers rank ahead of foreign offers when local_country is set.
-    #    - prefer_official: official providers rank ahead of scraped/community sources.
-    #    - source_rank: position in user's source_priority.
-    #    - provider_rank: preferred provider tiebreak.
-    #    - quality & language score tuple.
-    def sort_key(r: RankedOffer):
-        lang_penalty = r.score[0] if r.score else 0
-
-        # Entitlement tier among eligible offers:
-        entitled_tier = 0
-        if prefer_entitled and r.offer_type in ("rent", "buy"):
-            entitled_tier = 1
-
-        local_tier = 0
-        if prefer_local and local_country:
-            local_tier = 0 if r.country == local_country else 1
-
-        official_tier = 0
-        if prefer_official and r.is_scraped_source:
-            official_tier = 1
-
-        return (
-            lang_penalty,
-            entitled_tier,
-            official_tier,
-            local_tier,
-            r.source_rank,
-            r.provider_rank,
-            r.score,
+    ranked.sort(
+        key=lambda r: build_offer_sort_key(
+            r,
+            source_priority=source_priority,
+            prefer_official=prefer_official,
+            prefer_local=prefer_local,
+            prefer_entitled=prefer_entitled,
+            local_country=local_country,
         )
-
-    ranked.sort(key=sort_key)
+    )
     return ranked

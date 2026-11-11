@@ -810,20 +810,15 @@ def resolve_title(
     prefer_entitled = ranking_prefs.get("prefer_entitled", True)
     provider_priority = [p.lower() for p in (ranking_prefs.get("provider_priority") or [])]
 
+    from tracker.services.ranking import compute_source_rank
+
     def _offer_sort_key(c: ClassifiedOffer):
-        # 1. Entitlement tier among eligible offers:
         entitled_tier = 0
         if prefer_entitled and not c.is_entitled:
             entitled_tier = 1
 
-        # 2. Source category priority:
-        category = "unofficial" if c.is_scraped_source else ("local" if c.is_current_country else "official")
-        try:
-            source_rank = source_priority.index(category)
-        except ValueError:
-            source_rank = 99
+        source_rank = compute_source_rank(source_priority, c.is_scraped_source, c.is_current_country)
 
-        # 3. Penalties if preferred flags are enabled
         official_penalty = 0
         if prefer_official and c.is_scraped_source:
             official_penalty = 1
@@ -832,7 +827,6 @@ def resolve_title(
         if prefer_local and not c.is_current_country:
             local_penalty = 1
 
-        # 4. Provider priority
         clean_service = (c.service or "").lower().strip()
         provider_rank = 99
         if clean_service in provider_priority:
