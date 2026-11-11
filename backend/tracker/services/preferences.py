@@ -47,42 +47,47 @@ def resolve_preferences(user_id: int = 1) -> dict[str, Any]:
 
     Keys: audio_languages, subtitle_languages, candidate_countries, current_country,
     language_rule, vpn_enabled, ranking_preferences.
-    Falls back to settings.DEFAULT_PREFERENCE when no DB row exists,
-    or when the DB row has empty audio/subtitle languages (migration
-    seeds an empty row in v0; server-side defaults are the source of truth).
+    Resolves each preference domain independently so that saving ranking preferences
+    never wipes out server-side defaults for language configuration on a migration-seeded row.
     """
     row = Preference.objects.filter(user_id=user_id).first()
     defaults = getattr(settings, "DEFAULT_PREFERENCE", {})
-    if row is not None and (
-        row.audio_languages
-        or row.subtitle_languages
-        or row.language_rule
-        or row.ranking_preferences
-    ):
-        ranking_prefs = (
-            row.ranking_preferences
-            if isinstance(row.ranking_preferences, dict) and row.ranking_preferences
-            else get_default_ranking_preferences()
-        )
-        return {
-            "audio_languages": _norm_lang_list(row.audio_languages),
-            "subtitle_languages": _norm_lang_list(row.subtitle_languages),
-            "candidate_countries": list(row.candidate_countries),
-            "current_country": row.current_country,
-            "language_rule": row.language_rule,
-            "vpn_enabled": bool(row.vpn_enabled),
-            "ranking_preferences": ranking_prefs,
-        }
-    # No DB row, or empty row (migration-seeded) — use server-side defaults.
+
+    # 1. Language domain: if row exists and has audio/subtitle/language_rule, use DB; else fallback to defaults
+    if row is not None and (row.audio_languages or row.subtitle_languages or row.language_rule):
+        audio_languages = _norm_lang_list(row.audio_languages)
+        subtitle_languages = _norm_lang_list(row.subtitle_languages)
+        language_rule = row.language_rule
+    else:
+        audio_languages = _norm_lang_list(defaults.get("audio_languages", []))
+        subtitle_languages = _norm_lang_list(defaults.get("subtitle_languages", []))
+        language_rule = defaults.get("language_rule", None)
+
+    # 2. Country & VPN domain
+    if row is not None:
+        candidate_countries = list(row.candidate_countries) if row.candidate_countries else list(defaults.get("candidate_countries", []))
+        current_country = row.current_country if row.current_country is not None else defaults.get("current_country", "")
+        vpn_enabled = bool(row.vpn_enabled) if hasattr(row, "vpn_enabled") else bool(defaults.get("vpn_enabled", False))
+    else:
+        candidate_countries = list(defaults.get("candidate_countries", []))
+        current_country = defaults.get("current_country", "")
+        vpn_enabled = bool(defaults.get("vpn_enabled", False))
+
+    # 3. Ranking domain
     default_ranking = defaults.get("ranking_preferences") or get_default_ranking_preferences()
+    if row is not None and isinstance(row.ranking_preferences, dict) and row.ranking_preferences:
+        ranking_preferences = row.ranking_preferences
+    else:
+        ranking_preferences = default_ranking
+
     return {
-        "audio_languages": _norm_lang_list(defaults.get("audio_languages", [])),
-        "subtitle_languages": _norm_lang_list(defaults.get("subtitle_languages", [])),
-        "candidate_countries": list(defaults.get("candidate_countries", [])),
-        "current_country": defaults.get("current_country", ""),
-        "language_rule": defaults.get("language_rule", None),
-        "vpn_enabled": bool(defaults.get("vpn_enabled", False)),
-        "ranking_preferences": default_ranking,
+        "audio_languages": audio_languages,
+        "subtitle_languages": subtitle_languages,
+        "candidate_countries": candidate_countries,
+        "current_country": current_country,
+        "language_rule": language_rule,
+        "vpn_enabled": vpn_enabled,
+        "ranking_preferences": ranking_preferences,
     }
 
 

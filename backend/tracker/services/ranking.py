@@ -79,16 +79,23 @@ def compute_source_rank(
 ) -> int:
     """Compute the position (index) of an offer based on user source_priority.
 
-    Source categories:
-    - "local": local access (country matches user current_country or unscoped non-scraped)
-    - "official": official/licensed providers (not scraped)
-    - "unofficial": scraped/unofficial sources
+    When both 'official' and 'local' can apply (e.g. an official provider in the local country),
+    we match the earliest category appearing in the user's source_priority.
     """
-    category = "unofficial" if is_scraped else ("local" if is_local else "official")
-    try:
-        return source_priority.index(category)
-    except ValueError:
-        return 99
+    applicable = set()
+    if is_scraped:
+        applicable.add("unofficial")
+    else:
+        applicable.add("official")
+        if is_local:
+            applicable.add("local")
+
+    best_rank = 99
+    for idx, s in enumerate(source_priority):
+        if s in applicable:
+            best_rank = idx
+            break
+    return best_rank
 
 
 def rank_offers(
@@ -121,6 +128,7 @@ def rank_offers(
     source_priority = ranking_prefs.get("source_priority") or ["official", "local", "unofficial"]
     prefer_official = ranking_prefs.get("prefer_official", True)
     prefer_local = ranking_prefs.get("prefer_local", True)
+    prefer_entitled = ranking_prefs.get("prefer_entitled", True)
     provider_priority = [p.lower() for p in (ranking_prefs.get("provider_priority") or [])]
 
     ranked: list[RankedOffer] = []
@@ -190,28 +198,32 @@ def rank_offers(
 
     # Sort key:
     # 1. Language mismatch penalty: scored.score_tuple[0] is 0 if match, 1 if no match / unknown
-    # 2. Source ranking:
-    #    - If default (prefer_local=True, source_priority starts with official or local):
-    #      We rank according to user's configured source_priority, provider_rank, and local preference.
-    #      When prefer_local is true and no custom reordering, local offers come first.
+    # 2. Feasible offer ranking:
+    #    - prefer_entitled: subscription/free offers rank ahead of rent/buy offers.
+    #    - prefer_local: local country offers rank ahead of foreign offers when local_country is set.
+    #    - prefer_official: official providers rank ahead of scraped/community sources.
+    #    - source_rank: position in user's source_priority.
+    #    - provider_rank: preferred provider tiebreak.
+    #    - quality & language score tuple.
     def sort_key(r: RankedOffer):
         lang_penalty = r.score[0] if r.score else 0
 
-        # Official legality tier:
-        # If prefer_official is True, official (not scraped) comes ahead of scraped (0 vs 1).
-        # If prefer_official is False, source_rank determines order directly.
+        # Entitlement tier among eligible offers:
+        entitled_tier = 0
+        if prefer_entitled and r.offer_type in ("rent", "buy"):
+            entitled_tier = 1
+
+        local_tier = 0
+        if prefer_local and local_country:
+            local_tier = 0 if r.country == local_country else 1
+
         official_tier = 0
         if prefer_official and r.is_scraped_source:
             official_tier = 1
 
-        # Locality tier:
-        # If prefer_local is True, matching current country gives 0 else 1.
-        local_tier = 0
-        if prefer_local:
-            local_tier = 0 if (local_country and r.country == local_country) else 1
-
         return (
             lang_penalty,
+            entitled_tier,
             official_tier,
             local_tier,
             r.source_rank,

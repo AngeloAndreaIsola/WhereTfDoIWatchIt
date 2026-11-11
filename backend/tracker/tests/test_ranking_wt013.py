@@ -64,7 +64,7 @@ class RankingWT013Tests(SimpleTestCase):
         ranked = rank_offers(offers, pref)
         # US Prime (official, local) -> IT Netflix (official, foreign) -> US Unofficial (unofficial)
         self.assertEqual([r.service for r in ranked], ["Prime", "Netflix", "UnofficialSite"])
-        self.assertEqual(ranked[0].source_rank, 1)  # "local" index in ["official", "local", "unofficial"]
+        self.assertEqual(ranked[0].source_rank, 0)  # "official" index in ["official", "local", "unofficial"]
         self.assertIn("Official provider", ranked[0].ranking_explanation)
         self.assertIn("Local region offer", ranked[0].ranking_explanation)
 
@@ -171,6 +171,80 @@ class RankingWT013Tests(SimpleTestCase):
         res = valid_serializer.validated_data["ranking_preferences"]
         self.assertEqual(res["source_priority"], ["local", "official", "unofficial"])
         self.assertEqual(res["provider_priority"], ["netflix", "prime"])
+
+    def test_resolve_preferences_independent_domains_preserves_language_defaults(self):
+        """Saving ranking_preferences on a migration-seeded empty row must not wipe out server language defaults."""
+        from django.conf import settings
+        from tracker.services.preferences import resolve_preferences
+
+        # Create a row with empty languages (like seeded v0 row) but with ranking_preferences saved
+        empty_row = Preference(
+            user_id=888,
+            audio_languages=[],
+            subtitle_languages=[],
+            candidate_countries=[],
+            current_country="",
+            ranking_preferences={
+                "version": 1,
+                "source_priority": ["local", "official", "unofficial"],
+                "prefer_official": True,
+                "prefer_local": True,
+                "prefer_entitled": True,
+                "provider_priority": [],
+            },
+        )
+        # Mock Preference.objects.filter(user_id=888).first() returning empty_row
+        from unittest.mock import patch
+        with patch.object(Preference.objects, "filter") as mock_filter:
+            mock_filter.return_value.first.return_value = empty_row
+            resolved = resolve_preferences(user_id=888)
+
+            defaults = settings.DEFAULT_PREFERENCE
+            # Language defaults are preserved!
+            self.assertEqual(resolved["audio_languages"], defaults["audio_languages"])
+            self.assertEqual(resolved["subtitle_languages"], defaults["subtitle_languages"])
+            # Ranking preferences are respected!
+            self.assertEqual(resolved["ranking_preferences"]["source_priority"], ["local", "official", "unofficial"])
+
+    def test_prefer_entitled_tiebreak_among_eligible_offers(self):
+        """prefer_entitled places subscription/free offers ahead of rent/buy offers."""
+        pref = _pref(
+            ranking_preferences={
+                "version": 1,
+                "source_priority": ["official", "local", "unofficial"],
+                "prefer_official": True,
+                "prefer_local": True,
+                "prefer_entitled": True,
+                "provider_priority": [],
+            }
+        )
+        offers = [
+            _offer("US", "Prime", offer_type="rent", quality="4k", audio=("EN",)),
+            _offer("US", "Prime", offer_type="subscription", quality="hd", audio=("EN",)),
+        ]
+        ranked = rank_offers(offers, pref)
+        self.assertEqual(ranked[0].offer_type, "subscription")
+        self.assertEqual(ranked[1].offer_type, "rent")
+
+    def test_source_priority_reordering_with_disabled_prefer_official(self):
+        """When user prefers unofficial sources, setting prefer_official=False allows unofficial to rank first."""
+        pref = _pref(
+            ranking_preferences={
+                "version": 1,
+                "source_priority": ["unofficial", "local", "official"],
+                "prefer_official": False,
+                "prefer_local": False,
+                "prefer_entitled": True,
+                "provider_priority": [],
+            }
+        )
+        offers = [
+            _offer("IT", "Netflix", is_scraped=False, audio=("EN",)),
+            _offer("US", "ScrapedOne", is_scraped=True, audio=("EN",)),
+        ]
+        ranked = rank_offers(offers, pref)
+        self.assertEqual(ranked[0].service, "ScrapedOne")
+        self.assertEqual(ranked[1].service, "Netflix")
 
     def test_preference_serializer_reset_action(self):
         """Serializer resets to defaults when reset=True or null is passed."""

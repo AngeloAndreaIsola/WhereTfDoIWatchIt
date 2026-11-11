@@ -807,25 +807,30 @@ def resolve_title(
     source_priority = ranking_prefs.get("source_priority") or ["official", "local", "unofficial"]
     prefer_official = ranking_prefs.get("prefer_official", True)
     prefer_local = ranking_prefs.get("prefer_local", True)
+    prefer_entitled = ranking_prefs.get("prefer_entitled", True)
     provider_priority = [p.lower() for p in (ranking_prefs.get("provider_priority") or [])]
 
     def _offer_sort_key(c: ClassifiedOffer):
-        # 1. Official preference
-        official_tier = 0
-        if prefer_official and c.is_scraped_source:
-            official_tier = 1
+        # 1. Entitlement tier among eligible offers:
+        entitled_tier = 0
+        if prefer_entitled and not c.is_entitled:
+            entitled_tier = 1
 
-        # 2. Local preference
-        local_tier = 0
-        if prefer_local:
-            local_tier = 0 if c.is_current_country else 1
-
-        # 3. Source category priority
+        # 2. Source category priority:
         category = "unofficial" if c.is_scraped_source else ("local" if c.is_current_country else "official")
         try:
             source_rank = source_priority.index(category)
         except ValueError:
             source_rank = 99
+
+        # 3. Penalties if preferred flags are enabled
+        official_penalty = 0
+        if prefer_official and c.is_scraped_source:
+            official_penalty = 1
+
+        local_penalty = 0
+        if prefer_local and not c.is_current_country:
+            local_penalty = 1
 
         # 4. Provider priority
         clean_service = (c.service or "").lower().strip()
@@ -833,7 +838,7 @@ def resolve_title(
         if clean_service in provider_priority:
             provider_rank = provider_priority.index(clean_service)
 
-        return (official_tier, local_tier, source_rank, provider_rank, c.ranking_score)
+        return (entitled_tier, source_rank, official_penalty, local_penalty, provider_rank, c.ranking_score)
 
     local.sort(key=_offer_sort_key)
     vpn.sort(key=_offer_sort_key)
