@@ -1,9 +1,9 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from "react";
+import React, { createContext, useContext, useEffect, useState, useCallback, useMemo, useRef } from "react";
 import {
   DEFAULT_LOCALE,
-  isSupportedLocale,
+  normalizeLocale,
   type SupportedLocale,
   translate,
   setLocaleCookie,
@@ -12,7 +12,7 @@ import {
 
 export interface LocaleContextValue {
   locale: SupportedLocale;
-  setLocale: (newLocale: SupportedLocale) => void;
+  setLocale: (newLocale: SupportedLocale | string) => void;
   t: (key: string, params?: Record<string, string | number>, fallback?: string) => string;
 }
 
@@ -25,24 +25,40 @@ const LocaleContext = createContext<LocaleContextValue>({
 
 interface LocaleProviderProps {
   children: React.ReactNode;
-  initialLocale?: SupportedLocale;
+  initialLocale?: SupportedLocale | string;
 }
 
-export function LocaleProvider({ children, initialLocale = DEFAULT_LOCALE }: LocaleProviderProps) {
-  const [locale, setLocaleState] = useState<SupportedLocale>(initialLocale);
+export function LocaleProvider({ children, initialLocale }: LocaleProviderProps) {
+  const normalizedInitial = normalizeLocale(initialLocale);
+  const [locale, setLocaleState] = useState<SupportedLocale>(normalizedInitial ?? DEFAULT_LOCALE);
+  const hasExplicitInitial = useRef(Boolean(normalizedInitial));
 
+  // Synchronize document.documentElement.lang whenever locale changes
   useEffect(() => {
-    // If initialLocale wasn't provided or differed from client cookie/preference, resolve on mount
-    const detected = resolveInitialLocale();
-    if (detected !== locale) {
-      setLocaleState(detected);
+    if (typeof document !== "undefined" && document.documentElement) {
+      document.documentElement.lang = locale;
     }
   }, [locale]);
 
-  const setLocale = useCallback((newLocale: SupportedLocale) => {
-    if (isSupportedLocale(newLocale)) {
-      setLocaleState(newLocale);
-      setLocaleCookie(newLocale);
+  useEffect(() => {
+    // If explicit initialLocale was provided (e.g. from SSR layout cookie), respect it.
+    // Otherwise resolve on mount from cookie/storage/browser.
+    if (!hasExplicitInitial.current) {
+      const detected = resolveInitialLocale();
+      if (detected !== locale) {
+        setLocaleState(detected);
+      }
+    }
+  }, [locale]);
+
+  const setLocale = useCallback((newLocale: SupportedLocale | string) => {
+    const normalized = normalizeLocale(newLocale);
+    if (normalized) {
+      setLocaleState(normalized);
+      setLocaleCookie(normalized);
+      if (typeof document !== "undefined" && document.documentElement) {
+        document.documentElement.lang = normalized;
+      }
     }
   }, []);
 

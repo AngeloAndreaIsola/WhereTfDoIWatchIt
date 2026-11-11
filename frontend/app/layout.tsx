@@ -7,7 +7,7 @@ import { ViewerPreferencesProvider } from "@/components/ViewerPreferencesProvide
 import { CurrentLocationProvider } from "@/components/CurrentLocationProvider";
 import { LocaleProvider } from "@/lib/i18n/LocaleProvider";
 import { LOCALE_COOKIE_NAME } from "@/lib/i18n";
-import { isSupportedLocale, DEFAULT_LOCALE, type SupportedLocale } from "@/messages";
+import { normalizeLocale, DEFAULT_LOCALE, type SupportedLocale } from "@/messages";
 
 const geistSans = localFont({
   src: "./fonts/GeistVF.woff",
@@ -34,8 +34,9 @@ export default function RootLayout({
   try {
     const cookieStore = cookies();
     const cookieVal = cookieStore.get(LOCALE_COOKIE_NAME)?.value;
-    if (isSupportedLocale(cookieVal)) {
-      initialLocale = cookieVal;
+    const normalized = normalizeLocale(cookieVal);
+    if (normalized) {
+      initialLocale = normalized;
     }
   } catch {
     // If cookies() is unavailable (e.g. static rendering), fallback safely to DEFAULT_LOCALE

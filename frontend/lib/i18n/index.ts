@@ -1,7 +1,8 @@
 import {
   messages,
   DEFAULT_LOCALE,
-  isSupportedLocale,
+  SUPPORTED_LOCALES,
+  normalizeLocale,
   type SupportedLocale,
 } from "../../messages";
 
@@ -51,10 +52,11 @@ export function translate(
   params?: Record<string, string | number>,
   fallback?: string
 ): string {
-  const targetCatalog = messages[locale] ?? messages[DEFAULT_LOCALE];
+  const normLocale = normalizeLocale(locale) ?? DEFAULT_LOCALE;
+  const targetCatalog = messages[normLocale] ?? messages[DEFAULT_LOCALE];
   let msg = getNestedValue(targetCatalog, key);
 
-  if (msg === undefined && locale !== DEFAULT_LOCALE) {
+  if (msg === undefined && normLocale !== DEFAULT_LOCALE) {
     msg = getNestedValue(messages[DEFAULT_LOCALE], key);
   }
 
@@ -68,7 +70,7 @@ export function translate(
 /**
  * Detects locale from browser settings (navigator.languages or navigator.language).
  */
-export function detectBrowserLocale(acceptedLocales: readonly SupportedLocale[]): SupportedLocale {
+export function detectBrowserLocale(acceptedLocales: readonly SupportedLocale[] = SUPPORTED_LOCALES): SupportedLocale {
   if (typeof window === "undefined" || typeof navigator === "undefined") {
     return DEFAULT_LOCALE;
   }
@@ -76,9 +78,10 @@ export function detectBrowserLocale(acceptedLocales: readonly SupportedLocale[])
   const browserLangs = navigator.languages || [navigator.language || ""];
   for (const lang of browserLangs) {
     if (!lang) continue;
-    const prefix = lang.split("-")[0].toLowerCase();
-    if (isSupportedLocale(prefix) && acceptedLocales.includes(prefix)) {
-      return prefix;
+    const prefix = lang.split("-")[0].trim().toLowerCase();
+    const normalized = normalizeLocale(prefix);
+    if (normalized && acceptedLocales.includes(normalized)) {
+      return normalized;
     }
   }
 
@@ -87,28 +90,29 @@ export function detectBrowserLocale(acceptedLocales: readonly SupportedLocale[])
 
 /**
  * Reads the locale cookie from document.cookie (client-side) or a cookie string.
+ * Normalizes to exact lowercase canonical SupportedLocale.
  */
 export function getLocaleFromCookieString(cookieString?: string): SupportedLocale | null {
   if (!cookieString) return null;
   const match = cookieString.match(new RegExp(`(?:^|; )${LOCALE_COOKIE_NAME}=([^;]*)`));
   if (match) {
     const val = decodeURIComponent(match[1]);
-    if (isSupportedLocale(val)) {
-      return val;
-    }
+    return normalizeLocale(val);
   }
   return null;
 }
 
 /**
  * Sets the locale cookie in document.cookie for client persistence across navigation and reloads.
+ * Always stores the canonical lowercase locale.
  */
-export function setLocaleCookie(locale: SupportedLocale): void {
+export function setLocaleCookie(locale: string): void {
   if (typeof document === "undefined") return;
+  const normalized = normalizeLocale(locale) ?? DEFAULT_LOCALE;
   const maxAge = 60 * 60 * 24 * 365; // 1 year
-  document.cookie = `${LOCALE_COOKIE_NAME}=${locale}; path=/; max-age=${maxAge}; SameSite=Lax`;
+  document.cookie = `${LOCALE_COOKIE_NAME}=${normalized}; path=/; max-age=${maxAge}; SameSite=Lax`;
   try {
-    localStorage.setItem(LOCALE_COOKIE_NAME, locale);
+    localStorage.setItem(LOCALE_COOKIE_NAME, normalized);
   } catch {
     // Ignore storage quota / access issues
   }
@@ -116,6 +120,7 @@ export function setLocaleCookie(locale: SupportedLocale): void {
 
 /**
  * Retrieves the preferred locale checking cookie, then localStorage, then browser detection, defaulting to 'en'.
+ * Guarantees a canonical lowercase SupportedLocale return value.
  */
 export function resolveInitialLocale(): SupportedLocale {
   if (typeof window === "undefined") {
@@ -129,11 +134,12 @@ export function resolveInitialLocale(): SupportedLocale {
   // 2. Check localStorage
   try {
     const stored = localStorage.getItem(LOCALE_COOKIE_NAME);
-    if (isSupportedLocale(stored)) return stored;
+    const normalizedStored = normalizeLocale(stored);
+    if (normalizedStored) return normalizedStored;
   } catch {
     // Ignore error
   }
 
   // 3. Fallback to browser detection
-  return detectBrowserLocale(["en", "it", "ja"]);
+  return detectBrowserLocale();
 }

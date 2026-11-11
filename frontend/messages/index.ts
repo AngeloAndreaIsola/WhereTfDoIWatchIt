@@ -14,7 +14,16 @@ export const messages: Record<SupportedLocale, TranslationCatalog> = {
 };
 
 export function isSupportedLocale(locale: unknown): locale is SupportedLocale {
-  return typeof locale === "string" && (SUPPORTED_LOCALES as readonly string[]).includes(locale.toLowerCase());
+  return typeof locale === "string" && (SUPPORTED_LOCALES as readonly string[]).includes(locale.trim().toLowerCase());
+}
+
+/**
+ * Normalizes input to canonical lowercase SupportedLocale, or returns null if unsupported.
+ */
+export function normalizeLocale(locale: unknown): SupportedLocale | null {
+  if (typeof locale !== "string") return null;
+  const lower = locale.trim().toLowerCase();
+  return (SUPPORTED_LOCALES as readonly string[]).includes(lower) ? (lower as SupportedLocale) : null;
 }
 
 export * from "./en";

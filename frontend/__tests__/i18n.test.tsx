@@ -7,6 +7,7 @@ import {
   SUPPORTED_LOCALES,
   DEFAULT_LOCALE,
   isSupportedLocale,
+  normalizeLocale,
   type SupportedLocale,
 } from "@/messages";
 import {
@@ -93,15 +94,19 @@ describe("WT-006: Locale Persistence & Detection", () => {
     document.cookie = originalCookie;
   });
 
-  it("extracts locale correctly from cookie strings", () => {
+  it("extracts and normalizes locale correctly from cookie strings", () => {
     expect(getLocaleFromCookieString("")).toBeNull();
     expect(getLocaleFromCookieString("foo=bar; NEXT_LOCALE=it; other=val")).toBe("it");
     expect(getLocaleFromCookieString("NEXT_LOCALE=ja")).toBe("ja");
+    // Uppercase and mixed case should normalize to canonical lowercase
+    expect(getLocaleFromCookieString("NEXT_LOCALE=JA")).toBe("ja");
+    expect(getLocaleFromCookieString("NEXT_LOCALE=It")).toBe("it");
+    expect(getLocaleFromCookieString("NEXT_LOCALE= EN ")).toBe("en");
     expect(getLocaleFromCookieString("NEXT_LOCALE=invalid")).toBeNull();
   });
 
-  it("sets and persists locale in both cookie and localStorage", () => {
-    setLocaleCookie("ja");
+  it("sets and persists normalized locale in both cookie and localStorage", () => {
+    setLocaleCookie("JA");
     expect(document.cookie).toContain("NEXT_LOCALE=ja");
     expect(localStorage.getItem(LOCALE_COOKIE_NAME)).toBe("ja");
   });
@@ -146,12 +151,12 @@ describe("WT-006: Locale Persistence & Detection", () => {
 
     expect(resolveInitialLocale()).toBe("ja");
 
-    // 2. LocalStorage says it -> overrides browser
-    localStorage.setItem(LOCALE_COOKIE_NAME, "it");
+    // 2. LocalStorage says uppercase "IT" -> overrides browser and normalizes to "it"
+    localStorage.setItem(LOCALE_COOKIE_NAME, "IT");
     expect(resolveInitialLocale()).toBe("it");
 
-    // 3. Cookie says en -> overrides localStorage and browser
-    document.cookie = `${LOCALE_COOKIE_NAME}=en; path=/`;
+    // 3. Cookie says uppercase "EN" -> overrides localStorage and browser, normalizes to "en"
+    document.cookie = `${LOCALE_COOKIE_NAME}=EN; path=/`;
     expect(resolveInitialLocale()).toBe("en");
 
     Object.defineProperty(window, "navigator", {
@@ -165,6 +170,7 @@ describe("WT-006: UI Components & Keyboard Accessibility", () => {
   beforeEach(() => {
     localStorage.clear();
     document.cookie = `${LOCALE_COOKIE_NAME}=; max-age=0; path=/`;
+    document.documentElement.lang = "en";
   });
 
   function TestConsumer() {
@@ -177,7 +183,7 @@ describe("WT-006: UI Components & Keyboard Accessibility", () => {
     );
   }
 
-  it("renders with initial locale and switches locale through switcher", async () => {
+  it("renders with initial locale and switches locale through switcher, updating document.documentElement.lang", async () => {
     render(
       <LocaleProvider initialLocale="en">
         <LocaleSwitcher />
@@ -187,6 +193,7 @@ describe("WT-006: UI Components & Keyboard Accessibility", () => {
 
     expect(screen.getByTestId("current-locale")).toHaveTextContent("en");
     expect(screen.getByTestId("translated-home")).toHaveTextContent("Home");
+    expect(document.documentElement.lang).toBe("en");
 
     const select = screen.getByTestId("locale-switcher");
     expect(select).toBeInTheDocument();
@@ -196,16 +203,30 @@ describe("WT-006: UI Components & Keyboard Accessibility", () => {
 
     expect(screen.getByTestId("current-locale")).toHaveTextContent("it");
     expect(screen.getByTestId("translated-home")).toHaveTextContent("Home"); // in IT home is Home
+    expect(document.documentElement.lang).toBe("it");
 
     // Switch to Japanese
     fireEvent.change(select, { target: { value: "ja" } });
 
     expect(screen.getByTestId("current-locale")).toHaveTextContent("ja");
     expect(screen.getByTestId("translated-home")).toHaveTextContent("ホーム");
+    expect(document.documentElement.lang).toBe("ja");
 
-    // Verify persisted
+    // Verify persisted in canonical lowercase
     expect(localStorage.getItem(LOCALE_COOKIE_NAME)).toBe("ja");
     expect(document.cookie).toContain("NEXT_LOCALE=ja");
+  });
+
+  it("normalizes uppercase initialLocale (e.g. from cookie) without falling back", () => {
+    render(
+      <LocaleProvider initialLocale={"JA" as SupportedLocale}>
+        <TestConsumer />
+      </LocaleProvider>
+    );
+
+    expect(screen.getByTestId("current-locale")).toHaveTextContent("ja");
+    expect(screen.getByTestId("translated-home")).toHaveTextContent("ホーム");
+    expect(document.documentElement.lang).toBe("ja");
   });
 
   it("is keyboard accessible and navigable via tab and arrow keys", async () => {
@@ -228,6 +249,7 @@ describe("WT-006: UI Components & Keyboard Accessibility", () => {
     // Select with keyboard
     await user.selectOptions(select, "it");
     expect(select).toHaveValue("it");
+    expect(document.documentElement.lang).toBe("it");
 
     // Nav links reflect Italian translation
     expect(screen.getByRole("link", { name: "Catalogo" })).toBeInTheDocument();
@@ -247,5 +269,6 @@ describe("WT-006: UI Components & Keyboard Accessibility", () => {
     // UI nav is Japanese
     expect(screen.getByRole("link", { name: "カタログ" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "ウォッチリスト" })).toBeInTheDocument();
+    expect(document.documentElement.lang).toBe("ja");
   });
 });
