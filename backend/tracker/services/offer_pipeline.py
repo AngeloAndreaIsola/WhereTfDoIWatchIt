@@ -109,9 +109,10 @@ class OfficialOffersPipeline:
         reach=None,
         classify_preference: Optional[Preference] = None,
     ):
+        pref_for_ranking = classify_preference if classify_preference is not None else preference
         ranked = rank_offers(
             qualifying_offers,
-            preference,
+            pref_for_ranking,
             country_filter=set(),
             current_country=current_country,
         )

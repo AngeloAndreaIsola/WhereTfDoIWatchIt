@@ -73,6 +73,9 @@ export interface PrimeOffer {
     subtitle_rank: number;
     quality_rank: number;
     is_language_match?: boolean;
+    source_rank?: number;
+    provider_rank?: number;
+    explanation?: string[];
   };
   /** Access model of this offer — subscription, add-on, free, free_with_ads, rent or buy. */
   access_type?: AccessType;
