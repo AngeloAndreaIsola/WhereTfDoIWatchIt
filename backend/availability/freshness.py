@@ -80,6 +80,7 @@ SOURCE_FRESHNESS: dict[str, timedelta] = {
     "mediaset_infinity": timedelta(hours=24),
     "pbs": timedelta(hours=24),
     "abc_iview": timedelta(hours=24),
+    "public_domain_archive": timedelta(days=1),
     "legacy_scraper": timedelta(hours=12),
     # Aggregators: unofficial/fragile upstream, so their windows are longer
     # than a first-party collector's. JustWatch is walked by

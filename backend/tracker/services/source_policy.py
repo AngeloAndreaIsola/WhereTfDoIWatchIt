@@ -165,6 +165,7 @@ SOURCE_ROLES: dict[str, AvailabilityRole] = {
     "rai_play": AvailabilityRole.COLLECTOR,
     "pbs": AvailabilityRole.COLLECTOR,
     "abc_iview": AvailabilityRole.COLLECTOR,
+    "public_domain_archive": AvailabilityRole.COLLECTOR,
     # --- broad aggregators: multi-provider coverage (Watchmode has finite quota) -
     "justwatch": AvailabilityRole.BROAD_AGGREGATOR,
     "watchmode": AvailabilityRole.BROAD_AGGREGATOR,
