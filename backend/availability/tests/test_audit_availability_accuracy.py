@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 import csv
 import tempfile
+from datetime import timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -53,63 +54,111 @@ class CohortValidationTests(SimpleTestCase):
 class ComparisonClassificationTests(SimpleTestCase):
     def setUp(self):
         self.case = {"tmdb_id": 10, "title": "A", "media_type": "movie", "year": 2000, "country": "NL"}
+        self.movie = SimpleNamespace(content_type="movie", year=2000)
 
     def test_secondary_positive_does_not_turn_missing_app_row_into_conflict(self):
-        external = {"tmdb_id": "10", "country": "NL", "explicitly_confirms_availability": "Yes", "provider": "Netflix"}
+        external = {"tmdb_id": "10", "country": "NL", "explicitly_confirms_availability": "Yes", "provider": "Netflix", "offer_type": "subscription"}
         result, _ = _classify(self.case, external, None, [], False)
         self.assertEqual(result, "APP_DATA_MISSING")
 
     def test_providerless_or_unverified_external_evidence_is_insufficient(self):
-        external = {"tmdb_id": "10", "country": "NL", "explicitly_confirms_availability": "Yes", "provider": "not extractable"}
-        result, _ = _classify(self.case, external, object(), [], False)
+        external = {"tmdb_id": "10", "country": "NL", "explicitly_confirms_availability": "Yes", "provider": "not extractable", "offer_type": "subscription"}
+        result, _ = _classify(self.case, external, self.movie, [], False)
         self.assertEqual(result, "INSUFFICIENT_EXTERNAL_EVIDENCE")
         external["explicitly_confirms_availability"] = "No"
-        result, _ = _classify(self.case, external, object(), [], False)
+        result, _ = _classify(self.case, external, self.movie, [], False)
         self.assertEqual(result, "INSUFFICIENT_EXTERNAL_EVIDENCE")
 
     def test_country_mismatch_is_not_comparable(self):
-        external = {"tmdb_id": "10", "country": "IT", "explicitly_confirms_availability": "Yes", "provider": "Netflix"}
-        result, _ = _classify(self.case, external, object(), [], False)
+        external = {"tmdb_id": "10", "country": "IT", "explicitly_confirms_availability": "Yes", "provider": "Netflix", "offer_type": "subscription"}
+        result, _ = _classify(self.case, external, self.movie, [], False)
         self.assertEqual(result, "NOT_COMPARABLE")
 
     def test_media_type_and_year_mismatch_are_not_comparable(self):
         external = {"tmdb_id": "10", "country": "NL", "media_type": "series", "year": "2000",
-                    "explicitly_confirms_availability": "Yes", "provider": "Netflix"}
-        result, _ = _classify(self.case, external, object(), [], False)
+                    "explicitly_confirms_availability": "Yes", "provider": "Netflix", "offer_type": "subscription"}
+        result, _ = _classify(self.case, external, self.movie, [], False)
         self.assertEqual(result, "NOT_COMPARABLE")
         external["media_type"] = "movie"
         external["year"] = "1984"
-        result, _ = _classify(self.case, external, object(), [], False)
+        result, _ = _classify(self.case, external, self.movie, [], False)
         self.assertEqual(result, "NOT_COMPARABLE")
 
     def test_provider_mismatch_with_secondary_aggregator_stays_unconfirmed(self):
-        external = {"tmdb_id": "10", "country": "NL", "explicitly_confirms_availability": "Yes", "provider": "Netflix"}
+        external = {"tmdb_id": "10", "country": "NL", "explicitly_confirms_availability": "Yes", "provider": "Netflix", "offer_type": "subscription"}
         app_offer = SimpleNamespace(currently_available=True, evidence="verified", country="NL", provider="prime")
-        result, _ = _classify(self.case, external, object(), [app_offer], False)
+        result, _ = _classify(self.case, external, self.movie, [app_offer], False)
         self.assertEqual(result, "INSUFFICIENT_APP_EVIDENCE")
 
-    def test_stale_rows_and_disabled_source_are_not_confirmed_errors(self):
-        external = {"tmdb_id": "10", "country": "NL", "explicitly_confirms_availability": "Yes", "provider": "Netflix"}
-        stale_offer = SimpleNamespace(currently_available=True, evidence="stale", country="NL", provider="netflix")
-        result, _ = _classify(self.case, external, object(), [stale_offer], False)
+    def test_rental_offer_cannot_agree_with_external_subscription_listing(self):
+        external = {"tmdb_id": "10", "country": "NL", "explicitly_confirms_availability": "Yes",
+                    "provider": "Netflix", "offer_type": "subscription"}
+        movie = SimpleNamespace(content_type="movie", year=2000)
+        app_offer = SimpleNamespace(currently_available=True, evidence="verified", country="NL",
+                                    provider="netflix", offer_type="rent")
+        result, _ = _classify(self.case, external, movie, [app_offer])
+        self.assertEqual(result, "INSUFFICIENT_APP_EVIDENCE")
+
+    def test_stale_matching_provider_cannot_borrow_an_unrelated_verified_offer(self):
+        external = {"tmdb_id": "10", "country": "NL", "explicitly_confirms_availability": "Yes",
+                    "provider": "Netflix", "offer_type": "subscription"}
+        movie = SimpleNamespace(content_type="movie", year=2000)
+        offers = [
+            SimpleNamespace(currently_available=True, evidence="stale", country="NL",
+                             provider="netflix", offer_type="subscription"),
+            SimpleNamespace(currently_available=True, evidence="verified", country="NL",
+                             provider="prime", offer_type="subscription"),
+        ]
+        result, _ = _classify(self.case, external, movie, offers)
         self.assertEqual(result, "APP_DATA_STALE")
-        result, _ = _classify(self.case, external, object(), [], True)
+
+    def test_local_release_year_mismatch_is_not_comparable(self):
+        external = {"tmdb_id": "10", "country": "NL", "year": "2000",
+                    "explicitly_confirms_availability": "Yes", "provider": "Netflix", "offer_type": "subscription"}
+        wrong_release = SimpleNamespace(content_type="movie", year=1984)
+        verified = SimpleNamespace(currently_available=True, evidence="verified", country="NL",
+                                   provider="netflix", offer_type="subscription")
+        result, _ = _classify(self.case, external, wrong_release, [verified])
+        self.assertEqual(result, "NOT_COMPARABLE")
+
+    def test_stale_rows_and_disabled_source_are_not_confirmed_errors(self):
+        external = {"tmdb_id": "10", "country": "NL", "explicitly_confirms_availability": "Yes", "provider": "Netflix", "offer_type": "subscription"}
+        stale_offer = SimpleNamespace(currently_available=True, evidence="stale", country="NL",
+                                      provider="netflix", offer_type="subscription")
+        result, _ = _classify(self.case, external, self.movie, [stale_offer], False)
+        self.assertEqual(result, "APP_DATA_STALE")
+        result, _ = _classify(self.case, external, self.movie, [], "disabled")
         self.assertEqual(result, "APP_SOURCE_DISABLED")
 
+    def test_external_research_source_does_not_imply_disabled_app_source(self):
+        external = {"tmdb_id": "10", "country": "NL", "explicitly_confirms_availability": "Yes",
+                    "provider": "Netflix", "offer_type": "subscription", "evidence_source": "JustWatch"}
+        movie = SimpleNamespace(content_type="movie", year=2000)
+        result, _ = _classify(self.case, external, movie, [], "unknown")
+        self.assertEqual(result, "APP_DATA_MISSING")
+
+    def test_multi_provider_multi_class_listing_cannot_form_a_cross_product_agreement(self):
+        external = {"tmdb_id": "10", "country": "NL", "explicitly_confirms_availability": "Yes",
+                    "provider": "Netflix, Prime Video", "offer_type": "subscription + rent/buy"}
+        netflix_rent = SimpleNamespace(currently_available=True, evidence="verified", country="NL",
+                                       provider="netflix", offer_type="rent")
+        result, _ = _classify(self.case, external, self.movie, [netflix_rent])
+        self.assertEqual(result, "INSUFFICIENT_EXTERNAL_EVIDENCE")
+
     def test_unknown_app_territory_cannot_agree_with_a_country_listing(self):
-        external = {"tmdb_id": "10", "country": "NL", "explicitly_confirms_availability": "Yes", "provider": "Netflix"}
+        external = {"tmdb_id": "10", "country": "NL", "explicitly_confirms_availability": "Yes", "provider": "Netflix", "offer_type": "subscription"}
         unknown_scope = SimpleNamespace(currently_available=True, evidence="verified", country="", provider="netflix")
-        result, _ = _classify(self.case, external, object(), [unknown_scope], False)
+        result, _ = _classify(self.case, external, self.movie, [unknown_scope], False)
         self.assertEqual(result, "INSUFFICIENT_APP_EVIDENCE")
 
     def test_authoritative_negative_conflicts_only_with_verified_same_provider_offer(self):
         external = {"tmdb_id": "10", "country": "NL", "explicitly_confirms_unavailability": "Yes",
                     "evidence_authority": "primary", "provider": "Netflix"}
         current = SimpleNamespace(currently_available=True, evidence="verified", country="NL", provider="netflix")
-        result, _ = _classify(self.case, external, object(), [current], False)
+        result, _ = _classify(self.case, external, self.movie, [current], False)
         self.assertEqual(result, "CONFLICT_CONFIRMED")
         external["evidence_authority"] = "secondary"
-        result, _ = _classify(self.case, external, object(), [current], False)
+        result, _ = _classify(self.case, external, self.movie, [current], False)
         self.assertEqual(result, "INSUFFICIENT_EXTERNAL_EVIDENCE")
 
 
@@ -160,6 +209,9 @@ class ReadOnlyAuditPostgreSQLTests(TransactionTestCase):
         source, _ = Source.objects.get_or_create(
             slug="justwatch", defaults={"name": "JustWatch", "enabled": True}
         )
+        if not source.enabled:
+            source.enabled = True
+            source.save(update_fields=["enabled"])
         country, _ = Country.objects.get_or_create(code="NL", defaults={"name": "Netherlands", "enabled": True})
         CanonicalOffer.objects.create(
             provider=provider, source=source, country=country, content_type="movie",
@@ -184,9 +236,9 @@ class ReadOnlyAuditPostgreSQLTests(TransactionTestCase):
                 writer.writeheader()
                 writer.writerow({"tmdb_id": movie.tmdb_id, "title": movie.title, "media_type": "movie", "year": 2000, "country": "NL"})
             with evidence.open("w", newline="", encoding="utf-8") as handle:
-                writer = csv.DictWriter(handle, fieldnames=["tmdb_id", "media_type", "country", "provider", "explicitly_confirms_availability"])
+                writer = csv.DictWriter(handle, fieldnames=["tmdb_id", "media_type", "country", "provider", "offer_type", "explicitly_confirms_availability"])
                 writer.writeheader()
-                writer.writerow({"tmdb_id": movie.tmdb_id, "media_type": "movie", "country": "NL", "provider": "Netflix", "explicitly_confirms_availability": "Yes"})
+                writer.writerow({"tmdb_id": movie.tmdb_id, "media_type": "movie", "country": "NL", "provider": "Netflix", "offer_type": "subscription", "explicitly_confirms_availability": "Yes"})
             before = (Movie.objects.count(), CanonicalOffer.objects.count(), Source.objects.count())
             with patch("requests.sessions.Session.request", side_effect=AssertionError("HTTP must not be called")):
                 call_command("audit_availability_accuracy", cohort=str(cohort), external_evidence=str(evidence),
@@ -198,3 +250,98 @@ class ReadOnlyAuditPostgreSQLTests(TransactionTestCase):
             self.assertEqual(comparison["comparison_state"], "AGREEMENT_CONFIRMED")
             self.assertEqual(comparison["app_offer_count"], "2")
             self.assertEqual(comparison["app_positive_provider_count"], "2")
+
+    def test_nonempty_cases_classify_missing_stale_offer_type_identity_and_source_state(self):
+        country, _ = Country.objects.get_or_create(code="NL", defaults={"name": "Netherlands", "enabled": True})
+        justwatch, _ = Source.objects.get_or_create(slug="justwatch", defaults={"name": "JustWatch", "enabled": True})
+        justwatch.enabled = True
+        justwatch.save(update_fields=["enabled"])
+        enabled_source, _ = Source.objects.get_or_create(
+            slug="audit_enabled", defaults={"name": "Audit enabled", "enabled": True}
+        )
+        enabled_source.enabled = True
+        enabled_source.save(update_fields=["enabled"])
+        disabled_source, _ = Source.objects.get_or_create(
+            slug="audit_disabled", defaults={"name": "Audit disabled", "enabled": False}
+        )
+        disabled_source.enabled = False
+        disabled_source.save(update_fields=["enabled"])
+        netflix, _ = Provider.objects.get_or_create(
+            slug="netflix", defaults={"name": "Netflix", "category": ProviderCategory.OFFICIAL}
+        )
+        prime, _ = Provider.objects.get_or_create(
+            slug="prime", defaults={"name": "Prime Video", "category": ProviderCategory.OFFICIAL}
+        )
+
+        cases = [
+            (987661, "Missing offers", 2000),
+            (987662, "Stale match", 2000),
+            (987663, "Wrong offer class", 2000),
+            (987664, "Dune 1984 fixture", 1984),
+            (987665, "Disabled source", 2000),
+            (987666, "Unconfigured source", 2000),
+        ]
+        movies = {
+            tmdb_id: Movie.objects.create(tmdb_id=tmdb_id, title=title, year=year, content_type="movie")
+            for tmdb_id, title, year in cases
+        }
+        old = timezone.now() - timedelta(days=90)
+        CanonicalOffer.objects.create(
+            provider=netflix, source=justwatch, country=country, content_type="movie", tmdb_id=987662,
+            offer_type="subscription", provider_content_id="stale-netflix", last_seen=old,
+            observed_at=old, currently_available=True, identity="",
+        )
+        CanonicalOffer.objects.create(
+            provider=prime, source=justwatch, country=country, content_type="movie", tmdb_id=987662,
+            offer_type="subscription", provider_content_id="fresh-prime", last_seen=timezone.now(),
+            currently_available=True, identity="",
+        )
+        CanonicalOffer.objects.create(
+            provider=netflix, source=justwatch, country=country, content_type="movie", tmdb_id=987663,
+            offer_type="rent", provider_content_id="netflix-rent", last_seen=timezone.now(),
+            currently_available=True, identity="",
+        )
+        CanonicalOffer.objects.create(
+            provider=netflix, source=justwatch, country=country, content_type="movie", tmdb_id=987664,
+            offer_type="subscription", provider_content_id="dune-1984-offer", last_seen=timezone.now(),
+            currently_available=True, identity="",
+        )
+
+        external_by_id = {
+            tmdb_id: {"tmdb_id": tmdb_id, "title": title, "media_type": "movie", "year": 2000,
+                      "country": "NL", "provider": "Netflix", "offer_type": "subscription",
+                      "explicitly_confirms_availability": "Yes"}
+            for tmdb_id, title, _ in cases
+        }
+        external_by_id[987665]["app_source_slug"] = "audit_disabled"
+        external_by_id[987666]["app_source_slug"] = "missing_source_config"
+        external_by_id[987661]["app_source_slug"] = "audit_enabled"
+
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            cohort, evidence, output = root / "cohort.csv", root / "evidence.csv", root / "out"
+            columns = ["tmdb_id", "title", "media_type", "year", "country"]
+            with cohort.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=columns)
+                writer.writeheader()
+                for tmdb_id, title, year in cases:
+                    writer.writerow({"tmdb_id": tmdb_id, "title": title, "media_type": "movie", "year": 2000, "country": "NL"})
+            ext_columns = ["tmdb_id", "title", "media_type", "year", "country", "provider", "offer_type",
+                           "explicitly_confirms_availability", "app_source_slug"]
+            with evidence.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=ext_columns)
+                writer.writeheader()
+                writer.writerows(external_by_id.values())
+            before = (Movie.objects.count(), CanonicalOffer.objects.count(), Source.objects.count())
+            with patch("requests.sessions.Session.request", side_effect=AssertionError("HTTP must not be called")):
+                call_command("audit_availability_accuracy", cohort=str(cohort), external_evidence=str(evidence),
+                             output=str(output), offline=True, verbosity=0)
+            self.assertEqual(before, (Movie.objects.count(), CanonicalOffer.objects.count(), Source.objects.count()))
+            with (output / "comparison.csv").open(newline="", encoding="utf-8") as handle:
+                results = {int(row["tmdb_id"]): row for row in csv.DictReader(handle)}
+        self.assertEqual(results[987661]["comparison_state"], "APP_DATA_MISSING")
+        self.assertEqual(results[987662]["comparison_state"], "APP_DATA_STALE")
+        self.assertEqual(results[987663]["comparison_state"], "INSUFFICIENT_APP_EVIDENCE")
+        self.assertEqual(results[987664]["comparison_state"], "NOT_COMPARABLE")
+        self.assertEqual(results[987665]["comparison_state"], "APP_SOURCE_DISABLED")
+        self.assertEqual(results[987666]["comparison_state"], "INSUFFICIENT_APP_EVIDENCE")

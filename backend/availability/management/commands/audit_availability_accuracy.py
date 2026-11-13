@@ -180,7 +180,26 @@ def _provider_name_keys(names, providers=()):
     return keys
 
 
-def _classify(case, external, movie, offers, missing_source, providers=()):
+def _external_offer_classes(row):
+    """Return only offer classes explicitly supported by the external row."""
+    value = " ".join(str(row.get("offer_type") or "").casefold().replace("_", " ").split())
+    classes = set()
+    if any(token in value for token in ("subscription", "flat", "abbo")):
+        classes.add("subscription")
+    if "rent" in value:
+        classes.add("rent")
+    if "buy" in value or "purchase" in value:
+        classes.add("buy")
+    if "ad-supported" in value or "with ads" in value or "ads" in value:
+        classes.add("free_with_ads")
+    elif "free" in value:
+        classes.add("free")
+    if "addon" in value or "add-on" in value or "channel" in value:
+        classes.add("addon")
+    return classes
+
+
+def _classify(case, external, movie, offers, source_state="unknown", providers=()):
     if not external:
         return "INSUFFICIENT_EXTERNAL_EVIDENCE", "No matching Stage 2B evidence row."
     evidence_country = (external.get("country") or "").strip().upper()
@@ -211,8 +230,17 @@ def _classify(case, external, movie, offers, missing_source, providers=()):
     provider_names = _external_providers(external)
     if not provider_names:
         return "INSUFFICIENT_EXTERNAL_EVIDENCE", "External listing does not identify comparable providers."
+    classes = _external_offer_classes(external)
+    if not explicit_negative and not classes:
+        return "INSUFFICIENT_EXTERNAL_EVIDENCE", "External listing does not identify a comparable offer class."
+    if not explicit_negative and (len(provider_names) != 1 or len(classes) != 1):
+        return "INSUFFICIENT_EXTERNAL_EVIDENCE", "External evidence does not associate one provider with one offer class."
     if movie is None:
         return "APP_DATA_MISSING", "No local Movie row with exact TMDb id and media type."
+    if movie.content_type != case["media_type"] or (
+        case["year"] is not None and movie.year != case["year"]
+    ):
+        return "NOT_COMPARABLE", "Local Movie identity year or media type differs from the cohort."
     normalized = _provider_name_keys(provider_names, providers)
     positive = [x for x in offers if x.currently_available and x.evidence in (AvailabilityEvidence.VERIFIED, AvailabilityEvidence.STALE, AvailabilityEvidence.UNKNOWN)]
     if explicit_negative:
@@ -221,21 +249,27 @@ def _classify(case, external, movie, offers, missing_source, providers=()):
             return "CONFLICT_CONFIRMED", "Authoritative external negative contradicts a verified canonical offer for the same provider and country."
         return "INSUFFICIENT_APP_EVIDENCE", "No same-provider verified canonical offer establishes a contradiction to the external negative."
     if not positive:
-        if missing_source:
-            return "APP_SOURCE_DISABLED", "No canonical offer and the corresponding source is absent or disabled in the local Source table."
-        if any(x.evidence == AvailabilityEvidence.STALE for x in rows):
-            return "APP_DATA_STALE", "Only stale canonical positive evidence is available."
-        return "APP_DATA_MISSING", "Title exists locally, but no relevant canonical positive offer is stored."
-    if any(x.evidence == AvailabilityEvidence.STALE for x in positive) and not any(x.evidence == AvailabilityEvidence.VERIFIED for x in positive):
-        return "APP_DATA_STALE", "Only stale canonical positive evidence is available."
-    app_provider_names = {p.provider.casefold() for p in positive if p.country == case["country"]}
-    # Agreement requires a provider-level match in the same territory. The
-    # external aggregator's omission of additional app rows is not a conflict.
-    if normalized & app_provider_names:
-        return "AGREEMENT_CONFIRMED", "External and canonical evidence share provider, title identity, country, and offer inventory."
-    if not app_provider_names:
-        return "INSUFFICIENT_APP_EVIDENCE", "Canonical positive offers do not cover the external evidence country."
-    return "INSUFFICIENT_APP_EVIDENCE", "No provider-level match; external aggregator evidence is not authoritative enough to confirm a contradiction."
+        if source_state == "disabled":
+            return "APP_SOURCE_DISABLED", "The explicitly identified application source is persisted and disabled."
+        if source_state == "unconfigured":
+            return "INSUFFICIENT_APP_EVIDENCE", "The explicitly identified application source has no local Source row; enabled state is unknown."
+        return "APP_DATA_MISSING", "Title exists locally, but no relevant canonical positive offer is stored; source coverage is not established."
+
+    same_provider_country = [p for p in positive
+                             if p.country == case["country"] and p.provider.casefold() in normalized]
+    comparable = [p for p in same_provider_country if p.offer_type in classes]
+    verified_comparable = [p for p in comparable if p.evidence == AvailabilityEvidence.VERIFIED]
+    if verified_comparable:
+        return "AGREEMENT_CONFIRMED", "Fresh verified canonical evidence matches external provider, country, and offer class."
+    if any(p.evidence == AvailabilityEvidence.STALE for p in comparable):
+        return "APP_DATA_STALE", "The matching provider and offer class are present only as stale canonical evidence."
+    if not same_provider_country:
+        if source_state == "disabled":
+            return "APP_SOURCE_DISABLED", "The explicitly identified application source is persisted and disabled."
+        return "INSUFFICIENT_APP_EVIDENCE", "No same-provider canonical offer covers the external evidence country."
+    if not comparable:
+        return "INSUFFICIENT_APP_EVIDENCE", "Same-provider evidence exists, but its offer class does not match the external listing."
+    return "INSUFFICIENT_APP_EVIDENCE", "Matching provider and offer class have no fresh verified canonical evidence."
 
 
 def _write_csv(path, rows, columns):
@@ -303,9 +337,20 @@ class Command(BaseCommand):
                     year=case["year"], content_type=case["media_type"]), case["country"], reconciled, providers)
                 external = external_index.get((case["tmdb_id"], case["media_type"], case["country"]))
                 names = _external_providers(external)
-                related_source_slugs = {"justwatch"} if external else set()
-                matching_disabled = any(not source_status.get(slug, {}).get("enabled", False) for slug in related_source_slugs)
-                state, reason = _classify(case, external, movie, reconciled, matching_disabled, providers)
+                # Stage 2B's research/aggregator source is not the app's
+                # collector. Only an explicit app_source_slug can establish
+                # which local Source state is relevant to this comparison.
+                declared_app_source = (external.get("app_source_slug") or "").strip().casefold() if external else ""
+                source_state = "unknown"
+                if declared_app_source:
+                    source_record = source_status.get(declared_app_source)
+                    if source_record is None or not source_record["present"]:
+                        source_state = "unconfigured"
+                    elif source_record["enabled"] is False:
+                        source_state = "disabled"
+                    elif source_record["enabled"] is True:
+                        source_state = "enabled"
+                state, reason = _classify(case, external, movie, reconciled, source_state, providers)
                 if state not in COMPARISON_STATES:
                     raise CommandError(f"Unexpected comparison state {state}")
                 # Independent snapshot rows preserve each canonical observation;
@@ -437,8 +482,8 @@ class Command(BaseCommand):
             "2. `INSUFFICIENT_EXTERNAL_EVIDENCE` when no matching row exists, availability is not explicitly positive, provider names are absent, or a negative is secondary/unspecified.\n"
             "3. `APP_DATA_MISSING` when the exact local Movie identity is absent.\n"
             "4. For explicit primary/official negatives, `CONFLICT_CONFIRMED` requires a verified same-provider canonical offer in the same country; otherwise `INSUFFICIENT_APP_EVIDENCE`.\n"
-            "5. For positive external evidence with no positive canonical offer, report `APP_SOURCE_DISABLED` when the relevant source is missing/disabled, otherwise report `APP_DATA_STALE` when only stale positives exist, or `APP_DATA_MISSING`. Missing Source rows have unknown enabled state in this database and are not proof of deployment status.\n"
-            "6. `AGREEMENT_CONFIRMED` requires a provider and country match with positive canonical evidence. An aggregator's omission of other app providers is not a conflict. Remaining mismatches are `INSUFFICIENT_APP_EVIDENCE`.\n\n"
+            "5. `APP_SOURCE_DISABLED` requires an explicit `app_source_slug` in the external evidence and a persisted local Source row with `enabled=false`. An absent/unconfigured row has unknown state and is never inferred disabled from the research site's name. Without that explicit source attribution, no-offer cases are `APP_DATA_MISSING`. A stale matching provider/class is `APP_DATA_STALE`, even if a different provider has fresh evidence.\n"
+            "6. Positive `AGREEMENT_CONFIRMED` requires external evidence that unambiguously names one provider and one offer class, plus fresh verified canonical evidence matching provider, country, and class. Aggregated provider/class lists without a pairing stay `INSUFFICIENT_EXTERNAL_EVIDENCE`; a same-provider offer of another class is insufficient. An aggregator's omission of other app providers is not a conflict. Remaining mismatches are `INSUFFICIENT_APP_EVIDENCE`.\n\n"
             "## Targeted edge cases\n\n"
             "- **D1 — Dune (1984) vs (2021):** no local Movie or offer row was found for TMDb 438631. Source TMDb IDs are persisted as exact external-ID mappings; fallback matching constrains media type and known movie year, and canonical reads are keyed by TMDb ID and media type. No defect reproduced.\n"
             "- **D2 — localized titles:** no local rows existed for Dark (70523) or The Platform (619264). TMDb IDs bypass title matching; sources without IDs use exact title/year matching, so aliases remain an unverified coverage risk. No speculative alias was added.\n"

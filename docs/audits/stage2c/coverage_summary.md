@@ -11,12 +11,12 @@ Countries in cohort: IT, NL. Countries represented by stored offers: none. Enabl
 ## Comparison states
 
 - AGREEMENT_CONFIRMED: 0
-- APP_DATA_MISSING: 12
+- APP_DATA_MISSING: 4
 - APP_DATA_STALE: 0
 - APP_SOURCE_DISABLED: 0
 - CONFLICT_CONFIRMED: 0
 - INSUFFICIENT_APP_EVIDENCE: 0
-- INSUFFICIENT_EXTERNAL_EVIDENCE: 18
+- INSUFFICIENT_EXTERNAL_EVIDENCE: 26
 - NOT_COMPARABLE: 0
 
 The local database is an offline developer database, not production. No user subscriptions or preferences were read. Profile verdicts use in-memory synthetic preferences and the canonical `resolve_title` resolver. The audit command made 0 HTTP requests and consumed 0 Streaming Availability or Watchmode API calls.

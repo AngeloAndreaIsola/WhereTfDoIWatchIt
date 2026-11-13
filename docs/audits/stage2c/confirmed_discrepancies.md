@@ -8,8 +8,8 @@ No application-versus-external conflict was confirmed. Stage 2B evidence is a se
 2. `INSUFFICIENT_EXTERNAL_EVIDENCE` when no matching row exists, availability is not explicitly positive, provider names are absent, or a negative is secondary/unspecified.
 3. `APP_DATA_MISSING` when the exact local Movie identity is absent.
 4. For explicit primary/official negatives, `CONFLICT_CONFIRMED` requires a verified same-provider canonical offer in the same country; otherwise `INSUFFICIENT_APP_EVIDENCE`.
-5. For positive external evidence with no positive canonical offer, report `APP_SOURCE_DISABLED` when the relevant source is missing/disabled, otherwise report `APP_DATA_STALE` when only stale positives exist, or `APP_DATA_MISSING`. Missing Source rows have unknown enabled state in this database and are not proof of deployment status.
-6. `AGREEMENT_CONFIRMED` requires a provider and country match with positive canonical evidence. An aggregator's omission of other app providers is not a conflict. Remaining mismatches are `INSUFFICIENT_APP_EVIDENCE`.
+5. `APP_SOURCE_DISABLED` requires an explicit `app_source_slug` in the external evidence and a persisted local Source row with `enabled=false`. An absent/unconfigured row has unknown state and is never inferred disabled from the research site's name. Without that explicit source attribution, no-offer cases are `APP_DATA_MISSING`. A stale matching provider/class is `APP_DATA_STALE`, even if a different provider has fresh evidence.
+6. Positive `AGREEMENT_CONFIRMED` requires external evidence that unambiguously names one provider and one offer class, plus fresh verified canonical evidence matching provider, country, and class. Aggregated provider/class lists without a pairing stay `INSUFFICIENT_EXTERNAL_EVIDENCE`; a same-provider offer of another class is insufficient. An aggregator's omission of other app providers is not a conflict. Remaining mismatches are `INSUFFICIENT_APP_EVIDENCE`.
 
 ## Targeted edge cases
 
