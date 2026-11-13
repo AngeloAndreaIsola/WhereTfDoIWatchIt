@@ -25,11 +25,11 @@ Baseline: `4332732977ac414b051c0e2308e142af9c5803af`. No user preference/subscri
 | Paid add-on | Base subscription and explicit add-on required | Enforced by `addon_parent_slug`. |
 | Rental/purchase | Separately labeled; not included subscription | Enforced by access type. |
 | Unsupported country | Offer in nonlocal country is elsewhere unless explicit VPN allows | Enforced for known country; Watchmode country scope is NL/CA/JP; adapter rejects unsupported request. |
-| VPN disabled | Foreign offer is unreachable | Enforced if no configured regions and VPN disabled. Explicit candidate regions themselves activate VPN reach (`access.py:435-438`), even with flag false; this is an intentional but surprising rule. |
+| VPN disabled | Foreign offer is unreachable, even if VPN regions are saved | The follow-up found region presence could override `vpn_enabled=False` and classify a foreign offer as VPN-reachable. The switch now gates VPN reach; regions only restrict it when enabled. |
 | Unknown audio/subtitles | Language result is unknown and cannot qualify as accessible | `score_offer` returns `None`, and `classify_offer` requires truthy match (`score.py:164-168`; `access.py:619-624`). |
 | Language mismatch | Not eligible; source ranking cannot turn mismatch into match | Resolver classifies before sorting. |
 | Stale/uncertain evidence | Not in current offers; displayed as last-known/recheck only | `availability_reads.py:90-103`; availability report uses freshness state. |
-| Offer country absent | Should be unknown without source assertion of global territory | Baseline mapped blank to `ANYWHERE`, hence reachable (A1, P0); audit fix now returns unknown and does not claim local availability. |
+| Offer country absent | Unknown unless explicit worldwide scope is supplied | The baseline conflated missing country and scraped provenance with worldwide reach (A1, P0); the fix now returns unknown and does not claim local availability. |
 
 ## Cross-surface consistency
 

@@ -29,6 +29,7 @@ from tracker.services.access import (
     resolve_title,
 )
 from tracker.services.offers import Offer
+from tracker.services.ranking import rank_offers
 from tracker.services.watchability import WatchabilityStatus, evaluate_watchability
 
 
@@ -88,7 +89,7 @@ class AccessResolverTests(TestCase):
     # -- 2 ----------------------------------------------------------------
     def test_02_included_but_other_country_is_vpn_not_here(self):
         self._sub("netflix")
-        pref = self._pref(regions=["JP"])
+        pref = self._pref(regions=["JP"], vpn_enabled=True)
         res = resolve_title(
             self.movie,
             [self._offer(country="JP", service="netflix", offer_type="subscription",
@@ -114,13 +115,13 @@ class AccessResolverTests(TestCase):
         self.assertEqual(res.status_symbol, "🟠")
         self.assertIsNone(res.best_offer)
         self.assertTrue(
-            any("no VPN regions are configured" in r for r in res.explanation)
+            any("VPN access is disabled" in r for r in res.explanation)
         )
 
     # -- 4 ----------------------------------------------------------------
     def test_04_cross_country_outside_configured_regions_is_not_accessible(self):
         self._sub("netflix")
-        pref = self._pref(regions=["JP", "IT"])
+        pref = self._pref(regions=["JP", "IT"], vpn_enabled=True)
         res = resolve_title(
             self.movie,
             [self._offer(country="BR", service="netflix", offer_type="subscription",
@@ -159,16 +160,163 @@ class AccessResolverTests(TestCase):
         self.assertEqual(res.offers[0].locality, Locality.UNKNOWN)
 
     def test_explicit_global_scraped_offer_remains_available(self):
-        pref = self._pref(current="NL")
+        pref = self._pref(current="NL", regions=["JP"])
+        offer = self._offer(
+            country="US", service="legacy_scraper", offer_type="free",
+            url="u", is_scraped_source=True,
+            territorial_scope="worldwide",
+            audio_languages=["EN"], subtitle_languages=["EN"],
+        )
         res = resolve_title(
             self.movie,
-            [self._offer(country="", service="legacy_scraper", offer_type="free",
-                         url="u", is_scraped_source=True,
-                         audio_languages=["EN"], subtitle_languages=["EN"])],
+            [offer],
             pref,
             user_subscriptions={"legacy_scraper"},
         )
         self.assertEqual(res.verdict, AccessVerdict.AVAILABLE_HERE)
+        ranked = rank_offers([offer], pref, current_country="NL")[0]
+        self.assertEqual(ranked.territorial_scope, "worldwide")
+        self.assertEqual(ranked.to_dict()["territorial_scope"], "worldwide")
+
+    def test_scraped_offer_in_other_country_is_not_local_without_vpn(self):
+        Provider.objects.update_or_create(
+            slug="community_stream",
+            defaults={
+                "name": "Community Stream",
+                "category": ProviderCategory.SCRAPER,
+                "is_enabled": True,
+            },
+        )
+        pref = self._pref(current="NL", regions=["US"], vpn_enabled=False)
+        res = resolve_title(
+            self.movie,
+            [self._offer(
+                country="US", service="community_stream", offer_type="free",
+                url="u", is_scraped_source=True,
+                audio_languages=["EN"], subtitle_languages=["EN"],
+            )],
+            pref,
+        )
+        self.assertEqual(res.verdict, AccessVerdict.AVAILABLE_ELSEWHERE)
+        self.assertFalse(res.offers[0].is_accessible)
+        self.assertEqual(res.offers[0].locality, Locality.OUT_OF_REACH)
+        self.assertTrue(any("Available in US" in reason for reason in res.explanation))
+        self.assertIn(
+            "Available in US, but VPN access is disabled",
+            res.offers[0].rejection_reasons,
+        )
+
+    def test_scraped_offer_in_explicit_vpn_country_is_vpn_reachable(self):
+        Provider.objects.update_or_create(
+            slug="community_stream",
+            defaults={
+                "name": "Community Stream",
+                "category": ProviderCategory.SCRAPER,
+                "is_enabled": True,
+            },
+        )
+        pref = self._pref(current="NL", vpn_enabled=True, regions=["US"])
+        res = resolve_title(
+            self.movie,
+            [self._offer(
+                country="US", service="community_stream", offer_type="free",
+                url="u", is_scraped_source=True,
+                audio_languages=["EN"], subtitle_languages=["EN"],
+            )],
+            pref,
+        )
+        self.assertEqual(res.verdict, AccessVerdict.AVAILABLE_VPN)
+        self.assertEqual(res.best_offer.locality, Locality.VPN)
+        self.assertTrue(res.best_offer.is_accessible)
+
+    def test_scraper_provenance_does_not_make_blank_country_worldwide(self):
+        Provider.objects.update_or_create(
+            slug="community_stream",
+            defaults={
+                "name": "Community Stream",
+                "category": ProviderCategory.SCRAPER,
+                "is_enabled": True,
+            },
+        )
+        pref = self._pref(current="NL", vpn_enabled=False)
+        res = resolve_title(
+            self.movie,
+            [self._offer(
+                country="", service="community_stream", offer_type="free",
+                url="u", is_scraped_source=True,
+                audio_languages=["EN"], subtitle_languages=["EN"],
+            )],
+            pref,
+        )
+        self.assertEqual(res.verdict, AccessVerdict.UNKNOWN)
+        self.assertEqual(res.offers[0].locality, Locality.UNKNOWN)
+        self.assertFalse(res.offers[0].is_accessible)
+
+    def test_provider_home_country_does_not_fill_missing_offer_territory(self):
+        provider, _ = Provider.objects.update_or_create(
+            slug="regional_free_tv",
+            defaults={
+                "name": "Regional Free TV",
+                "category": ProviderCategory.BVOD,
+                "is_enabled": True,
+                "country_code": "GB",
+            },
+        )
+        offer = self._offer(
+            country="", service=provider.slug, offer_type="free", url="u",
+            audio_languages=["EN"], subtitle_languages=["EN"],
+        )
+        from tracker.services.offer_pipeline import OfficialOffersPipeline
+        selected = OfficialOffersPipeline()._qualify_offers(
+            [offer], {provider.slug: provider}, "prime"
+        )
+        self.assertEqual(selected[0].country, "")
+        result = resolve_title(
+            self.movie, selected, self._pref(current="NL"),
+        )
+        self.assertEqual(result.verdict, AccessVerdict.UNKNOWN)
+        self.assertEqual(result.offers[0].locality, Locality.UNKNOWN)
+
+    def test_provenance_changes_ranking_category_not_geographic_reach(self):
+        pref = self._pref(current="NL")
+        official, scraped = rank_offers(
+            [
+                self._offer(country="US", service="netflix", offer_type="subscription",
+                            url="official", audio_languages=["EN"],
+                            subtitle_languages=["EN"]),
+                self._offer(country="US", service="netflix", offer_type="subscription",
+                            url="scraped", is_scraped_source=True,
+                            source_category="unofficial", audio_languages=["EN"],
+                            subtitle_languages=["EN"]),
+            ],
+            pref,
+            current_country="NL",
+        )
+        self.assertEqual({offer.country for offer in (official, scraped)}, {"US"})
+        self.assertEqual(official.source_category, "official")
+        self.assertEqual(scraped.source_category, "unofficial")
+        self.assertNotEqual(official.source_rank, scraped.source_rank)
+        official_result = resolve_title(
+            self.movie,
+            [self._offer(country="US", service="netflix", offer_type="subscription",
+                         url="official", audio_languages=["EN"],
+                         subtitle_languages=["EN"])],
+            pref,
+            user_subscriptions={"netflix"},
+        )
+        scraped_result = resolve_title(
+            self.movie,
+            [self._offer(country="US", service="netflix", offer_type="subscription",
+                         url="scraped", is_scraped_source=True,
+                         source_category="unofficial", audio_languages=["EN"],
+                         subtitle_languages=["EN"])],
+            pref,
+            user_subscriptions={"netflix"},
+        )
+        self.assertEqual(official_result.verdict, AccessVerdict.AVAILABLE_ELSEWHERE)
+        self.assertEqual(scraped_result.verdict, AccessVerdict.AVAILABLE_ELSEWHERE)
+        self.assertEqual(official_result.offers[0].locality, Locality.OUT_OF_REACH)
+        self.assertEqual(scraped_result.offers[0].locality, Locality.OUT_OF_REACH)
 
     def test_unknown_territory_with_unknown_language_stays_unknown(self):
         self._sub("netflix")
@@ -302,8 +450,7 @@ class AccessResolverTests(TestCase):
         """Following (1999) regression: JA-only rule, EN/IT offers, no VPN.
 
         The old label blamed the subscriptions though the user plainly *has*
-        Prime; the real blockers are the language rule and the unconfigured
-        VPN regions, and those are what must be reported.
+        Prime; the real blockers are the language rule and disabled VPN access.
         """
         self._sub("prime")
         pref = self._pref(audio=["EN", "IT", "JA"], subs=["EN", "IT", "JA"],
@@ -320,7 +467,7 @@ class AccessResolverTests(TestCase):
         )
         self.assertNotEqual(res.verdict, AccessVerdict.AVAILABLE_HERE)
         reasons = " | ".join(res.explanation)
-        self.assertIn("no VPN regions are configured", reasons)
+        self.assertIn("VPN access is disabled", reasons)
         self.assertNotIn("No active subscription", reasons)
 
     # -- cross-surface consistency ---------------------------------------

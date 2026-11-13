@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
 from tracker.models import Preference
-from .offers import Offer
+from .offers import Offer, effective_territorial_scope
 from .score import QUALITY_RANK, evaluate_language_rule, score_offer, _normalize_lang_list
 from .preferences import get_default_ranking_preferences
 
@@ -44,6 +44,7 @@ class RankedOffer:
     ranking_explanation: list[str] = field(default_factory=list)
     is_scraped_source: bool = False
     source_category: str = ""
+    territorial_scope: str = ""
 
     def to_dict(self) -> dict:
         ranking_dict = {
@@ -71,6 +72,9 @@ class RankedOffer:
             "prices": self.prices,
             "availability_evidence": self.availability_evidence,
             "last_seen_at": self.last_seen_at,
+            "territorial_scope": effective_territorial_scope(
+                self.country, self.territorial_scope
+            ),
         }
 
 
@@ -214,6 +218,9 @@ def rank_offers(
             raise TypeError(f"Expected Offer, got {type(offer).__name__}")
 
         country = (offer.country or "").upper()
+        territorial_scope = effective_territorial_scope(
+            country, getattr(offer, "territorial_scope", "")
+        )
         service = offer.service
         offer_type = offer.offer_type
         quality = (offer.quality or "").lower()
@@ -222,7 +229,11 @@ def rank_offers(
         subs = _normalize_lang_list(offer.subtitle_languages)
         is_scraped = bool(getattr(offer, "is_scraped_source", False))
 
-        if allowed_countries and country not in allowed_countries:
+        if (
+            allowed_countries
+            and country not in allowed_countries
+            and territorial_scope != "worldwide"
+        ):
             continue
 
         scored = score_offer(offer, preference)
@@ -274,6 +285,7 @@ def rank_offers(
                     getattr(offer, "source_category", "")
                     or ("unofficial" if is_scraped else "official")
                 ),
+                territorial_scope=territorial_scope,
             )
         )
 

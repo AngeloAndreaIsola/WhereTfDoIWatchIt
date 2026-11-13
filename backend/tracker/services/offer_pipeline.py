@@ -84,8 +84,6 @@ class OfficialOffersPipeline:
                 continue
 
             if prov.category in official_categories:
-                if not o.country and prov.country_code:
-                    o.country = prov.country_code
                 qualifying.append(o)
 
         return qualifying

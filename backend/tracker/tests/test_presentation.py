@@ -34,7 +34,7 @@ class PresentOfferTests(TestCase):
             ),
         )
 
-    def test_country_fallback_from_provider(self):
+    def test_missing_offer_country_is_not_inferred_from_provider_home_country(self):
         prov = _make_provider(
             slug="netflix", name="Netflix", source_indicator="Official",
             country_code="GB", category=ProviderCategory.OFFICIAL,
@@ -42,7 +42,7 @@ class PresentOfferTests(TestCase):
         provider_map = {"netflix": prov}
         offer = Offer(service="netflix", country="")
         result = present_offer(offer, provider_map)
-        self.assertEqual(result.country, "GB")
+        self.assertEqual(result.country, "")
 
     @patch("tracker.services.streaming_api.service_display_name")
     def test_unknown_slug_legacy_fallback(self, mock_display):

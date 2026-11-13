@@ -15,6 +15,8 @@ respective eligibility checks. The precedence is:
 An offer must still satisfy the applicable language, entitlement, country/VPN reach,
 and access-evidence rules before it can affect an access verdict. Reordering offers
 changes presentation and `best_offer`; it does not change whether the verdict is
-`AVAILABLE_HERE` or `AVAILABLE_VPN`. Source category is separate from the legacy
-`is_scraped_source` country-independent reach flag, so an unofficial offer with a
-country can be ranked as unofficial and still require that country to be reachable.
+`AVAILABLE_HERE` or `AVAILABLE_VPN`. `is_scraped_source` is provenance used for
+source classification and ranking only. Territory comes from the offer's observed
+country unless a source supplies the explicit `territorial_scope="worldwide"`
+assertion. A blank country without that assertion is unknown, regardless of source
+category or provenance.

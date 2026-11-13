@@ -28,6 +28,7 @@ def _pref(
         subtitle_languages=list(subs),
         candidate_countries=list(countries),
         current_country=current_country,
+        vpn_enabled=True,
         ranking_preferences=ranking_preferences or {},
     )
 

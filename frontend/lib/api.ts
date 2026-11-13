@@ -65,6 +65,8 @@ export interface PrimeOffer {
   source_indicator?: "Official" | "SVOD" | "BVOD" | "AVOD" | "FAST" | "TVOD" | "Scraper" | string;
   quality: string;
   url?: string;
+  /** Explicit territorial evidence, independent of scraper/source provenance. */
+  territorial_scope?: "country" | "worldwide" | "unknown";
   audio_languages: string[];
   subtitle_languages: string[];
   is_language_match?: boolean;

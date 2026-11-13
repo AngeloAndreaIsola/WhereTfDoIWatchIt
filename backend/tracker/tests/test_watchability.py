@@ -35,6 +35,7 @@ class WatchabilityEvaluationTests(TestCase):
             audio_languages=["EN", "JA"],
             subtitle_languages=["EN"],
             candidate_countries=["JP", "IT"],
+            vpn_enabled=True,
         )
 
     def test_watchable_here(self):
@@ -177,7 +178,7 @@ class WatchabilityEvaluationTests(TestCase):
         self.assertEqual(res.status_symbol, "🟠")
         self.assertEqual(res.status_label, "Available — not with your subscriptions")
 
-    def test_scraped_source_bypasses_vpn_but_respects_language_match(self):
+    def test_explicit_worldwide_scraped_source_bypasses_vpn_but_respects_language_match(self):
         offers = [Offer(
             country="BR",
             service="scraped_site",
@@ -187,6 +188,7 @@ class WatchabilityEvaluationTests(TestCase):
             audio_languages=["EN"],
             subtitle_languages=["EN"],
             is_scraped_source=True,
+            territorial_scope="worldwide",
         )]
         res = evaluate_watchability(
             self.movie,
@@ -209,6 +211,7 @@ class WatchabilityEvaluationTests(TestCase):
             audio_languages=["FR"],
             subtitle_languages=["FR"],
             is_scraped_source=True,
+            territorial_scope="worldwide",
         )]
         res = evaluate_watchability(
             self.movie,
