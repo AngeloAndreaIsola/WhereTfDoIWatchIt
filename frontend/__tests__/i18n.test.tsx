@@ -29,6 +29,14 @@ vi.mock("next/navigation", () => ({
 }));
 
 describe("WT-006: Internationalization & Catalogs", () => {
+  it("only narrows canonical locales and normalizes persisted values separately", () => {
+    for (const locale of SUPPORTED_LOCALES) expect(isSupportedLocale(locale)).toBe(true);
+    for (const value of ["JA", "It", " en ", "fr", "en-US", null, {}, 1]) {
+      expect(isSupportedLocale(value)).toBe(false);
+    }
+    expect(normalizeLocale(" JA ")).toBe("ja");
+    expect(normalizeLocale("en-US")).toBeNull();
+  });
   it("has exact structural parity across all supported catalogs", () => {
     const enCatalog = messages.en;
 
@@ -103,6 +111,8 @@ describe("WT-006: Locale Persistence & Detection", () => {
     expect(getLocaleFromCookieString("NEXT_LOCALE=It")).toBe("it");
     expect(getLocaleFromCookieString("NEXT_LOCALE= EN ")).toBe("en");
     expect(getLocaleFromCookieString("NEXT_LOCALE=invalid")).toBeNull();
+    expect(getLocaleFromCookieString("NEXT_LOCALE=%E0%A4%A")).toBeNull();
+    expect(getLocaleFromCookieString("other=x;NEXT_LOCALE=it")).toBe("it");
   });
 
   it("sets and persists normalized locale in both cookie and localStorage", () => {

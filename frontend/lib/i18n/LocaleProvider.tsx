@@ -44,12 +44,9 @@ export function LocaleProvider({ children, initialLocale }: LocaleProviderProps)
     // If explicit initialLocale was provided (e.g. from SSR layout cookie), respect it.
     // Otherwise resolve on mount from cookie/storage/browser.
     if (!hasExplicitInitial.current) {
-      const detected = resolveInitialLocale();
-      if (detected !== locale) {
-        setLocaleState(detected);
-      }
+      setLocaleState(resolveInitialLocale());
     }
-  }, [locale]);
+  }, []);
 
   const setLocale = useCallback((newLocale: SupportedLocale | string) => {
     const normalized = normalizeLocale(newLocale);

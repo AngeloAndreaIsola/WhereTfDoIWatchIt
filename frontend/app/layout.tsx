@@ -30,7 +30,9 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  let initialLocale: SupportedLocale = DEFAULT_LOCALE;
+  // Only a valid cookie is an explicit preference. The server default must not
+  // prevent the provider from detecting storage/browser preferences on mount.
+  let initialLocale: SupportedLocale | undefined;
   try {
     const cookieStore = cookies();
     const cookieVal = cookieStore.get(LOCALE_COOKIE_NAME)?.value;
@@ -39,11 +41,11 @@ export default function RootLayout({
       initialLocale = normalized;
     }
   } catch {
-    // If cookies() is unavailable (e.g. static rendering), fallback safely to DEFAULT_LOCALE
+    // Without a server cookie, render the default and detect after hydration.
   }
 
   return (
-    <html lang={initialLocale}>
+    <html lang={initialLocale ?? DEFAULT_LOCALE}>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >

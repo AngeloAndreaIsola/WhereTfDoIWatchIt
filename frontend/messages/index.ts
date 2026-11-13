@@ -14,7 +14,7 @@ export const messages: Record<SupportedLocale, TranslationCatalog> = {
 };
 
 export function isSupportedLocale(locale: unknown): locale is SupportedLocale {
-  return typeof locale === "string" && (SUPPORTED_LOCALES as readonly string[]).includes(locale.trim().toLowerCase());
+  return typeof locale === "string" && (SUPPORTED_LOCALES as readonly string[]).includes(locale);
 }
 
 /**

@@ -94,10 +94,14 @@ export function detectBrowserLocale(acceptedLocales: readonly SupportedLocale[] 
  */
 export function getLocaleFromCookieString(cookieString?: string): SupportedLocale | null {
   if (!cookieString) return null;
-  const match = cookieString.match(new RegExp(`(?:^|; )${LOCALE_COOKIE_NAME}=([^;]*)`));
+  const match = cookieString.match(new RegExp(`(?:^|;\\s*)${LOCALE_COOKIE_NAME}=([^;]*)`));
   if (match) {
-    const val = decodeURIComponent(match[1]);
-    return normalizeLocale(val);
+    try {
+      return normalizeLocale(decodeURIComponent(match[1]));
+    } catch {
+      // Ignore malformed percent encoding just like an unsupported locale.
+      return null;
+    }
   }
   return null;
 }
