@@ -37,7 +37,11 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
 from tracker.models import Provider, ProviderCategory, Subscription
-from tracker.services.offers import Offer
+from tracker.services.offers import (
+    Offer,
+    TerritorialScope,
+    effective_territorial_scope,
+)
 from tracker.services.presentation import present_offer
 from tracker.services.score import score_offer
 
@@ -109,7 +113,8 @@ class Locality:
     LOCAL = "local"
     VPN = "vpn"
     OUT_OF_REACH = "out_of_reach"
-    ANYWHERE = "anywhere"  # scraped sources are treated as country independent
+    ANYWHERE = "anywhere"  # explicit source assertion says country independent
+    UNKNOWN = "unknown"  # no territorial assertion was supplied
 
 
 class AccessVerdict:
@@ -405,14 +410,20 @@ class CountryReach:
     vpn_active: bool = False
     vpn_regions: set[str] = field(default_factory=set)
 
-    def locality(self, country: str, is_scraped: bool = False) -> str:
-        """Determine reach from territory; legacy global scraper semantics remain explicit."""
-        if is_scraped:
+    def locality(self, country: str, territorial_scope: str = "") -> str:
+        """Determine reach from territory, independently of source provenance.
+
+        Only an explicit ``worldwide`` scope grants country-independent reach.
+        A known country is evaluated against the user's market/VPN, and a
+        missing country without worldwide evidence remains unknown.
+        """
+        if (territorial_scope or "").lower().strip() == TerritorialScope.WORLDWIDE:
             return Locality.ANYWHERE
         c = (country or "").upper().strip()
         if not c:
-            # No geography recorded: cannot claim it is out of reach.
-            return Locality.ANYWHERE
+            # Missing geography is not a global-rights assertion. Only the
+            # explicit worldwide territorial assertion may be treated as global.
+            return Locality.UNKNOWN
         if self.current_country and c == self.current_country:
             return Locality.LOCAL
         if self.vpn_active and (not self.vpn_regions or c in self.vpn_regions):
@@ -420,7 +431,7 @@ class CountryReach:
         return Locality.OUT_OF_REACH
 
     def reachable(self, locality: str) -> bool:
-        return locality != Locality.OUT_OF_REACH
+        return locality in (Locality.LOCAL, Locality.VPN, Locality.ANYWHERE)
 
 
 def build_reach(preference: Any, current_country: Optional[str] = None) -> CountryReach:
@@ -433,9 +444,9 @@ def build_reach(preference: Any, current_country: Optional[str] = None) -> Count
     }
     regions.discard("")
     vpn_enabled = bool(getattr(preference, "vpn_enabled", False))
-    # A user who has configured explicit VPN regions has, by definition,
-    # enabled VPN reach even before the flag exists on their row.
-    vpn_active = vpn_enabled or bool(regions)
+    # Candidate countries are a region limit, not consent to use a VPN. The
+    # explicit switch must be on before any foreign offer is VPN-reachable.
+    vpn_active = vpn_enabled
     return CountryReach(current_country=curr, vpn_active=vpn_active, vpn_regions=regions)
 
 
@@ -457,6 +468,7 @@ class ClassifiedOffer:
     subtitle_languages: list[str] = field(default_factory=list)
     is_scraped_source: bool = False
     source_category: str = ""
+    territorial_scope: str = TerritorialScope.UNKNOWN
     is_entitled: bool = False
     is_language_match: bool = True
     has_language_info: bool = False
@@ -505,6 +517,7 @@ class ClassifiedOffer:
             "subtitle_languages": self.subtitle_languages,
             "is_scraped_source": self.is_scraped_source,
             "source_category": self.source_category,
+            "territorial_scope": self.territorial_scope,
             "is_entitled": self.is_entitled,
             "is_language_match": self.is_language_match,
             "locality": self.locality,
@@ -545,6 +558,7 @@ def _coerce_offer(raw: Any) -> Offer:
         ),
         is_scraped_source=bool(getattr(raw, "is_scraped_source", False)),
         source_category=getattr(raw, "source_category", ""),
+        territorial_scope=getattr(raw, "territorial_scope", ""),
         price=getattr(raw, "price", None),
         prices=list(getattr(raw, "prices", None) or []),
         availability_evidence=getattr(raw, "availability_evidence", "verified"),
@@ -572,6 +586,9 @@ def classify_offer(
     offer_type = (raw.offer_type or "").lower().strip()
     access_type = OFFER_TYPE_TO_ACCESS.get(offer_type, AccessType.UNKNOWN)
     is_scraped = bool(getattr(raw, "is_scraped_source", False))
+    territorial_scope = effective_territorial_scope(
+        country, getattr(raw, "territorial_scope", "")
+    )
     audio = list(raw.audio_languages or [])
     subs = list(raw.subtitle_languages or [])
     has_lang_info = bool(audio or subs)
@@ -580,7 +597,7 @@ def classify_offer(
     scored = score_offer(raw, preference)
     is_lang_match = scored.is_match
 
-    locality = reach.locality(country, is_scraped)
+    locality = reach.locality(country, territorial_scope)
     requires_payment = access_type in PAYMENT_ACCESS_TYPES
 
     # An offer whose provider has a base platform is delivered as an add-on
@@ -649,12 +666,16 @@ def classify_offer(
             reasons.append("Does not satisfy language rules")
     if locality == Locality.OUT_OF_REACH:
         cc = country or "?"
-        if reach.vpn_regions:
+        if not reach.vpn_active:
+            reasons.append(f"Available in {cc}, but VPN access is disabled")
+        elif reach.vpn_regions:
             reasons.append(
                 f"Available in {cc}, but {cc} is not in your configured VPN regions"
             )
         else:
             reasons.append(f"Available in {cc}, but no VPN regions are configured")
+    elif locality == Locality.UNKNOWN:
+        reasons.append("Territory information unknown")
 
     return ClassifiedOffer(
         country=presented.country or country,
@@ -673,6 +694,7 @@ def classify_offer(
             getattr(raw, "source_category", "")
             or ("unofficial" if is_scraped else "official")
         ),
+        territorial_scope=territorial_scope,
         is_entitled=entitled,
         is_language_match=is_lang_match,
         has_language_info=has_lang_info,
@@ -726,11 +748,12 @@ class AccessResult:
 def _empty_result(movie, refresh_state: Optional[str]) -> AccessResult:
     label, symbol = VERDICT_LABELS[AccessVerdict.UNKNOWN]
     if refresh_state == RefreshState.CHECKED:
-        verdict, label, symbol = (
-            AccessVerdict.UNAVAILABLE,
-            *VERDICT_LABELS[AccessVerdict.UNAVAILABLE],
-        )
-        explanation = ["Availability was checked — no qualifying offers found for this title."]
+        verdict = AccessVerdict.UNKNOWN
+        label, symbol = "Unknown — no offers verified", "⚪"
+        explanation = [
+            "A source returned no offers, but source coverage does not establish "
+            "that the title is unavailable in this country."
+        ]
     elif refresh_state == RefreshState.PENDING:
         verdict, label, symbol = (
             AccessVerdict.CHECKING,
@@ -808,6 +831,13 @@ def resolve_title(
         c for c in classified
         if c.requires_payment and c.is_entitled and reach.reachable(c.locality)
     ]
+    unknown_territory = [
+        c for c in classified
+        if c.locality == Locality.UNKNOWN
+        and c.is_entitled
+        and c.is_language_match is not False
+        and c.access_type in (INCLUDED_ACCESS_TYPES | PAYMENT_ACCESS_TYPES)
+    ]
 
     raw_ranking_pref = getattr(preference, "ranking_preferences", None)
     if isinstance(raw_ranking_pref, dict) and raw_ranking_pref:
@@ -850,6 +880,12 @@ def resolve_title(
         explanation = [
             "Only available for an additional payment (rent or buy) — no "
             "subscription or free option is accessible with your services."
+        ]
+    elif unknown_territory:
+        verdict = AccessVerdict.UNKNOWN
+        explanation = [
+            "An offer was found, but its country is unknown; local or VPN access "
+            "has not been verified."
         ]
     else:
         verdict = AccessVerdict.AVAILABLE_ELSEWHERE

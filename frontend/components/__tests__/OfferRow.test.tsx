@@ -30,6 +30,25 @@ describe("OfferRow", () => {
     expect(screen.getByText("VPN required")).toBeInTheDocument();
   });
 
+  it("labels an offer with unknown territory without claiming local access", () => {
+    render(
+      <OfferRow
+        offer={{
+          ...baseOffer,
+          country: "",
+          locality: "unknown",
+          is_entitled: true,
+          is_accessible: false,
+          rejection_reasons: ["Territory information unknown"],
+        }}
+        currentCountry="NL"
+      />,
+    );
+    expect(screen.getAllByText("Territory unknown").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Local")).not.toBeInTheDocument();
+    expect(screen.queryByText("VPN required")).not.toBeInTheDocument();
+  });
+
   it("does not render locality badge when currentCountry is not provided", () => {
     render(<OfferRow offer={baseOffer} />);
     expect(screen.queryByText("Local")).not.toBeInTheDocument();

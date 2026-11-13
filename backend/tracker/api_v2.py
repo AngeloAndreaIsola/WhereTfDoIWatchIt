@@ -441,14 +441,11 @@ def unofficial_movie_offers(request, tmdb_id: int):
             "availability": _title_availability(movie.id, country=country),
         })
 
-    pref_dict = resolve_preferences(user_id=1)
-    preference = Preference(
-        user_id=1,
-        audio_languages=pref_dict["audio_languages"],
-        subtitle_languages=pref_dict["subtitle_languages"],
-        candidate_countries=pref_dict["candidate_countries"],
-        language_rule=pref_dict.get("language_rule"),
-    )
+    from tracker.services.access import build_reach, build_user_access, classify_offer
+    from tracker.services.preferences import build_preference
+
+    preference = build_preference(1)
+    preference.current_country = (country or preference.current_country).upper().strip()
 
     include_bvod = request.GET.get("include_bvod", "").lower() == "true"
     categories = set(_SCRAPER_CATEGORIES)
@@ -461,7 +458,11 @@ def unofficial_movie_offers(request, tmdb_id: int):
     # unchanged.
     offers, provider_map = get_scraped_offers(movie, provider_categories=categories)
 
-    ranked = rank_offers(offers, preference)
+    ranked = rank_offers(
+        offers, preference, current_country=preference.current_country
+    )
+    access = build_user_access(1)
+    reach = build_reach(preference, preference.current_country)
 
     # Format for frontend
     from tracker.services.presentation import present_offer
@@ -472,6 +473,18 @@ def unofficial_movie_offers(request, tmdb_id: int):
         d["service_display"] = presented.service_display
         d["source_indicator"] = presented.source_indicator
         d["country"] = presented.country
+        classified = classify_offer(
+            offer,
+            access=access,
+            preference=preference,
+            reach=reach,
+            provider_map=provider_map,
+        )
+        d["locality"] = classified.locality
+        d["is_accessible"] = classified.is_accessible
+        d["is_entitled"] = classified.is_entitled
+        d["rejection_reasons"] = classified.rejection_reasons
+        d["territorial_scope"] = classified.territorial_scope
         offers_out.append(d)
 
     return Response({

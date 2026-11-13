@@ -4,7 +4,10 @@ from unittest.mock import MagicMock, patch
 from django.test import TestCase
 from django.urls import reverse
 
-from tracker.models import Movie, Preference, Provider, Subscription, WatchlistItem
+from tracker.models import (
+    Movie, Preference, Provider, RefreshRequest, RefreshRequestStatus,
+    ScrapedContentMapping, Subscription, WatchlistItem,
+)
 from tracker.services.offers import Offer
 from tracker.tests.availability_factories import local_offer
 
@@ -825,6 +828,160 @@ class MovieDetailEndpointTests(TestCase):
         resp = self.client.get("/api/movie/99999/")
         self.assertEqual(resp.status_code, 404)
         self.assertEqual(resp.json()["error"], "movie not found")
+
+    @patch("tracker.services.enrichment.TMDbClient")
+    def test_pending_refresh_state_matches_watchlist_report(self, mock_tmdb_cls):
+        from tracker.services.tmdb import TMDbItem
+
+        movie = Movie.objects.create(
+            tmdb_id=776, title="Pending Film", year=2023,
+            poster_path="/poster.jpg", overview="", genres=[], genre_ids=[],
+            cast=[], tmdb_rating=7.0,
+        )
+        mock_tmdb_cls.return_value.details.return_value = TMDbItem(
+            tmdb_id=776, title="Pending Film", year=2023, content_type="movie",
+            overview="", poster_path="/poster.jpg", genres=[], genre_ids=[],
+            cast=[], seasons_data=[], rating=7.0,
+        )
+        WatchlistItem.objects.create(user_id=1, movie=movie, source="manual")
+        RefreshRequest.objects.create(
+            movie=movie, source="watchmode", country="NL",
+            status=RefreshRequestStatus.PENDING,
+        )
+
+        detail = self.client.get(f"/api/prime/movie/{movie.tmdb_id}/").json()
+        report = self.client.get("/api/watchlist/report/").json()
+        report_watchability = next(
+            row["watchability"] for row in report["report"]
+            if row["movie"]["tmdb_id"] == movie.tmdb_id
+        )
+
+        self.assertEqual(detail["watchability"]["status"], "checking")
+        self.assertEqual(
+            detail["watchability"]["status"], report_watchability["status"]
+        )
+        self.assertEqual(
+            detail["watchability"]["refresh_state"],
+            report_watchability["refresh_state"],
+        )
+
+    @patch("tracker.views.request_title_refresh")
+    @patch("tracker.services.enrichment.TMDbClient")
+    def test_country_scoped_scraped_offer_agrees_across_detail_report_and_v2(
+        self, mock_tmdb_cls, _mock_refresh
+    ):
+        from tracker.services.tmdb import TMDbItem
+        from availability.services.legacy_ingest import ingest_scraped_mapping
+
+        movie = Movie.objects.create(
+            tmdb_id=6077, title="Territorial Test", year=2021,
+            poster_path="", overview="", genres=[], genre_ids=[], cast=[],
+        )
+        mock_tmdb_cls.return_value.details.return_value = TMDbItem(
+            tmdb_id=6077, title="Territorial Test", year=2021,
+            content_type="movie", overview="", poster_path="", genres=[],
+            genre_ids=[], cast=[], seasons_data=[], rating=None,
+        )
+        provider, _ = Provider.objects.update_or_create(
+            slug="tivu_play",
+            defaults={
+                "name": "Tivù Play",
+                "category": "bvod",
+                "is_enabled": True,
+                "country_code": "IT",
+            },
+        )
+        Preference.objects.update_or_create(
+            user_id=1,
+            defaults={
+                "current_country": "NL",
+                "candidate_countries": [],
+                "vpn_enabled": False,
+                "audio_languages": ["EN"],
+                "subtitle_languages": ["EN"],
+            },
+        )
+        WatchlistItem.objects.create(user_id=1, movie=movie, source="manual")
+        local_offer(
+            movie, country="US", service="tivu_play", offer_type="free",
+            audio_languages=["EN"], subtitle_languages=["EN"],
+        )
+        mapping = ScrapedContentMapping.objects.create(
+            provider=provider,
+            movie=movie,
+            scraped_title=movie.title,
+            scraped_year=movie.year,
+            scraped_url="https://tivu.example/watch",
+            country_code="US",
+            is_available=True,
+            is_confirmed=True,
+            confidence_score=1.0,
+            raw_payload={"audio_languages": ["EN"], "subtitle_languages": ["EN"]},
+        )
+        ingest_scraped_mapping(mapping)
+
+        detail = self.client.get(
+            f"/api/prime/movie/{movie.tmdb_id}/?current_country=NL"
+        ).json()
+        report = self.client.get(
+            "/api/watchlist/report/?current_country=NL"
+        ).json()
+        report_row = next(
+            row for row in report["report"]
+            if row["movie"]["tmdb_id"] == movie.tmdb_id
+        )
+        v2 = self.client.get(
+            f"/api/v2/unofficial/movie/{movie.tmdb_id}/offers/"
+            "?include_bvod=true&current_country=NL"
+        ).json()
+
+        detail_offers = [o for o in detail["offers"] if o["country"] == "US"]
+        self.assertTrue(detail_offers)
+        [v2_offer] = v2["offers"]
+        for detail_offer in detail_offers:
+            self.assertEqual(detail_offer["territorial_scope"], "country")
+            self.assertEqual(detail_offer["locality"], "out_of_reach")
+            self.assertFalse(detail_offer["is_accessible"])
+        self.assertEqual(detail["watchability"]["status"], "available_elsewhere")
+        self.assertEqual(report_row["watchability"]["status"], "available_elsewhere")
+        self.assertEqual(v2_offer["locality"], detail_offers[0]["locality"])
+        self.assertFalse(v2_offer["is_accessible"])
+
+        Preference.objects.update_or_create(
+            user_id=1,
+            defaults={
+                "current_country": "NL",
+                "candidate_countries": ["US"],
+                "vpn_enabled": True,
+                "audio_languages": ["EN"],
+                "subtitle_languages": ["EN"],
+            },
+        )
+        detail_vpn = self.client.get(
+            f"/api/prime/movie/{movie.tmdb_id}/?current_country=NL"
+        ).json()
+        report_vpn = self.client.get(
+            "/api/watchlist/report/?current_country=NL"
+        ).json()
+        [v2_vpn_offer] = self.client.get(
+            f"/api/v2/unofficial/movie/{movie.tmdb_id}/offers/"
+            "?include_bvod=true&current_country=NL"
+        ).json()["offers"]
+        detail_vpn_offers = [
+            offer for offer in detail_vpn["offers"]
+            if offer["country"] == "US"
+        ]
+        self.assertTrue(detail_vpn_offers)
+        report_vpn_row = next(
+            row for row in report_vpn["report"]
+            if row["movie"]["tmdb_id"] == movie.tmdb_id
+        )
+        self.assertTrue(all(offer["locality"] == "vpn" for offer in detail_vpn_offers))
+        self.assertTrue(all(offer["is_accessible"] for offer in detail_vpn_offers))
+        self.assertEqual(detail_vpn["watchability"]["status"], "available_vpn")
+        self.assertEqual(report_vpn_row["watchability"]["status"], "watchable_vpn")
+        self.assertEqual(v2_vpn_offer["locality"], "vpn")
+        self.assertTrue(v2_vpn_offer["is_accessible"])
 
     @patch("tracker.services.enrichment.TMDbClient")
     def test_returns_full_detail(self, mock_tmdb_cls):

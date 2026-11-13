@@ -333,7 +333,7 @@ class PrimeMovieEndpointTests(TestCase):
         # Free providers carry a "BVOD" source indicator.
         bbc = next(o for o in data["offers"] if o["service"] == "BBC iPlayer")
         self.assertEqual(bbc["source_indicator"], "BVOD")
-        # Free provider offers get a country fallback from the Provider row.
+        # The observed offer country is shown, not inferred from the provider.
         self.assertEqual(bbc["country"], "GB")
 
     @patch("tracker.services.enrichment.TMDbClient")

@@ -10,6 +10,7 @@ from rest_framework.test import APIClient
 
 from tracker.models import (
     Movie,
+    Preference,
     Provider,
     ProviderCategory,
     ScrapedContentMapping,
@@ -281,6 +282,8 @@ class UnofficialOffersContractTests(TestCase):
                 "service_display", "source_indicator",
                 "price", "prices",
                 "availability_evidence", "last_seen_at",
+                "territorial_scope", "locality", "is_accessible",
+                "is_entitled", "rejection_reasons",
             },
         )
         self.assertIsNone(offer["price"])
@@ -293,6 +296,68 @@ class UnofficialOffersContractTests(TestCase):
         self.assertEqual(offer["url"], "https://matrixhd.example/watch")
         self.assertEqual(offer["audio_languages"], ["EN"])
         self.assertEqual(offer["subtitle_languages"], ["IT", "EN"])
+        self.assertEqual(offer["territorial_scope"], "country")
+
+    def test_scraped_country_scope_is_exposed_as_reachability_not_provenance(self):
+        Preference.objects.update_or_create(
+            user_id=1,
+            defaults={
+                "current_country": "NL",
+                "audio_languages": ["EN"],
+                "subtitle_languages": ["EN"],
+                "candidate_countries": [],
+                "vpn_enabled": False,
+            },
+        )
+        _ingest(self.bvod, self.movie, country_code="US")
+
+        [offer] = self._offers(
+            "?include_bvod=true&current_country=NL"
+        )["offers"]
+
+        self.assertEqual(offer["country"], "US")
+        self.assertEqual(offer["territorial_scope"], "country")
+        self.assertEqual(offer["locality"], "out_of_reach")
+        self.assertFalse(offer["is_accessible"])
+        self.assertTrue(any("Available in US" in reason for reason in offer["rejection_reasons"]))
+
+        Preference.objects.update_or_create(
+            user_id=1,
+            defaults={
+                "current_country": "NL",
+                "audio_languages": ["EN"],
+                "subtitle_languages": ["EN"],
+                "candidate_countries": [],
+                "vpn_enabled": True,
+            },
+        )
+        [vpn_offer] = self._offers(
+            "?include_bvod=true&current_country=NL"
+        )["offers"]
+        self.assertEqual(vpn_offer["locality"], "vpn")
+        self.assertTrue(vpn_offer["is_accessible"])
+
+    def test_missing_scraped_country_is_unknown_in_v2_offer_response(self):
+        Preference.objects.update_or_create(
+            user_id=1,
+            defaults={
+                "current_country": "NL",
+                "audio_languages": ["EN"],
+                "subtitle_languages": ["EN"],
+                "candidate_countries": [],
+                "vpn_enabled": False,
+            },
+        )
+        _ingest(self.bvod, self.movie, country_code="")
+
+        [offer] = self._offers(
+            "?include_bvod=true&current_country=NL"
+        )["offers"]
+
+        self.assertEqual(offer["country"], "")
+        self.assertEqual(offer["territorial_scope"], "unknown")
+        self.assertEqual(offer["locality"], "unknown")
+        self.assertFalse(offer["is_accessible"])
 
     def test_include_bvod_adds_bvod_rows(self):
         _ingest(self.scraper, self.movie, title="Scraper Row")
