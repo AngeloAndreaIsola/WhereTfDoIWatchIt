@@ -36,7 +36,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Protocol, runtime_checkable
 
 from ..domain.enums import SourceType, SyncMode
-from ..domain.models import DiscoveredContent, ProviderOffer
+from ..domain.models import DiscoveredContent, ProviderOffer, ProviderOfferWithdrawal
 
 
 def accepts_kwarg(func, name):
@@ -265,6 +265,8 @@ class SourceFetchResult:
     # other source. Declaring it lets the refresh service attribute a checkpoint
     # to the market that was actually walked instead of a configured default.
     country: Optional[str] = None
+    #: Explicit observed withdrawals, never inferred from catalogue absence.
+    offer_withdrawals: list[ProviderOfferWithdrawal] = field(default_factory=list)
 
 
 @runtime_checkable

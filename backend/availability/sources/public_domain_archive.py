@@ -28,7 +28,7 @@ from typing import Any, Callable, Optional
 import requests
 
 from ..domain.enums import ContentType, OfferType, SourceType, SyncMode
-from ..domain.models import DiscoveredContent, ProviderOffer
+from ..domain.models import DiscoveredContent, ProviderOffer, ProviderOfferWithdrawal
 from ..services.normalize import (
     normalize_content_type,
     normalize_country,
@@ -71,6 +71,7 @@ IA_FIELDS = [
     "mediatype",
     "licenseurl",
     "rights",
+    "jurisdiction",
     "description",
     "language",
 ]
@@ -241,6 +242,7 @@ class PublicDomainArchiveSource(AvailabilitySource):
 
         contents: list[DiscoveredContent] = []
         offers: list[ProviderOffer] = []
+        withdrawals: list[ProviderOfferWithdrawal] = []
         walked = 0
         eval_country = country or DEFAULT_COUNTRY
 
@@ -281,12 +283,12 @@ class PublicDomainArchiveSource(AvailabilitySource):
                         identifier,
                         evaluation.status.value,
                     )
-                continue
 
-            # Item has valid public domain or open license indicator
+            # Keep unknown/restricted metadata for audit, without an offer.
             provenance = build_provenance_record(raw, evaluation)
             walked += 1
-            self.budget_tracker.pd_items_accepted += 1
+            if evaluation.has_public_domain_mark:
+                self.budget_tracker.pd_items_accepted += 1
 
             raw_type = str(raw.get("content_type") or raw.get("mediatype") or "movie").strip().lower()
             if raw_type == "episode" or raw.get("episode_number") is not None:
@@ -314,6 +316,17 @@ class PublicDomainArchiveSource(AvailabilitySource):
                 description=str(raw.get("description") or "").strip(),
                 external_ids={},
                 source_id=self.slug,
+                rights_provenance={
+                    "identifier": provenance.identifier,
+                    "landing_page_url": provenance.landing_page_url,
+                    "rights_url": provenance.rights_url,
+                    "rights_status": provenance.rights_status.value,
+                    "territorial_scope": provenance.territorial_scope.value,
+                    "raw_rights_text": provenance.raw_rights_text,
+                    "jurisdiction": str(raw.get("jurisdiction") or "").strip(),
+                    "observed_at": provenance.observed_at.isoformat(),
+                    "assessment_notes": evaluation.notes,
+                },
             )
             contents.append(discovered)
 
@@ -353,6 +366,11 @@ class PublicDomainArchiveSource(AvailabilitySource):
                 )
                 offers.append(offer)
             else:
+                withdrawals.append(ProviderOfferWithdrawal(
+                    provider_id=self.provider_slug, provider_content_id=identifier,
+                    country=normalize_country(eval_country), content_type=content_type,
+                    season_number=season_number, episode_number=episode_number,
+                ))
                 logger.info(
                     "%s_offer_omitted_territory_unauthorized identifier=%s scope=%s country=%s",
                     self.slug,
@@ -382,6 +400,7 @@ class PublicDomainArchiveSource(AvailabilitySource):
         return SourceFetchResult(
             contents=contents,
             offers=offers,
+            offer_withdrawals=withdrawals,
             authoritative=False,
             complete_snapshot=False,
             sync_mode=SyncMode.FULL,

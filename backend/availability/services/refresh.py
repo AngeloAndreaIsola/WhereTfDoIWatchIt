@@ -29,7 +29,8 @@ Counter semantics per run:
 - offers_created / offers_updated: upsert outcomes for this group;
 - offers_deactivated: offers that became effectively unavailable under this
   run's snapshot — i.e. no source retained a present observation (§14.10).
-  Always 0 unless the run qualifies as an authoritative full snapshot. An offer
+  Unseen offers require an authoritative full snapshot; explicit observed
+  withdrawals are source-scoped and do not infer anything from absence. An offer
   a co-reporting source still observes is counted as neither deactivated nor
   updated;
 - error_count / last_error: populated when the run fails.
@@ -185,6 +186,8 @@ def _content_metadata(content) -> dict:
         metadata["original_title"] = content.original_title
     if content.duration:
         metadata["duration"] = content.duration
+    if content.rights_provenance:
+        metadata["rights_provenance"] = dict(content.rights_provenance)
     return metadata
 
 
@@ -723,6 +726,17 @@ class AvailabilityRefreshService:
         with transaction.atomic():
             contents = self._persist_contents(result, source)
             result = self._attach_tmdb_ids(result, source, contents)
+            withdrawn = 0
+            for content in result.offer_withdrawals:
+                if (capabilities.supported_content_types is not None
+                        and content.content_type not in capabilities.supported_content_types):
+                    continue
+                provider = self._provider(content.provider_id)
+                country = Country.objects.filter(code=content.country.upper(), enabled=True).first()
+                if provider is not None and country is not None:
+                    withdrawn += self.offers.withdraw_observed(
+                        source=source, provider=provider, country=country, content=content,
+                    )
         # Everything still without a tmdb id is provider content that could
         # not be mapped (Offer.tmdb_id is non-null): discovered, counted,
         # logged by the mapping step, kept as a ProviderContent row, but never
@@ -801,7 +815,8 @@ class AvailabilityRefreshService:
             for (provider, country), group in grouped.items()
         ]
 
-        processed = created = updated = deactivated = 0
+        processed = created = updated = 0
+        deactivated = withdrawn
         try:
             with transaction.atomic():
                 for run, provider, country, group in runs:

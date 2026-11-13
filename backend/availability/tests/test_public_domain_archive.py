@@ -17,11 +17,12 @@ from pathlib import Path
 from django.test import SimpleTestCase, TestCase
 
 from availability.domain.enums import ContentType, OfferType, SourceType, SyncMode
-from django.db.migrations.operations.special import RunSQL
 from availability.models import (
     Country,
     Offer,
     ProviderContent,
+    Source,
+    OfferEvidence,
     SyncCursor,
 )
 from availability.services.public_domain_catalogue import (
@@ -32,6 +33,7 @@ from availability.services.public_domain_catalogue import (
     evaluate_item_rights,
 )
 from availability.services.refresh import AvailabilityRefreshService
+from availability.persistence.repositories import OfferRepository
 from availability.sources import SourceFetchError, source_registry
 from availability.sources.base import ContentRequest
 from availability.sources.public_domain_archive import (
@@ -40,40 +42,6 @@ from availability.sources.public_domain_archive import (
     PublicDomainArchiveSource,
 )
 from tracker.models import Movie, Provider
-
-# SQLite test setup isolation:
-# Migration tracker.0035 uses postgres-specific ALTER TABLE ADD CONSTRAINT syntax.
-# For SQLite test runs, intercept table alteration without modifying the production migration.
-_orig_runsql_forwards = RunSQL.database_forwards
-
-
-def _sqlite_safe_database_forwards(self, app_label, schema_editor, from_state, to_state):
-    if schema_editor.connection.vendor == "sqlite":
-        if "tracker_externalprovidermapping" in str(self.sql):
-            schema_editor.execute(
-                """
-                CREATE TABLE tracker_externalprovidermapping_new (
-                    id integer NOT NULL PRIMARY KEY AUTOINCREMENT,
-                    integration_name varchar(50) NOT NULL,
-                    external_id varchar(100) NOT NULL,
-                    provider_id bigint NOT NULL REFERENCES tracker_provider (id) DEFERRABLE INITIALLY DEFERRED,
-                    country varchar(2) NOT NULL,
-                    CONSTRAINT uniq_external_provider_mapping UNIQUE (provider_id, integration_name, country)
-                );
-            """
-            )
-            schema_editor.execute(
-                "INSERT INTO tracker_externalprovidermapping_new SELECT id, integration_name, external_id, provider_id, country FROM tracker_externalprovidermapping;"
-            )
-            schema_editor.execute("DROP TABLE tracker_externalprovidermapping;")
-            schema_editor.execute(
-                "ALTER TABLE tracker_externalprovidermapping_new RENAME TO tracker_externalprovidermapping;"
-            )
-            return
-    return _orig_runsql_forwards(self, app_label, schema_editor, from_state, to_state)
-
-
-RunSQL.database_forwards = _sqlite_safe_database_forwards
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures" / "public_domain"
 
@@ -161,6 +129,51 @@ class RightsEvaluationServiceTests(SimpleTestCase):
         self.assertEqual(res.status, RightsStatus.RESTRICTED)
         self.assertFalse(res.has_public_domain_mark)
         self.assertFalse(res.is_watchable_in_country("US"))
+
+    def test_negated_and_contradictory_rights_never_authorize(self):
+        for license_url in (
+            "https://creativecommons.org/publicdomain/mark/1.0/",
+            "https://creativecommons.org/publicdomain/zero/1.0/",
+            "https://creativecommons.org/licenses/by/4.0/",
+            "https://creativecommons.org/licenses/by-sa/4.0/",
+        ):
+            for statement, jurisdiction in (
+                ("Not public domain worldwide", ""),
+                ("No worldwide rights", ""),
+                ("Copyrighted worldwide", ""),
+                ("Worldwide rights unknown", ""),
+                ("Might be public domain worldwide", ""),
+                ("Not public domain in the United States", "US"),
+                ("Public domain globally except the Netherlands", ""),
+                ("Public domain worldwide, protected by foreign copyright in other countries", ""),
+                ("Public domain worldwide", "US"),
+                ("All rights reserved. Public domain worldwide", ""),
+            ):
+                with self.subTest(license=license_url, rights=statement, jurisdiction=jurisdiction):
+                    result = evaluate_item_rights({"licenseurl": license_url, "rights": statement,
+                                                   "jurisdiction": jurisdiction})
+                    self.assertEqual(result.territorial_scope, TerritorialScope.UNKNOWN)
+                    self.assertFalse(result.is_watchable_in_country("NL"))
+                    self.assertFalse(result.is_watchable_in_country("US"))
+
+    def test_recognized_open_licenses_and_unrecognized_urls(self):
+        for name in ("by", "by-sa"):
+            result = evaluate_item_rights({"licenseurl": f"https://creativecommons.org/licenses/{name}/4.0/"})
+            self.assertEqual(result.status, RightsStatus.OPEN_LICENSE)
+            self.assertTrue(result.is_watchable_in_country("NL"))
+        for url in ("https://creativecommons.org/licenses/by/unknown/",
+                    "https://creativecommons.org/publicdomain/zero/1.0/untrusted"):
+            result = evaluate_item_rights({"licenseurl": url, "rights": "Public domain worldwide"})
+            self.assertFalse(result.is_watchable_in_country("NL"))
+
+    def test_multivalue_and_malformed_license_metadata_fail_closed(self):
+        cc0 = "https://creativecommons.org/publicdomain/zero/1.0/"
+        self.assertTrue(evaluate_item_rights({"licenseurl": [cc0]}).is_watchable_in_country("NL"))
+        for value in ([cc0, "https://example.org/other-rights"], {"url": cc0}, 123):
+            with self.subTest(value=value):
+                result = evaluate_item_rights({"licenseurl": value})
+                self.assertFalse(result.is_watchable_in_country("NL"))
+                self.assertEqual(result.status, RightsStatus.AMBIGUOUS_UNKNOWN)
 
     def test_provenance_preserves_rights_url_and_landing_page(self):
         item = {
@@ -286,10 +299,10 @@ class PublicDomainArchiveCollectorTests(TestCase):
         # - Night of the Living Dead (PD Mark US) -> DiscoveredContent + Offer (US)
         # - Charade (CC0 Worldwide) -> DiscoveredContent + Offer (Worldwide -> US)
         # - The Hitch-Hiker (LOC US statement) -> DiscoveredContent + Offer (US)
-        # - Dracula (ambiguous/null) -> skipped/flagged unknown (No content, no offer)
+        # - Dracula (ambiguous/null) -> metadata retained, no offer
         # - Territorial Conflict Film (PDM US only, foreign copyright) -> DiscoveredContent + Offer (US)
         # - Bare PDM Film (PDM without jurisdiction or territory -> UNKNOWN scope) -> DiscoveredContent (kept for audit), NO Offer
-        # - Open Source Adventure (CC BY-NC-ND) -> restricted, skipped
+        # - Open Source Adventure (CC BY-NC-ND) -> restricted metadata retained, no offer
         # - missing metadata item -> skipped
         # - Flash Gordon (PD Mark episode) -> DiscoveredContent + Offer (US)
         identifiers = {c.provider_content_id for c in res.contents}
@@ -299,9 +312,9 @@ class PublicDomainArchiveCollectorTests(TestCase):
         self.assertIn("territorial_conflict_film", identifiers)
         self.assertIn("bare_pdm_no_jurisdiction", identifiers)
         self.assertIn("flash_gordon_s01e01", identifiers)
-        self.assertNotIn("dracula_1931_ambiguous", identifiers)
-        self.assertNotIn("modern_indie_cc_by", identifiers)
-        self.assertEqual(len(res.contents), 6)
+        self.assertIn("dracula_1931_ambiguous", identifiers)
+        self.assertIn("modern_indie_cc_by", identifiers)
+        self.assertEqual(len(res.contents), 8)
 
         # Offers emitted only for items watchable in US:
         # 5 items have confirmed US rights (NOT bare_pdm_no_jurisdiction)
@@ -357,8 +370,8 @@ class PublicDomainArchiveCollectorTests(TestCase):
         self.assertEqual(first_run.processed, 2)
         self.assertEqual(first_run.unresolved, 3)
 
-        # ProviderContent rows are persisted for all 6 discovered items
-        self.assertEqual(ProviderContent.objects.filter(provider__slug="internet_archive").count(), 6)
+        # ProviderContent rows are persisted for all 8 discovered items
+        self.assertEqual(ProviderContent.objects.filter(provider__slug="internet_archive").count(), 8)
         self.assertEqual(Offer.objects.filter(provider__slug="internet_archive").count(), 2)
 
         # Verify Offer metadata
@@ -371,8 +384,107 @@ class PublicDomainArchiveCollectorTests(TestCase):
         second_run = service.refresh_catalogue()
         self.assertEqual(second_run.created, 0)
         self.assertEqual(second_run.deactivated, 0)
-        self.assertEqual(ProviderContent.objects.filter(provider__slug="internet_archive").count(), 6)
+        self.assertEqual(ProviderContent.objects.filter(provider__slug="internet_archive").count(), 8)
         self.assertEqual(Offer.objects.filter(provider__slug="internet_archive").count(), 2)
+
+    def test_completed_refresh_preserves_rights_provenance_and_unknown_metadata(self):
+        payload = load_fixture("archive_items.json")
+        service = AvailabilityRefreshService(source=self._make_source(payload))
+        service.refresh_catalogue()
+        self.assertFalse(SyncCursor.objects.filter(source__slug="public_domain_archive").exists())
+        row = ProviderContent.objects.get(provider_content_id="night_of_the_living_dead_1968")
+        provenance = row.metadata["rights_provenance"]
+        self.assertEqual(provenance["rights_url"], "http://creativecommons.org/publicdomain/mark/1.0/")
+        self.assertEqual(provenance["landing_page_url"], row.provider_url)
+        self.assertEqual(provenance["raw_rights_text"], "Public domain in the United States.")
+        self.assertEqual(provenance["rights_status"], "public_domain")
+        self.assertEqual(provenance["territorial_scope"], "us_only")
+        self.assertTrue(provenance["observed_at"])
+        for identifier in ("bare_pdm_no_jurisdiction", "dracula_1931_ambiguous"):
+            row = ProviderContent.objects.get(provider_content_id=identifier)
+            self.assertEqual(row.metadata["rights_provenance"]["territorial_scope"], "unknown")
+            self.assertFalse(Offer.objects.filter(provider_content_id=identifier).exists())
+        self.assertEqual(ProviderContent.objects.get(provider_content_id="dracula_1931_ambiguous")
+                         .metadata["rights_provenance"]["raw_rights_text"], "")
+        self.assertFalse(Offer.objects.filter(country__code="NL").exists())
+        service.refresh_catalogue()
+        row.refresh_from_db()
+        self.assertIn("rights_provenance", row.metadata)
+
+    def test_negated_worldwide_item_is_persisted_without_offer(self):
+        item = {"identifier": "charade_1963_pd", "title": "Charade", "year": 1963,
+                "licenseurl": "https://creativecommons.org/publicdomain/mark/1.0/",
+                "rights": "Not public domain worldwide"}
+        service = AvailabilityRefreshService(source=self._make_source({"response": {"docs": [item], "numFound": 1}}))
+        service.refresh_catalogue()
+        row = ProviderContent.objects.get(provider_content_id=item["identifier"])
+        self.assertEqual(row.metadata["rights_provenance"]["territorial_scope"], "unknown")
+        self.assertFalse(Offer.objects.filter(provider_content_id=item["identifier"]).exists())
+
+    def test_rights_downgrade_withdraws_previous_positive_offer(self):
+        item = {"identifier": "charade_1963_pd", "title": "Charade", "year": 1963,
+                "licenseurl": "https://creativecommons.org/publicdomain/zero/1.0/"}
+        payload = {"response": {"docs": [item], "numFound": 1}}
+        service = AvailabilityRefreshService(source=self._make_source(payload))
+        service.refresh_catalogue()
+        offer = Offer.objects.get(provider_content_id=item["identifier"])
+        self.assertTrue(offer.currently_available)
+        item["rights"] = "Not public domain worldwide"
+        result = service.refresh_catalogue()
+        offer.refresh_from_db()
+        self.assertFalse(offer.currently_available)
+        self.assertEqual(result.deactivated, 1)
+        item["rights"] = "CC0 worldwide dedication"
+        service.refresh_catalogue()
+        offer.refresh_from_db()
+        self.assertTrue(offer.currently_available)
+        self.assertEqual(Offer.objects.filter(provider_content_id=item["identifier"]).count(), 1)
+
+    def test_rights_withdrawal_preserves_independent_source_evidence(self):
+        item = {"identifier": "charade_1963_pd", "title": "Charade", "year": 1963,
+                "licenseurl": "https://creativecommons.org/publicdomain/zero/1.0/"}
+        payload = {"response": {"docs": [item], "numFound": 1}}
+        service = AvailabilityRefreshService(source=self._make_source(payload))
+        service.refresh_catalogue()
+        offer = Offer.objects.get(provider_content_id=item["identifier"])
+        other = Source.objects.create(slug="independent_archive_review", name="Independent review", type="api")
+        OfferRepository().upsert(provider=offer.provider, country=offer.country, source=other,
+                                 content_type=offer.content_type, tmdb_id=offer.tmdb_id,
+                                 offer_type=offer.offer_type, provider_content_id=offer.provider_content_id)
+        item["rights"] = "Not public domain worldwide"
+        service.refresh_catalogue()
+        offer.refresh_from_db()
+        self.assertTrue(offer.currently_available)
+        self.assertFalse(OfferEvidence.objects.get(offer_identity=offer.identity,
+                         source__slug="public_domain_archive").is_present)
+        self.assertTrue(OfferEvidence.objects.get(offer_identity=offer.identity, source=other).is_present)
+
+    def test_failed_page_preserves_checkpoint_for_retry(self):
+        pages = load_fixture("paginated_archive.json")
+        failed_once = False
+        requested_pages = []
+
+        def fetcher(endpoint, params):
+            nonlocal failed_once
+            page = params["page"]
+            requested_pages.append(page)
+            if page == 2 and not failed_once:
+                failed_once = True
+                raise SourceFetchError("Temporary page failure")
+            return pages[f"page_{page}"]
+
+        service = AvailabilityRefreshService(source=PublicDomainArchiveSource(
+            client=PublicDomainArchiveClient(fetcher=fetcher), batch_size=2,
+        ))
+        service.refresh_catalogue()
+        checkpoint = SyncCursor.objects.get(source__slug="public_domain_archive").cursor
+        with self.assertRaises(SourceFetchError):
+            service.refresh_catalogue()
+        self.assertEqual(SyncCursor.objects.get(source__slug="public_domain_archive").cursor, checkpoint)
+        service.refresh_catalogue()
+        self.assertEqual(requested_pages, [1, 2, 2])
+        self.assertFalse(SyncCursor.objects.filter(source__slug="public_domain_archive").exists())
+        self.assertEqual(ProviderContent.objects.filter(provider__slug="internet_archive").count(), 3)
 
     def test_paginated_walk_checkpoints_forward(self):
         paginated_data = load_fixture("paginated_archive.json")

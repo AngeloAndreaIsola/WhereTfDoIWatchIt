@@ -41,6 +41,23 @@ class DiscoveredContent:
     description: str = ""
     external_ids: dict[str, str] = field(default_factory=dict)
     source_id: str = ""
+    #: Structured rights evidence for audit/revalidation; never implies availability.
+    rights_provenance: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ProviderOfferWithdrawal:
+    """An explicit withdrawal of this source's offer assertion for an observed item.
+
+    Distinct from an item absent from an incomplete catalogue snapshot.
+    Other sources' evidence for the same offer remains intact.
+    """
+    provider_id: str
+    provider_content_id: str
+    country: str
+    content_type: str
+    season_number: Optional[int] = None
+    episode_number: Optional[int] = None
 
 
 @dataclass(frozen=True)

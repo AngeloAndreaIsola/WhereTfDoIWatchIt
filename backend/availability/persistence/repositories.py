@@ -440,6 +440,34 @@ class OfferRepository:
                 claims.setdefault(key, set()).add(tmdb_id)
         return claims
 
+    def withdraw_observed(self, *, source, provider, country, content):
+        """Withdraw one source's assertion after an explicit item observation.
+
+        This does not infer removal from a partial snapshot. It preserves any
+        independent positive evidence and never touches another source's price.
+        """
+        identities = OfferEvidence.objects.filter(
+            source=source, provider_slug=provider.slug,
+            country_code=country.code, provider_content_id=content.provider_content_id,
+        ).values_list("offer_identity", flat=True)
+        candidates = list(Offer.objects.filter(
+            Q(identity__in=identities) | Q(source=source),
+            provider=provider, country=country,
+            provider_content_id=content.provider_content_id,
+            content_type=content.content_type, season_number=content.season_number,
+            episode_number=content.episode_number, currently_available=True,
+        ).select_related("provider", "country"))
+        if not candidates:
+            return 0
+        now = timezone.now()
+        self.evidence.record_absent_bulk(candidates, source=source, now=now)
+        keys = [offer.identity for offer in candidates]
+        self.evidence.recompute_availability(keys, now=now)
+        OfferPrice.objects.filter(offer_identity__in=keys, source=source, is_current=True).update(
+            is_current=False, updated_at=now,
+        )
+        return Offer.objects.filter(identity__in=keys, currently_available=False).count()
+
     def deactivate_unseen(self, sync_run, seen_identities):
         """Mark this source's evidence absent for offers it did not see.
 
