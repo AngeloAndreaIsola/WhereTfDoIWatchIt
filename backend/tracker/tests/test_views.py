@@ -4,7 +4,10 @@ from unittest.mock import MagicMock, patch
 from django.test import TestCase
 from django.urls import reverse
 
-from tracker.models import Movie, Preference, Provider, Subscription, WatchlistItem
+from tracker.models import (
+    Movie, Preference, Provider, RefreshRequest, RefreshRequestStatus,
+    Subscription, WatchlistItem,
+)
 from tracker.services.offers import Offer
 from tracker.tests.availability_factories import local_offer
 
@@ -825,6 +828,42 @@ class MovieDetailEndpointTests(TestCase):
         resp = self.client.get("/api/movie/99999/")
         self.assertEqual(resp.status_code, 404)
         self.assertEqual(resp.json()["error"], "movie not found")
+
+    @patch("tracker.services.enrichment.TMDbClient")
+    def test_pending_refresh_state_matches_watchlist_report(self, mock_tmdb_cls):
+        from tracker.services.tmdb import TMDbItem
+
+        movie = Movie.objects.create(
+            tmdb_id=776, title="Pending Film", year=2023,
+            poster_path="/poster.jpg", overview="", genres=[], genre_ids=[],
+            cast=[], tmdb_rating=7.0,
+        )
+        mock_tmdb_cls.return_value.details.return_value = TMDbItem(
+            tmdb_id=776, title="Pending Film", year=2023, content_type="movie",
+            overview="", poster_path="/poster.jpg", genres=[], genre_ids=[],
+            cast=[], seasons_data=[], rating=7.0,
+        )
+        WatchlistItem.objects.create(user_id=1, movie=movie, source="manual")
+        RefreshRequest.objects.create(
+            movie=movie, source="watchmode", country="NL",
+            status=RefreshRequestStatus.PENDING,
+        )
+
+        detail = self.client.get(f"/api/prime/movie/{movie.tmdb_id}/").json()
+        report = self.client.get("/api/watchlist/report/").json()
+        report_watchability = next(
+            row["watchability"] for row in report["report"]
+            if row["movie"]["tmdb_id"] == movie.tmdb_id
+        )
+
+        self.assertEqual(detail["watchability"]["status"], "checking")
+        self.assertEqual(
+            detail["watchability"]["status"], report_watchability["status"]
+        )
+        self.assertEqual(
+            detail["watchability"]["refresh_state"],
+            report_watchability["refresh_state"],
+        )
 
     @patch("tracker.services.enrichment.TMDbClient")
     def test_returns_full_detail(self, mock_tmdb_cls):

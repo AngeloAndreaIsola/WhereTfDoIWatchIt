@@ -2542,6 +2542,10 @@ def _prime_detail_response(request, item: Movie, key: str) -> Response:
         current_offers,
         access_pref,
         current_country=access_country,
+        refresh_state=(
+            None if last_known_offers
+            else refresh_states_for({item.pk}).get(item.pk)
+        ),
     )
     last_known = describe_last_known(
         item, last_known_offers, access_pref, current_country=access_country

@@ -38,7 +38,7 @@ export type OfferType =
   | "unknown";
 
 export type AccessType = OfferType;
-export type OfferLocality = "local" | "vpn" | "out_of_reach" | "anywhere";
+export type OfferLocality = "local" | "vpn" | "out_of_reach" | "anywhere" | "unknown";
 
 /**
  * A structured price attached to an offer. `amount` is a decimal string (never

@@ -144,6 +144,56 @@ class AccessResolverTests(TestCase):
         )
         self.assertEqual(res.verdict, AccessVerdict.AVAILABLE_VPN)
 
+    def test_unknown_offer_country_does_not_become_local_availability(self):
+        self._sub("netflix")
+        pref = self._pref(current="NL")
+        res = resolve_title(
+            self.movie,
+            [self._offer(country="", service="netflix", offer_type="subscription",
+                         url="u", audio_languages=["EN"], subtitle_languages=["EN"])],
+            pref,
+        )
+        self.assertEqual(res.verdict, AccessVerdict.UNKNOWN)
+        self.assertIsNone(res.best_offer)
+        self.assertFalse(res.offers[0].is_accessible)
+        self.assertEqual(res.offers[0].locality, Locality.UNKNOWN)
+
+    def test_explicit_global_scraped_offer_remains_available(self):
+        pref = self._pref(current="NL")
+        res = resolve_title(
+            self.movie,
+            [self._offer(country="", service="legacy_scraper", offer_type="free",
+                         url="u", is_scraped_source=True,
+                         audio_languages=["EN"], subtitle_languages=["EN"])],
+            pref,
+            user_subscriptions={"legacy_scraper"},
+        )
+        self.assertEqual(res.verdict, AccessVerdict.AVAILABLE_HERE)
+
+    def test_unknown_territory_with_unknown_language_stays_unknown(self):
+        self._sub("netflix")
+        pref = self._pref(current="NL")
+        res = resolve_title(
+            self.movie,
+            [self._offer(country="", service="netflix", offer_type="subscription",
+                         url="u")],
+            pref,
+        )
+        self.assertEqual(res.verdict, AccessVerdict.UNKNOWN)
+        self.assertIsNone(res.offers[0].is_language_match)
+        self.assertEqual(res.offers[0].locality, Locality.UNKNOWN)
+
+    def test_unknown_territory_does_not_claim_purchase_only(self):
+        self._sub("rakuten_tv", mode=SubscriptionAccessMode.RENT_BUY)
+        pref = self._pref(current="NL")
+        res = resolve_title(
+            self.movie,
+            [self._offer(country="", service="rakuten_tv", offer_type="rent",
+                         url="u", audio_languages=["EN"])],
+            pref,
+        )
+        self.assertEqual(res.verdict, AccessVerdict.UNKNOWN)
+
     # -- 6 ----------------------------------------------------------------
     def test_06_declared_addon_entitles(self):
         self._sub("mgm_plus", mode=SubscriptionAccessMode.ADDON)

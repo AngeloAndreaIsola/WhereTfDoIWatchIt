@@ -68,6 +68,7 @@ from tracker.services.refresh_requests import (
     request_watchlist_refresh,
 )
 from tracker.services.watchability import RefreshState
+from tracker.services.access import AccessVerdict, _empty_result
 from tracker.tests.availability_factories import local_offer
 from tracker.tests.test_refresh_provider_catalogue import catalogue_slugs
 
@@ -939,6 +940,23 @@ class RefreshStateEvidenceTests(TestCase):
         states = refresh_states_for({movie.id})
 
         self.assertEqual(states[movie.id], RefreshState.CHECKED)
+
+    def test_cross_country_success_does_not_prove_current_market_unavailable(self):
+        movie = _watchlist_movie(43601)
+        RefreshRequest.objects.create(
+            movie=movie, source="watchmode", country="US",
+            status=RefreshRequestStatus.DONE,
+        )
+        RefreshRequest.objects.create(
+            movie=movie, source="justwatch", country="NL",
+            status=RefreshRequestStatus.FAILED,
+        )
+
+        state = refresh_states_for({movie.id})[movie.id]
+        verdict = _empty_result(movie, state)
+
+        self.assertEqual(state, RefreshState.CHECKED)
+        self.assertEqual(verdict.verdict, AccessVerdict.UNKNOWN)
 
     def test_pending_in_any_scope_beats_a_done_row(self):
         # Precedence is evaluated across scopes too: a queued check anywhere

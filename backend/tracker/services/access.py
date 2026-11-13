@@ -110,6 +110,7 @@ class Locality:
     VPN = "vpn"
     OUT_OF_REACH = "out_of_reach"
     ANYWHERE = "anywhere"  # scraped sources are treated as country independent
+    UNKNOWN = "unknown"  # no territorial assertion was supplied
 
 
 class AccessVerdict:
@@ -411,8 +412,9 @@ class CountryReach:
             return Locality.ANYWHERE
         c = (country or "").upper().strip()
         if not c:
-            # No geography recorded: cannot claim it is out of reach.
-            return Locality.ANYWHERE
+            # Missing geography is not a global-rights assertion. Only the
+            # explicit scraped-source contract above may be treated as global.
+            return Locality.UNKNOWN
         if self.current_country and c == self.current_country:
             return Locality.LOCAL
         if self.vpn_active and (not self.vpn_regions or c in self.vpn_regions):
@@ -420,7 +422,7 @@ class CountryReach:
         return Locality.OUT_OF_REACH
 
     def reachable(self, locality: str) -> bool:
-        return locality != Locality.OUT_OF_REACH
+        return locality in (Locality.LOCAL, Locality.VPN, Locality.ANYWHERE)
 
 
 def build_reach(preference: Any, current_country: Optional[str] = None) -> CountryReach:
@@ -655,6 +657,8 @@ def classify_offer(
             )
         else:
             reasons.append(f"Available in {cc}, but no VPN regions are configured")
+    elif locality == Locality.UNKNOWN:
+        reasons.append("Territory information unknown")
 
     return ClassifiedOffer(
         country=presented.country or country,
@@ -726,11 +730,12 @@ class AccessResult:
 def _empty_result(movie, refresh_state: Optional[str]) -> AccessResult:
     label, symbol = VERDICT_LABELS[AccessVerdict.UNKNOWN]
     if refresh_state == RefreshState.CHECKED:
-        verdict, label, symbol = (
-            AccessVerdict.UNAVAILABLE,
-            *VERDICT_LABELS[AccessVerdict.UNAVAILABLE],
-        )
-        explanation = ["Availability was checked — no qualifying offers found for this title."]
+        verdict = AccessVerdict.UNKNOWN
+        label, symbol = "Unknown — no offers verified", "⚪"
+        explanation = [
+            "A source returned no offers, but source coverage does not establish "
+            "that the title is unavailable in this country."
+        ]
     elif refresh_state == RefreshState.PENDING:
         verdict, label, symbol = (
             AccessVerdict.CHECKING,
@@ -808,6 +813,13 @@ def resolve_title(
         c for c in classified
         if c.requires_payment and c.is_entitled and reach.reachable(c.locality)
     ]
+    unknown_territory = [
+        c for c in classified
+        if c.locality == Locality.UNKNOWN
+        and c.is_entitled
+        and c.is_language_match is not False
+        and c.access_type in (INCLUDED_ACCESS_TYPES | PAYMENT_ACCESS_TYPES)
+    ]
 
     raw_ranking_pref = getattr(preference, "ranking_preferences", None)
     if isinstance(raw_ranking_pref, dict) and raw_ranking_pref:
@@ -850,6 +862,12 @@ def resolve_title(
         explanation = [
             "Only available for an additional payment (rent or buy) — no "
             "subscription or free option is accessible with your services."
+        ]
+    elif unknown_territory:
+        verdict = AccessVerdict.UNKNOWN
+        explanation = [
+            "An offer was found, but its country is unknown; local or VPN access "
+            "has not been verified."
         ]
     else:
         verdict = AccessVerdict.AVAILABLE_ELSEWHERE
