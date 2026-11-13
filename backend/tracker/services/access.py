@@ -109,7 +109,7 @@ class Locality:
     LOCAL = "local"
     VPN = "vpn"
     OUT_OF_REACH = "out_of_reach"
-    ANYWHERE = "anywhere"  # scraped sources ignore geography
+    ANYWHERE = "anywhere"  # scraped sources are treated as country independent
 
 
 class AccessVerdict:
@@ -406,6 +406,7 @@ class CountryReach:
     vpn_regions: set[str] = field(default_factory=set)
 
     def locality(self, country: str, is_scraped: bool = False) -> str:
+        """Determine reach from territory; legacy global scraper semantics remain explicit."""
         if is_scraped:
             return Locality.ANYWHERE
         c = (country or "").upper().strip()
@@ -455,6 +456,7 @@ class ClassifiedOffer:
     audio_languages: list[str] = field(default_factory=list)
     subtitle_languages: list[str] = field(default_factory=list)
     is_scraped_source: bool = False
+    source_category: str = ""
     is_entitled: bool = False
     is_language_match: bool = True
     has_language_info: bool = False
@@ -469,6 +471,7 @@ class ClassifiedOffer:
     required_base_display: str = ""
     rejection_reasons: list[str] = field(default_factory=list)
     ranking_score: tuple = field(default_factory=tuple)
+    availability_evidence: str = "verified"
     #: Display price (structured amount + currency) or None. Price never
     #: affects ``is_entitled``/``is_accessible`` — it only tells the reader what
     #: a rent/buy offer would cost, which is orthogonal to access.
@@ -501,6 +504,7 @@ class ClassifiedOffer:
             "audio_languages": self.audio_languages,
             "subtitle_languages": self.subtitle_languages,
             "is_scraped_source": self.is_scraped_source,
+            "source_category": self.source_category,
             "is_entitled": self.is_entitled,
             "is_language_match": self.is_language_match,
             "locality": self.locality,
@@ -510,6 +514,7 @@ class ClassifiedOffer:
             "required_base": self.required_base,
             "required_base_display": self.required_base_display,
             "rejection_reasons": self.rejection_reasons,
+            "availability_evidence": self.availability_evidence,
             "price": self.price,
             "prices": self.prices,
         }
@@ -539,8 +544,10 @@ def _coerce_offer(raw: Any) -> Offer:
             getattr(raw, "subtitle_languages", None) or getattr(raw, "subs", None) or []
         ),
         is_scraped_source=bool(getattr(raw, "is_scraped_source", False)),
+        source_category=getattr(raw, "source_category", ""),
         price=getattr(raw, "price", None),
         prices=list(getattr(raw, "prices", None) or []),
+        availability_evidence=getattr(raw, "availability_evidence", "verified"),
     )
 
 
@@ -662,6 +669,10 @@ def classify_offer(
         audio_languages=audio,
         subtitle_languages=subs,
         is_scraped_source=is_scraped,
+        source_category=(
+            getattr(raw, "source_category", "")
+            or ("unofficial" if is_scraped else "official")
+        ),
         is_entitled=entitled,
         is_language_match=is_lang_match,
         has_language_info=has_lang_info,
@@ -673,6 +684,7 @@ def classify_offer(
         required_base_display=base_display,
         rejection_reasons=reasons,
         ranking_score=scored.score_tuple,
+        availability_evidence=getattr(raw, "availability_evidence", "verified"),
         price=raw.price,
         prices=list(raw.prices or []),
     )
@@ -810,34 +822,22 @@ def resolve_title(
     prefer_entitled = ranking_prefs.get("prefer_entitled", True)
     provider_priority = [p.lower() for p in (ranking_prefs.get("provider_priority") or [])]
 
-    from tracker.services.ranking import compute_source_rank
+    from tracker.services.ranking import build_offer_sort_key
 
     def _offer_sort_key(c: ClassifiedOffer):
-        entitled_tier = 0
-        if prefer_entitled and not c.is_entitled:
-            entitled_tier = 1
+        # Convert access-classification fields through the same precedence key
+        # used by rank_offers so both APIs select the same eligible best offer.
+        return build_offer_sort_key(
+            c,
+            source_priority=source_priority,
+            prefer_official=prefer_official,
+            prefer_local=prefer_local,
+            prefer_entitled=prefer_entitled,
+            local_country=reach.current_country,
+            provider_priority=provider_priority,
+        )
 
-        source_rank = compute_source_rank(source_priority, c.is_scraped_source, c.is_current_country)
-
-        official_penalty = 0
-        if prefer_official and c.is_scraped_source:
-            official_penalty = 1
-
-        local_penalty = 0
-        if prefer_local and not c.is_current_country:
-            local_penalty = 1
-
-        clean_service = (c.service or "").lower().strip()
-        provider_rank = 99
-        if clean_service in provider_priority:
-            provider_rank = provider_priority.index(clean_service)
-
-        return (entitled_tier, source_rank, official_penalty, local_penalty, provider_rank, c.ranking_score)
-
-    local.sort(key=_offer_sort_key)
-    vpn.sort(key=_offer_sort_key)
-
-    accessible = local + vpn
+    accessible = sorted(local + vpn, key=_offer_sort_key)
     excluded = [c for c in classified if c not in accessible]
 
     explanation: list[str] = []

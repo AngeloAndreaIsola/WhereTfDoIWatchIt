@@ -43,6 +43,7 @@ class RankedOffer:
     provider_rank: int = 99
     ranking_explanation: list[str] = field(default_factory=list)
     is_scraped_source: bool = False
+    source_category: str = ""
 
     def to_dict(self) -> dict:
         ranking_dict = {
@@ -52,6 +53,7 @@ class RankedOffer:
             "is_language_match": self.is_language_match,
             "source_rank": self.source_rank,
             "provider_rank": self.provider_rank,
+            "source_category": self.source_category,
         }
         if self.ranking_explanation:
             ranking_dict["explanation"] = self.ranking_explanation
@@ -76,6 +78,7 @@ def compute_source_rank(
     source_priority: list[str],
     is_scraped: bool,
     is_local: bool,
+    source_category: str = "",
 ) -> int:
     """Compute the position (index) of an offer based on user source_priority.
 
@@ -86,13 +89,16 @@ def compute_source_rank(
           (takes whichever appears earlier in the user's `source_priority`)
         - If not `is_local`: matches "official"
     """
-    applicable = set()
-    if is_scraped:
+    category = (source_category or "").lower().strip()
+    applicable = {category} if category in {"official", "local", "unofficial"} else set()
+    if not category and is_scraped:
         applicable.add("unofficial")
-    else:
+    elif not category:
         applicable.add("official")
         if is_local:
             applicable.add("local")
+    elif category != "unofficial" and is_local:
+        applicable.add("local")
 
     best_rank = 99
     for idx, s in enumerate(source_priority):
@@ -110,11 +116,13 @@ def build_offer_sort_key(
     prefer_local: bool,
     prefer_entitled: bool,
     local_country: str,
+    provider_priority: Optional[list[str]] = None,
 ):
     """Canonical ranking-precedence key shared across ranking and access resolution.
 
     Contract:
-    1. Language mismatch penalty (ineligible offers cannot rank above eligible ones).
+    1. Verified availability evidence, then language match (unknown/mismatching evidence
+       cannot outrank a verified language match).
     2. Entitlement tier: subscription/free offers rank before rental/purchase when prefer_entitled is True.
     3. User-configured source priority order (`source_rank` computed from `source_priority`).
        `source_priority` directly controls precedence among source categories (e.g. official vs local vs unofficial).
@@ -124,7 +132,12 @@ def build_offer_sort_key(
     5. Provider priority rank (user's preferred providers tiebreak within same source category).
     6. Quality & language score tuple.
     """
-    lang_penalty = r.score[0] if r.score else 0
+    score = getattr(r, "score", None) or getattr(r, "ranking_score", ())
+    lang_penalty = score[0] if score else 0
+    language_match = getattr(r, "is_language_match", None)
+    language_rank = 0 if language_match is True else 1 if language_match is None else 2
+    evidence = getattr(r, "availability_evidence", "verified")
+    evidence_rank = {"verified": 0, "stale": 1, "unknown": 2}.get(evidence, 2)
 
     entitled_tier = 0
     if prefer_entitled and r.offer_type in ("rent", "buy"):
@@ -135,17 +148,30 @@ def build_offer_sort_key(
         official_penalty = 1
 
     local_penalty = 0
-    if prefer_local and local_country and r.country != local_country:
+    country = getattr(r, "country", "") or ""
+    if prefer_local and local_country and country.upper() != local_country.upper():
         local_penalty = 1
 
+    source_rank = compute_source_rank(
+        source_priority,
+        bool(getattr(r, "is_scraped_source", False)),
+        bool(local_country and country.upper() == local_country.upper()),
+        getattr(r, "source_category", ""),
+    )
+    service = (getattr(r, "service", "") or "").lower().strip()
+    priorities = [p.lower() for p in (provider_priority or [])]
+    provider_rank = priorities.index(service) if service in priorities else getattr(r, "provider_rank", 99)
+
     return (
+        evidence_rank,
+        language_rank,
         lang_penalty,
         entitled_tier,
-        r.source_rank,
+        source_rank,
         official_penalty,
         local_penalty,
-        r.provider_rank,
-        r.score,
+        provider_rank,
+        score,
     )
 
 
@@ -244,6 +270,10 @@ def rank_offers(
                 provider_rank=provider_rank,
                 ranking_explanation=explanations,
                 is_scraped_source=is_scraped,
+                source_category=(
+                    getattr(offer, "source_category", "")
+                    or ("unofficial" if is_scraped else "official")
+                ),
             )
         )
 
@@ -255,6 +285,7 @@ def rank_offers(
             prefer_local=prefer_local,
             prefer_entitled=prefer_entitled,
             local_country=local_country,
+            provider_priority=provider_priority,
         )
     )
     return ranked

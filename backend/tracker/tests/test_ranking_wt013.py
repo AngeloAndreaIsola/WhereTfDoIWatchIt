@@ -40,6 +40,7 @@ def _offer(
     audio=(),
     subs=(),
     is_scraped=False,
+    source_category="",
 ):
     return Offer(
         country=country,
@@ -49,6 +50,7 @@ def _offer(
         audio_languages=list(audio),
         subtitle_languages=list(subs),
         is_scraped_source=is_scraped,
+        source_category=source_category,
     )
 
 
@@ -143,6 +145,26 @@ class RankingWT013Tests(SimpleTestCase):
         self.assertEqual(ranked[0].service, "ConfirmedEN")
         self.assertTrue(ranked[0].is_language_match)
         self.assertIsNone(ranked[1].is_language_match)
+
+    def test_verified_availability_evidence_precedes_stale_or_unknown(self):
+        pref = _pref(ranking_preferences={
+            "version": 1,
+            "source_priority": ["unofficial", "official", "local"],
+            "prefer_official": False,
+            "prefer_local": False,
+            "prefer_entitled": False,
+            "provider_priority": ["stalefav", "unknownfav"],
+        })
+        offers = [
+            Offer(country="US", service="StaleFav", offer_type="subscription", quality="hd",
+                  audio_languages=["EN"], availability_evidence="stale"),
+            Offer(country="US", service="UnknownFav", offer_type="subscription", quality="hd",
+                  audio_languages=["EN"], availability_evidence="unknown"),
+            Offer(country="US", service="Verified", offer_type="subscription", quality="sd",
+                  audio_languages=["EN"], availability_evidence="verified"),
+        ]
+        ranked = rank_offers(offers, pref)
+        self.assertEqual([r.service for r in ranked], ["Verified", "StaleFav", "UnknownFav"])
 
     def test_compute_source_rank_handles_unknown_category(self):
         self.assertEqual(compute_source_rank(["official", "local"], is_scraped=True, is_local=False), 99)
@@ -275,6 +297,91 @@ class RankingWT013Tests(SimpleTestCase):
         # best_offer should agree with rank_offers:
         self.assertIsNotNone(res.best_offer)
         self.assertEqual(res.best_offer.service, "ScrapedOne")
+
+    def test_local_official_vs_vpn_unofficial_obeys_source_priority(self):
+        """source_priority can put a reachable VPN offer first when prefer_local is disabled."""
+        from tracker.services.access import AccessVerdict, build_explicit_access, resolve_title
+
+        local = _offer("US", "OfficialLocal", audio=("EN",))
+        vpn_unofficial = _offer(
+            "IT", "UnofficialVPN", audio=("EN",), source_category="unofficial"
+        )
+        pref = _pref(
+            countries=("US", "IT"),
+            current_country="US",
+            ranking_preferences={
+                "version": 1,
+                "source_priority": ["unofficial", "official", "local"],
+                "prefer_official": True,
+                "prefer_local": False,
+                "prefer_entitled": True,
+                "provider_priority": [],
+            },
+        )
+
+        ranked = rank_offers([local, vpn_unofficial], pref, current_country="US")
+        result = resolve_title(
+            None, [local, vpn_unofficial], pref, access=build_explicit_access(
+                ["OfficialLocal", "UnofficialVPN"]
+            ), current_country="US", provider_map={},
+        )
+        self.assertEqual(ranked[0].service, "UnofficialVPN")
+        self.assertEqual(result.best_offer.service, ranked[0].service)
+        # Offer order does not change the factual verdict: one eligible local offer exists.
+        self.assertEqual(result.verdict, AccessVerdict.AVAILABLE_HERE)
+        self.assertEqual(result.vpn_offers[0].locality, "vpn")
+
+    def test_local_source_priority_keeps_local_offer_first_but_verdict_tracks_reachability(self):
+        from tracker.services.access import AccessVerdict, build_explicit_access, resolve_title
+
+        local = _offer("US", "OfficialLocal", audio=("EN",))
+        vpn_unofficial = _offer(
+            "IT", "UnofficialVPN", audio=("EN",), source_category="unofficial"
+        )
+        pref = _pref(
+            countries=("US", "IT"),
+            current_country="US",
+            ranking_preferences={
+                "version": 1,
+                "source_priority": ["local", "official", "unofficial"],
+                "prefer_official": True,
+                "prefer_local": False,
+                "prefer_entitled": True,
+                "provider_priority": [],
+            },
+        )
+        ranked = rank_offers([vpn_unofficial, local], pref, current_country="US")
+        result = resolve_title(
+            None, [vpn_unofficial, local], pref,
+            access=build_explicit_access(["OfficialLocal", "UnofficialVPN"]),
+            current_country="US", provider_map={},
+        )
+        self.assertEqual(ranked[0].service, "OfficialLocal")
+        self.assertEqual(result.best_offer.service, ranked[0].service)
+        self.assertEqual(result.verdict, AccessVerdict.AVAILABLE_HERE)
+
+    def test_vpn_only_offer_keeps_vpn_verdict_when_ranked_first(self):
+        from tracker.services.access import AccessVerdict, build_explicit_access, resolve_title
+
+        vpn_offer = _offer("IT", "UnofficialVPN", audio=("EN",), source_category="unofficial")
+        pref = _pref(
+            countries=("IT",),
+            current_country="US",
+            ranking_preferences={
+                "version": 1,
+                "source_priority": ["unofficial", "official", "local"],
+                "prefer_official": False,
+                "prefer_local": False,
+                "prefer_entitled": True,
+                "provider_priority": [],
+            },
+        )
+        result = resolve_title(
+            None, [vpn_offer], pref, access=build_explicit_access(["UnofficialVPN"]),
+            current_country="US", provider_map={},
+        )
+        self.assertEqual(result.verdict, AccessVerdict.AVAILABLE_VPN)
+        self.assertEqual(result.best_offer.service, "UnofficialVPN")
 
     def test_preference_serializer_reset_action(self):
         """Serializer resets to defaults when reset=True or null is passed."""

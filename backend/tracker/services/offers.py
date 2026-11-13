@@ -21,6 +21,10 @@ class Offer:
     audio_languages: list[str] = field(default_factory=list)
     subtitle_languages: list[str] = field(default_factory=list)
     is_scraped_source: bool = False
+    #: Optional explicit provenance tier. Empty preserves the legacy inference
+    #: from ``is_scraped_source`` while allowing an unofficial source with
+    #: country-scoped reach to remain distinct from a globally scraped host.
+    source_category: str = ""
     #: Structured display price (``{"amount": "2.99", "currency": "EUR", ...}``)
     #: or None. "No price" is never rendered as "free".
     price: Optional[dict] = None
@@ -60,6 +64,7 @@ class Offer:
             audio_languages=list(audio),
             subtitle_languages=list(subs),
             is_scraped_source=bool(d.get("is_scraped_source", False)),
+            source_category=(d.get("source_category") or "").lower().strip(),
             price=d.get("price") or None,
             prices=list(d.get("prices") or []),
             availability_evidence=d.get("availability_evidence") or "verified",
@@ -79,6 +84,7 @@ class Offer:
             "audio_languages": self.audio_languages,
             "subtitle_languages": self.subtitle_languages,
             "is_scraped_source": self.is_scraped_source,
+            "source_category": self.source_category,
             "price": self.price,
             "prices": self.prices,
             "availability_evidence": self.availability_evidence,
