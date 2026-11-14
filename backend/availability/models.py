@@ -140,6 +140,66 @@ class Source(models.Model):
         return self.name
 
 
+class AvailabilityExperiment(models.Model):
+    """Durable budget state for one explicitly authorized experiment token."""
+
+    authorization_id = models.UUIDField(primary_key=True)
+    manifest_digest = models.CharField(max_length=64)
+    database_identity = models.CharField(max_length=255)
+    maximum_attempts = models.PositiveSmallIntegerField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class AvailabilityExperimentAttempt(models.Model):
+    """Durable reservation; a missing outcome means the attempt is spent/ambiguous."""
+
+    experiment = models.ForeignKey(
+        AvailabilityExperiment, on_delete=models.PROTECT, related_name="attempts"
+    )
+    ordinal = models.PositiveSmallIntegerField()
+    scope_id = models.CharField(max_length=80)
+    source_slug = models.CharField(max_length=50)
+    operation = models.CharField(max_length=50)
+    method = models.CharField(max_length=8)
+    destination_host = models.CharField(max_length=255)
+    reserved_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("experiment", "ordinal"), name="uniq_avail_exp_attempt_ordinal"
+            )
+        ]
+
+
+class AvailabilityExperimentAttemptOutcome(models.Model):
+    """Append-only response event; no response metadata or URL is persisted."""
+
+    attempt = models.OneToOneField(
+        AvailabilityExperimentAttempt, on_delete=models.PROTECT, related_name="outcome"
+    )
+    outcome = models.CharField(max_length=12, choices=(("success", "Success"), ("failure", "Failure")))
+    http_status = models.PositiveSmallIntegerField(null=True, blank=True)
+    recorded_at = models.DateTimeField(auto_now_add=True)
+
+
+class AvailabilityExperimentScope(models.Model):
+    """Completion marker; incomplete reserved scopes require manual reconciliation."""
+
+    experiment = models.ForeignKey(
+        AvailabilityExperiment, on_delete=models.PROTECT, related_name="scopes"
+    )
+    scope_id = models.CharField(max_length=80)
+    completed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("experiment", "scope_id"), name="uniq_avail_exp_scope"
+            )
+        ]
+
+
 class SyncRun(models.Model):
     provider = models.ForeignKey(
         "tracker.Provider", on_delete=models.PROTECT, related_name="sync_runs"
