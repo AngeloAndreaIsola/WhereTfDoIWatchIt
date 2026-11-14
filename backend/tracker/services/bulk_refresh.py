@@ -353,6 +353,34 @@ def process_watchlist_refresh(
     limiter: Optional[RateLimiter] = None,
     content_types: tuple[str, ...] | list[str] = ("movie", "series"),
 ) -> dict:
+    """Run the watchlist drain and stale sweep under the shared drain lock.
+
+    The lock covers both phases: otherwise a queue worker could begin draining
+    a newly queued request for a movie while this invocation is sweeping that
+    same movie. On contention this invocation defers without creating a run,
+    settling queue rows, or starting the sweep.
+    """
+    from .refresh_requests import title_drain_lock, _drain_lock_busy_summary
+
+    with title_drain_lock() as acquired:
+        if not acquired:
+            return _drain_lock_busy_summary(budget)
+        return _process_watchlist_refresh_locked(
+            budget=budget,
+            user_id=user_id,
+            refresh_service=refresh_service,
+            limiter=limiter,
+            content_types=content_types,
+        )
+
+
+def _process_watchlist_refresh_locked(
+    budget: int = 90,
+    user_id: int = 1,
+    refresh_service: Optional[AvailabilityRefreshService] = None,
+    limiter: Optional[RateLimiter] = None,
+    content_types: tuple[str, ...] | list[str] = ("movie", "series"),
+) -> dict:
     """Batch refresh watchlist movie availability up to budget limit.
 
     Candidates selection & priority:
@@ -439,9 +467,12 @@ def process_watchlist_refresh(
     # module load time. The returned set owns those titles for this run —
     # settled or still queued — so the sweep below neither re-attempts nor
     # double-counts them.
-    from .refresh_requests import drain_refresh_requests, _metered_source_is_unnecessary
+    from .refresh_requests import (
+        _drain_refresh_requests_locked,
+        _metered_source_is_unnecessary,
+    )
 
-    queue_owned = drain_refresh_requests(
+    queue_owned = _drain_refresh_requests_locked(
         summary=summary,
         service=service,
         limiter=limiter,
