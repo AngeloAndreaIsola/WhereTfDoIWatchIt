@@ -15,6 +15,7 @@
       "maximum_attempts": 2,
       "endpoint": "https://frontier.api-graph.mediaset.it/",
       "transport_operations": ["MediasetSearch", "MediasetMovie"],
+      "verified_provider_id": null,
       "expected_offer_type": "subscription"
     },
     {

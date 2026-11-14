@@ -38,9 +38,13 @@ from availability.sources.justwatch import JustWatchSource
 from availability.sources.justwatch_client import JustWatchClient
 from availability.sources.justwatch_client import SEARCH_TITLES_QUERY
 from availability.sources.mediaset_infinity import (
+    APP_VERSION,
+    DEFAULT_TIMEOUT,
     FRONTIER_URL,
     MediasetInfinityClient,
     MediasetInfinitySource,
+    SITE_ORIGIN,
+    USER_AGENT,
 )
 from availability.services.refresh import AvailabilityRefreshService
 from tracker.models import Movie, RefreshRequest
@@ -73,6 +77,9 @@ APPROVED_SCOPES = [
         "year": 2021, "operation": "title_refresh", "maximum_attempts": 2,
         "endpoint": FRONTIER_URL,
         "transport_operations": ["MediasetSearch", "MediasetMovie"],
+        # Mediaset search cards have no year; this must be replaced with an
+        # independently reviewed GUID before this source can execute.
+        "verified_provider_id": None,
         "expected_offer_type": "subscription",
     },
     {
@@ -226,6 +233,10 @@ class ReservedTransport:
         self.source_slug = source_slug
         self.operation_attempts = {}
         self.mediaset_guid = None
+        if source_slug == "mediaset_infinity" and not scope.get("verified_provider_id"):
+            raise ExperimentBlocked(
+                "Mediaset scope is disabled until an independently verified provider GUID is pinned"
+            )
         self.session = requests.Session()
         self.session.trust_env = False
         self.session.mount("https://", requests.adapters.HTTPAdapter(max_retries=0))
@@ -255,6 +266,18 @@ class ReservedTransport:
         if self.authorization.get("manifest_digest") != manifest_digest(APPROVED_MANIFEST):
             raise ExperimentBlocked("authorization manifest digest is not approved")
         variables = (json or {}).get("variables") or {}
+        if self.source_slug == "mediaset_infinity":
+            expected_headers = {
+                "User-Agent": USER_AGENT,
+                "Content-Type": "application/json",
+                "x-m-platform": "WEB",
+                "x-m-property": "MPLAY",
+                "x-m-app-version": APP_VERSION,
+                "Origin": SITE_ORIGIN,
+                "Referer": f"{SITE_ORIGIN}/",
+            }
+            if headers != expected_headers or timeout != DEFAULT_TIMEOUT:
+                raise ExperimentBlocked("Mediaset transport headers or finite timeout differ from its pinned client contract")
         if self.source_slug == "justwatch":
             expected_filter = {
                 "includeTitlesWithoutUrl": True,
@@ -317,6 +340,8 @@ class ReservedTransport:
         _record_outcome(attempt, "success" if 200 <= response.status_code < 300 else "failure", response.status_code)
         if 300 <= response.status_code < 400:
             raise ExperimentBlocked("redirect response denied; no redirect hop was followed")
+        if self.source_slug == "mediaset_infinity" and response.status_code != 200:
+            raise ExperimentBlocked("Mediaset requires HTTP 200; response rejected after spending the attempt")
         if self.source_slug == "mediaset_infinity" and operation == "MediasetSearch" and 200 <= response.status_code < 300:
             try:
                 from availability.sources.mediaset_infinity import _find_movie_candidate
@@ -327,10 +352,35 @@ class ReservedTransport:
                         title=scope["title"], year=scope["year"],
                     ),
                 )
-                self.mediaset_guid = str(candidate.get("guid") or "") if candidate else None
+                candidate_guid = str(candidate.get("guid") or "") if candidate else ""
+                self.mediaset_guid = (
+                    candidate_guid
+                    if candidate_guid and candidate_guid == self.scope.get("verified_provider_id")
+                    else None
+                )
             except Exception:
                 self.mediaset_guid = None
         return response
+
+
+def _mediaset_http_post(transport):
+    """Adapt the existing (url, payload)->dict client seam to guarded HTTP."""
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Content-Type": "application/json",
+        "x-m-platform": "WEB",
+        "x-m-property": "MPLAY",
+        "x-m-app-version": APP_VERSION,
+        "Origin": SITE_ORIGIN,
+        "Referer": f"{SITE_ORIGIN}/",
+    }
+
+    def post(url, payload):
+        return transport(
+            url, payload, headers=headers, timeout=DEFAULT_TIMEOUT
+        ).json()
+
+    return post
 
 
 def _reserve_attempt(authorization, scope, operation, method, host):
@@ -433,6 +483,27 @@ def read_only_preflight(manifest):
         reservations_by_source[attempt.source_slug] = reservations_by_source.get(attempt.source_slug, 0) + 1
         if attempt.pk not in outcome_ids:
             ambiguous_reservations += 1
+    current_experiment_id = str(uuid5(
+        NAMESPACE_URL,
+        f"stage2e-availability-refresh:{actual_database_identity}" if actual_database_identity else "stage2e-availability-refresh:unknown",
+    ))
+    current_attempts = AvailabilityExperimentAttempt.objects.using(alias).filter(
+        experiment_id=current_experiment_id
+    )
+    current_outcomes = set(AvailabilityExperimentAttemptOutcome.objects.using(alias).filter(
+        attempt__experiment_id=current_experiment_id
+    ).values_list("attempt_id", flat=True))
+    current_ambiguous = current_attempts.exclude(pk__in=current_outcomes).count()
+    current_attempt_count = current_attempts.count()
+    current_attempts_by_source = {}
+    current_attempts_by_operation = {}
+    current_attempts_by_scope = {}
+    for attempt in current_attempts.values("scope_id", "source_slug", "operation"):
+        current_attempts_by_source[attempt["source_slug"]] = current_attempts_by_source.get(attempt["source_slug"], 0) + 1
+        key = (attempt["source_slug"], attempt["operation"])
+        current_attempts_by_operation[key] = current_attempts_by_operation.get(key, 0) + 1
+        current_attempts_by_scope[attempt["scope_id"]] = current_attempts_by_scope.get(attempt["scope_id"], 0) + 1
+    current_incomplete_scopes = _incomplete_scope_ids(current_experiment_id)
     result = {
         "database_engine": cfg.get("ENGINE", "unknown"),
         "database_name": str(cfg.get("NAME", "unknown")),
@@ -449,6 +520,10 @@ def read_only_preflight(manifest):
             "total": sum(reservations_by_source.values()),
             "by_source": reservations_by_source,
             "ambiguous_without_outcome": ambiguous_reservations,
+            "current_experiment_total": current_attempt_count,
+            "current_experiment_ambiguous": current_ambiguous,
+            "current_experiment_by_source": current_attempts_by_source,
+            "current_experiment_incomplete_scopes": sorted(current_incomplete_scopes),
         },
         "destination_policy": "fixed exact HTTPS endpoints; redirects denied",
         "expected_maximum_attempts": GLOBAL_LIMIT,
@@ -499,6 +574,8 @@ def read_only_preflight(manifest):
             result["blockers"].append(f"scope {scope['scope_id']} title/year do not match manifest")
         if scope["source_slug"] not in quota_evidence:
             result["blockers"].append(f"scope {scope['scope_id']} has no current quota evidence")
+        if scope["source_slug"] == "mediaset_infinity" and not scope.get("verified_provider_id"):
+            result["blockers"].append(f"scope {scope['scope_id']} has no independently verified provider GUID")
         if pending_scope:
             result["blockers"].append(f"scope {scope['scope_id']} overlaps a pending ordinary refresh")
         if source_locks.get(scope["source_slug"], {}).get("held"):
@@ -512,6 +589,29 @@ def read_only_preflight(manifest):
         result["blockers"].append("preflight DB is not PostgreSQL")
     if not actual_database_identity:
         result["blockers"].append("actual PostgreSQL cluster/database identity is unavailable")
+    if current_ambiguous:
+        result["blockers"].append("current experiment has ambiguous reservations requiring manual reconciliation")
+    if current_incomplete_scopes:
+        result["blockers"].append(
+            "current experiment has reserved scopes without completion markers requiring reconciliation"
+        )
+    if current_attempt_count >= manifest["maximum_attempts"]:
+        result["blockers"].append("current experiment attempt budget is exhausted")
+    if any(count > SOURCE_LIMITS.get(source_slug, -1) for source_slug, count in current_attempts_by_source.items()):
+        result["blockers"].append("current experiment source attempt budget is exhausted or inconsistent")
+    for (source_slug, operation), count in current_attempts_by_operation.items():
+        if count > OPERATION_LIMITS.get(source_slug, {}).get(operation, -1):
+            result["blockers"].append("current experiment operation attempt budget is exhausted or inconsistent")
+    for scope in manifest["scopes"]:
+        scope_id = scope["scope_id"]
+        if scope_id in current_incomplete_scopes and current_attempts_by_scope.get(scope_id, 0) >= scope["maximum_attempts"]:
+            result["blockers"].append(f"scope {scope_id} exhausted its per-scope attempts and needs reconciliation")
+    for (source_slug, operation), count in current_attempts_by_operation.items():
+        if count >= OPERATION_LIMITS.get(source_slug, {}).get(operation, GLOBAL_LIMIT) and any(
+            scope["source_slug"] == source_slug and scope["scope_id"] in current_incomplete_scopes
+            for scope in manifest["scopes"]
+        ):
+            result["blockers"].append(f"{source_slug} {operation} exhausted its operation attempts")
     result["readiness"] = "ready" if not result["blockers"] else "blocked"
     return result
 
@@ -680,7 +780,8 @@ def execute_manifest(manifest, authorization):
                     source = JustWatchSource(client=client)
                 elif scope["source_slug"] == "mediaset_infinity":
                     client = MediasetInfinityClient(
-                        http_post=lambda url, payload: transport(url, payload).json()
+                        timeout=DEFAULT_TIMEOUT,
+                        http_post=_mediaset_http_post(transport),
                     )
                     source = MediasetInfinitySource(client=client)
                 else:

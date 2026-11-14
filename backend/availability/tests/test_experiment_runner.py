@@ -28,6 +28,7 @@ from availability.services.experiment_runner import (
     _reserve_attempt,
     _incomplete_scope_ids,
     _quota_evidence,
+    _mediaset_http_post,
     issue_authorization,
     manifest_digest,
     read_authorization,
@@ -216,33 +217,51 @@ class GuardedTransportTests(SimpleTestCase):
     @patch("availability.services.experiment_runner._record_outcome")
     @patch("availability.services.experiment_runner._reserve_attempt", return_value=Mock())
     @patch("availability.services.experiment_runner.requests.Session.post")
-    def test_mediaset_search_and_detail_each_spend_one_attempt(self, post, reserve, _outcome):
+    def test_mediaset_scope_without_reviewed_guid_is_denied_before_network(self, post, reserve, _outcome):
         scope = next(s for s in load_manifest()["scopes"] if s["source_slug"] == "mediaset_infinity")
+        with self.assertRaisesRegex(ExperimentBlocked, "independently verified provider GUID"):
+            ReservedTransport(
+                authorization=self.authorization, scope=scope, source_slug="mediaset_infinity"
+            )
+        self.assertEqual(post.call_count, 0)
+        self.assertEqual(reserve.call_count, 0)
+
+    @patch("availability.services.experiment_runner.validate_scope")
+    @patch("availability.services.experiment_runner._record_outcome")
+    @patch("availability.services.experiment_runner._reserve_attempt", return_value=Mock())
+    @patch("availability.services.experiment_runner.requests.Session.post")
+    def test_mediaset_wired_callback_pins_guid_headers_timeout_and_http_200(
+        self, post, reserve, _outcome, _validate_scope
+    ):
+        scope = dict(next(s for s in load_manifest()["scopes"] if s["source_slug"] == "mediaset_infinity"))
+        scope["verified_provider_id"] = "fixture-guid"
         guard = ReservedTransport(
             authorization=self.authorization, scope=scope, source_slug="mediaset_infinity"
         )
         response = Mock(status_code=200)
-        search_result = {
-            "data": {"getSearchPage": {"areaContainersConnection": {"areaContainers": [
-                {"areas": [{"sections": [{"collections": [{"itemsConnection": {"items": [
-                    {"__typename": "VideoItem", "guid": "fixture-id", "cardTitle": "Dune", "editorialType": "Movie"}
-                ]}}]}]}]}
-            ]}}}
-        }
-        def response_json():
-            if post.call_args.kwargs["json"]["operationName"] == "MediasetSearch":
-                return search_result
-            return {"data": {"getMoviePage": {"dataSource": {}}}}
-        response.json.side_effect = response_json
+        response.json.return_value = {"data": {"getSearchPage": {"areaContainersConnection": {
+            "areaContainers": [{"areas": [{"sections": [{"collections": [{"itemsConnection": {
+                "items": [{"__typename": "VideoItem", "guid": "fixture-guid", "cardTitle": "Dune", "editorialType": "Movie"}]
+            }}]}]}]}]
+        }}}}
         post.return_value = response
-        client = MediasetInfinityClient(http_post=lambda url, payload: guard(url, payload).json())
+        client = MediasetInfinityClient(http_post=_mediaset_http_post(guard))
         client.search("Dune")
-        client.movie("fixture-id")
+        self.assertEqual(post.call_count, 1)
+        self.assertEqual(reserve.call_count, 1)
+        self.assertEqual(post.call_args.kwargs["headers"]["x-m-platform"], "WEB")
+        self.assertEqual(post.call_args.kwargs["headers"]["x-m-app-version"], "1.5.2")
+        self.assertEqual(post.call_args.kwargs["timeout"], 30)
+        self.assertFalse(post.call_args.kwargs["allow_redirects"])
+
+        post.return_value = Mock(status_code=201)
+        with self.assertRaises(SourceFetchError):
+            guard2 = ReservedTransport(
+                authorization=self.authorization, scope=scope, source_slug="mediaset_infinity"
+            )
+            MediasetInfinityClient(http_post=_mediaset_http_post(guard2)).search("Dune")
         self.assertEqual(post.call_count, 2)
         self.assertEqual(reserve.call_count, 2)
-        with self.assertRaises(SourceFetchError):
-            client.movie("another-id")
-        self.assertEqual(post.call_count, 2)
 
     @patch("availability.services.experiment_runner._record_outcome")
     @patch("availability.services.experiment_runner._reserve_attempt", return_value=Mock())
@@ -451,12 +470,65 @@ class PostgreSQLPreflightTests(TransactionTestCase):
         before = (Movie.objects.count(), Source.objects.count(), AvailabilityExperimentAttempt.objects.count())
         report = read_only_preflight(self.manifest)
         after = (Movie.objects.count(), Source.objects.count(), AvailabilityExperimentAttempt.objects.count())
-        self.assertEqual(report["readiness"], "ready", report)
+        self.assertEqual(report["readiness"], "blocked", report)
+        self.assertTrue(any("provider GUID" in blocker for blocker in report["blockers"]))
         self.assertEqual(before, after)
         self.assertIn("expected_refresh_interval_seconds", report["scopes"][1]["source_configuration"])
         self.assertEqual(report["scopes"][1]["source_configuration"]["api_token"], "[redacted]")
         self.assertEqual(report["queue_scope_overlap"], 0)
         self.assertEqual(report["expected_maximum_attempts"], 11)
+
+    def test_preflight_blocks_ambiguous_current_experiment_reservation(self):
+        from availability.services.experiment_runner import database_identity
+        identity = database_identity()
+        experiment_id = str(uuid5(NAMESPACE_URL, f"stage2e-availability-refresh:{identity}"))
+        experiment = AvailabilityExperiment.objects.create(
+            authorization_id=experiment_id,
+            manifest_digest=manifest_digest(self.manifest),
+            database_identity=identity,
+            maximum_attempts=11,
+        )
+        AvailabilityExperimentAttempt.objects.create(
+            experiment=experiment,
+            ordinal=1,
+            scope_id="inception-nl-justwatch",
+            source_slug="justwatch",
+            operation="GetSearchTitles",
+            method="POST",
+            destination_host="apis.justwatch.com",
+        )
+        report = read_only_preflight(self.manifest)
+        self.assertEqual(report["reservations"]["current_experiment_ambiguous"], 1)
+        self.assertTrue(any("ambiguous reservations" in blocker for blocker in report["blockers"]))
+
+    def test_preflight_blocks_responded_but_incomplete_exhausted_scope(self):
+        from availability.services.experiment_runner import database_identity
+        identity = database_identity()
+        experiment_id = str(uuid5(NAMESPACE_URL, f"stage2e-availability-refresh:{identity}"))
+        experiment = AvailabilityExperiment.objects.create(
+            authorization_id=experiment_id,
+            manifest_digest=manifest_digest(self.manifest),
+            database_identity=identity,
+            maximum_attempts=11,
+        )
+        for ordinal in range(1, 4):
+            attempt = AvailabilityExperimentAttempt.objects.create(
+                experiment=experiment,
+                ordinal=ordinal,
+                scope_id="inception-nl-justwatch",
+                source_slug="justwatch",
+                operation="GetSearchTitles",
+                method="POST",
+                destination_host="apis.justwatch.com",
+            )
+            AvailabilityExperimentAttemptOutcome.objects.create(
+                attempt=attempt, outcome="failure", http_status=503
+            )
+        report = read_only_preflight(self.manifest)
+        self.assertEqual(report["reservations"]["current_experiment_ambiguous"], 0)
+        self.assertIn("inception-nl-justwatch", report["reservations"]["current_experiment_incomplete_scopes"])
+        self.assertTrue(any("without completion markers" in blocker for blocker in report["blockers"]))
+        self.assertTrue(any("per-scope attempts" in blocker for blocker in report["blockers"]))
 
     def test_pending_exact_scope_and_missing_quota_block_preflight(self):
         os.environ.pop("AVAILABILITY_EXPERIMENT_QUOTA_EVIDENCE", None)
@@ -513,6 +585,7 @@ class PostgreSQLPreflightTests(TransactionTestCase):
         from availability.services import experiment_runner
         with patch.object(experiment_runner, "database_identity", return_value="test-db"), \
              patch.object(experiment_runner, "read_only_preflight", return_value={"readiness": "ready", "blockers": []}), \
+             patch.object(experiment_runner, "ReservedTransport", return_value=Mock(session=Mock())), \
              patch("availability.services.refresh.AvailabilityRefreshService.refresh_content", new=mock_refresh):
             with ThreadPoolExecutor(max_workers=1) as pool:
                 first = pool.submit(execute_manifest, self.manifest, auth)
