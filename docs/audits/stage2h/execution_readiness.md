@@ -108,6 +108,19 @@ provider_evidence:
 | Watchmode | 0 | Denied |
 | `legacy_scraper` | 0 | Denied |
 
+## Reduced-scope option (proposal only)
+
+If the eventual objective is a JustWatch refresh observation rather than a
+three-case accuracy comparison, a separately reviewed two-scope manifest could
+contain only Inception NL and Dune NL, with 3 attempts each (6 total), Mediaset
+set to 0, and provider-evidence requests set to 0. This would not establish
+independent accuracy because no primary-provider URLs are saved. It would also
+not be accepted by the current fixed-manifest validator: the fixed manifest
+must remain unchanged. A reduced run would require a new reviewed manifest
+revision/code approval, a new digest and database-bound explicit
+authorization, after the database, lock, quota, and worker gates are resolved.
+This option is not authorized or activated.
+
 ## Conclusion
 
 **INCONCLUSIVE** — do not execute. The required PRs have not merged and the

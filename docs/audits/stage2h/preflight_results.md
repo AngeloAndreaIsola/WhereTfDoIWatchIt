@@ -41,6 +41,39 @@ database. Applying migration `0015_availability_experiment_ledger` to the
 actual application database would require separate authorization. No migration
 was applied. The actual Docker-volume migration state remains unknown.
 
+### Exact effects of migration 0015 (proposed in PR #81)
+
+If separately authorized and applied after its code prerequisites merge, the
+migration creates four initially empty tables:
+
+- `availability_availabilityexperiment`: authorization UUID, manifest digest,
+  database identity, maximum attempts, and creation time.
+- `availability_availabilityexperimentattempt`: experiment FK, ordinal,
+  scope/source/operation/method, destination host, and reservation time; a
+  unique `(experiment, ordinal)` constraint and protected FK.
+- `availability_availabilityexperimentattemptoutcome`: one outcome per
+  attempt (`success`/`failure`), optional HTTP status, and record time; protected
+  one-to-one FK.
+- `availability_availabilityexperimentscope`: completed scope and timestamp;
+  unique `(experiment, scope_id)` and protected FK.
+
+On PostgreSQL it installs one trigger per table that rejects every `UPDATE`
+and `DELETE`, plus a shared trigger function. The migration has no data-copy or
+source-activation step and does not alter existing application rows. Its
+reverse operation drops those four triggers and the function before Django
+drops the newly created tables. The SQLite guard installer is a no-op; the
+runner requires PostgreSQL for durable reservations.
+
+Before any authorized production migration, require a fresh consistent backup
+of the confirmed `tracker` database and a verified restore procedure, plus a
+pre-migration Docker-volume snapshot or equivalent storage backup. Confirm the
+database/container/volume identity first, quiesce writers in an approved
+maintenance window, record backup identifiers and checksums, and obtain
+separate explicit authorization for the migration. Afterward, verify the
+`django_migrations` row, all four relations, all four trigger definitions in
+`pg_trigger`, and an approved rollback/restore plan. None of those actions was
+performed here.
+
 The Stage 2H command preflight is **blocked**: its runner and ledger schema are
 not present on current master, and the target Docker database was unreachable.
 Equivalent read-only SQL diagnostics were run only against the separate host
