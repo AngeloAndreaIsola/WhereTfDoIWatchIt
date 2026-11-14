@@ -275,6 +275,20 @@ def unified_catalog(request):
     unified_items = []
     seen_tmdb_ids = set()
 
+    # Watched flag for the official half, read once. Official rows are Movie
+    # rows, so this is the same UserMovieData source the mark/unmark endpoints
+    # write — never the watchlist.
+    watched_filter = (
+        request.GET.get("watched") or request.GET.get("watched_status") or ""
+    ).lower().strip()
+    watched_movie_ids: set[int] = set()
+    if watched_filter in ("watched", "unwatched"):
+        watched_movie_ids = set(
+            UserMovieData.objects.filter(
+                user_id=1, is_watched=True
+            ).values_list("movie_id", flat=True)
+        )
+
     # 1. Fetch Official Catalog Items
     if include_official:
         movies = Movie.objects.all().order_by("-id")
@@ -290,6 +304,10 @@ def unified_catalog(request):
             m = item["movie"]
             watch_res = item["watchability"]
             seen_tmdb_ids.add(m.tmdb_id)
+
+            # Membership already reflects the watched filter (applied inside
+            # apply_composable_filters); this only labels the row for display.
+            is_watched = m.id in watched_movie_ids if watched_filter else None
 
             best_offer = watch_res.best_offer.to_dict() if watch_res.best_offer else None
             watch_url = best_offer.get("url") if best_offer else None
@@ -321,17 +339,40 @@ def unified_catalog(request):
                 "watchability": watch_res.to_dict(),
                 "unofficial_details": None,
                 "watch_url": watch_url,
+                "is_watched": bool(is_watched) if watched_filter else None,
             })
 
     # 2. Fetch Unofficial Catalog Items (canonical, via the scraper bridge)
     if include_scraper:
-        unified_items.extend(
-            unofficial_catalogue_items(
-                request.GET,
-                allowed_provider_slugs=allowed_provider_slugs,
-                exclude_tmdb_ids=seen_tmdb_ids,
-            )
+        scraped_items = unofficial_catalogue_items(
+            request.GET,
+            allowed_provider_slugs=allowed_provider_slugs,
+            exclude_tmdb_ids=seen_tmdb_ids,
         )
+        if watched_filter in ("watched", "unwatched"):
+            # An unofficial entry has watch state only once it resolves to a
+            # local Movie; an unresolved entry has never been tracked, so it
+            # can only ever be unwatched. One batched read over the resolved
+            # tmdb ids, then keep/drop each row.
+            resolved_ids = {
+                item["tmdb_id"] for item in scraped_items if item.get("tmdb_id")
+            }
+            watched_tmdb_ids: set[int] = set()
+            if resolved_ids:
+                watched_tmdb_ids = set(
+                    UserMovieData.objects.filter(
+                        user_id=1, movie__tmdb_id__in=resolved_ids, is_watched=True
+                    ).values_list("movie__tmdb_id", flat=True)
+                )
+            keep = []
+            for item in scraped_items:
+                is_watched = item.get("tmdb_id") in watched_tmdb_ids
+                if is_watched != (watched_filter == "watched"):
+                    continue
+                item["is_watched"] = is_watched
+                keep.append(item)
+            scraped_items = keep
+        unified_items.extend(scraped_items)
 
     # Sort combined results if sort_by parameter is provided
     sort_by = (request.GET.get("sort_by") or request.GET.get("sort") or "").lower().strip()
@@ -2959,6 +3000,13 @@ def watched_list(request):
     page_size = min(positive_int("page_size", 24), 100)
 
     qs = UserMovieData.objects.filter(user_id=user_id, is_watched=True).select_related("movie")
+
+    # This endpoint is already scoped to watched rows. Keep the shared
+    # watched selector semantics: "watched" and "all" are equivalent here,
+    # while "unwatched" intersects this scope to an empty result.
+    watched_filter = (request.GET.get("watched") or "all").strip().lower()
+    if watched_filter == "unwatched":
+        qs = qs.none()
 
     content_type = request.GET.get("content_type")
     if content_type in ("movie", "series"):
