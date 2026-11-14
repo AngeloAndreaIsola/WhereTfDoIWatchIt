@@ -512,11 +512,16 @@ def import_interests(
     Uses the same TMDb search + ambiguity logic as the Letterboxd importer.
     """
     from tracker.models import Movie, RefreshPriority, WatchlistItem
+    from availability.freshness import source_configuration_snapshot
+    from availability.sources import DEFAULT_SOURCE_SLUG
     from tracker.services.refresh_requests import request_import_refresh
     from tracker.services.tmdb import TMDbClient
 
     client = client or TMDbClient(settings.TMDB_API_KEY, timeout=3)
     result = GoogleInterestsImportResult()
+    import_freshness_configuration = source_configuration_snapshot().get(
+        DEFAULT_SOURCE_SLUG, {}
+    )
 
     # Fast in-memory cache of local movies to prevent repeated TMDb calls.
     local_movies_by_title_year: dict[tuple[str, Optional[int]], Movie] = {}
@@ -614,6 +619,7 @@ def import_interests(
             movie,
             priority=RefreshPriority.WATCHLIST,
             entering=movie_created or item_created,
+            source_configuration=import_freshness_configuration,
         )
 
     return result

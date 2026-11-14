@@ -58,6 +58,7 @@ from django.db import IntegrityError, connection, connections
 from django.db.models import Q
 from django.utils import timezone
 
+from availability.freshness import source_configuration_snapshot
 from availability.models import Offer
 from availability.services.refresh import AvailabilityRefreshService
 from availability.sources import DEFAULT_SOURCE_SLUG, source_registry
@@ -169,6 +170,7 @@ def request_availability_refresh(
     country: str | None = None,
     if_stale: bool = True,
     batch: uuid.UUID | None = None,
+    source_configuration=None,
 ) -> RefreshRequest | None:
     """Request an asynchronous canonical availability refresh for *movie*.
 
@@ -198,8 +200,18 @@ def request_availability_refresh(
     country = (
         resolve_source_country() if country is None else str(country).strip().upper()
     ) or ""
+    freshness_source = source or DEFAULT_SOURCE_SLUG
     try:
-        if if_stale and not is_stale(movie, source=source, country=country or None):
+        if source_configuration is None:
+            source_configuration = source_configuration_snapshot(
+                [freshness_source]
+            ).get(freshness_source, {})
+        if if_stale and not is_stale(
+            movie,
+            source=source,
+            country=country or None,
+            configuration=source_configuration,
+        ):
             return None
         if if_stale and recently_attempted(movie, source, country):
             # Already fetched (or failed) moments ago for this scope — the
@@ -386,6 +398,7 @@ def request_title_refresh(
         ladder_switch=(False if priority == RefreshPriority.EXPLICIT else None),
     )
     allowed = list(decision["allowed_sources"])
+    source_configurations = source_configuration_snapshot(allowed)
 
     queued = 0
     for source in allowed:
@@ -396,6 +409,7 @@ def request_title_refresh(
             source=source,
             batch=batch,
             country=country,
+            source_configuration=source_configurations.get(source, {}),
         )
         if row is not None:
             queued += 1
@@ -474,6 +488,9 @@ def request_watchlist_refresh(
         resolve_source_country() if country is None else str(country).strip().upper()
     ) or ""
     base_sources = list(sources) if sources is not None else title_level_source_slugs()
+    source_configurations = source_configuration_snapshot(
+        [source or DEFAULT_SOURCE_SLUG for source in base_sources]
+    )
     movie_ids = list(
         WatchlistItem.objects.filter(user_id=user_id)
         .values_list("movie_id", flat=True)
@@ -513,6 +530,9 @@ def request_watchlist_refresh(
                 source=source,
                 batch=batch,
                 country=country,
+                source_configuration=source_configurations.get(
+                    source or DEFAULT_SOURCE_SLUG, {}
+                ),
             )
 
     # `queued` counts what this batch actually owns. Counting the union of
@@ -551,6 +571,7 @@ def request_import_refresh(
     priority: int = RefreshPriority.WATCHLIST,
     *,
     entering: bool = False,
+    source_configuration=None,
 ) -> RefreshRequest | None:
     """Refresh-request rule for imported titles.
 
@@ -567,7 +588,12 @@ def request_import_refresh(
     """
     if not entering and has_canonical_offers(movie):
         return None
-    return request_availability_refresh(movie, priority=priority, if_stale=True)
+    return request_availability_refresh(
+        movie,
+        priority=priority,
+        if_stale=True,
+        source_configuration=source_configuration,
+    )
 
 
 def request_catalogue_refresh(
@@ -799,6 +825,7 @@ def _drain_one(
     limiter_overrides: dict[str, RateLimiter] | None = None,
     quota_circuit: SourceQuotaCircuit | None = None,
     permanent_negative_scopes: set[tuple[int, str, str]] | None = None,
+    source_configurations=None,
 ) -> bool:
     """Process one pending request under the run's guards.
 
@@ -885,7 +912,10 @@ def _drain_one(
     if (
         request.priority != RefreshPriority.EXPLICIT
         and not is_stale(
-            movie, source=request.source, country=request.country or None
+            movie,
+            source=request.source,
+            country=request.country or None,
+            configuration=(source_configurations or {}).get(source, {}),
         )
     ):
         _finish(request, RefreshRequestStatus.DONE)
@@ -1178,6 +1208,7 @@ def drain_refresh_requests(
     limiter,
     represented_batches=None,
     quota_circuit: SourceQuotaCircuit | None = None,
+    source_configurations=None,
 ) -> set[int]:
     """Safely invoke the queue drain for any caller.
 
@@ -1199,6 +1230,7 @@ def drain_refresh_requests(
             limiter=limiter,
             represented_batches=represented_batches,
             quota_circuit=quota_circuit,
+            source_configurations=source_configurations,
         )
 
 
@@ -1209,6 +1241,7 @@ def _drain_refresh_requests_locked(
     limiter,
     represented_batches=None,
     quota_circuit: SourceQuotaCircuit | None = None,
+    source_configurations=None,
 ) -> set[int]:
     """Process pending refresh requests in priority order, budget permitting.
 
@@ -1249,6 +1282,8 @@ def _drain_refresh_requests_locked(
     sweep's).
     """
     excluded: set[int] = set()
+    if source_configurations is None:
+        source_configurations = source_configuration_snapshot()
     quota_circuit = quota_circuit or SourceQuotaCircuit()
     rate_limit_hit = summary.rate_limited
     # Batches actually *processed* by this tick. Attribution must reflect the
@@ -1323,6 +1358,7 @@ def _drain_refresh_requests_locked(
                 limiter_overrides=limiters,
                 quota_circuit=quota_circuit,
                 permanent_negative_scopes=permanent_negatives,
+                source_configurations=source_configurations,
             )
             # A named scope and a legacy empty scope can coexist for the same
             # source. An earlier explicit refresh in this page may therefore
@@ -1511,6 +1547,7 @@ def _process_refresh_queue_locked(
 
     service = service or AvailabilityRefreshService()
     limiter = limiter or rate_limiter_for(DEFAULT_SOURCE_SLUG)
+    source_configurations = source_configuration_snapshot()
 
     summary = BulkRefreshSummary(budget=budget, remaining_budget=budget)
     # One terminal-quota circuit per worker tick. It suppresses only the source
@@ -1537,6 +1574,7 @@ def _process_refresh_queue_locked(
         limiter=limiter,
         represented_batches=drained_batches,
         quota_circuit=quota_circuit,
+        source_configurations=source_configurations,
     )
     # Diagnostic only: read by nothing that decides behaviour. A batch with no
     # AvailabilityRefresh row (requests queued directly, or by an older
