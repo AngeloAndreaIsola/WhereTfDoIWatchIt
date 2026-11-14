@@ -34,7 +34,9 @@ The exact sanitized preflight JSON is in [read_only_preflight.json](read_only_pr
 
 ## Readiness result
 
-`readiness` is **blocked**. The only blockers are the absence of current JustWatch quota and rate-policy evidence adequate for six requests, separately reported for each scope. No quota evidence was supplied or inferred. Lack of a billed API quota is not treated as unlimited capacity. The candidate requires fresh evidence (within one hour) supporting a burst of at least six, plus a current quota classification; available-quota evidence must also show at least six requests remaining.
+`readiness` is **blocked**. The refreshed Stage 2T preflight reports two missing gates for each scope: current JustWatch quota/rate-policy evidence adequate for six requests, and current express permission evidence for automated use of the exact GraphQL endpoint. No quota, rate-policy, or permission evidence was supplied or inferred. Lack of a billed API quota is not treated as unlimited capacity. The candidate requires fresh evidence (within one hour) supporting a burst of at least six, a current quota classification, and reviewed written permission covering the endpoint, both exact scopes, and at least six requests; available-quota evidence must also show at least six requests remaining.
+
+The permission requirement was added after review of JustWatch's current public Terms of Use, which prohibit scraping and similar automated data extraction unless expressly authorized. The preflight validates evidence shape and freshness; an operator must inspect the referenced written permission. The current actual preflight remains blocked because neither permission nor quota/rate-policy evidence is present.
 
 This is `EXPERIMENT_READINESS_ASSESSED`, not `EXPERIMENT_READY`. Even after quota evidence is obtained, a later phase must recheck operational conditions and obtain separate explicit authorization before execution. No request or experiment was executed in this assessment.
 

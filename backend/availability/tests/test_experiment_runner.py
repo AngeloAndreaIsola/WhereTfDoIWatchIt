@@ -66,6 +66,15 @@ def quota_record(*, status="unmetered_public", remaining=None):
             "evidence_reference": "fixture-reviewed-rate-policy",
             "max_burst": 6,
         },
+        # Synthetic fixture only. This string is not real JustWatch permission.
+        "access_permission": {
+            "status": "authorized",
+            "checked_at": checked_at,
+            "evidence_reference": "fixture-test-only-not-real-permission",
+            "endpoint": "https://apis.justwatch.com/graphql",
+            "maximum_requests": 6,
+            "scope_ids": ["inception-nl-justwatch", "dune-nl-justwatch"],
+        },
     }
 
 
@@ -510,6 +519,7 @@ class PostgreSQLPreflightTests(TransactionTestCase):
         self.assertEqual(report["queue_scope_overlap"], 0)
         self.assertEqual(report["expected_maximum_attempts"], 6)
         self.assertEqual(len(report["scopes"]), 2)
+        self.assertEqual(report["access_permission_evidence"]["justwatch"]["maximum_requests"], 6)
 
     def test_preflight_blocks_ambiguous_current_experiment_reservation(self):
         from availability.services.experiment_runner import database_identity
@@ -594,6 +604,51 @@ class PostgreSQLPreflightTests(TransactionTestCase):
         valid["rate_policy_evidence"]["checked_at"] = checked_at
         os.environ["AVAILABILITY_EXPERIMENT_QUOTA_EVIDENCE"] = json.dumps({"justwatch": valid})
         self.assertEqual(_quota_evidence({"justwatch"})["justwatch"]["max_burst"], 6)
+
+    def test_preflight_requires_current_express_permission_for_exact_endpoint_and_scopes(self):
+        from availability.services.experiment_runner import _access_permission_evidence
+
+        evidence = quota_record()
+        evidence.pop("access_permission")
+        os.environ["AVAILABILITY_EXPERIMENT_QUOTA_EVIDENCE"] = json.dumps({"justwatch": evidence})
+        self.assertEqual(_access_permission_evidence({"justwatch"}), {})
+
+        evidence = quota_record()
+        evidence["access_permission"]["endpoint"] = "https://apis.justwatch.com/contentpartner/v2/content"
+        os.environ["AVAILABILITY_EXPERIMENT_QUOTA_EVIDENCE"] = json.dumps({"justwatch": evidence})
+        self.assertEqual(_access_permission_evidence({"justwatch"}), {})
+
+        evidence = quota_record()
+        evidence["access_permission"]["scope_ids"] = ["inception-nl-justwatch"]
+        os.environ["AVAILABILITY_EXPERIMENT_QUOTA_EVIDENCE"] = json.dumps({"justwatch": evidence})
+        self.assertEqual(_access_permission_evidence({"justwatch"}), {})
+
+        evidence = quota_record()
+        evidence["access_permission"]["maximum_requests"] = 5
+        os.environ["AVAILABILITY_EXPERIMENT_QUOTA_EVIDENCE"] = json.dumps({"justwatch": evidence})
+        self.assertEqual(_access_permission_evidence({"justwatch"}), {})
+
+        evidence = quota_record()
+        evidence["access_permission"]["checked_at"] = (
+            datetime.now(timezone.utc) - timedelta(hours=2)
+        ).isoformat()
+        os.environ["AVAILABILITY_EXPERIMENT_QUOTA_EVIDENCE"] = json.dumps({"justwatch": evidence})
+        self.assertEqual(_access_permission_evidence({"justwatch"}), {})
+
+        evidence = quota_record()
+        os.environ["AVAILABILITY_EXPERIMENT_QUOTA_EVIDENCE"] = json.dumps({"justwatch": evidence})
+        self.assertEqual(
+            _access_permission_evidence({"justwatch"})["justwatch"]["scope_ids"],
+            ["dune-nl-justwatch", "inception-nl-justwatch"],
+        )
+
+    def test_quota_evidence_alone_does_not_make_preflight_ready(self):
+        evidence = quota_record()
+        evidence.pop("access_permission")
+        os.environ["AVAILABILITY_EXPERIMENT_QUOTA_EVIDENCE"] = json.dumps({"justwatch": evidence})
+        report = read_only_preflight(self.manifest)
+        self.assertEqual(report["readiness"], "blocked")
+        self.assertTrue(any("express permission" in blocker for blocker in report["blockers"]))
 
     def test_source_lock_inspection_detects_ordinary_catalogue_overlap(self):
         from tracker.services.bulk_refresh import release_source_lock, try_source_lock

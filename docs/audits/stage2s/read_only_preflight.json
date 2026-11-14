@@ -1,4 +1,5 @@
 {
+  "access_permission_evidence": {},
   "active_source_locks": {
     "justwatch": {
       "held": false,
@@ -11,7 +12,9 @@
   },
   "blockers": [
     "scope inception-nl-justwatch has no current quota/rate-policy evidence for six requests",
-    "scope dune-nl-justwatch has no current quota/rate-policy evidence for six requests"
+    "scope inception-nl-justwatch has no current express permission evidence for the JustWatch GraphQL endpoint",
+    "scope dune-nl-justwatch has no current quota/rate-policy evidence for six requests",
+    "scope dune-nl-justwatch has no current express permission evidence for the JustWatch GraphQL endpoint"
   ],
   "database_engine": "django.db.backends.postgresql",
   "database_host_configured": true,

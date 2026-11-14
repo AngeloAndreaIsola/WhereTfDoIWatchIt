@@ -385,6 +385,7 @@ def read_only_preflight(manifest):
     active_refresh_runs = RefreshRun.objects.using(alias).filter(finished_at__isnull=True).count()
     selected_sources = {scope["source_slug"] for scope in manifest["scopes"]}
     quota_evidence = _quota_evidence(selected_sources)
+    access_permission_evidence = _access_permission_evidence(selected_sources)
     scoped_queue_overlap = 0
     source_locks = _source_lock_states(manifest["scopes"]) if "postgresql" in str(cfg.get("ENGINE", "")) else {}
     try:
@@ -432,6 +433,7 @@ def read_only_preflight(manifest):
         "active_source_locks": source_locks,
         "worker_state": {"active_refresh_runs": active_refresh_runs, "process_presence": "not observable from PostgreSQL"},
         "quota_evidence": quota_evidence,
+        "access_permission_evidence": access_permission_evidence,
         "reservations": {
             "total": sum(reservations_by_source.values()),
             "by_source": reservations_by_source,
@@ -491,6 +493,11 @@ def read_only_preflight(manifest):
         if scope["source_slug"] not in quota_evidence:
             result["blockers"].append(
                 f"scope {scope['scope_id']} has no current quota/rate-policy evidence for six requests"
+            )
+        if scope["source_slug"] not in access_permission_evidence:
+            result["blockers"].append(
+                f"scope {scope['scope_id']} has no current express permission evidence "
+                "for the JustWatch GraphQL endpoint"
             )
         if pending_scope:
             result["blockers"].append(f"scope {scope['scope_id']} overlaps a pending ordinary refresh")
@@ -583,6 +590,55 @@ def _quota_evidence(source_slugs):
                 "checked_at": checked.astimezone(timezone.utc).isoformat(),
                 "rate_policy_checked_at": policy_checked.astimezone(timezone.utc).isoformat(),
                 "max_burst": max_burst,
+            }
+        return valid
+    except Exception:
+        return {}
+
+
+def _access_permission_evidence(source_slugs):
+    """Require current operator-reviewed permission for the exact GraphQL use."""
+    raw = os.environ.get("AVAILABILITY_EXPERIMENT_QUOTA_EVIDENCE", "")
+    try:
+        evidence = json.loads(raw)
+        if not isinstance(evidence, dict):
+            return {}
+        now = datetime.now(timezone.utc)
+        valid = {}
+        for slug in source_slugs:
+            item = evidence.get(slug)
+            if not isinstance(item, dict):
+                continue
+            permission = item.get("access_permission")
+            if not isinstance(permission, dict) or permission.get("status") != "authorized":
+                continue
+            checked = datetime.fromisoformat(permission["checked_at"].replace("Z", "+00:00"))
+            age = (now - checked.astimezone(timezone.utc)).total_seconds()
+            maximum_requests = permission.get("maximum_requests")
+            expected_scope_ids = sorted(
+                scope["scope_id"] for scope in APPROVED_MANIFEST["scopes"]
+                if scope["source_slug"] == slug
+            )
+            scope_ids = permission.get("scope_ids")
+            if (
+                age < 0
+                or age > 3600
+                or not str(permission.get("evidence_reference", "")).strip()
+                or permission.get("endpoint") != "https://apis.justwatch.com/graphql"
+                or isinstance(maximum_requests, bool)
+                or not isinstance(maximum_requests, int)
+                or maximum_requests < GLOBAL_LIMIT
+                or not isinstance(scope_ids, list)
+                or sorted(scope_ids) != expected_scope_ids
+            ):
+                continue
+            valid[slug] = {
+                "status": "authorized",
+                "checked_at": checked.astimezone(timezone.utc).isoformat(),
+                "endpoint": permission["endpoint"],
+                "maximum_requests": maximum_requests,
+                "scope_ids": expected_scope_ids,
+                "evidence_reference_present": True,
             }
         return valid
     except Exception:
