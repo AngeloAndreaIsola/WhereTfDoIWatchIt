@@ -1,0 +1,79 @@
+{
+  "active_source_locks": {
+    "justwatch": {
+      "held": false,
+      "sessions": 0
+    }
+  },
+  "active_title_drain": {
+    "held": false,
+    "sessions": 0
+  },
+  "blockers": [
+    "scope inception-nl-justwatch has no current quota/rate-policy evidence for six requests",
+    "scope dune-nl-justwatch has no current quota/rate-policy evidence for six requests"
+  ],
+  "database_engine": "django.db.backends.postgresql",
+  "database_host_configured": true,
+  "database_identity": "c9139f575fcaf416780341d45d7083971b297970f50f2d2f90f4b26b004afbbd",
+  "database_name": "tracker",
+  "destination_policy": "fixed exact HTTPS endpoints; redirects denied",
+  "expected_maximum_attempts": 6,
+  "queue_pending": 0,
+  "queue_scope_overlap": 0,
+  "quota_evidence": {},
+  "readiness": "blocked",
+  "reservations": {
+    "ambiguous_without_outcome": 0,
+    "by_source": {},
+    "current_experiment_ambiguous": 0,
+    "current_experiment_by_source": {},
+    "current_experiment_incomplete_scopes": [],
+    "current_experiment_total": 0,
+    "total": 0
+  },
+  "scopes": [
+    {
+      "canonical_offer_count": 5,
+      "country_present": true,
+      "current_title": "Inception",
+      "current_year": 2010,
+      "movie_present": true,
+      "pending_exact_scope_requests": 0,
+      "quota": "missing",
+      "scope_id": "inception-nl-justwatch",
+      "selected_source_freshness": [
+        "stale"
+      ],
+      "source_configuration": {
+        "expected_refresh_interval_seconds": 43200
+      },
+      "source_enabled": true,
+      "source_registered": true,
+      "source_row_present": true
+    },
+    {
+      "canonical_offer_count": 8,
+      "country_present": true,
+      "current_title": "Dune",
+      "current_year": 2021,
+      "movie_present": true,
+      "pending_exact_scope_requests": 0,
+      "quota": "missing",
+      "scope_id": "dune-nl-justwatch",
+      "selected_source_freshness": [
+        "stale"
+      ],
+      "source_configuration": {
+        "expected_refresh_interval_seconds": 43200
+      },
+      "source_enabled": true,
+      "source_registered": true,
+      "source_row_present": true
+    }
+  ],
+  "worker_state": {
+    "active_refresh_runs": 0,
+    "process_presence": "not observable from PostgreSQL"
+  }
+}

@@ -5,6 +5,7 @@ from django.core.management.base import CommandError
 
 from availability.services.experiment_runner import (
     ExperimentBlocked,
+    GLOBAL_LIMIT,
     database_identity,
     issue_authorization,
     manifest_digest,
@@ -32,8 +33,8 @@ class Command(ExperimentCommand):
             raise CommandError("confirmed manifest digest does not match")
         if options["confirm_database_identity"] != database_identity():
             raise CommandError("confirmed database identity does not match this environment")
-        if options["maximum_attempts"] != 11:
-            raise CommandError("maximum attempts must be exactly 11")
+        if options["maximum_attempts"] != GLOBAL_LIMIT:
+            raise CommandError(f"maximum attempts must be exactly {GLOBAL_LIMIT}")
         try:
             token = issue_authorization(manifest, expires_at=options["expires_at"])
             path = Path(options["output"])
