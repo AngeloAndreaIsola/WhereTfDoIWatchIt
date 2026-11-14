@@ -15,6 +15,7 @@ No live HTTP: offers come from the ``local_offer`` factory.
 from __future__ import annotations
 
 from datetime import date
+from unittest.mock import patch
 
 from django.test import TestCase
 
@@ -315,6 +316,42 @@ class UnifiedCatalogWatchedFilterTests(TestCase):
         rows = {item["tmdb_id"]: item for item in self._items()}
         self.assertIsNone(rows[711]["is_watched"])
         self.assertIsNone(rows[712]["is_watched"])
+
+    def test_explicit_all_labels_official_rows_with_their_watched_state(self):
+        rows = {item["tmdb_id"]: item for item in self._items("?watched=all")}
+        self.assertIs(rows[711]["is_watched"], True)
+        self.assertIs(rows[712]["is_watched"], False)
+        self.assertIs(rows[713]["is_watched"], True)
+
+    def test_explicit_all_labels_resolved_and_unresolved_unofficial_rows(self):
+        resolved = Movie.objects.create(
+            tmdb_id=714, title="Resolved Scraper", year=2020
+        )
+        _mark_watched(resolved)
+        scraper_items = [
+            {"tmdb_id": 714, "source": "scraper", "title": "Resolved Scraper"},
+            {"tmdb_id": None, "source": "scraper", "title": "Unresolved Scraper"},
+        ]
+
+        with patch(
+            "tracker.views.unofficial_catalogue_items", return_value=scraper_items
+        ):
+            rows = self._items("?providers=hydra&watched=all")
+
+        by_title = {item["title"]: item for item in rows}
+        self.assertIs(by_title["Resolved Scraper"]["is_watched"], True)
+        self.assertIs(by_title["Unresolved Scraper"]["is_watched"], False)
+
+    def test_no_watched_parameter_keeps_unofficial_label_absent(self):
+        scraper_item = {
+            "tmdb_id": None, "source": "scraper", "title": "Unresolved Scraper"
+        }
+        with patch(
+            "tracker.views.unofficial_catalogue_items", return_value=[scraper_item]
+        ):
+            rows = self._items("?providers=hydra")
+
+        self.assertNotIn("is_watched", rows[0])
 
     def test_composes_with_content_type_and_sort(self):
         self.assertEqual(

@@ -282,7 +282,7 @@ def unified_catalog(request):
         request.GET.get("watched") or request.GET.get("watched_status") or ""
     ).lower().strip()
     watched_movie_ids: set[int] = set()
-    if watched_filter in ("watched", "unwatched"):
+    if watched_filter in ("watched", "unwatched", "all"):
         watched_movie_ids = set(
             UserMovieData.objects.filter(
                 user_id=1, is_watched=True
@@ -307,7 +307,11 @@ def unified_catalog(request):
 
             # Membership already reflects the watched filter (applied inside
             # apply_composable_filters); this only labels the row for display.
-            is_watched = m.id in watched_movie_ids if watched_filter else None
+            is_watched = (
+                m.id in watched_movie_ids
+                if watched_filter in ("watched", "unwatched", "all")
+                else None
+            )
 
             best_offer = watch_res.best_offer.to_dict() if watch_res.best_offer else None
             watch_url = best_offer.get("url") if best_offer else None
@@ -339,7 +343,7 @@ def unified_catalog(request):
                 "watchability": watch_res.to_dict(),
                 "unofficial_details": None,
                 "watch_url": watch_url,
-                "is_watched": bool(is_watched) if watched_filter else None,
+                "is_watched": is_watched,
             })
 
     # 2. Fetch Unofficial Catalog Items (canonical, via the scraper bridge)
@@ -349,7 +353,7 @@ def unified_catalog(request):
             allowed_provider_slugs=allowed_provider_slugs,
             exclude_tmdb_ids=seen_tmdb_ids,
         )
-        if watched_filter in ("watched", "unwatched"):
+        if watched_filter in ("watched", "unwatched", "all"):
             # An unofficial entry has watch state only once it resolves to a
             # local Movie; an unresolved entry has never been tracked, so it
             # can only ever be unwatched. One batched read over the resolved
@@ -367,7 +371,7 @@ def unified_catalog(request):
             keep = []
             for item in scraped_items:
                 is_watched = item.get("tmdb_id") in watched_tmdb_ids
-                if is_watched != (watched_filter == "watched"):
+                if watched_filter != "all" and is_watched != (watched_filter == "watched"):
                     continue
                 item["is_watched"] = is_watched
                 keep.append(item)
