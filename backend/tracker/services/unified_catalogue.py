@@ -27,6 +27,7 @@ from typing import Optional
 from availability.services.catalogue_query import ProviderCatalogueQueryService
 
 from ..models import Movie, Provider
+from .filtering import cast_matches_actors, parse_actor_filters
 
 
 @dataclass(frozen=True)
@@ -144,6 +145,14 @@ def unofficial_catalogue_items(
         exclude_tmdb_ids=exclude_tmdb_ids,
     )
     movies = _movies_by_tmdb_id(entry.tmdb_id for entry in entries)
+    actor_ids, actor_names = parse_actor_filters(params)
+    if actor_ids or actor_names:
+        entries = [
+            entry
+            for entry in entries
+            if (movie := movies.get(entry.tmdb_id)) is not None
+            and cast_matches_actors(movie.cast, actor_ids, actor_names)
+        ]
     return [
         _as_api_item(entry, movies.get(entry.tmdb_id))
         for entry in entries
@@ -162,7 +171,7 @@ def _movies_by_tmdb_id(tmdb_ids) -> dict[int, Movie]:
     if not wanted:
         return {}
     movies = Movie.objects.filter(tmdb_id__in=wanted).only(
-        "tmdb_id", "title", "year", "poster_path", "content_type"
+        "tmdb_id", "title", "year", "poster_path", "content_type", "cast"
     )
     return {movie.tmdb_id: movie for movie in movies}
 

@@ -97,6 +97,8 @@ class EvaluatedOffer:
     offer_type: str
     quality: str
     url: str
+    audio_languages: list[str] = field(default_factory=list)
+    subtitle_languages: list[str] = field(default_factory=list)
     price_info: str = ""
     service_display: str = ""
     is_qualifying_offer_type: bool = False
@@ -124,6 +126,8 @@ class EvaluatedOffer:
             offer_type=c.offer_type,
             quality=c.quality,
             url=c.url,
+            audio_languages=list(c.audio_languages),
+            subtitle_languages=list(c.subtitle_languages),
             price_info="",
             service_display=c.service_display,
             is_qualifying_offer_type=c.is_qualifying_offer_type,
@@ -150,6 +154,8 @@ class EvaluatedOffer:
             "offer_type": self.offer_type,
             "quality": self.quality,
             "url": self.url,
+            "audio_languages": self.audio_languages,
+            "subtitle_languages": self.subtitle_languages,
             "price_info": self.price_info,
             "service_display": self.service_display,
             "is_qualifying_offer_type": self.is_qualifying_offer_type,

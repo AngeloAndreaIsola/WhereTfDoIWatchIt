@@ -8,6 +8,7 @@ import { AccessTypeFilter } from "./AccessTypeFilter";
 import CountrySelect, { countryName } from "./CountrySelect";
 import { useCurrentLocation } from "./CurrentLocationProvider";
 import { DurationFilter } from "./DurationFilter";
+import { CANONICAL_LANGUAGES } from "@/lib/languages";
 
 export interface FilterState {
   q: string;
@@ -27,6 +28,9 @@ export interface FilterState {
   duration_min: string;
   duration_max: string;
   watched: string; // "all", "watched", "unwatched"
+  audio_languages: string;
+  subtitle_languages: string;
+  provider_categories: string[];
 }
 
 export const DEFAULT_FILTER_STATE: FilterState = {
@@ -46,6 +50,9 @@ export const DEFAULT_FILTER_STATE: FilterState = {
   duration_min: "",
   duration_max: "",
   watched: "all",
+  audio_languages: "",
+  subtitle_languages: "",
+  provider_categories: [],
 };
 
 /** The all-defaults value used by "Reset". content_type/watched are enums. */
@@ -66,6 +73,9 @@ const EMPTY_FILTER_STATE: FilterState = {
   duration_min: "",
   duration_max: "",
   watched: "all",
+  audio_languages: "",
+  subtitle_languages: "",
+  provider_categories: [],
 };
 
 /** Field-by-field comparison; `actors` needs an id-set compare, not `===`. */
@@ -90,6 +100,10 @@ function sameFilters(a: FilterState, b: FilterState): boolean {
     a.duration_min === b.duration_min &&
     a.duration_max === b.duration_max &&
     (a.watched || "all") === (b.watched || "all") &&
+    a.audio_languages === b.audio_languages &&
+    a.subtitle_languages === b.subtitle_languages &&
+    a.provider_categories.length === b.provider_categories.length &&
+    a.provider_categories.every((category) => b.provider_categories.includes(category)) &&
     actorIdsA.length === actorIdsB.length &&
     actorIdsA.every((id, i) => id === actorIdsB[i])
   );
@@ -99,9 +113,17 @@ interface FilterBarProps {
   filters: FilterState;
   onChange: (newFilters: FilterState) => void;
   showStatusFilter?: boolean;
+  showLanguageFilters?: boolean;
+  showProviderCategories?: boolean;
 }
 
-export function FilterBar({ filters, onChange, showStatusFilter = true }: FilterBarProps) {
+export function FilterBar({
+  filters,
+  onChange,
+  showStatusFilter = true,
+  showLanguageFilters = false,
+  showProviderCategories = false,
+}: FilterBarProps) {
   // Controls edit a local draft; nothing reaches the parent (and so no request
   // is issued) until Apply is pressed. `filters` is the last applied value, so
   // an external reset or URL-driven change re-seeds the draft.
@@ -252,7 +274,10 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
       draft.access ||
       draft.duration_min ||
       draft.duration_max ||
-      (draft.watched && draft.watched !== "all")
+      (draft.watched && draft.watched !== "all") ||
+      draft.audio_languages ||
+      draft.subtitle_languages ||
+      draft.provider_categories.length > 0
   );
 
   const handleClearAllFilters = () => {
@@ -452,6 +477,38 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
 
       {/* Secondary Row: Genre, Provider, Year Range, Quality, Min Score, Sort, Status */}
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-8 gap-3">
+        {showProviderCategories && (
+          <fieldset className="col-span-full rounded-lg border border-gray-200 p-3 dark:border-gray-700">
+            <legend className="px-1 text-xs font-semibold uppercase tracking-wider text-gray-500">
+              Provider categories
+            </legend>
+            <div className="flex flex-wrap gap-x-5 gap-y-2">
+              {[
+                ["major", "Major services"],
+                ["bvod", "Broadcast (BVOD)"],
+                ["avod", "Ad-supported (AVOD)"],
+                ["tvod", "Rent and buy (TVOD)"],
+                ["fast", "Free ad-supported (FAST)"],
+                ["scraper", "Unofficial sources"],
+              ].map(([value, label]) => (
+                <label key={value} className="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                  <input
+                    type="checkbox"
+                    checked={draft.provider_categories.includes(value)}
+                    onChange={(event) => {
+                      const selected = new Set(draft.provider_categories);
+                      if (event.target.checked) selected.add(value);
+                      else selected.delete(value);
+                      updateDraft({ provider_categories: Array.from(selected) });
+                    }}
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+        )}
+
         <div>
           <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
             Genre
@@ -609,6 +666,38 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
           <option value="unwatched">○ Unwatched</option>
         </select>
       </div>
+
+      {showLanguageFilters && (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {([
+            ["audio_languages", "Audio language"],
+            ["subtitle_languages", "Subtitle language"],
+          ] as const).map(([field, label]) => (
+            <div key={field}>
+              <label htmlFor={field} className="mb-1 block text-xs font-semibold uppercase tracking-wider text-gray-500">
+                {label}
+              </label>
+              <select
+                id={field}
+                aria-label={label}
+                value={draft[field]}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  updateDraft(field === "audio_languages"
+                    ? { audio_languages: value }
+                    : { subtitle_languages: value });
+                }}
+                className="w-full rounded-lg border border-gray-300 bg-gray-50 px-3 py-1.5 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
+              >
+                <option value="">Any</option>
+                {CANONICAL_LANGUAGES.map(({ code, name }) => (
+                  <option key={code} value={code}>{name}</option>
+                ))}
+              </select>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Apply / Reset — filters are staged locally until Apply is pressed */}
       <div className="flex items-center justify-end gap-2 border-t border-gray-200 pt-3 dark:border-gray-800">

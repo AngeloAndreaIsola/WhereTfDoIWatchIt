@@ -30,6 +30,12 @@ const BASE: FilterState = {
   score_min: "",
   sort_by: "",
   watched: "all",
+  access: "",
+  duration_min: "",
+  duration_max: "",
+  audio_languages: "",
+  subtitle_languages: "",
+  provider_categories: [],
 };
 
 /**
@@ -149,6 +155,9 @@ describe("FilterBar apply/reset staging", () => {
       access: "",
       duration_min: "",
       duration_max: "",
+      audio_languages: "",
+      subtitle_languages: "",
+      provider_categories: [],
     });
   });
 

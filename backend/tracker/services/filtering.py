@@ -23,6 +23,44 @@ from tracker.services.watchability import (
 logger = logging.getLogger(__name__)
 
 
+def parse_actor_filters(params) -> tuple[list[int], list[str]]:
+    """Read repeated or comma-separated actor ids/names from query params."""
+    raw_actors = params.getlist("actor_id") if hasattr(params, "getlist") else params.get("actor_id")
+    if not raw_actors:
+        raw_actors = params.getlist("actor") if hasattr(params, "getlist") else params.get("actor")
+    if isinstance(raw_actors, (str, int)):
+        raw_actors = [raw_actors]
+
+    values = [
+        part.strip()
+        for raw in (raw_actors or [])
+        for part in str(raw).split(",")
+        if part.strip()
+    ]
+    actor_ids = [int(value) for value in values if value.isdigit()]
+    actor_names = [value.lower() for value in values if not value.isdigit()]
+    return actor_ids, actor_names
+
+
+def cast_matches_actors(cast_data, actor_ids: list[int], actor_names: list[str]) -> bool:
+    """Require every selected actor to appear in the title's cast metadata."""
+    cast = cast_data if isinstance(cast_data, list) else []
+    cast_ids = {
+        person.get("id")
+        for person in cast
+        if isinstance(person, dict) and person.get("id") is not None
+    }
+    cast_names = {
+        str(person.get("name") or "").strip().lower()
+        for person in cast
+        if isinstance(person, dict)
+    }
+    return all(actor_id in cast_ids for actor_id in actor_ids) and all(
+        any(name in cast_name for cast_name in cast_names)
+        for name in actor_names
+    )
+
+
 def apply_composable_filters(
     queryset: QuerySet[Movie] | list[Movie],
     params: dict,
@@ -103,26 +141,13 @@ def apply_composable_filters(
             ]
 
     # 5. Actor Filter (multi-actor AND support)
-    actors = params.getlist("actor_id") if hasattr(params, "getlist") else params.get("actor_id")
-    if not actors and "actor" in params:
-        actors = params.getlist("actor") if hasattr(params, "getlist") else params.get("actor")
-    if actors:
-        if isinstance(actors, (str, int)):
-            actors = [actors]
-        actor_ids = [int(a) for a in actors if str(a).isdigit()]
-        actor_names = [str(a).lower().strip() for a in actors if not str(a).isdigit()]
-
-        filtered_by_actor = []
-        for m in queryset:
-            m_cast_ids = {c.get("id") for c in (m.cast or []) if c.get("id")}
-            m_cast_names = {(c.get("name") or "").lower() for c in (m.cast or [])}
-
-            # Must satisfy all actor_ids AND actor_names
-            match_ids = all(aid in m_cast_ids for aid in actor_ids)
-            match_names = all(any(an in cn for cn in m_cast_names) for an in actor_names)
-            if match_ids and match_names:
-                filtered_by_actor.append(m)
-        queryset = filtered_by_actor
+    actor_ids, actor_names = parse_actor_filters(params)
+    if actor_ids or actor_names:
+        queryset = [
+            movie
+            for movie in queryset
+            if cast_matches_actors(movie.cast, actor_ids, actor_names)
+        ]
 
     # 6. Score / Rating Filter
     score_min = params.get("score_min") or params.get("min_score") or params.get("rating_min")
