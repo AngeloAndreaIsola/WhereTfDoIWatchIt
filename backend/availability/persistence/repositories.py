@@ -19,8 +19,9 @@ from ..models import (
 )
 from ..services.normalize import truncate_field
 from ..services.identity_policy import (
-    EXTERNAL_ID_ASSERTION_SOURCES,
+    legacy_catalogue_visibility_query,
     mapping_is_trusted,
+    trusted_mapping_query,
 )
 
 #: Column width for a provider-native content id, read from the model itself so
@@ -725,11 +726,10 @@ class ProviderContentRepository:
                 | Q(source__slug=LEGACY_SCRAPER_SOURCE_SLUG)
             )
             .filter(
-                ~Q(provider__slug="mediaset_infinity")
-                | Q(mappings__match_method=MatchMethod.MANUAL)
-                | Q(
-                    mappings__match_method=MatchMethod.EXTERNAL_ID,
-                    mappings__source__slug__in=EXTERNAL_ID_ASSERTION_SOURCES,
+                legacy_catalogue_visibility_query(
+                    provider_lookup="provider__slug",
+                    method_lookup="mappings__match_method",
+                    source_lookup="mappings__source__slug",
                 )
             )
         )
@@ -778,11 +778,10 @@ class ProviderContentRepository:
                 | Q(source__slug=LEGACY_SCRAPER_SOURCE_SLUG)
             )
             .filter(
-                ~Q(provider__slug="mediaset_infinity")
-                | Q(mappings__match_method=MatchMethod.MANUAL)
-                | Q(
-                    mappings__match_method=MatchMethod.EXTERNAL_ID,
-                    mappings__source__slug__in=EXTERNAL_ID_ASSERTION_SOURCES,
+                trusted_mapping_query(
+                    provider_lookup="provider__slug",
+                    method_lookup="mappings__match_method",
+                    source_lookup="mappings__source__slug",
                 )
             )
         )

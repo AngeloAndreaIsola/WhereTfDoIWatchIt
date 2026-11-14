@@ -56,7 +56,10 @@ from ..domain.reconciliation import (
 # Re-exported here so existing importers keep working.
 from ..freshness import FRESHNESS_INTERVAL_KEY, freshness_state
 from ..models import ContentMapping, ProviderContent
-from .identity_policy import EXTERNAL_ID_ASSERTION_SOURCES
+from .identity_policy import (
+    EXTERNAL_ID_ASSERTION_SOURCES,
+    TITLE_SEARCH_IDENTITY_SOURCES,
+)
 from ..persistence.repositories import (
     MappingRepository,
     OfferPriceRepository,
@@ -242,7 +245,7 @@ class AvailabilityReconciliationService:
     def _observe(self, row, *, now, mappings, claims, statuses, prices=()) -> OfferObservation:
         detail = ""
         provider_content_id = row.provider_content_id
-        is_mediaset = row.provider.slug == "mediaset_infinity"
+        identity_sensitive_provider = row.provider.slug in TITLE_SEARCH_IDENTITY_SOURCES
         has_trusted_source_identity = row.source.slug in EXTERNAL_ID_ASSERTION_SOURCES
         if provider_content_id:
             key = (row.provider_id, provider_content_id)
@@ -251,13 +254,13 @@ class AvailabilityReconciliationService:
                 detail = "provider-content mapping provenance is unverified"
             elif mapped_tmdb is not None and mapped_tmdb != row.tmdb_id:
                 detail = f"mapping points to tmdb {mapped_tmdb}"
-            elif is_mediaset and key not in mappings and not has_trusted_source_identity:
+            elif identity_sensitive_provider and key not in mappings and not has_trusted_source_identity:
                 detail = "provider-content mapping is unresolved"
             others = sorted(claims.get(key, set()) - {row.tmdb_id})
             if others:
                 suffix = "also active for " + ", ".join(f"tmdb {other}" for other in others)
                 detail = f"{detail}; {suffix}" if detail else suffix
-        elif is_mediaset and not has_trusted_source_identity:
+        elif identity_sensitive_provider and not has_trusted_source_identity:
             detail = "provider-content mapping is unresolved"
 
         window_open = (
@@ -627,7 +630,7 @@ class AvailabilityReconciliationService:
                 provider_content_id=OuterRef("provider_content_id"),
             )
         )
-        has_trusted_mediaset_mapping = Exists(
+        has_trusted_mapping = Exists(
             ContentMapping.objects.filter(
                 provider=OuterRef("provider"),
                 provider_content_id=OuterRef("provider_content_id"),
@@ -641,10 +644,10 @@ class AvailabilityReconciliationService:
         )
         return ProviderContent.objects.annotate(
             has_any_mapping=has_any_mapping,
-            has_trusted_mediaset_mapping=has_trusted_mediaset_mapping,
+            has_trusted_mapping=has_trusted_mapping,
         ).filter(
-            Q(provider__slug="mediaset_infinity", has_trusted_mediaset_mapping=False)
-            | (~Q(provider__slug="mediaset_infinity") & Q(has_any_mapping=False))
+            Q(provider__slug__in=TITLE_SEARCH_IDENTITY_SOURCES, has_trusted_mapping=False)
+            | (~Q(provider__slug__in=TITLE_SEARCH_IDENTITY_SOURCES) & Q(has_any_mapping=False))
         ).count()
 
 

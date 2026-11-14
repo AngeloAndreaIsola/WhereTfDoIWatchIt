@@ -645,6 +645,33 @@ class ListUnofficialTests(CatalogueQueryTestCase):
         )
 
         self.assertEqual(self.service.list_for_tmdb(438631), [])
+        self.assertEqual(self.service.list_unofficial(), [])
+
+    def test_youtube_synthetic_external_mapping_stays_unresolved_in_legacy_reads(self):
+        youtube, _ = Provider.objects.update_or_create(
+            slug="youtube", defaults={
+                "name": "YouTube", "category": ProviderCategory.SCRAPER,
+                "is_enabled": True,
+            },
+        )
+        youtube_source, _ = Source.objects.get_or_create(
+            slug="youtube", defaults={"name": "YouTube"}
+        )
+        row = self._row(
+            "youtube-video", provider=youtube, source=self.legacy, title="Matilda",
+        )
+        self.mappings.record(
+            provider=youtube, source=youtube_source,
+            provider_content_id=row.provider_content_id,
+            content_type=ContentType.MOVIE, tmdb_id=460, confidence=0.95,
+            match_method=MatchMethod.EXTERNAL_ID, content=row,
+        )
+
+        [entry] = self.service.list_unofficial()
+
+        self.assertEqual(entry.provider_content_id, "youtube-video")
+        self.assertIsNone(entry.tmdb_id)
+        self.assertEqual(self.service.list_for_tmdb(460), [])
 
     def test_mediaset_manual_and_aggregator_external_id_mappings_remain_visible(self):
         mediaset, _ = Provider.objects.update_or_create(

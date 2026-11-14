@@ -185,6 +185,19 @@ class OnePipelineRunTests(TestCase):
             confidence=1.0,
             match_method=MatchMethod.MANUAL,
         )
+        youtube_provider = Provider.objects.get(slug="youtube")
+        youtube_source, _ = Source.objects.get_or_create(
+            slug="youtube", defaults={"name": "YouTube"}
+        )
+        ContentMapping.objects.create(
+            provider=youtube_provider,
+            source=youtube_source,
+            provider_content_id="_F8kU1vb_rk",
+            content_type="movie",
+            tmdb_id=460,
+            confidence=1.0,
+            match_method=MatchMethod.MANUAL,
+        )
 
     def _run_all_five(self):
         results = {}
