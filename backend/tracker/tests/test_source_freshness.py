@@ -11,11 +11,19 @@ from __future__ import annotations
 import datetime as dt
 from unittest.mock import MagicMock
 
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from availability.domain.enums import OfferType, SourceType
-from availability.freshness import freshness_for
+from availability.freshness import (
+    FRESHNESS_INTERVAL_KEY,
+    declared_freshness,
+    freshness_for,
+    source_configuration_snapshot,
+    source_is_stale,
+)
 from availability.models import Country, Offer, Source
 from availability.sources import DEFAULT_SOURCE_SLUG
 from tracker.models import (
@@ -34,6 +42,7 @@ from tracker.services.bulk_refresh import (
 )
 from tracker.services.rate_limit import RateLimiter
 from tracker.services.refresh_requests import request_availability_refresh
+from tracker.services.refresh_requests import process_refresh_queue
 from tracker.tests.availability_factories import local_offer
 
 PRIME = "prime_video"
@@ -119,6 +128,229 @@ class ScopedStalenessTests(TestCase):
                 now=observed + window + dt.timedelta(microseconds=1),
             )
         )  # just past it
+
+
+class ConfiguredFreshnessSchedulingTests(TestCase):
+    """Schedulers use the same persisted source window as read verdicts."""
+
+    def setUp(self):
+        self.movie = Movie.objects.create(
+            tmdb_id=8210, title="Configured Window", year=2022
+        )
+        self.source, _ = Source.objects.get_or_create(
+            slug="justwatch",
+            defaults={"name": "JustWatch", "type": SourceType.AGGREGATOR},
+        )
+        self.country, _ = Country.objects.get_or_create(
+            code="US", defaults={"name": "US"}
+        )
+
+    def _set_interval(self, seconds):
+        self.source.configuration = {FRESHNESS_INTERVAL_KEY: seconds}
+        self.source.save(update_fields=["configuration"])
+
+    def _justwatch_offer(self, *, age=dt.timedelta(hours=2), content_type="movie"):
+        provider, _ = Provider.objects.get_or_create(
+            slug="freshness-justwatch-provider",
+            defaults={"name": "Freshness JustWatch Provider"},
+        )
+        offer = Offer.objects.create(
+            provider=provider,
+            country=self.country,
+            source=self.source,
+            content_type=content_type,
+            tmdb_id=self.movie.tmdb_id,
+            offer_type=OfferType.SUBSCRIPTION,
+            provider_content_id=f"jw-{content_type}",
+        )
+        Offer.objects.filter(pk=offer.pk).update(last_seen=timezone.now() - age)
+        return offer
+
+    def test_one_hour_override_makes_two_hour_evidence_stale(self):
+        self._set_interval(3600)
+        self._justwatch_offer()
+
+        self.assertTrue(
+            is_stale(self.movie, source="justwatch", country="US")
+        )
+        self.assertIn(
+            "justwatch",
+            stale_refresh_scopes(
+                self.movie.tmdb_id,
+                country="US",
+                content_type="movie",
+                source_configurations=source_configuration_snapshot(),
+            ),
+        )
+
+    def test_forty_eight_hour_override_keeps_two_hour_evidence_fresh(self):
+        self._set_interval(48 * 3600)
+        self._justwatch_offer()
+
+        self.assertFalse(
+            is_stale(self.movie, source="justwatch", country="US")
+        )
+        self.assertNotIn(
+            "justwatch",
+            stale_refresh_scopes(
+                self.movie.tmdb_id,
+                country="US",
+                content_type="movie",
+                source_configurations=source_configuration_snapshot(),
+            ),
+        )
+
+    def test_effective_window_keeps_title_media_source_and_country_scoped(self):
+        self._set_interval(48 * 3600)
+        self._justwatch_offer()
+        configuration = self.source.configuration
+
+        self.assertFalse(
+            is_stale(
+                self.movie,
+                source="justwatch",
+                country="US",
+                configuration=configuration,
+            )
+        )
+        self.assertTrue(
+            is_stale(
+                self.movie,
+                source="justwatch",
+                country="NL",
+                configuration=configuration,
+            )
+        )
+        self.assertTrue(
+            source_is_stale(
+                self.movie.tmdb_id,
+                "justwatch",
+                country="US",
+                content_type="series",
+                configuration=configuration,
+            ),
+            "a movie observation must not make a same-ID series scope fresh",
+        )
+        self.assertTrue(
+            is_stale(
+                self.movie,
+                source="streaming_availability",
+                country="US",
+                configuration=configuration,
+            )
+        )
+        other_title = Movie.objects.create(
+            tmdb_id=8211, title="Other", year=2022
+        )
+        self.assertTrue(
+            is_stale(
+                other_title,
+                source="justwatch",
+                country="US",
+                configuration=configuration,
+            )
+        )
+
+    def test_invalid_or_missing_configuration_uses_documented_default(self):
+        self._justwatch_offer()
+        default_window = freshness_for("justwatch")
+        self.source.configuration = {FRESHNESS_INTERVAL_KEY: "invalid"}
+        self.source.save(update_fields=["configuration"])
+        self.assertFalse(is_stale(self.movie, source="justwatch", country="US"))
+        self.assertEqual(default_window, dt.timedelta(hours=12))
+
+        self.source.configuration = {}
+        self.source.save(update_fields=["configuration"])
+        self.assertFalse(is_stale(self.movie, source="justwatch", country="US"))
+
+    def test_unrepresentable_or_zero_length_override_uses_default(self):
+        default_window = freshness_for("justwatch")
+        for invalid in (float("inf"), float("nan"), 10**100, 1e-7, 0):
+            with self.subTest(invalid=invalid):
+                self.assertEqual(
+                    declared_freshness(
+                        "justwatch", {FRESHNESS_INTERVAL_KEY: invalid}
+                    ),
+                    default_window,
+                )
+
+    def test_configuration_snapshot_is_one_query_for_a_title_batch(self):
+        self._set_interval(3600)
+        self._justwatch_offer()
+        second = Movie.objects.create(tmdb_id=8212, title="Second", year=2022)
+        third = Movie.objects.create(tmdb_id=8213, title="Third", year=2022)
+
+        with CaptureQueriesContext(connection) as queries:
+            configurations = source_configuration_snapshot()
+            for movie in (self.movie, second, third):
+                stale_refresh_scopes(
+                    movie.tmdb_id,
+                    country="US",
+                    content_type="movie",
+                    source_configurations=configurations,
+                )
+
+        source_reads = [
+            query for query in queries
+            if (
+                '"availability_source"' in query["sql"].lower()
+                and '"configuration"' in query["sql"].lower()
+            )
+        ]
+        self.assertEqual(len(source_reads), 1)
+
+    def test_snapshot_does_not_create_or_enable_sources(self):
+        disabled_slug = "disabled-freshness-fixture"
+        Source.objects.create(
+            slug=disabled_slug,
+            name="Disabled Fixture",
+            type=SourceType.API,
+            enabled=False,
+        )
+
+        snapshot = source_configuration_snapshot(
+            [disabled_slug, "never-configured-fixture"]
+        )
+
+        self.assertIn(disabled_slug, snapshot)
+        self.assertNotIn("never-configured-fixture", snapshot)
+        self.assertFalse(Source.objects.get(slug=disabled_slug).enabled)
+        self.assertFalse(
+            Source.objects.filter(slug="never-configured-fixture").exists()
+        )
+
+    def test_config_change_to_longer_window_settles_queued_work_without_refresh(self):
+        self._set_interval(3600)
+        self._justwatch_offer()
+        request = request_availability_refresh(
+            self.movie,
+            source="justwatch",
+            country="US",
+            if_stale=True,
+        )
+        self.assertIsNotNone(request)
+
+        self._set_interval(48 * 3600)
+        service = MagicMock()
+        result = process_refresh_queue(budget=5, service=service)
+
+        self.assertEqual(result["requests_drained"], 1)
+        self.assertEqual(result["skipped_cached"], 1)
+        self.assertEqual(result["refreshed"], 0)
+        service.refresh_content.assert_not_called()
+        self.assertEqual(
+            RefreshRequest.objects.get(pk=request.pk).status,
+            RefreshRequestStatus.DONE,
+        )
+        self.assertIsNone(
+            request_availability_refresh(
+                self.movie,
+                source="justwatch",
+                country="US",
+                if_stale=True,
+            ),
+            "fresh evidence after the configuration change must not be requeued",
+        )
 
 
 class SweepScopeSelectionTests(TestCase):

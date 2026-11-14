@@ -30,7 +30,7 @@ from django.db.models import Max
 from django.utils import timezone
 
 from .domain.enums import FreshnessState
-from .models import Offer
+from .models import Offer, Source
 
 FRESHNESS_INTERVAL_KEY = "expected_refresh_interval_seconds"
 
@@ -103,10 +103,19 @@ def declared_freshness(
     An unconfigured unregistered slug answers ``None`` — the read path turns
     that into ``FreshnessState.UNKNOWN`` rather than a silent ``fresh``.
     """
-    raw = (configuration or {}).get(FRESHNESS_INTERVAL_KEY)
-    if isinstance(raw, bool) or not isinstance(raw, (int, float)) or raw <= 0:
+    config = configuration if isinstance(configuration, Mapping) else {}
+    raw = config.get(FRESHNESS_INTERVAL_KEY)
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
         return SOURCE_FRESHNESS.get(slug)
-    return timedelta(seconds=raw)
+    try:
+        interval = timedelta(seconds=raw)
+    except (OverflowError, TypeError, ValueError):
+        return SOURCE_FRESHNESS.get(slug)
+    # timedelta rounds sub-microsecond floats; a positive configured value can
+    # therefore become zero and diverge from the read path's default fallback.
+    if interval <= timedelta(0):
+        return SOURCE_FRESHNESS.get(slug)
+    return interval
 
 
 def freshness_for(
@@ -120,6 +129,23 @@ def freshness_for(
     (``DEFAULT_FRESHNESS``).
     """
     return declared_freshness(slug, configuration) or DEFAULT_FRESHNESS
+
+
+def source_configuration_snapshot(slugs=None) -> dict[str, Mapping]:
+    """Read effective freshness configuration for a scheduler batch once.
+
+    Missing Source rows intentionally map to the code policy. This helper is
+    read-only and never creates, enables, or otherwise activates a source.
+    Callers processing multiple titles should capture one snapshot and pass it
+    through their per-title decisions to avoid an N+1 configuration query.
+    """
+    query = Source.objects.all()
+    if slugs is not None:
+        query = query.filter(slug__in=set(slugs))
+    return {
+        slug: configuration if isinstance(configuration, Mapping) else {}
+        for slug, configuration in query.values_list("slug", "configuration")
+    }
 
 
 def freshness_state(
@@ -184,6 +210,7 @@ def source_is_stale(
     *,
     country: Optional[str] = None,
     content_type: Optional[str] = None,
+    configuration: Optional[Mapping] = None,
     now: Optional[datetime] = None,
 ) -> bool:
     """True when source evidence for this country/content scope is stale.
@@ -197,6 +224,10 @@ def source_is_stale(
         source_last_seen(
             tmdb_id, source, country=country, content_type=content_type
         ),
+        configuration=(
+            source_configuration_snapshot([source]).get(source, {})
+            if configuration is None else configuration
+        ),
         now=now,
     )
 
@@ -207,6 +238,7 @@ def stale_sources(
     sources=None,
     country: Optional[str] = None,
     content_type: Optional[str] = None,
+    source_configurations: Optional[Mapping[str, Mapping]] = None,
     now: Optional[datetime] = None,
 ) -> list[str]:
     """Slugs whose observation of the title is stale, each on its own window.
@@ -238,6 +270,12 @@ def stale_sources(
     else:
         candidates = set(sources)
 
+    configurations = (
+        source_configuration_snapshot(candidates)
+        if source_configurations is None
+        else source_configurations
+    )
+
     latest_by_slug = {
         row["source__slug"]: row["latest"]
         for row in scope_query.filter(source__slug__in=candidates)
@@ -248,14 +286,25 @@ def stale_sources(
     return sorted(
         slug
         for slug in candidates
-        if _is_stale_at(slug, latest_by_slug.get(slug), now=moment)
+        if _is_stale_at(
+            slug,
+            latest_by_slug.get(slug),
+            configuration=configurations.get(slug, {}),
+            now=moment,
+        )
     )
 
 
-def _is_stale_at(slug: str, latest: Optional[datetime], *, now=None) -> bool:
+def _is_stale_at(
+    slug: str,
+    latest: Optional[datetime],
+    *,
+    configuration: Optional[Mapping] = None,
+    now=None,
+) -> bool:
     if latest is None:
         return True
-    return _now(now) - _aware(latest) > freshness_for(slug)
+    return _now(now) - _aware(latest) > freshness_for(slug, configuration)
 
 
 def _aware(value: datetime) -> datetime:

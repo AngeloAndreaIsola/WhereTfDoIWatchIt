@@ -48,7 +48,12 @@ from django.db.models import Max
 from django.utils import timezone
 
 from availability.domain.enums import ContentType
-from availability.freshness import freshness_for, source_is_stale, stale_sources
+from availability.freshness import (
+    freshness_for,
+    source_configuration_snapshot,
+    source_is_stale,
+    stale_sources,
+)
 from availability.models import Country, Offer, Source
 from availability.services.refresh import (
     AvailabilityRefreshService,
@@ -98,6 +103,7 @@ def is_stale(
     *,
     source: str = "",
     country: Optional[str] = None,
+    configuration=None,
     now=None,
 ) -> bool:
     """True when *source*'s observation of the movie is missing or too old.
@@ -119,6 +125,7 @@ def is_stale(
         source or DEFAULT_SOURCE_SLUG,
         country=country,
         content_type=movie.content_type,
+        configuration=configuration,
         now=now,
     )
 
@@ -177,6 +184,7 @@ def stale_refresh_scopes(
     *,
     country: Optional[str] = None,
     content_type: Optional[str] = None,
+    source_configurations=None,
     now=None,
 ) -> list[str]:
     """Refreshable sources whose observation of the title is stale.
@@ -191,7 +199,11 @@ def stale_refresh_scopes(
     return [
         slug
         for slug in stale_sources(
-            tmdb_id, country=country, content_type=content_type, now=now
+            tmdb_id,
+            country=country,
+            content_type=content_type,
+            source_configurations=source_configurations,
+            now=now,
         )
         if slug in refreshable
     ]
@@ -451,6 +463,9 @@ def _process_watchlist_refresh_locked(
     # Nothing is persisted: a future quota reset must never be masked by a
     # stale in-memory or database flag.
     quota_circuit = SourceQuotaCircuit()
+    # One read-only snapshot for the queue drain and sweep. Configuration is
+    # resolved once per tick, then passed through per-title decisions.
+    source_configurations = source_configuration_snapshot()
 
     # Check upfront if the daily or monthly budget is already exhausted.
     if _is_spent(limiter):
@@ -477,6 +492,7 @@ def _process_watchlist_refresh_locked(
         service=service,
         limiter=limiter,
         quota_circuit=quota_circuit,
+        source_configurations=source_configurations,
     )
 
     pairs = _order_candidates(_candidate_pairs(user_id, content_types))
@@ -528,6 +544,7 @@ def _process_watchlist_refresh_locked(
             tmdb_id,
             country=current_country,
             content_type=movie.content_type,
+            source_configurations=source_configurations,
         )
         if not stale_scopes:
             summary.skipped_cached += 1
@@ -889,12 +906,15 @@ def stale_catalogue_sources(now=None) -> list[str]:
     """
     slugs, _disabled = _catalogue_source_slugs()
     last_success = last_successful_completions(slugs)
+    source_configurations = source_configuration_snapshot(slugs)
     moment = now or timezone.now()
     return sorted(
         slug
         for slug in slugs
         if last_success.get(slug) is None
-        or moment - last_success[slug] > freshness_for(slug)
+        or moment - last_success[slug] > freshness_for(
+            slug, source_configurations.get(slug, {})
+        )
     )
 
 
