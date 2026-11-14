@@ -9,7 +9,7 @@ from unittest import skipUnless
 from unittest.mock import Mock, patch
 
 import requests
-from django.db import connection
+from django.db import connection, connections
 from django.test import SimpleTestCase, TransactionTestCase
 
 from availability.domain.models import DiscoveredContent, ProviderOffer, ProviderOfferWithdrawal
@@ -371,6 +371,10 @@ class PostgreSQLReservationTests(TransactionTestCase):
                 return _reserve_attempt(self.authorization, scope, "GetSearchTitles", "POST", "apis.justwatch.com").ordinal
             except ExperimentBlocked:
                 return None
+            finally:
+                # ThreadPoolExecutor workers own Django connections too. Close
+                # each worker's connection before the test runner drops its DB.
+                connections.close_all()
         with ThreadPoolExecutor(max_workers=8) as pool:
             ordinals = list(pool.map(reserve_one, range(8)))
         saved = list(AvailabilityExperimentAttempt.objects.order_by("ordinal").values_list("ordinal", flat=True))
@@ -588,7 +592,13 @@ class PostgreSQLPreflightTests(TransactionTestCase):
              patch.object(experiment_runner, "ReservedTransport", return_value=Mock(session=Mock())), \
              patch("availability.services.refresh.AvailabilityRefreshService.refresh_content", new=mock_refresh):
             with ThreadPoolExecutor(max_workers=1) as pool:
-                first = pool.submit(execute_manifest, self.manifest, auth)
+                def execute_in_worker():
+                    try:
+                        return execute_manifest(self.manifest, auth)
+                    finally:
+                        connections.close_all()
+
+                first = pool.submit(execute_in_worker)
                 self.assertTrue(entered.wait(5))
                 with self.assertRaises(ExperimentBlocked):
                     execute_manifest(self.manifest, auth)
