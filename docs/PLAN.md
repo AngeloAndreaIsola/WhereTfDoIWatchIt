@@ -297,7 +297,8 @@ Phase 13 contracts (reconciliation):
   (reconciliation classification) and the refresh side (`is_stale`, sweep
   scope selection, enqueue/drain guards). Each source answers on its own
   window, resolved in order: `Source.configuration[
-  "expected_refresh_interval_seconds"]` (read side only) → the built-in
+  "expected_refresh_interval_seconds"]` (read and refresh sides; missing or
+  invalid values use the built-in source default) → the built-in
   `SOURCE_FRESHNESS` policy (registered sources: 6h for `cbc_gem`, 12h for
   `legacy_scraper`, 24h for the rest) → no deadline, so the read-side state
   is `unknown` (only undeclared slugs get here — there is no global default
