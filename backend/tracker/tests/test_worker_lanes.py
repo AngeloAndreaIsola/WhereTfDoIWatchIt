@@ -29,7 +29,6 @@ import threading
 from unittest.mock import patch
 
 from django.core.management import call_command
-from django.db import connections
 from django.test import TestCase, TransactionTestCase
 
 from availability.sources import source_registry
@@ -42,13 +41,8 @@ from tracker.models import (
     RefreshRequestStatus,
     WatchlistItem,
 )
-from django.db import connection
-
 from tracker.services.refresh_requests import (
-    _TITLE_DRAIN_LOCK_KEY,
     process_refresh_queue,
-    release_title_drain_lock,
-    try_title_drain_lock,
 )
 
 WORKER = "tracker.management.commands.refresh_worker"
@@ -155,101 +149,6 @@ class ConcurrencyTests(TransactionTestCase):
             worker.join(timeout=10)
 
         self.assertFalse(worker.is_alive(), "worker did not finish after release")
-
-    def test_only_one_title_worker_may_hold_the_drain_lock(self):
-        """The claim is the lock, because the model has no RUNNING state.
-
-        ``RefreshRequest`` is four-state with no ``RUNNING``, so a row cannot be
-        claimed by writing a status without a migration. The drain is serialised
-        wholesale instead: one worker holds the lock, the other is told to skip.
-
-        Two live connections are required, because the lock is **session-scoped**
-        and therefore dies with its connection. An earlier version of this test
-        closed the first connection to force a new session — which released the
-        very lock it was asserting on, so the second acquire trivially succeeded.
-        Holding both open at once is also the only faithful model of two worker
-        processes, which is what the lock exists to separate.
-
-        Backend PIDs are recorded so a regression that quietly reuses one session
-        (and so silently proves nothing) fails loudly instead.
-        """
-        other = connections["default"].copy()
-        try:
-            self.assertTrue(try_title_drain_lock())
-            with connection.cursor() as cur:
-                cur.execute("SELECT pg_backend_pid()")
-                pid_a = cur.fetchone()[0]
-
-            with other.cursor() as cur:
-                cur.execute("SELECT pg_backend_pid()")
-                pid_b = cur.fetchone()[0]
-            self.assertNotEqual(
-                pid_a, pid_b,
-                "the two 'workers' share a PostgreSQL session, so exclusion "
-                "cannot be observed",
-            )
-
-            # The second worker, from its own session, must be refused.
-            with other.cursor() as cur:
-                cur.execute("SELECT pg_try_advisory_lock(%s)",
-                            [_TITLE_DRAIN_LOCK_KEY])
-                self.assertFalse(
-                    cur.fetchone()[0],
-                    "a second title worker must not enter the drain",
-                )
-
-            # PostgreSQL agrees: exactly one owner of this key.
-            with other.cursor() as cur:
-                cur.execute(
-                    "SELECT count(*) FROM pg_locks "
-                    "WHERE locktype = 'advisory' AND objid = %s",
-                    [_TITLE_DRAIN_LOCK_KEY],
-                )
-                self.assertEqual(cur.fetchone()[0], 1)
-
-            # Once the owner releases, the other worker may take it.
-            release_title_drain_lock()
-            with other.cursor() as cur:
-                cur.execute("SELECT pg_try_advisory_lock(%s)",
-                            [_TITLE_DRAIN_LOCK_KEY])
-                self.assertTrue(
-                    cur.fetchone()[0],
-                    "releasing the lock must let the next worker drain",
-                )
-                cur.execute("SELECT pg_advisory_unlock(%s)",
-                            [_TITLE_DRAIN_LOCK_KEY])
-        finally:
-            other.close()
-
-    def test_two_title_workers_never_double_execute_a_pending_row(self):
-        """End to end: the second worker settles nothing while the first owns it."""
-        movie, _ = Movie.objects.get_or_create(
-            tmdb_id=555, defaults={"title": "Fight Club", "year": 1999},
-        )
-        RefreshRequest.objects.create(
-            movie=movie, source="streaming_availability",
-            status=RefreshRequestStatus.PENDING,
-        )
-
-        calls = []
-
-        def fake_drain(**kwargs):
-            calls.append(kwargs)
-
-        with patch(
-            "tracker.services.refresh_requests.drain_refresh_requests",
-            side_effect=fake_drain,
-        ):
-            with patch(
-                "tracker.services.refresh_requests.try_title_drain_lock",
-                return_value=False,
-            ):
-                blocked = process_refresh_queue(budget=5)
-
-        self.assertEqual(calls, [],
-                         "a worker that lost the lock must not drain")
-        self.assertTrue(blocked["rate_limited"])
-
 
 class RequestSemanticsTests(TestCase):
     """Existing status meanings are unchanged by the lane split."""

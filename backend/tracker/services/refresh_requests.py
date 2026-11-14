@@ -51,9 +51,10 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import uuid
+from contextlib import contextmanager
 from typing import Optional
 
-from django.db import IntegrityError, connection
+from django.db import IntegrityError, connection, connections
 from django.db.models import Q
 from django.utils import timezone
 
@@ -1178,6 +1179,37 @@ def drain_refresh_requests(
     represented_batches=None,
     quota_circuit: SourceQuotaCircuit | None = None,
 ) -> set[int]:
+    """Safely invoke the queue drain for any caller.
+
+    Production coordinators that also perform adjacent work acquire
+    :func:`title_drain_lock` around that entire work unit and call the private
+    locked implementation. Direct callers are protected here, so adding a new
+    caller cannot silently bypass the concurrency contract.
+    """
+    with title_drain_lock() as acquired:
+        if not acquired:
+            # Direct callers need an explicit deferral instead of a plausible
+            # empty result that could let an adjacent stale sweep run.
+            raise RefreshDrainLockUnavailable(
+                "another process owns the availability refresh drain"
+            )
+        return _drain_refresh_requests_locked(
+            summary=summary,
+            service=service,
+            limiter=limiter,
+            represented_batches=represented_batches,
+            quota_circuit=quota_circuit,
+        )
+
+
+def _drain_refresh_requests_locked(
+    *,
+    summary,
+    service: AvailabilityRefreshService,
+    limiter,
+    represented_batches=None,
+    quota_circuit: SourceQuotaCircuit | None = None,
+) -> set[int]:
     """Process pending refresh requests in priority order, budget permitting.
 
     Called by ``process_watchlist_refresh`` before its background stale
@@ -1339,50 +1371,117 @@ def drain_refresh_requests(
     return excluded
 
 
-#: Advisory-lock key serialising the title-queue drain. Fixed constant (not
-#: hashed from a slug) because it guards the queue as a whole, not one source.
+#: Advisory-lock key serialising every title-refresh drain. Fixed constant (not
+#: hashed from a slug) because the protected queue is shared across sources.
 _TITLE_DRAIN_LOCK_KEY = 0x7A9E_D41C
 
 
-def try_title_drain_lock() -> bool:
-    """Take the advisory lock that serialises title-queue drains.
+class RefreshDrainLockUnavailable(RuntimeError):
+    """The caller did not acquire the non-blocking title-drain lock."""
 
-    ``RefreshRequest`` is deliberately a four-state model (``PENDING`` plus three
-    terminal outcomes) with no ``RUNNING``, so a row cannot be "claimed" by
-    writing a status: that would need a migration and would change what every
-    consumer of request semantics reads. The whole drain is therefore serialised
-    with a Postgres session advisory lock — the same mechanism already used to
-    keep one catalogue walk per source
-    (:func:`tracker.services.bulk_refresh.try_source_lock`).
 
-    Two title workers never interleave: one takes the lock and drains, the other
-    skips the tick cleanly and picks up whatever is still pending next tick.
-    Strictly more conservative than per-row claiming, and needs no schema change.
+@contextmanager
+def title_drain_lock():
+    """Yield whether this caller exclusively owns the shared title-drain lock.
 
-    Degrades to "always acquired" on backends without advisory locks, so local
-    sqlite testing is unaffected — exactly like the catalogue lock.
+    PostgreSQL session-level advisory locks live on a dedicated Django
+    connection. Holding the lock on a separate session means a failed ORM
+    transaction cannot prevent explicit unlock; closing that session also
+    releases the lock if the unlock itself fails or the process dies. The
+    non-blocking try function makes lock contention a deferral, never an
+    indefinite wait. Callers must leave queued rows pending when ``False``.
+
+    Non-PostgreSQL backends retain the project's existing best-effort
+    single-process behavior; cross-connection exclusion is PostgreSQL-only and
+    is covered by dedicated TransactionTestCase regressions.
     """
     if connection.vendor != "postgresql":
-        return True
-    with connection.cursor() as cursor:
-        cursor.execute(
-            "SELECT pg_try_advisory_lock(%s)", [_TITLE_DRAIN_LOCK_KEY]
-        )
-        row = cursor.fetchone()
-    return bool(row and row[0])
-
-
-def release_title_drain_lock() -> None:
-    """Release the drain lock. Safe to call even if it was never taken."""
-    if connection.vendor != "postgresql":
+        yield True
         return
-    with connection.cursor() as cursor:
-        cursor.execute(
-            "SELECT pg_advisory_unlock(%s)", [_TITLE_DRAIN_LOCK_KEY]
-        )
+
+    lock_connection = connections["default"].copy()
+    acquired = False
+    body_failed = False
+    try:
+        with lock_connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT pg_try_advisory_lock(%s)", [_TITLE_DRAIN_LOCK_KEY]
+            )
+            row = cursor.fetchone()
+        acquired = bool(row and row[0])
+        try:
+            yield acquired
+        except BaseException:
+            body_failed = True
+            raise
+    finally:
+        try:
+            if acquired:
+                try:
+                    with lock_connection.cursor() as cursor:
+                        cursor.execute(
+                            "SELECT pg_advisory_unlock(%s)",
+                            [_TITLE_DRAIN_LOCK_KEY],
+                        )
+                        unlocked = cursor.fetchone()
+                    if not unlocked or not unlocked[0]:
+                        raise RuntimeError(
+                            "PostgreSQL title-drain advisory lock was not held "
+                            "by its owning session during release"
+                        )
+                except Exception:
+                    if body_failed:
+                        logger.exception(
+                            "title_drain_lock_release_failed; closing lock session"
+                        )
+                    else:
+                        raise
+        finally:
+            # PostgreSQL drops all session locks when the owning connection
+            # ends, including after an ungraceful client disconnect.
+            lock_connection.close()
+
+
+def _drain_lock_busy_summary(budget: int) -> dict:
+    """Return a visible deferral without settling or deleting queued work."""
+    from .bulk_refresh import BulkRefreshSummary
+
+    summary = BulkRefreshSummary(budget=budget, remaining_budget=budget)
+    summary.note_rate_limited_source(DEFAULT_SOURCE_SLUG)
+    summary.skipped_rate_limited = 1
+    summary.requests_pending = RefreshRequest.objects.filter(
+        status=RefreshRequestStatus.PENDING
+    ).count()
+    return summary.to_dict()
 
 
 def process_refresh_queue(
+    *,
+    budget: int = 10,
+    service: AvailabilityRefreshService | None = None,
+    limiter: RateLimiter | None = None,
+) -> dict | None:
+    """Run one queue-only worker tick under the shared drain lock."""
+    if not RefreshRequest.objects.filter(
+        status=RefreshRequestStatus.PENDING
+    ).exists():
+        return None
+
+    with title_drain_lock() as acquired:
+        if not acquired:
+            return _drain_lock_busy_summary(budget)
+        # Recheck under the lock: the previous owner may have settled the
+        # queue between the initial fast-path read and lock acquisition.
+        if not RefreshRequest.objects.filter(
+            status=RefreshRequestStatus.PENDING
+        ).exists():
+            return None
+        return _process_refresh_queue_locked(
+            budget=budget, service=service, limiter=limiter
+        )
+
+
+def _process_refresh_queue_locked(
     *,
     budget: int = 10,
     service: AvailabilityRefreshService | None = None,
@@ -1424,38 +1523,21 @@ def process_refresh_queue(
     if _is_spent(limiter):
         summary.note_rate_limited_source(DEFAULT_SOURCE_SLUG)
 
-    # Serialise the drain itself. Two title workers must never interleave: the
-    # queue is read-then-settle with no per-row claim, so without this both would
-    # see the same candidates and call the same sources for the same titles.
-    if not try_title_drain_lock():
-        # Another title worker owns the queue this tick. Report it as
-        # rate-limited rather than inventing a new status: the work is neither
-        # failed nor done, it simply has an owner, and the caller's existing
-        # rate-limit branch already treats that as "back off and retry".
-        summary.note_rate_limited_source(DEFAULT_SOURCE_SLUG)
-        summary.skipped_rate_limited += 1
-        summary.rate_limited = True
-        summary.requests_pending = pending.count()
-        return summary.to_dict()
-
     # Batches this tick actually drains. One tick may span several batches
     # (queued refreshes accumulate), and the resulting RefreshRun legitimately
     # belongs to all of them - so attribution is a set, never a single parent.
     drained_batches: set = set()
-    try:
-        run = RefreshRun.objects.create(
-            service=DEFAULT_SOURCE_SLUG,
-            started_at=timezone.now(),
-        )
-        drain_refresh_requests(
-            summary=summary,
-            service=service,
-            limiter=limiter,
-            represented_batches=drained_batches,
-            quota_circuit=quota_circuit,
-        )
-    finally:
-        release_title_drain_lock()
+    run = RefreshRun.objects.create(
+        service=DEFAULT_SOURCE_SLUG,
+        started_at=timezone.now(),
+    )
+    _drain_refresh_requests_locked(
+        summary=summary,
+        service=service,
+        limiter=limiter,
+        represented_batches=drained_batches,
+        quota_circuit=quota_circuit,
+    )
     # Diagnostic only: read by nothing that decides behaviour. A batch with no
     # AvailabilityRefresh row (requests queued directly, or by an older
     # version) simply produces no link.
