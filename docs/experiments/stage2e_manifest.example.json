@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "experiment_id": "stage2e-availability-refresh",
+  "maximum_attempts": 11,
+  "scopes": [
+    {
+      "scope_id": "dune-it-mediaset",
+      "tmdb_id": 438631,
+      "media_type": "movie",
+      "country": "IT",
+      "source_slug": "mediaset_infinity",
+      "title": "Dune",
+      "year": 2021,
+      "operation": "title_refresh",
+      "maximum_attempts": 2,
+      "endpoint": "https://frontier.api-graph.mediaset.it/",
+      "transport_operations": ["MediasetSearch", "MediasetMovie"],
+      "verified_provider_id": null,
+      "expected_offer_type": "subscription"
+    },
+    {
+      "scope_id": "inception-nl-justwatch",
+      "tmdb_id": 27205,
+      "media_type": "movie",
+      "country": "NL",
+      "source_slug": "justwatch",
+      "title": "Inception",
+      "year": 2010,
+      "operation": "title_refresh",
+      "maximum_attempts": 3,
+      "endpoint": "https://apis.justwatch.com/graphql",
+      "transport_operations": ["GetSearchTitles"],
+      "expected_offer_type": "subscription"
+    },
+    {
+      "scope_id": "dune-nl-justwatch",
+      "tmdb_id": 438631,
+      "media_type": "movie",
+      "country": "NL",
+      "source_slug": "justwatch",
+      "title": "Dune",
+      "year": 2021,
+      "operation": "title_refresh",
+      "maximum_attempts": 3,
+      "endpoint": "https://apis.justwatch.com/graphql",
+      "transport_operations": ["GetSearchTitles"],
+      "expected_offer_type": "subscription"
+    }
+  ]
+}

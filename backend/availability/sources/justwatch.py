@@ -262,6 +262,10 @@ class JustWatchSource:
                 country=country,
                 language=self.language,
                 count=min(self.page_size, 20),
+                object_types=(
+                    [self._requested_content_type(request).value.upper()]
+                    if self._requested_content_type(request) is not None else None
+                ),
                 best_only=self.best_only,
             )
         except JustWatchError as exc:
