@@ -264,8 +264,10 @@ class YouTubeSource:
         # absence must never deactivate offers.
         supports_authoritative_snapshots=False,
         # The source provides no external ids of its own; offers carry the
-        # requested tmdb id after title verification.
+        # request's TMDb id is not provider evidence. A title search may only
+        # reuse an independently trusted mapping (normally a manual one).
         supports_tmdb_ids=False,
+        supports_automatic_title_mapping=False,
         supports_seasons=False,
         supports_episodes=False,
         # Search payloads expose no audio/subtitle language metadata.
@@ -306,17 +308,47 @@ class YouTubeSource:
 
         query = request.title if request.year is None else f"{request.title} {request.year}"
         payload = self.client.search(query)
-        candidate = _find_free_candidate(payload, request)
-        if candidate is None:
+        candidates = _find_free_candidates(payload, request)
+        if not candidates:
             return SourceFetchResult(sync_mode=SyncMode.TARGETED)
 
-        renderer, video_id = candidate
+        if len(candidates) > 1:
+            # A title search can return multiple distinct free videos with the
+            # same title. Preserve each YouTube-native identity as unresolved
+            # provider content, but do not emit watchable offer assertions.
+            unresolved = [
+                _discovered_content(
+                    renderer,
+                    video_id,
+                    identity_evidence={
+                        "status": "unresolved",
+                        "basis": "ambiguous_title_search",
+                        "candidate_count": len(candidates),
+                        "provider_reported_tmdb_id": False,
+                        "provider_reported_release_year": bool(_candidate_year(renderer)),
+                    },
+                )
+                for renderer, video_id in candidates
+            ]
+            logger.warning(
+                "youtube_ambiguous_title_candidates title=%r video_ids=%s",
+                request.title, sorted(video_id for _, video_id in candidates),
+            )
+            return SourceFetchResult(
+                contents=unresolved,
+                authoritative=False,
+                complete_snapshot=False,
+                sync_mode=SyncMode.TARGETED,
+                cursor=None,
+            )
+
+        renderer, video_id = candidates[0]
         offer = ProviderOffer(
             provider_id=self.slug,
             provider_content_id=video_id,
             country=normalize_country(region),
             content_type=ContentType.MOVIE,
-            tmdb_id=request.tmdb_id,
+            tmdb_id=None,
             season_number=None,
             episode_number=None,
             offer_type=normalize_offer_type("free_with_ads"),
@@ -329,15 +361,7 @@ class YouTubeSource:
             source_record_id=video_id,
             source_version=CLIENT_VERSION,
         )
-        content = DiscoveredContent(
-            provider_id=self.slug,
-            provider_content_id=video_id,
-            content_type=ContentType.MOVIE,
-            title=_title(renderer),
-            url=WATCH_URL.format(video_id=video_id),
-            external_ids={"tmdb": str(request.tmdb_id)},
-            source_id=self.slug,
-        )
+        content = _discovered_content(renderer, video_id)
         return SourceFetchResult(
             contents=[content],
             offers=[offer],
@@ -418,8 +442,8 @@ def _search_items(payload: dict) -> list[dict]:
     return [item for item in items if isinstance(item, dict)]
 
 
-def _find_free_candidate(payload: dict, request: ContentRequest):
-    """First verified free-with-ads candidate: ``(renderer, video_id)``.
+def _find_free_candidates(payload: dict, request: ContentRequest):
+    """Verified free-with-ads candidates as ``(renderer, video_id)`` pairs.
 
     Verification order per entry: a free YPC badge, then normalized title
     equality with the request (trailing ``"(YYYY)"`` stripped, an explicit
@@ -429,6 +453,7 @@ def _find_free_candidate(payload: dict, request: ContentRequest):
     still exist.
     """
     wanted = _normalize_title(request.title)
+    matches = {}
     for item in _search_items(payload):
         for key in ("movieRenderer", "videoRenderer"):
             renderer = item.get(key)
@@ -454,8 +479,29 @@ def _find_free_candidate(payload: dict, request: ContentRequest):
                 video_id = str(renderer.get("videoId") or "").strip()
                 if not video_id:
                     continue
-                return renderer, video_id
-    return None
+                matches.setdefault(video_id, (renderer, video_id))
+    return list(matches.values())
+
+
+def _candidate_year(renderer: dict) -> Optional[int]:
+    match = _TRAILING_YEAR.search(_title(renderer))
+    return int(match.group(1)) if match else None
+
+
+def _discovered_content(renderer: dict, video_id: str, *, identity_evidence=None):
+    return DiscoveredContent(
+        provider_id=YouTubeSource.slug,
+        provider_content_id=video_id,
+        content_type=ContentType.MOVIE,
+        title=_title(renderer),
+        url=WATCH_URL.format(video_id=video_id),
+        # YouTube search does not report a TMDb id. Keep the video id as the
+        # provider-native key and never copy the requested canonical id here.
+        external_ids={},
+        replace_external_ids=True,
+        identity_evidence=identity_evidence or {},
+        source_id=YouTubeSource.slug,
+    )
 
 
 def _titles_match(renderer: dict, request: ContentRequest, wanted: str) -> bool:
