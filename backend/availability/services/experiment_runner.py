@@ -20,7 +20,6 @@ from urllib.parse import urlsplit
 from uuid import UUID, NAMESPACE_URL, uuid5
 
 import requests
-from django.conf import settings
 from django.db import connections, transaction
 from django.utils import timezone as django_timezone
 
@@ -29,25 +28,13 @@ from availability.models import (
     AvailabilityExperimentAttempt,
     AvailabilityExperimentAttemptOutcome,
     AvailabilityExperimentScope,
-    ContentMapping,
     Country,
     Offer,
     Source,
 )
-from availability.domain.enums import MatchMethod
-from availability.sources.base import ContentRequest
 from availability.sources.justwatch import JustWatchSource
 from availability.sources.justwatch_client import JustWatchClient
 from availability.sources.justwatch_client import SEARCH_TITLES_QUERY
-from availability.sources.mediaset_infinity import (
-    APP_VERSION,
-    DEFAULT_TIMEOUT,
-    FRONTIER_URL,
-    MediasetInfinityClient,
-    MediasetInfinitySource,
-    SITE_ORIGIN,
-    USER_AGENT,
-)
 from availability.services.refresh import AvailabilityRefreshService
 from tracker.models import Movie, RefreshRequest
 from tracker.services.refresh_requests import title_drain_lock
@@ -57,33 +44,29 @@ from tracker.services.bulk_refresh import (
     try_source_lock,
 )
 
-GLOBAL_LIMIT = 11
+GLOBAL_LIMIT = 6
 SOURCE_LIMITS = {
     "justwatch": 6,
-    "mediaset_infinity": 2,
-    "provider_evidence": 3,
+    "mediaset_infinity": 0,
+    "provider_evidence": 0,
     "streaming_availability": 0,
     "watchmode": 0,
+    "legacy_scraper": 0,
 }
-DENIED_SOURCES = frozenset({"streaming_availability", "watchmode", "legacy_scraper"})
+DENIED_SOURCES = frozenset({
+    "mediaset_infinity", "provider_evidence", "streaming_availability",
+    "watchmode", "legacy_scraper",
+})
 OPERATION_LIMITS = {
     "justwatch": {"GetSearchTitles": 6},
-    "mediaset_infinity": {"MediasetSearch": 1, "MediasetMovie": 1},
-    "provider_evidence": {"provider_page": 3},
+    "mediaset_infinity": {},
+    "provider_evidence": {},
+    "streaming_availability": {},
+    "watchmode": {},
+    "legacy_scraper": {},
 }
 METHOD = "POST"
 APPROVED_SCOPES = [
-    {
-        "scope_id": "dune-it-mediaset", "tmdb_id": 438631, "media_type": "movie",
-        "country": "IT", "source_slug": "mediaset_infinity", "title": "Dune",
-        "year": 2021, "operation": "title_refresh", "maximum_attempts": 2,
-        "endpoint": FRONTIER_URL,
-        "transport_operations": ["MediasetSearch", "MediasetMovie"],
-        # Mediaset search cards have no year; this must be replaced with an
-        # independently reviewed GUID before this source can execute.
-        "verified_provider_id": None,
-        "expected_offer_type": "subscription",
-    },
     {
         "scope_id": "inception-nl-justwatch", "tmdb_id": 27205, "media_type": "movie",
         "country": "NL", "source_slug": "justwatch", "title": "Inception",
@@ -130,7 +113,7 @@ def validate_manifest(manifest):
     if manifest["schema_version"] != 1 or manifest["experiment_id"] != "stage2e-availability-refresh":
         raise ExperimentBlocked("unsupported manifest schema or experiment id")
     if manifest["maximum_attempts"] != GLOBAL_LIMIT:
-        raise ExperimentBlocked("manifest maximum must equal the fixed 11-attempt ceiling")
+        raise ExperimentBlocked("manifest maximum must equal the fixed 6-attempt ceiling")
     if manifest != APPROVED_MANIFEST:
         raise ExperimentBlocked("manifest differs from the fixed approved scope set")
     return True
@@ -234,11 +217,6 @@ class ReservedTransport:
         self.scope = scope
         self.source_slug = source_slug
         self.operation_attempts = {}
-        self.mediaset_guid = None
-        if source_slug == "mediaset_infinity" and not scope.get("verified_provider_id"):
-            raise ExperimentBlocked(
-                "Mediaset scope is disabled until an independently verified provider GUID is pinned"
-            )
         self.session = requests.Session()
         self.session.trust_env = False
         self.session.mount("https://", requests.adapters.HTTPAdapter(max_retries=0))
@@ -261,67 +239,37 @@ class ReservedTransport:
             "", "",
         ):
             raise ExperimentBlocked("unexpected endpoint")
-        if expected_host not in ("apis.justwatch.com", "frontier.api-graph.mediaset.it"):
+        if expected_host != "apis.justwatch.com":
             raise ExperimentBlocked("unrecognized destination host")
         if self.source_slug != scope["source_slug"] or operation not in scope["transport_operations"]:
             raise ExperimentBlocked("unrecognized source operation")
         if self.authorization.get("manifest_digest") != manifest_digest(APPROVED_MANIFEST):
             raise ExperimentBlocked("authorization manifest digest is not approved")
         variables = (json or {}).get("variables") or {}
-        if self.source_slug == "mediaset_infinity":
-            expected_headers = {
-                "User-Agent": USER_AGENT,
-                "Content-Type": "application/json",
-                "x-m-platform": "WEB",
-                "x-m-property": "MPLAY",
-                "x-m-app-version": APP_VERSION,
-                "Origin": SITE_ORIGIN,
-                "Referer": f"{SITE_ORIGIN}/",
-            }
-            if headers != expected_headers or timeout != DEFAULT_TIMEOUT:
-                raise ExperimentBlocked("Mediaset transport headers or finite timeout differ from its pinned client contract")
-        if self.source_slug == "justwatch":
-            expected_filter = {
-                "includeTitlesWithoutUrl": True,
-                "packages": None,
-                "objectTypes": ["MOVIE"],
-                "releaseYear": {"min": None, "max": None},
-                "searchQuery": scope["title"],
-            }
-            expected_variables = {
-                "filter": {"bestOnly": True},
-                "formatOfferIcon": "PNG",
-                "formatPoster": "JPG",
-                "profile": "S718",
-                "backdropProfile": "S1920",
-                "country": scope["country"],
-                "language": "en",
-                "first": 20,
-                "offset": None,
-                "popularTitlesFilter": expected_filter,
-                "searchTitlesFilter": expected_filter,
-            }
-            if json.get("query") != SEARCH_TITLES_QUERY or variables != expected_variables:
-                raise ExperimentBlocked("JustWatch title or country escaped manifest scope")
-        else:
-            from availability.sources.mediaset_infinity import SEARCH_QUERY, MOVIE_QUERY
-            expected_document = SEARCH_QUERY if operation == "MediasetSearch" else MOVIE_QUERY
-            if json.get("query") != expected_document:
-                raise ExperimentBlocked("unrecognized Mediaset GraphQL document")
-            if operation == "MediasetSearch":
-                expected_variables = {
-                    "property": "search", "query": scope["title"],
-                    "uxReference": "filteredSearch", "variant": "movie",
-                    "first": 12, "after": None,
-                }
-                if variables != expected_variables:
-                    raise ExperimentBlocked("Mediaset title or media type escaped manifest scope")
-            elif set(variables) != {"id"} or not isinstance(variables.get("id"), str):
-                raise ExperimentBlocked("Mediaset detail identity is malformed")
-            elif not self.mediaset_guid or variables["id"] != self.mediaset_guid:
-                raise ExperimentBlocked("Mediaset detail ID was not returned by the approved title search")
+        expected_filter = {
+            "includeTitlesWithoutUrl": True,
+            "packages": None,
+            "objectTypes": ["MOVIE"],
+            "releaseYear": {"min": None, "max": None},
+            "searchQuery": scope["title"],
+        }
+        expected_variables = {
+            "filter": {"bestOnly": True},
+            "formatOfferIcon": "PNG",
+            "formatPoster": "JPG",
+            "profile": "S718",
+            "backdropProfile": "S1920",
+            "country": scope["country"],
+            "language": "en",
+            "first": 20,
+            "offset": None,
+            "popularTitlesFilter": expected_filter,
+            "searchTitlesFilter": expected_filter,
+        }
+        if json.get("query") != SEARCH_TITLES_QUERY or variables != expected_variables:
+            raise ExperimentBlocked("JustWatch title or country escaped manifest scope")
         self.operation_attempts[operation] = self.operation_attempts.get(operation, 0) + 1
-        operation_limit = 1 if self.source_slug == "mediaset_infinity" else scope["maximum_attempts"]
+        operation_limit = scope["maximum_attempts"]
         if self.operation_attempts[operation] > operation_limit:
             raise ExperimentBlocked("per-operation attempt limit exhausted")
 
@@ -340,49 +288,11 @@ class ReservedTransport:
             # Process interruption/no response remains a bare durable reserve.
             raise
         _record_outcome(attempt, "success" if 200 <= response.status_code < 300 else "failure", response.status_code)
+        if self.source_slug == "justwatch" and response.status_code == 429:
+            raise ExperimentBlocked("JustWatch HTTP 429 rate limit; attempt spent and scope stopped")
         if 300 <= response.status_code < 400:
             raise ExperimentBlocked("redirect response denied; no redirect hop was followed")
-        if self.source_slug == "mediaset_infinity" and response.status_code != 200:
-            raise ExperimentBlocked("Mediaset requires HTTP 200; response rejected after spending the attempt")
-        if self.source_slug == "mediaset_infinity" and operation == "MediasetSearch" and 200 <= response.status_code < 300:
-            try:
-                from availability.sources.mediaset_infinity import _find_movie_candidate
-                candidate = _find_movie_candidate(
-                    response.json(),
-                    ContentRequest(
-                        tmdb_id=scope["tmdb_id"], content_type=scope["media_type"],
-                        title=scope["title"], year=scope["year"],
-                    ),
-                )
-                candidate_guid = str(candidate.get("guid") or "") if candidate else ""
-                self.mediaset_guid = (
-                    candidate_guid
-                    if candidate_guid and candidate_guid == self.scope.get("verified_provider_id")
-                    else None
-                )
-            except Exception:
-                self.mediaset_guid = None
         return response
-
-
-def _mediaset_http_post(transport):
-    """Adapt the existing (url, payload)->dict client seam to guarded HTTP."""
-    headers = {
-        "User-Agent": USER_AGENT,
-        "Content-Type": "application/json",
-        "x-m-platform": "WEB",
-        "x-m-property": "MPLAY",
-        "x-m-app-version": APP_VERSION,
-        "Origin": SITE_ORIGIN,
-        "Referer": f"{SITE_ORIGIN}/",
-    }
-
-    def post(url, payload):
-        return transport(
-            url, payload, headers=headers, timeout=DEFAULT_TIMEOUT
-        ).json()
-
-    return post
 
 
 def _reserve_attempt(authorization, scope, operation, method, host):
@@ -394,7 +304,10 @@ def _reserve_attempt(authorization, scope, operation, method, host):
     if authorization.get("manifest_digest") != manifest_digest(APPROVED_MANIFEST):
         raise ExperimentBlocked("reservation authorization is not bound to the approved manifest")
     validate_scope(scope)
-    if scope["source_slug"] in DENIED_SOURCES or scope["source_slug"] not in SOURCE_LIMITS:
+    if (scope["source_slug"] in DENIED_SOURCES
+            or scope["source_slug"] not in SOURCE_LIMITS
+            or SOURCE_LIMITS[scope["source_slug"]] <= 0
+            or scope["source_slug"] != "justwatch"):
         raise ExperimentBlocked("source is not enabled in experiment policy")
     if host != urlsplit(scope["endpoint"]).hostname or operation not in scope["transport_operations"]:
         raise ExperimentBlocked("reservation destination or operation differs from approved scope")
@@ -470,7 +383,9 @@ def read_only_preflight(manifest):
             active_title_lock_count = cursor.fetchone()[0]
     from tracker.models import RefreshRun
     active_refresh_runs = RefreshRun.objects.using(alias).filter(finished_at__isnull=True).count()
-    quota_evidence = _quota_evidence()
+    selected_sources = {scope["source_slug"] for scope in manifest["scopes"]}
+    quota_evidence = _quota_evidence(selected_sources)
+    access_permission_evidence = _access_permission_evidence(selected_sources)
     scoped_queue_overlap = 0
     source_locks = _source_lock_states(manifest["scopes"]) if "postgresql" in str(cfg.get("ENGINE", "")) else {}
     try:
@@ -518,6 +433,7 @@ def read_only_preflight(manifest):
         "active_source_locks": source_locks,
         "worker_state": {"active_refresh_runs": active_refresh_runs, "process_presence": "not observable from PostgreSQL"},
         "quota_evidence": quota_evidence,
+        "access_permission_evidence": access_permission_evidence,
         "reservations": {
             "total": sum(reservations_by_source.values()),
             "by_source": reservations_by_source,
@@ -575,23 +491,14 @@ def read_only_preflight(manifest):
         if movie and (movie.title != scope["title"] or movie.year != scope["year"]):
             result["blockers"].append(f"scope {scope['scope_id']} title/year do not match manifest")
         if scope["source_slug"] not in quota_evidence:
-            result["blockers"].append(f"scope {scope['scope_id']} has no current quota evidence")
-        if scope["source_slug"] == "mediaset_infinity":
-            verified_guid = scope.get("verified_provider_id")
-            if not verified_guid:
-                result["blockers"].append(f"scope {scope['scope_id']} has no independently verified provider GUID")
-            else:
-                trusted_mapping = ContentMapping.objects.using(alias).filter(
-                    provider__slug="mediaset_infinity",
-                    provider_content_id=verified_guid,
-                    content_type=scope["media_type"],
-                    tmdb_id=scope["tmdb_id"],
-                    match_method=MatchMethod.MANUAL,
-                ).exists()
-                if not trusted_mapping:
-                    result["blockers"].append(
-                        f"scope {scope['scope_id']} has no manual mapping for its verified provider GUID"
-                    )
+            result["blockers"].append(
+                f"scope {scope['scope_id']} has no current quota/rate-policy evidence for six requests"
+            )
+        if scope["source_slug"] not in access_permission_evidence:
+            result["blockers"].append(
+                f"scope {scope['scope_id']} has no current express permission evidence "
+                "for the JustWatch GraphQL endpoint"
+            )
         if pending_scope:
             result["blockers"].append(f"scope {scope['scope_id']} overlaps a pending ordinary refresh")
         if source_locks.get(scope["source_slug"], {}).get("held"):
@@ -637,18 +544,39 @@ def _registered_source_slugs():
     return set(source_registry.slugs())
 
 
-def _quota_evidence():
-    """Read a short-lived operator-supplied quota fact; never infer a balance."""
+def _quota_evidence(source_slugs):
+    """Read short-lived quota and rate-policy evidence; never infer a balance or limit."""
     raw = os.environ.get("AVAILABILITY_EXPERIMENT_QUOTA_EVIDENCE", "")
     try:
         evidence = json.loads(raw)
+        if not isinstance(evidence, dict):
+            return {}
         now = datetime.now(timezone.utc)
         valid = {}
-        for slug in ("justwatch", "mediaset_infinity"):
-            item = evidence[slug]
+        for slug in source_slugs:
+            if slug not in SOURCE_LIMITS or SOURCE_LIMITS[slug] <= 0:
+                continue
+            item = evidence.get(slug)
+            if not isinstance(item, dict):
+                continue
             checked = datetime.fromisoformat(item["checked_at"].replace("Z", "+00:00"))
             age = (now - checked.astimezone(timezone.utc)).total_seconds()
             if age < 0 or age > 3600 or item.get("status") not in ("unmetered_public", "available"):
+                continue
+            policy = item.get("rate_policy_evidence")
+            if not isinstance(policy, dict):
+                continue
+            policy_checked = datetime.fromisoformat(policy["checked_at"].replace("Z", "+00:00"))
+            policy_age = (now - policy_checked.astimezone(timezone.utc)).total_seconds()
+            max_burst = policy.get("max_burst")
+            if (
+                policy_age < 0
+                or policy_age > 3600
+                or not str(policy.get("evidence_reference", "")).strip()
+                or isinstance(max_burst, bool)
+                or not isinstance(max_burst, int)
+                or max_burst < SOURCE_LIMITS[slug]
+            ):
                 continue
             if item["status"] == "available" and (
                 isinstance(item.get("remaining"), bool)
@@ -656,7 +584,62 @@ def _quota_evidence():
                 or item["remaining"] < SOURCE_LIMITS[slug]
             ):
                 continue
-            valid[slug] = {"status": item["status"], "remaining": item.get("remaining"), "checked_at": checked.astimezone(timezone.utc).isoformat()}
+            valid[slug] = {
+                "status": item["status"],
+                "remaining": item.get("remaining"),
+                "checked_at": checked.astimezone(timezone.utc).isoformat(),
+                "rate_policy_checked_at": policy_checked.astimezone(timezone.utc).isoformat(),
+                "max_burst": max_burst,
+            }
+        return valid
+    except Exception:
+        return {}
+
+
+def _access_permission_evidence(source_slugs):
+    """Require current operator-reviewed permission for the exact GraphQL use."""
+    raw = os.environ.get("AVAILABILITY_EXPERIMENT_QUOTA_EVIDENCE", "")
+    try:
+        evidence = json.loads(raw)
+        if not isinstance(evidence, dict):
+            return {}
+        now = datetime.now(timezone.utc)
+        valid = {}
+        for slug in source_slugs:
+            item = evidence.get(slug)
+            if not isinstance(item, dict):
+                continue
+            permission = item.get("access_permission")
+            if not isinstance(permission, dict) or permission.get("status") != "authorized":
+                continue
+            checked = datetime.fromisoformat(permission["checked_at"].replace("Z", "+00:00"))
+            age = (now - checked.astimezone(timezone.utc)).total_seconds()
+            maximum_requests = permission.get("maximum_requests")
+            expected_scope_ids = sorted(
+                scope["scope_id"] for scope in APPROVED_MANIFEST["scopes"]
+                if scope["source_slug"] == slug
+            )
+            scope_ids = permission.get("scope_ids")
+            if (
+                age < 0
+                or age > 3600
+                or not str(permission.get("evidence_reference", "")).strip()
+                or permission.get("endpoint") != "https://apis.justwatch.com/graphql"
+                or isinstance(maximum_requests, bool)
+                or not isinstance(maximum_requests, int)
+                or maximum_requests < GLOBAL_LIMIT
+                or not isinstance(scope_ids, list)
+                or sorted(scope_ids) != expected_scope_ids
+            ):
+                continue
+            valid[slug] = {
+                "status": "authorized",
+                "checked_at": checked.astimezone(timezone.utc).isoformat(),
+                "endpoint": permission["endpoint"],
+                "maximum_requests": maximum_requests,
+                "scope_ids": expected_scope_ids,
+                "evidence_reference_present": True,
+            }
         return valid
     except Exception:
         return {}
@@ -721,32 +704,8 @@ class ScopedSource:
         result = self._source.fetch(content, provider=provider, country=country, cursor=cursor, **kwargs)
         if result.country and str(result.country).upper() != self.scope["country"]:
             raise ExperimentBlocked("source result declared a different country")
-        if self.slug == "mediaset_infinity" and any(
-            entry.identity_evidence.get("basis") == "ambiguous_normalized_title"
-            for entry in result.contents
-        ):
-            raise ExperimentBlocked("Mediaset title search returned ambiguous provider identities")
-        verified_guid = self.scope.get("verified_provider_id")
         offers = []
         for item in result.offers:
-            if self.slug == "mediaset_infinity":
-                if (
-                    not verified_guid
-                    or item.provider_id != "mediaset_infinity"
-                    or item.provider_content_id != verified_guid
-                    or item.tmdb_id not in (None, self.scope["tmdb_id"])
-                ):
-                    raise ExperimentBlocked("Mediaset offer does not match the verified provider identity")
-                trusted_mapping = ContentMapping.objects.filter(
-                    provider__slug="mediaset_infinity",
-                    provider_content_id=verified_guid,
-                    content_type=self.scope["media_type"],
-                    tmdb_id=self.scope["tmdb_id"],
-                    match_method=MatchMethod.MANUAL,
-                ).exists()
-                if not trusted_mapping:
-                    raise ExperimentBlocked("Mediaset offer has no trusted manual TMDb mapping")
-                item = replace(item, tmdb_id=self.scope["tmdb_id"])
             if (item.tmdb_id != self.scope["tmdb_id"]
                     or str(item.content_type) != self.scope["media_type"]
                     or str(item.country).upper() != self.scope["country"]
@@ -771,7 +730,7 @@ class ScopedSource:
 
 
 def execute_manifest(manifest, authorization):
-    """Run only the three listed targeted scopes; never reads or drains queue work."""
+    """Run only the two listed JustWatch title scopes; never drain queue work."""
     validate_manifest(manifest)
     if database_identity() != authorization["database_identity"]:
         raise ExperimentBlocked("database environment changed")
@@ -822,12 +781,6 @@ def execute_manifest(manifest, authorization):
                 if scope["source_slug"] == "justwatch":
                     client = JustWatchClient(http_post=transport, retries=scope["maximum_attempts"])
                     source = JustWatchSource(client=client)
-                elif scope["source_slug"] == "mediaset_infinity":
-                    client = MediasetInfinityClient(
-                        timeout=DEFAULT_TIMEOUT,
-                        http_post=_mediaset_http_post(transport),
-                    )
-                    source = MediasetInfinitySource(client=client)
                 else:
                     raise ExperimentBlocked("no dedicated instrumented client for source")
                 AvailabilityRefreshService(source=ScopedSource(source, scope)).refresh_content(

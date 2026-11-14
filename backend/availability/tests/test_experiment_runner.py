@@ -13,12 +13,10 @@ from django.db import connection, connections
 from django.test import SimpleTestCase, TransactionTestCase
 
 from availability.domain.models import DiscoveredContent, ProviderOffer, ProviderOfferWithdrawal
-from availability.domain.enums import MatchMethod
 from availability.models import (
     AvailabilityExperimentAttemptOutcome,
     AvailabilityExperimentScope,
     Country,
-    ContentMapping,
     Source,
 )
 from availability.services.experiment_runner import (
@@ -30,7 +28,6 @@ from availability.services.experiment_runner import (
     _reserve_attempt,
     _incomplete_scope_ids,
     _quota_evidence,
-    _mediaset_http_post,
     issue_authorization,
     manifest_digest,
     read_authorization,
@@ -38,11 +35,9 @@ from availability.services.experiment_runner import (
     execute_manifest,
     validate_manifest,
 )
-from availability.sources.base import ContentRequest, SourceFetchError, SourceFetchResult
+from availability.sources.base import ContentRequest, SourceFetchResult
 from availability.sources.justwatch_client import SEARCH_TITLES_QUERY, JustWatchClient, JustWatchTransportError
-from availability.sources.mediaset_infinity import MediasetInfinityClient
 from tracker.models import Movie, RefreshRequest
-from tracker.models import Provider
 
 
 MANIFEST_PATH = Path(__file__).resolve().parents[3] / "docs/experiments/stage2e_manifest.example.json"
@@ -54,6 +49,33 @@ def load_manifest():
 
 def jw_scope():
     return next(s for s in load_manifest()["scopes"] if s["source_slug"] == "justwatch" and s["tmdb_id"] == 27205)
+
+
+def dune_scope():
+    return next(s for s in load_manifest()["scopes"] if s["source_slug"] == "justwatch" and s["tmdb_id"] == 438631)
+
+
+def quota_record(*, status="unmetered_public", remaining=None):
+    checked_at = datetime.now(timezone.utc).isoformat()
+    return {
+        "status": status,
+        "remaining": remaining,
+        "checked_at": checked_at,
+        "rate_policy_evidence": {
+            "checked_at": checked_at,
+            "evidence_reference": "fixture-reviewed-rate-policy",
+            "max_burst": 6,
+        },
+        # Synthetic fixture only. This string is not real JustWatch permission.
+        "access_permission": {
+            "status": "authorized",
+            "checked_at": checked_at,
+            "evidence_reference": "fixture-test-only-not-real-permission",
+            "endpoint": "https://apis.justwatch.com/graphql",
+            "maximum_requests": 6,
+            "scope_ids": ["inception-nl-justwatch", "dune-nl-justwatch"],
+        },
+    }
 
 
 def jw_payload(title="Inception", country="NL", operation="GetSearchTitles"):
@@ -77,33 +99,69 @@ def jw_payload(title="Inception", country="NL", operation="GetSearchTitles"):
 
 
 class ManifestValidationTests(SimpleTestCase):
-    def test_fixed_manifest_has_exact_three_scopes_and_eight_application_attempts(self):
+    def test_fixed_manifest_has_exact_two_nl_scopes_and_six_attempts(self):
         manifest = load_manifest()
         self.assertTrue(validate_manifest(manifest))
-        self.assertEqual(sum(s["maximum_attempts"] for s in manifest["scopes"]), 8)
-        self.assertEqual(manifest["maximum_attempts"], 11)
+        self.assertEqual(len(manifest["scopes"]), 2)
+        self.assertEqual(sum(s["maximum_attempts"] for s in manifest["scopes"]), 6)
+        self.assertEqual(manifest["maximum_attempts"], 6)
+        self.assertEqual({scope["country"] for scope in manifest["scopes"]}, {"NL"})
+        self.assertEqual({scope["transport_operations"][0] for scope in manifest["scopes"]}, {"GetSearchTitles"})
 
-    def test_unlisted_title_country_and_source_are_denied(self):
-        for key, value in (("tmdb_id", 999), ("country", "US"), ("source_slug", "watchmode")):
-            manifest = load_manifest()
-            manifest["scopes"][0][key] = value
-            with self.subTest(key=key), self.assertRaises(ExperimentBlocked):
-                validate_manifest(manifest)
-        for source_slug in ("streaming_availability", "watchmode", "legacy_scraper"):
+    def test_third_scope_and_all_non_justwatch_sources_are_denied(self):
+        manifest = load_manifest()
+        manifest["scopes"].append(dict(manifest["scopes"][0]))
+        with self.assertRaises(ExperimentBlocked):
+            validate_manifest(manifest)
+        for source_slug in ("mediaset_infinity", "watchmode", "streaming_availability", "provider_evidence", "legacy_scraper", "other"):
             manifest = load_manifest()
             manifest["scopes"][0]["source_slug"] = source_slug
             with self.subTest(source_slug=source_slug), self.assertRaises(ExperimentBlocked):
                 validate_manifest(manifest)
 
-    def test_manifest_extension_or_budget_change_is_denied(self):
-        manifest = load_manifest()
-        manifest["maximum_attempts"] = 12
+    def test_every_scope_identity_operation_or_budget_change_is_denied(self):
+        mutations = [
+            ("tmdb_id", 999), ("country", "IT"), ("source_slug", "watchmode"),
+            ("title", "The Matrix"), ("year", 1999), ("media_type", "series"),
+            ("operation", "catalogue_sync"), ("maximum_attempts", 4),
+            ("endpoint", "https://evil.example/"),
+            ("transport_operations", ["GetProviders"]),
+            ("expected_offer_type", "rent"),
+        ]
+        for key, value in mutations:
+            manifest = load_manifest()
+            manifest["scopes"][0][key] = value
+            with self.subTest(key=key), self.assertRaises(ExperimentBlocked):
+                validate_manifest(manifest)
+        for budget in (5, 7, 12):
+            manifest = load_manifest()
+            manifest["maximum_attempts"] = budget
+            with self.subTest(budget=budget), self.assertRaises(ExperimentBlocked):
+                validate_manifest(manifest)
+
+    def test_old_three_scope_manifest_and_authorization_digest_cannot_authorize_revision(self):
+        old_manifest = load_manifest()
+        old_manifest["maximum_attempts"] = 11
+        old_manifest["scopes"].append({
+            "scope_id": "dune-it-mediaset", "tmdb_id": 438631, "media_type": "movie",
+            "country": "IT", "source_slug": "mediaset_infinity", "title": "Dune",
+            "year": 2021, "operation": "title_refresh", "maximum_attempts": 2,
+            "endpoint": "https://frontier.api-graph.mediaset.it/",
+            "transport_operations": ["MediasetSearch", "MediasetMovie"],
+            "verified_provider_id": None, "expected_offer_type": "subscription",
+        })
+        self.assertNotEqual(manifest_digest(old_manifest), manifest_digest(load_manifest()))
         with self.assertRaises(ExperimentBlocked):
-            validate_manifest(manifest)
-        manifest = load_manifest()
-        manifest["scopes"][0]["unexpected"] = True
+            validate_manifest(old_manifest)
+        legacy_auth = {
+            "authorization_id": "10101010-1010-4010-8010-101010101010",
+            "manifest_digest": manifest_digest(old_manifest),
+            "database_identity": "database",
+            "maximum_attempts": 11,
+            "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat(),
+        }
         with self.assertRaises(ExperimentBlocked):
-            validate_manifest(manifest)
+            ReservedTransport(authorization=legacy_auth, scope=jw_scope(), source_slug="justwatch")
 
     @patch("availability.services.experiment_runner.database_identity", return_value="db-hash")
     def test_authorization_is_digest_environment_and_expiry_bound(self, _identity):
@@ -149,7 +207,7 @@ class GuardedTransportTests(SimpleTestCase):
             "authorization_id": "10101010-1010-4010-8010-101010101010",
             "manifest_digest": manifest_digest(load_manifest()),
             "database_identity": "database",
-            "maximum_attempts": 11,
+            "maximum_attempts": 6,
             "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat(),
         }
         self.scope = jw_scope()
@@ -176,6 +234,7 @@ class GuardedTransportTests(SimpleTestCase):
             (self.scope["endpoint"], jw_payload(title="The Matrix")),
             (self.scope["endpoint"], jw_payload(country="IT")),
             (self.scope["endpoint"], jw_payload(operation="GetProviders")),
+            (self.scope["endpoint"], jw_payload(operation="MediasetSearch")),
         ]
         for endpoint, payload in cases:
             with self.subTest(endpoint=endpoint, payload=payload), self.assertRaises(ExperimentBlocked):
@@ -220,55 +279,6 @@ class GuardedTransportTests(SimpleTestCase):
     @patch("availability.services.experiment_runner._record_outcome")
     @patch("availability.services.experiment_runner._reserve_attempt", return_value=Mock())
     @patch("availability.services.experiment_runner.requests.Session.post")
-    def test_mediaset_scope_without_reviewed_guid_is_denied_before_network(self, post, reserve, _outcome):
-        scope = next(s for s in load_manifest()["scopes"] if s["source_slug"] == "mediaset_infinity")
-        with self.assertRaisesRegex(ExperimentBlocked, "independently verified provider GUID"):
-            ReservedTransport(
-                authorization=self.authorization, scope=scope, source_slug="mediaset_infinity"
-            )
-        self.assertEqual(post.call_count, 0)
-        self.assertEqual(reserve.call_count, 0)
-
-    @patch("availability.services.experiment_runner.validate_scope")
-    @patch("availability.services.experiment_runner._record_outcome")
-    @patch("availability.services.experiment_runner._reserve_attempt", return_value=Mock())
-    @patch("availability.services.experiment_runner.requests.Session.post")
-    def test_mediaset_wired_callback_pins_guid_headers_timeout_and_http_200(
-        self, post, reserve, _outcome, _validate_scope
-    ):
-        scope = dict(next(s for s in load_manifest()["scopes"] if s["source_slug"] == "mediaset_infinity"))
-        scope["verified_provider_id"] = "fixture-guid"
-        guard = ReservedTransport(
-            authorization=self.authorization, scope=scope, source_slug="mediaset_infinity"
-        )
-        response = Mock(status_code=200)
-        response.json.return_value = {"data": {"getSearchPage": {"areaContainersConnection": {
-            "areaContainers": [{"areas": [{"sections": [{"collections": [{"itemsConnection": {
-                "items": [{"__typename": "VideoItem", "guid": "fixture-guid", "cardTitle": "Dune", "editorialType": "Movie"}]
-            }}]}]}]}]
-        }}}}
-        post.return_value = response
-        client = MediasetInfinityClient(http_post=_mediaset_http_post(guard))
-        client.search("Dune")
-        self.assertEqual(post.call_count, 1)
-        self.assertEqual(reserve.call_count, 1)
-        self.assertEqual(post.call_args.kwargs["headers"]["x-m-platform"], "WEB")
-        self.assertEqual(post.call_args.kwargs["headers"]["x-m-app-version"], "1.5.2")
-        self.assertEqual(post.call_args.kwargs["timeout"], 30)
-        self.assertFalse(post.call_args.kwargs["allow_redirects"])
-
-        post.return_value = Mock(status_code=201)
-        with self.assertRaises(SourceFetchError):
-            guard2 = ReservedTransport(
-                authorization=self.authorization, scope=scope, source_slug="mediaset_infinity"
-            )
-            MediasetInfinityClient(http_post=_mediaset_http_post(guard2)).search("Dune")
-        self.assertEqual(post.call_count, 2)
-        self.assertEqual(reserve.call_count, 2)
-
-    @patch("availability.services.experiment_runner._record_outcome")
-    @patch("availability.services.experiment_runner._reserve_attempt", return_value=Mock())
-    @patch("availability.services.experiment_runner.requests.Session.post")
     def test_redirect_is_one_spent_attempt_and_never_followed(self, post, reserve, _outcome):
         post.return_value = Mock(status_code=302, headers={"Location": "https://evil.example/"})
         with self.assertRaises(ExperimentBlocked):
@@ -288,6 +298,28 @@ class GuardedTransportTests(SimpleTestCase):
         self.assertEqual(post.call_count, 3)
         self.assertEqual(reserve.call_count, 3)
         self.assertEqual(outcome.call_count, 3)
+
+    @patch("availability.services.experiment_runner._record_outcome")
+    @patch("availability.services.experiment_runner._reserve_attempt", return_value=Mock())
+    @patch("availability.services.experiment_runner.requests.Session.post")
+    def test_http_429_spends_one_attempt_and_stops_without_retry(self, post, reserve, outcome):
+        post.return_value = Mock(status_code=429, headers={"Retry-After": "1"})
+        client = JustWatchClient(http_post=self.transport, retries=3, backoff=0, sleeper=lambda _delay: None)
+        with self.assertRaisesRegex(ExperimentBlocked, "HTTP 429.*attempt spent"):
+            client.search_titles("Inception", country="NL", object_types=["MOVIE"])
+        self.assertEqual(post.call_count, 1)
+        self.assertEqual(reserve.call_count, 1)
+        outcome.assert_called_once_with(reserve.return_value, "failure", 429)
+
+    @patch("availability.services.experiment_runner._record_outcome")
+    @patch("availability.services.experiment_runner._reserve_attempt")
+    @patch("availability.services.experiment_runner.requests.Session.post")
+    def test_durable_reservation_precedes_network_transmission(self, post, reserve, _outcome):
+        events = []
+        reserve.side_effect = lambda *args, **kwargs: events.append("reserve") or Mock()
+        post.side_effect = lambda *args, **kwargs: events.append("network") or Mock(status_code=200)
+        self.transport(self.scope["endpoint"], json=jw_payload())
+        self.assertEqual(events, ["reserve", "network"])
 
     @patch("availability.services.experiment_runner._record_outcome")
     @patch("availability.services.experiment_runner._reserve_attempt", return_value=Mock())
@@ -349,14 +381,14 @@ class PostgreSQLReservationTests(TransactionTestCase):
             "authorization_id": "20202020-2020-4020-8020-202020202020",
             "manifest_digest": manifest_digest(load_manifest()),
             "database_identity": "isolated-test-database",
-            "maximum_attempts": 11,
+            "maximum_attempts": 6,
             "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat(),
         }
         AvailabilityExperiment.objects.create(
             authorization_id=self.authorization["authorization_id"],
             manifest_digest=self.authorization["manifest_digest"],
             database_identity=self.authorization["database_identity"],
-            maximum_attempts=11,
+            maximum_attempts=6,
         )
 
     def test_attempt_ordinals_are_durable_and_scope_budget_is_enforced(self):
@@ -384,30 +416,40 @@ class PostgreSQLReservationTests(TransactionTestCase):
         self.assertEqual(sorted(x for x in ordinals if x is not None), [1, 2, 3])
         self.assertEqual(saved, [1, 2, 3])
 
-    def test_eleven_global_ceiling_cannot_be_exceeded_across_sources_and_scopes(self):
+    def test_six_attempts_fill_both_title_limits_and_seventh_is_rejected(self):
         scopes = load_manifest()["scopes"]
-        experiment = AvailabilityExperiment.objects.get(pk=self.authorization["authorization_id"])
-        # Model the three bounded evidence-page reservations. No evidence
-        # transport exists in this version, so these rows are fixtures only.
-        for ordinal in range(1, 4):
-            AvailabilityExperimentAttempt.objects.create(
-                experiment=experiment, ordinal=ordinal, scope_id="provider-evidence",
-                source_slug="provider_evidence", operation="provider_page", method="GET",
-                destination_host="evidence.example",
-            )
         for scope in scopes:
             for _ in range(scope["maximum_attempts"]):
-                operation = "GetSearchTitles" if scope["source_slug"] == "justwatch" else "MediasetSearch"
-                if scope["source_slug"] == "mediaset_infinity" and _ == 1:
-                    operation = "MediasetMovie"
-                from urllib.parse import urlsplit
                 _reserve_attempt(
-                    self.authorization, scope, operation, "POST",
-                    urlsplit(scope["endpoint"]).hostname,
+                    self.authorization, scope, "GetSearchTitles", "POST", "apis.justwatch.com",
                 )
-        self.assertEqual(AvailabilityExperimentAttempt.objects.count(), 11)
-        with self.assertRaises(ExperimentBlocked):
-            _reserve_attempt(self.authorization, scopes[0], "MediasetSearch", "POST", "frontier.api-graph.mediaset.it")
+        self.assertEqual(AvailabilityExperimentAttempt.objects.count(), 6)
+        for scope in scopes:
+            self.assertEqual(
+                AvailabilityExperimentAttempt.objects.filter(scope_id=scope["scope_id"]).count(), 3
+            )
+        with self.assertRaisesRegex(ExperimentBlocked, "global attempt budget exhausted"):
+            _reserve_attempt(self.authorization, scopes[0], "GetSearchTitles", "POST", "apis.justwatch.com")
+
+    def test_only_get_search_titles_can_be_reserved(self):
+        with self.assertRaisesRegex(ExperimentBlocked, "destination or operation differs"):
+            _reserve_attempt(self.authorization, jw_scope(), "MediasetSearch", "POST", "apis.justwatch.com")
+        self.assertEqual(AvailabilityExperimentAttempt.objects.count(), 0)
+
+    @patch("availability.services.experiment_runner.requests.Session.post", return_value=Mock(status_code=429))
+    def test_postgres_429_outcome_is_durably_recorded_and_scope_stops(self, _post):
+        scope = jw_scope()
+        transport = ReservedTransport(
+            authorization=self.authorization, scope=scope, source_slug="justwatch"
+        )
+        client = JustWatchClient(http_post=transport, retries=3, backoff=0, sleeper=lambda _delay: None)
+        with self.assertRaisesRegex(ExperimentBlocked, "HTTP 429.*attempt spent"):
+            client.search_titles("Inception", country="NL", object_types=["MOVIE"])
+        self.assertEqual(AvailabilityExperimentAttempt.objects.count(), 1)
+        attempt = AvailabilityExperimentAttempt.objects.get()
+        outcome = AvailabilityExperimentAttemptOutcome.objects.get(attempt=attempt)
+        self.assertEqual(outcome.outcome, "failure")
+        self.assertEqual(outcome.http_status, 429)
 
     def test_ledger_rows_are_append_only(self):
         from django.db import DatabaseError, transaction
@@ -443,7 +485,6 @@ class PostgreSQLReservationTests(TransactionTestCase):
 class PostgreSQLPreflightTests(TransactionTestCase):
     def setUp(self):
         self.manifest = load_manifest()
-        Country.objects.update_or_create(code="IT", defaults={"name": "Italy", "enabled": True})
         Country.objects.update_or_create(code="NL", defaults={"name": "Netherlands", "enabled": True})
         Movie.objects.update_or_create(
             tmdb_id=438631,
@@ -458,15 +499,9 @@ class PostgreSQLPreflightTests(TransactionTestCase):
             defaults={"name": "JustWatch", "type": "aggregator", "enabled": True,
                       "configuration": {"expected_refresh_interval_seconds": 43200, "api_token": "never-report-me"}},
         )
-        Source.objects.update_or_create(
-            slug="mediaset_infinity",
-            defaults={"name": "Mediaset Infinity", "type": "api", "enabled": True,
-                      "configuration": {"expected_refresh_interval_seconds": 86400}},
-        )
         import os
         os.environ["AVAILABILITY_EXPERIMENT_QUOTA_EVIDENCE"] = json.dumps({
-            "justwatch": {"status": "unmetered_public", "checked_at": datetime.now(timezone.utc).isoformat()},
-            "mediaset_infinity": {"status": "unmetered_public", "checked_at": datetime.now(timezone.utc).isoformat()},
+            "justwatch": quota_record(),
         })
 
     def tearDown(self):
@@ -477,102 +512,14 @@ class PostgreSQLPreflightTests(TransactionTestCase):
         before = (Movie.objects.count(), Source.objects.count(), AvailabilityExperimentAttempt.objects.count())
         report = read_only_preflight(self.manifest)
         after = (Movie.objects.count(), Source.objects.count(), AvailabilityExperimentAttempt.objects.count())
-        self.assertEqual(report["readiness"], "blocked", report)
-        self.assertTrue(any("provider GUID" in blocker for blocker in report["blockers"]))
+        self.assertEqual(report["readiness"], "ready", report)
         self.assertEqual(before, after)
-        self.assertIn("expected_refresh_interval_seconds", report["scopes"][1]["source_configuration"])
-        self.assertEqual(report["scopes"][1]["source_configuration"]["api_token"], "[redacted]")
+        self.assertIn("expected_refresh_interval_seconds", report["scopes"][0]["source_configuration"])
+        self.assertEqual(report["scopes"][0]["source_configuration"]["api_token"], "[redacted]")
         self.assertEqual(report["queue_scope_overlap"], 0)
-        self.assertEqual(report["expected_maximum_attempts"], 11)
-
-    def test_preflight_rejects_untrusted_mapping_for_a_pinned_mediaset_guid(self):
-        mediaset_scope = next(
-            scope for scope in self.manifest["scopes"]
-            if scope["source_slug"] == "mediaset_infinity"
-        )
-        mediaset_scope["verified_provider_id"] = "unverified-dune-guid"
-        provider, _ = Provider.objects.get_or_create(
-            slug="mediaset_infinity", defaults={"name": "Mediaset Infinity"}
-        )
-        ContentMapping.objects.create(
-            provider=provider,
-            source=Source.objects.get(slug="mediaset_infinity"),
-            provider_content_id="unverified-dune-guid",
-            content_type="movie", tmdb_id=438631, confidence=0.95,
-            match_method=MatchMethod.EXTERNAL_ID,
-        )
-        with patch("availability.services.experiment_runner.APPROVED_SCOPES", self.manifest["scopes"]), \
-                patch("availability.services.experiment_runner.APPROVED_MANIFEST", self.manifest):
-            report = read_only_preflight(self.manifest)
-
-        self.assertTrue(any("no manual mapping" in blocker for blocker in report["blockers"]))
-
-    def test_scoped_mediaset_accepts_only_offer_with_pinned_manual_mapping(self):
-        scope = next(
-            scope for scope in self.manifest["scopes"]
-            if scope["source_slug"] == "mediaset_infinity"
-        )
-        scope["verified_provider_id"] = "DUNE-VERIFIED"
-        provider, _ = Provider.objects.get_or_create(
-            slug="mediaset_infinity", defaults={"name": "Mediaset Infinity"}
-        )
-        ContentMapping.objects.create(
-            provider=provider,
-            source=Source.objects.create(slug="operator_review", name="Review"),
-            provider_content_id="DUNE-VERIFIED", content_type="movie",
-            tmdb_id=438631, confidence=1.0, match_method=MatchMethod.MANUAL,
-        )
-        source = Mock(
-            slug="mediaset_infinity", capabilities=Mock(), name="Mediaset",
-            source_type="api",
-        )
-        source.fetch.return_value = SourceFetchResult(offers=[
-            ProviderOffer(
-                provider_id="mediaset_infinity", provider_content_id="DUNE-VERIFIED",
-                country="IT", content_type="movie", tmdb_id=None,
-                season_number=None, episode_number=None, offer_type="subscription",
-            )
-        ])
-
-        result = ScopedSource(source, scope).fetch(
-            ContentRequest(tmdb_id=438631, content_type="movie", title="Dune"),
-            country="IT",
-        )
-
-        self.assertEqual(result.offers[0].tmdb_id, 438631)
-
-    def test_scoped_mediaset_rejects_corrupt_external_id_mapping(self):
-        scope = next(
-            scope for scope in self.manifest["scopes"]
-            if scope["source_slug"] == "mediaset_infinity"
-        )
-        scope["verified_provider_id"] = "DUNE-CORRUPT"
-        provider, _ = Provider.objects.get_or_create(
-            slug="mediaset_infinity", defaults={"name": "Mediaset Infinity"}
-        )
-        ContentMapping.objects.create(
-            provider=provider,
-            source=Source.objects.get(slug="mediaset_infinity"),
-            provider_content_id="DUNE-CORRUPT", content_type="movie",
-            tmdb_id=438631, confidence=0.95, match_method=MatchMethod.EXTERNAL_ID,
-        )
-        source = Mock(
-            slug="mediaset_infinity", capabilities=Mock(), name="Mediaset",
-            source_type="api",
-        )
-        source.fetch.return_value = SourceFetchResult(offers=[
-            ProviderOffer(
-                provider_id="mediaset_infinity", provider_content_id="DUNE-CORRUPT",
-                country="IT", content_type="movie", tmdb_id=None,
-                season_number=None, episode_number=None, offer_type="subscription",
-            )
-        ])
-
-        with self.assertRaisesRegex(ExperimentBlocked, "trusted manual TMDb mapping"):
-            ScopedSource(source, scope).fetch(
-                ContentRequest(tmdb_id=438631, content_type="movie", title="Dune"),
-                country="IT",
-            )
+        self.assertEqual(report["expected_maximum_attempts"], 6)
+        self.assertEqual(len(report["scopes"]), 2)
+        self.assertEqual(report["access_permission_evidence"]["justwatch"]["maximum_requests"], 6)
 
     def test_preflight_blocks_ambiguous_current_experiment_reservation(self):
         from availability.services.experiment_runner import database_identity
@@ -582,7 +529,7 @@ class PostgreSQLPreflightTests(TransactionTestCase):
             authorization_id=experiment_id,
             manifest_digest=manifest_digest(self.manifest),
             database_identity=identity,
-            maximum_attempts=11,
+            maximum_attempts=6,
         )
         AvailabilityExperimentAttempt.objects.create(
             experiment=experiment,
@@ -605,7 +552,7 @@ class PostgreSQLPreflightTests(TransactionTestCase):
             authorization_id=experiment_id,
             manifest_digest=manifest_digest(self.manifest),
             database_identity=identity,
-            maximum_attempts=11,
+            maximum_attempts=6,
         )
         for ordinal in range(1, 4):
             attempt = AvailabilityExperimentAttempt.objects.create(
@@ -637,10 +584,71 @@ class PostgreSQLPreflightTests(TransactionTestCase):
 
     def test_zero_or_boolean_quota_is_not_accepted(self):
         os.environ["AVAILABILITY_EXPERIMENT_QUOTA_EVIDENCE"] = json.dumps({
-            "justwatch": {"status": "available", "remaining": 0, "checked_at": datetime.now(timezone.utc).isoformat()},
-            "mediaset_infinity": {"status": "available", "remaining": True, "checked_at": datetime.now(timezone.utc).isoformat()},
+            "justwatch": quota_record(status="available", remaining=0),
         })
-        self.assertEqual(_quota_evidence(), {})
+        self.assertEqual(_quota_evidence({"justwatch"}), {})
+
+    def test_quota_evidence_requires_current_rate_policy_with_six_request_burst(self):
+        checked_at = datetime.now(timezone.utc).isoformat()
+        incomplete = quota_record()
+        incomplete.pop("rate_policy_evidence")
+        os.environ["AVAILABILITY_EXPERIMENT_QUOTA_EVIDENCE"] = json.dumps({"justwatch": incomplete})
+        self.assertEqual(_quota_evidence({"justwatch"}), {})
+
+        insufficient = quota_record()
+        insufficient["rate_policy_evidence"]["max_burst"] = 5
+        os.environ["AVAILABILITY_EXPERIMENT_QUOTA_EVIDENCE"] = json.dumps({"justwatch": insufficient})
+        self.assertEqual(_quota_evidence({"justwatch"}), {})
+
+        valid = quota_record(status="available", remaining=6)
+        valid["rate_policy_evidence"]["checked_at"] = checked_at
+        os.environ["AVAILABILITY_EXPERIMENT_QUOTA_EVIDENCE"] = json.dumps({"justwatch": valid})
+        self.assertEqual(_quota_evidence({"justwatch"})["justwatch"]["max_burst"], 6)
+
+    def test_preflight_requires_current_express_permission_for_exact_endpoint_and_scopes(self):
+        from availability.services.experiment_runner import _access_permission_evidence
+
+        evidence = quota_record()
+        evidence.pop("access_permission")
+        os.environ["AVAILABILITY_EXPERIMENT_QUOTA_EVIDENCE"] = json.dumps({"justwatch": evidence})
+        self.assertEqual(_access_permission_evidence({"justwatch"}), {})
+
+        evidence = quota_record()
+        evidence["access_permission"]["endpoint"] = "https://apis.justwatch.com/contentpartner/v2/content"
+        os.environ["AVAILABILITY_EXPERIMENT_QUOTA_EVIDENCE"] = json.dumps({"justwatch": evidence})
+        self.assertEqual(_access_permission_evidence({"justwatch"}), {})
+
+        evidence = quota_record()
+        evidence["access_permission"]["scope_ids"] = ["inception-nl-justwatch"]
+        os.environ["AVAILABILITY_EXPERIMENT_QUOTA_EVIDENCE"] = json.dumps({"justwatch": evidence})
+        self.assertEqual(_access_permission_evidence({"justwatch"}), {})
+
+        evidence = quota_record()
+        evidence["access_permission"]["maximum_requests"] = 5
+        os.environ["AVAILABILITY_EXPERIMENT_QUOTA_EVIDENCE"] = json.dumps({"justwatch": evidence})
+        self.assertEqual(_access_permission_evidence({"justwatch"}), {})
+
+        evidence = quota_record()
+        evidence["access_permission"]["checked_at"] = (
+            datetime.now(timezone.utc) - timedelta(hours=2)
+        ).isoformat()
+        os.environ["AVAILABILITY_EXPERIMENT_QUOTA_EVIDENCE"] = json.dumps({"justwatch": evidence})
+        self.assertEqual(_access_permission_evidence({"justwatch"}), {})
+
+        evidence = quota_record()
+        os.environ["AVAILABILITY_EXPERIMENT_QUOTA_EVIDENCE"] = json.dumps({"justwatch": evidence})
+        self.assertEqual(
+            _access_permission_evidence({"justwatch"})["justwatch"]["scope_ids"],
+            ["dune-nl-justwatch", "inception-nl-justwatch"],
+        )
+
+    def test_quota_evidence_alone_does_not_make_preflight_ready(self):
+        evidence = quota_record()
+        evidence.pop("access_permission")
+        os.environ["AVAILABILITY_EXPERIMENT_QUOTA_EVIDENCE"] = json.dumps({"justwatch": evidence})
+        report = read_only_preflight(self.manifest)
+        self.assertEqual(report["readiness"], "blocked")
+        self.assertTrue(any("express permission" in blocker for blocker in report["blockers"]))
 
     def test_source_lock_inspection_detects_ordinary_catalogue_overlap(self):
         from tracker.services.bulk_refresh import release_source_lock, try_source_lock
@@ -665,7 +673,7 @@ class PostgreSQLPreflightTests(TransactionTestCase):
             "authorization_id": str(uuid5(NAMESPACE_URL, "stage2e-availability-refresh:test-db")),
             "manifest_digest": manifest_digest(self.manifest),
             "database_identity": "test-db",
-            "maximum_attempts": 11,
+            "maximum_attempts": 6,
             "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat(),
         }
         entered = Event()
@@ -696,5 +704,5 @@ class PostgreSQLPreflightTests(TransactionTestCase):
                     execute_manifest(self.manifest, auth)
                 release.set()
                 result = first.result(timeout=10)
-        self.assertEqual(len(calls), 3)
-        self.assertEqual([row["status"] for row in result], ["completed"] * 3)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual([row["status"] for row in result], ["completed"] * 2)
