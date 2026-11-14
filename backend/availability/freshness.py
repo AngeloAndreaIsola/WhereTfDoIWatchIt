@@ -105,9 +105,17 @@ def declared_freshness(
     """
     config = configuration if isinstance(configuration, Mapping) else {}
     raw = config.get(FRESHNESS_INTERVAL_KEY)
-    if isinstance(raw, bool) or not isinstance(raw, (int, float)) or raw <= 0:
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
         return SOURCE_FRESHNESS.get(slug)
-    return timedelta(seconds=raw)
+    try:
+        interval = timedelta(seconds=raw)
+    except (OverflowError, TypeError, ValueError):
+        return SOURCE_FRESHNESS.get(slug)
+    # timedelta rounds sub-microsecond floats; a positive configured value can
+    # therefore become zero and diverge from the read path's default fallback.
+    if interval <= timedelta(0):
+        return SOURCE_FRESHNESS.get(slug)
+    return interval
 
 
 def freshness_for(

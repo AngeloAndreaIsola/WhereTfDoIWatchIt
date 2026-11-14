@@ -19,6 +19,7 @@ from django.utils import timezone
 from availability.domain.enums import OfferType, SourceType
 from availability.freshness import (
     FRESHNESS_INTERVAL_KEY,
+    declared_freshness,
     freshness_for,
     source_configuration_snapshot,
     source_is_stale,
@@ -261,6 +262,17 @@ class ConfiguredFreshnessSchedulingTests(TestCase):
         self.source.configuration = {}
         self.source.save(update_fields=["configuration"])
         self.assertFalse(is_stale(self.movie, source="justwatch", country="US"))
+
+    def test_unrepresentable_or_zero_length_override_uses_default(self):
+        default_window = freshness_for("justwatch")
+        for invalid in (float("inf"), float("nan"), 10**100, 1e-7, 0):
+            with self.subTest(invalid=invalid):
+                self.assertEqual(
+                    declared_freshness(
+                        "justwatch", {FRESHNESS_INTERVAL_KEY: invalid}
+                    ),
+                    default_window,
+                )
 
     def test_configuration_snapshot_is_one_query_for_a_title_batch(self):
         self._set_interval(3600)
