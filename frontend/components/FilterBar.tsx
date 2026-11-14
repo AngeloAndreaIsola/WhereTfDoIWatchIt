@@ -617,6 +617,16 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
             Unapplied filter changes
           </span>
         )}
+        {hasActiveFilters && (
+          <button
+            type="button"
+            onClick={handleClearAllFilters}
+            data-testid="clear-all-filters-btn"
+            className="rounded-lg border border-red-200 px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-300 dark:hover:bg-red-950"
+          >
+            Clear all filters
+          </button>
+        )}
         <button
           type="button"
           onClick={handleReset}
