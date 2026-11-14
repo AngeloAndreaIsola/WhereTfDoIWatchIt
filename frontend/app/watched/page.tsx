@@ -19,6 +19,7 @@ export default function WatchedPage() {
   const [search, setSearch] = useState(searchParams.get("search") || "");
   const [contentType, setContentType] = useState(searchParams.get("content_type") || "all");
   const [sort, setSort] = useState(searchParams.get("sort") || "last_watched");
+  const [watched, setWatched] = useState(searchParams.get("watched") || "all");
   const [page, setPage] = useState(Number(searchParams.get("page") || "1"));
 
   const [data, setData] = useState<WatchedListResponse | null>(null);
@@ -32,6 +33,7 @@ export default function WatchedPage() {
     setSearch(searchParams.get("search") || "");
     setContentType(searchParams.get("content_type") || "all");
     setSort(searchParams.get("sort") || "last_watched");
+    setWatched(searchParams.get("watched") || "all");
     setPage(Number(searchParams.get("page") || "1"));
   }, [searchParams]);
 
@@ -41,9 +43,10 @@ export default function WatchedPage() {
     if (search) params.set("search", search); else params.delete("search");
     if (contentType !== "all") params.set("content_type", contentType); else params.delete("content_type");
     if (sort && sort !== "last_watched") params.set("sort", sort); else if (sort === "last_watched") params.delete("sort");
+    if (watched && watched !== "all") params.set("watched", watched); else params.delete("watched");
     if (page > 1) params.set("page", String(page)); else params.delete("page");
     router.replace(`/watched?${params.toString()}`);
-  }, [search, contentType, sort, page]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [search, contentType, sort, watched, page]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch with abort
   useEffect(() => {
@@ -54,6 +57,7 @@ export default function WatchedPage() {
     if (search) params.search = search;
     if (contentType !== "all") params.content_type = contentType;
     if (sort) params.sort = sort;
+    if (watched && watched !== "all") params.watched = watched;
     if (page > 1) params.page = String(page);
     setLoading(true);
     setError(null);
@@ -68,7 +72,7 @@ export default function WatchedPage() {
         if (!ac.signal.aborted) setLoading(false);
       });
     return () => ac.abort();
-  }, [search, contentType, sort, page]);
+  }, [search, contentType, sort, watched, page]);
 
   const detailHref = (r: WatchedItem) =>
     r.movie.content_type === "series" ? `/tv/${r.movie.tmdb_id}` : `/movie/${r.movie.tmdb_id}`;

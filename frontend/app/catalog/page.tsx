@@ -46,6 +46,7 @@ function CatalogPageClient() {
     const quality = searchParams.get("quality") || "";
     const score_min = searchParams.get("score_min") || "";
     const sort_by = searchParams.get("sort_by") || "";
+    const watched = searchParams.get("watched") || "all";
     const access = searchParams.get("access") || "";
     const duration_min = searchParams.get("duration_min") || "";
     const duration_max = searchParams.get("duration_max") || "";
@@ -78,6 +79,7 @@ function CatalogPageClient() {
         quality,
         score_min,
         sort_by,
+        watched,
         access,
         duration_min,
         duration_max,
@@ -156,6 +158,9 @@ function CatalogPageClient() {
     if (filters.quality) params.set("quality", filters.quality);
     if (filters.score_min) params.set("score_min", filters.score_min);
     if (filters.sort_by) params.set("sort_by", filters.sort_by);
+    if (filters.watched && filters.watched !== "all") {
+      params.set("watched", filters.watched);
+    }
     if (filters.access) params.set("access", filters.access);
     if (filters.duration_min) params.set("duration_min", filters.duration_min);
     if (filters.duration_max) params.set("duration_max", filters.duration_max);
@@ -194,6 +199,9 @@ function CatalogPageClient() {
     if (filters.quality) params.quality = filters.quality;
     if (filters.score_min) params.score_min = filters.score_min;
     if (filters.sort_by) params.sort_by = filters.sort_by;
+    if (filters.watched && filters.watched !== "all") {
+      params.watched = filters.watched;
+    }
     if (filters.access) params.access = filters.access;
     if (filters.duration_min) params.duration_min = filters.duration_min;
     if (filters.duration_max) params.duration_max = filters.duration_max;
