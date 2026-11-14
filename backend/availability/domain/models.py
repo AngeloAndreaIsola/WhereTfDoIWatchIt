@@ -40,6 +40,13 @@ class DiscoveredContent:
     poster: str = ""
     description: str = ""
     external_ids: dict[str, str] = field(default_factory=dict)
+    # True when the adapter wants this observation to replace the saved
+    # external-id set, including with an empty set. This is useful when a
+    # corrected adapter must clear values it previously synthesized.
+    replace_external_ids: bool = False
+    # Structured, source-reported identity limits; stored with provider-native
+    # metadata so unresolved observations remain auditable.
+    identity_evidence: dict = field(default_factory=dict)
     source_id: str = ""
     #: Structured rights evidence for audit/revalidation; never implies availability.
     rights_provenance: dict = field(default_factory=dict)

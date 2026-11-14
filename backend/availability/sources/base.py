@@ -195,6 +195,11 @@ class SourceCapabilities:
     supports_catalogue_sync: bool = False
     supports_authoritative_snapshots: bool = False
     supports_tmdb_ids: bool = True
+    # Some title-targeted sources return only a homonymous title and do not
+    # expose a year or stable external id. Such sources may reuse an explicit
+    # manual provider-content mapping, but must not resolve new identities by
+    # title/year alone.
+    supports_automatic_title_mapping: bool = True
     supports_seasons: bool = False
     supports_episodes: bool = False
     supports_languages: bool = True

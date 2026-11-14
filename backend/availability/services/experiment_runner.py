@@ -29,10 +29,12 @@ from availability.models import (
     AvailabilityExperimentAttempt,
     AvailabilityExperimentAttemptOutcome,
     AvailabilityExperimentScope,
+    ContentMapping,
     Country,
     Offer,
     Source,
 )
+from availability.domain.enums import MatchMethod
 from availability.sources.base import ContentRequest
 from availability.sources.justwatch import JustWatchSource
 from availability.sources.justwatch_client import JustWatchClient
@@ -574,8 +576,22 @@ def read_only_preflight(manifest):
             result["blockers"].append(f"scope {scope['scope_id']} title/year do not match manifest")
         if scope["source_slug"] not in quota_evidence:
             result["blockers"].append(f"scope {scope['scope_id']} has no current quota evidence")
-        if scope["source_slug"] == "mediaset_infinity" and not scope.get("verified_provider_id"):
-            result["blockers"].append(f"scope {scope['scope_id']} has no independently verified provider GUID")
+        if scope["source_slug"] == "mediaset_infinity":
+            verified_guid = scope.get("verified_provider_id")
+            if not verified_guid:
+                result["blockers"].append(f"scope {scope['scope_id']} has no independently verified provider GUID")
+            else:
+                trusted_mapping = ContentMapping.objects.using(alias).filter(
+                    provider__slug="mediaset_infinity",
+                    provider_content_id=verified_guid,
+                    content_type=scope["media_type"],
+                    tmdb_id=scope["tmdb_id"],
+                    match_method=MatchMethod.MANUAL,
+                ).exists()
+                if not trusted_mapping:
+                    result["blockers"].append(
+                        f"scope {scope['scope_id']} has no manual mapping for its verified provider GUID"
+                    )
         if pending_scope:
             result["blockers"].append(f"scope {scope['scope_id']} overlaps a pending ordinary refresh")
         if source_locks.get(scope["source_slug"], {}).get("held"):
@@ -705,18 +721,46 @@ class ScopedSource:
         result = self._source.fetch(content, provider=provider, country=country, cursor=cursor, **kwargs)
         if result.country and str(result.country).upper() != self.scope["country"]:
             raise ExperimentBlocked("source result declared a different country")
+        if self.slug == "mediaset_infinity" and any(
+            entry.identity_evidence.get("basis") == "ambiguous_normalized_title"
+            for entry in result.contents
+        ):
+            raise ExperimentBlocked("Mediaset title search returned ambiguous provider identities")
+        verified_guid = self.scope.get("verified_provider_id")
+        offers = []
         for item in result.offers:
+            if self.slug == "mediaset_infinity":
+                if (
+                    not verified_guid
+                    or item.provider_id != "mediaset_infinity"
+                    or item.provider_content_id != verified_guid
+                    or item.tmdb_id not in (None, self.scope["tmdb_id"])
+                ):
+                    raise ExperimentBlocked("Mediaset offer does not match the verified provider identity")
+                trusted_mapping = ContentMapping.objects.filter(
+                    provider__slug="mediaset_infinity",
+                    provider_content_id=verified_guid,
+                    content_type=self.scope["media_type"],
+                    tmdb_id=self.scope["tmdb_id"],
+                    match_method=MatchMethod.MANUAL,
+                ).exists()
+                if not trusted_mapping:
+                    raise ExperimentBlocked("Mediaset offer has no trusted manual TMDb mapping")
+                item = replace(item, tmdb_id=self.scope["tmdb_id"])
             if (item.tmdb_id != self.scope["tmdb_id"]
                     or str(item.content_type) != self.scope["media_type"]
                     or str(item.country).upper() != self.scope["country"]
                     or item.season_number is not None or item.episode_number is not None):
                 raise ExperimentBlocked("source result escaped manifest identity")
+            offers.append(item)
         wanted_offer_type = self.scope["expected_offer_type"]
         if wanted_offer_type:
             result = replace(
                 result,
-                offers=[item for item in result.offers if str(item.offer_type) == wanted_offer_type],
+                offers=[item for item in offers if str(item.offer_type) == wanted_offer_type],
             )
+        else:
+            result = replace(result, offers=offers)
         # ProviderContent mappings and source withdrawals are outside this
         # experiment's title-country offer objective; dropping both prevents
         # a source payload from changing unrelated catalogue identities.

@@ -18,6 +18,7 @@ from availability.domain.enums import SyncMode
 from availability.models import ContentMapping, ProviderContent, Source
 from availability.services.normalize import normalize_content_type
 from availability.services.refresh import AvailabilityRefreshService
+from availability.services.identity_policy import mapping_is_trusted
 from availability.services.write_barrier import writer_barrier
 from availability.sources.base import SourceFetchError, SourceFetchResult, SourceQuotaExceeded
 from availability.sources.registry import UnknownSourceError, source_registry
@@ -229,6 +230,28 @@ def recover_provider_evidence(
         )
 
     mapping = mappings[0]
+    if not mapping_is_trusted(
+        provider_slug, mapping.match_method, mapping.source.slug
+    ):
+        return RecoveryResult(
+            outcome=OUTCOME_MAPPING_CONFLICT,
+            provider_content_pk=provider_content_pk,
+            provider_content_id=provider_content_id,
+            provider_slug=provider_slug,
+            source_slug=content.source.slug if content.source else "",
+            tmdb_id=None,
+            content_type=norm_content_type,
+            http_requests_attempted=0,
+            offers_created=0,
+            offers_updated=0,
+            offer_identities=[],
+            reason_code="unverified_mapping_provenance",
+            error_detail=(
+                f"Mapping method {mapping.match_method!r} is not trusted for "
+                f"provider {provider_slug!r}"
+            ),
+            applied=apply,
+        )
     pinned_mapping_id = mapping.pk
     pinned_tmdb_id = mapping.tmdb_id
     pinned_mapping_revision = getattr(mapping, "revision", None)

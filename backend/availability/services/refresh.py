@@ -111,6 +111,7 @@ from django.db import transaction
 from tracker.models import ExternalProviderMapping, Provider
 
 from ..domain.enums import MatchMethod, SyncMode
+from .identity_policy import mapping_is_trusted
 from ..models import ContentMapping, Country, Source
 from ..sources.justwatch_providers import provider_slug_for_package
 from ..persistence.repositories import (
@@ -182,6 +183,10 @@ def _content_metadata(content) -> dict:
         metadata["description"] = content.description
     if content.external_ids:
         metadata["external_ids"] = dict(content.external_ids)
+    elif content.replace_external_ids:
+        metadata["external_ids"] = {}
+    if content.identity_evidence:
+        metadata["identity_evidence"] = dict(content.identity_evidence)
     if content.original_title:
         metadata["original_title"] = content.original_title
     if content.duration:
@@ -639,13 +644,31 @@ class AvailabilityRefreshService:
                     provider=provider,
                     provider_content_id=content.provider_content_id,
                 ).first()
-                match = match_local_catalog(content)
+                allow_title_mapping = self.source.capabilities.supports_automatic_title_mapping
+                trusted_existing = bool(
+                    existing
+                    and mapping_is_trusted(
+                        provider.slug,
+                        existing.match_method,
+                        existing.source.slug,
+                    )
+                    and existing.content_type == content_type
+                )
+                match = match_local_catalog(content) if allow_title_mapping else None
                 if existing is None and match is None:
                     logger.warning(
                         "availability_mapping_unresolved source=%s provider=%s "
                         "content=%s title=%r",
                         self.source.slug, provider.slug,
                         content.provider_content_id, content.title,
+                    )
+                    continue
+                if not allow_title_mapping and not trusted_existing:
+                    logger.warning(
+                        "availability_mapping_unresolved source=%s provider=%s "
+                        "content=%s reason=explicit_manual_mapping_required",
+                        self.source.slug, provider.slug,
+                        content.provider_content_id,
                     )
                     continue
                 if match is not None:
