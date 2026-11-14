@@ -13,10 +13,12 @@ from django.db import connection, connections
 from django.test import SimpleTestCase, TransactionTestCase
 
 from availability.domain.models import DiscoveredContent, ProviderOffer, ProviderOfferWithdrawal
+from availability.domain.enums import MatchMethod
 from availability.models import (
     AvailabilityExperimentAttemptOutcome,
     AvailabilityExperimentScope,
     Country,
+    ContentMapping,
     Source,
 )
 from availability.services.experiment_runner import (
@@ -40,6 +42,7 @@ from availability.sources.base import ContentRequest, SourceFetchError, SourceFe
 from availability.sources.justwatch_client import SEARCH_TITLES_QUERY, JustWatchClient, JustWatchTransportError
 from availability.sources.mediaset_infinity import MediasetInfinityClient
 from tracker.models import Movie, RefreshRequest
+from tracker.models import Provider
 
 
 MANIFEST_PATH = Path(__file__).resolve().parents[3] / "docs/experiments/stage2e_manifest.example.json"
@@ -481,6 +484,95 @@ class PostgreSQLPreflightTests(TransactionTestCase):
         self.assertEqual(report["scopes"][1]["source_configuration"]["api_token"], "[redacted]")
         self.assertEqual(report["queue_scope_overlap"], 0)
         self.assertEqual(report["expected_maximum_attempts"], 11)
+
+    def test_preflight_rejects_untrusted_mapping_for_a_pinned_mediaset_guid(self):
+        mediaset_scope = next(
+            scope for scope in self.manifest["scopes"]
+            if scope["source_slug"] == "mediaset_infinity"
+        )
+        mediaset_scope["verified_provider_id"] = "unverified-dune-guid"
+        provider, _ = Provider.objects.get_or_create(
+            slug="mediaset_infinity", defaults={"name": "Mediaset Infinity"}
+        )
+        ContentMapping.objects.create(
+            provider=provider,
+            source=Source.objects.get(slug="mediaset_infinity"),
+            provider_content_id="unverified-dune-guid",
+            content_type="movie", tmdb_id=438631, confidence=0.95,
+            match_method=MatchMethod.EXTERNAL_ID,
+        )
+        with patch("availability.services.experiment_runner.APPROVED_SCOPES", self.manifest["scopes"]), \
+                patch("availability.services.experiment_runner.APPROVED_MANIFEST", self.manifest):
+            report = read_only_preflight(self.manifest)
+
+        self.assertTrue(any("no manual mapping" in blocker for blocker in report["blockers"]))
+
+    def test_scoped_mediaset_accepts_only_offer_with_pinned_manual_mapping(self):
+        scope = next(
+            scope for scope in self.manifest["scopes"]
+            if scope["source_slug"] == "mediaset_infinity"
+        )
+        scope["verified_provider_id"] = "DUNE-VERIFIED"
+        provider, _ = Provider.objects.get_or_create(
+            slug="mediaset_infinity", defaults={"name": "Mediaset Infinity"}
+        )
+        ContentMapping.objects.create(
+            provider=provider,
+            source=Source.objects.create(slug="operator_review", name="Review"),
+            provider_content_id="DUNE-VERIFIED", content_type="movie",
+            tmdb_id=438631, confidence=1.0, match_method=MatchMethod.MANUAL,
+        )
+        source = Mock(
+            slug="mediaset_infinity", capabilities=Mock(), name="Mediaset",
+            source_type="api",
+        )
+        source.fetch.return_value = SourceFetchResult(offers=[
+            ProviderOffer(
+                provider_id="mediaset_infinity", provider_content_id="DUNE-VERIFIED",
+                country="IT", content_type="movie", tmdb_id=None,
+                season_number=None, episode_number=None, offer_type="subscription",
+            )
+        ])
+
+        result = ScopedSource(source, scope).fetch(
+            ContentRequest(tmdb_id=438631, content_type="movie", title="Dune"),
+            country="IT",
+        )
+
+        self.assertEqual(result.offers[0].tmdb_id, 438631)
+
+    def test_scoped_mediaset_rejects_corrupt_external_id_mapping(self):
+        scope = next(
+            scope for scope in self.manifest["scopes"]
+            if scope["source_slug"] == "mediaset_infinity"
+        )
+        scope["verified_provider_id"] = "DUNE-CORRUPT"
+        provider, _ = Provider.objects.get_or_create(
+            slug="mediaset_infinity", defaults={"name": "Mediaset Infinity"}
+        )
+        ContentMapping.objects.create(
+            provider=provider,
+            source=Source.objects.get(slug="mediaset_infinity"),
+            provider_content_id="DUNE-CORRUPT", content_type="movie",
+            tmdb_id=438631, confidence=0.95, match_method=MatchMethod.EXTERNAL_ID,
+        )
+        source = Mock(
+            slug="mediaset_infinity", capabilities=Mock(), name="Mediaset",
+            source_type="api",
+        )
+        source.fetch.return_value = SourceFetchResult(offers=[
+            ProviderOffer(
+                provider_id="mediaset_infinity", provider_content_id="DUNE-CORRUPT",
+                country="IT", content_type="movie", tmdb_id=None,
+                season_number=None, episode_number=None, offer_type="subscription",
+            )
+        ])
+
+        with self.assertRaisesRegex(ExperimentBlocked, "trusted manual TMDb mapping"):
+            ScopedSource(source, scope).fetch(
+                ContentRequest(tmdb_id=438631, content_type="movie", title="Dune"),
+                country="IT",
+            )
 
     def test_preflight_blocks_ambiguous_current_experiment_reservation(self):
         from availability.services.experiment_runner import database_identity

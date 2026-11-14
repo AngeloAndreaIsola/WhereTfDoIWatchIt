@@ -623,3 +623,73 @@ class ListUnofficialTests(CatalogueQueryTestCase):
 
     def test_empty_catalogue_returns_no_entries(self):
         self.assertEqual(self.service.list_unofficial(), [])
+
+    def test_corrupt_mediaset_external_id_is_hidden_from_tmdb_catalogue(self):
+        mediaset, _ = Provider.objects.update_or_create(
+            slug="mediaset_infinity", defaults={
+                "name": "Mediaset Infinity", "category": ProviderCategory.SCRAPER,
+                "is_enabled": True,
+            },
+        )
+        source, _ = Source.objects.get_or_create(
+            slug="mediaset_infinity", defaults={"name": "Mediaset"}
+        )
+        row = self._row(
+            "dune-guid", provider=mediaset, source=source, title="Dune",
+        )
+        ProviderContent.objects.filter(pk=row.pk).update(currently_available=True)
+        self.mappings.record(
+            provider=mediaset, source=source, provider_content_id=row.provider_content_id,
+            content_type=ContentType.MOVIE, tmdb_id=438631, confidence=0.95,
+            match_method=MatchMethod.EXTERNAL_ID, content=row,
+        )
+
+        self.assertEqual(self.service.list_for_tmdb(438631), [])
+
+    def test_mediaset_manual_and_aggregator_external_id_mappings_remain_visible(self):
+        mediaset, _ = Provider.objects.update_or_create(
+            slug="mediaset_infinity", defaults={
+                "name": "Mediaset Infinity", "category": ProviderCategory.SCRAPER,
+                "is_enabled": True,
+            },
+        )
+        mediaset_source, _ = Source.objects.get_or_create(
+            slug="mediaset_infinity", defaults={"name": "Mediaset"}
+        )
+        manual = self._row(
+            "manual-guid", provider=mediaset, source=mediaset_source, title="Dune",
+        )
+        ProviderContent.objects.filter(pk=manual.pk).update(currently_available=True)
+        self.mappings.record(
+                provider=mediaset, source=Source.objects.get_or_create(
+                    slug="operator_review", defaults={"name": "Operator review"}
+                )[0], provider_content_id=manual.provider_content_id,
+            content_type=ContentType.MOVIE, tmdb_id=438631, confidence=1.0,
+            match_method=MatchMethod.MANUAL, content=manual,
+        )
+        justwatch, _ = Provider.objects.update_or_create(
+            slug="justwatch", defaults={
+                "name": "JustWatch", "category": ProviderCategory.SCRAPER,
+                "is_enabled": True,
+            }
+        )
+        jw_source, _ = Source.objects.get_or_create(
+            slug="justwatch", defaults={"name": "JustWatch"}
+        )
+        jw = self._row(
+            "justwatch-guid", provider=justwatch, source=jw_source,
+        )
+        ProviderContent.objects.filter(pk=jw.pk).update(currently_available=True)
+        self.mappings.record(
+            provider=justwatch, source=jw_source,
+            provider_content_id=jw.provider_content_id,
+            content_type=ContentType.MOVIE, tmdb_id=438631, confidence=0.99,
+            match_method=MatchMethod.EXTERNAL_ID, content=jw,
+        )
+
+        entries = self.service.list_for_tmdb(438631)
+
+        self.assertEqual(
+            {entry.provider_content_id for entry in entries},
+            {"manual-guid", "justwatch-guid"},
+        )

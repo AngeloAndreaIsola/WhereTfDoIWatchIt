@@ -10,13 +10,16 @@ persisted, an AVOD movie with a real expiry window, and a no-match result.
 from __future__ import annotations
 
 import datetime as dt
+import copy
 
 from django.test import SimpleTestCase, TestCase
 
 from availability.domain.enums import ContentType, OfferType, SourceType, SyncMode
 from availability.freshness import declared_freshness
-from availability.models import Country, Offer, ProviderContent, Source, SyncRun
+from availability.domain.enums import MatchMethod
+from availability.models import ContentMapping, Country, Offer, ProviderContent, Source, SyncRun
 from availability.services.refresh import AvailabilityRefreshService
+from availability.services.reconciliation import AvailabilityReconciliationService
 from availability.sources import SourceFetchError, source_registry
 from availability.sources.base import ContentRequest
 from availability.sources.mediaset_infinity import (
@@ -27,7 +30,7 @@ from availability.sources.mediaset_infinity import (
 )
 from tracker.models import Movie, Provider
 
-from .mediaset_fixtures import FakeMediasetApi
+from .mediaset_fixtures import FakeMediasetApi, load_fixture
 
 KAROL_GUID = "F011844503000101"
 KAROL_TITLE = "Karol un uomo diventato Papa"
@@ -67,6 +70,7 @@ class RegistrationTests(SimpleTestCase):
         self.assertFalse(caps.supports_incremental_sync)
         self.assertFalse(caps.supports_authoritative_snapshots)
         self.assertFalse(caps.supports_tmdb_ids)
+        self.assertFalse(caps.supports_automatic_title_mapping)
         self.assertFalse(caps.supports_seasons)
         self.assertFalse(caps.supports_episodes)
         # The detail carries audio/subtitle language codes.
@@ -148,6 +152,11 @@ class SearchParsingTests(SimpleTestCase):
         self.api = FakeMediasetApi()
         self.source = make_source(self.api)
 
+    def test_mediaset_does_not_claim_the_requested_tmdb_id_as_provider_evidence(self):
+        result = self.source.fetch(movie_request())
+        self.assertIsNone(result.offers[0].tmdb_id)
+        self.assertEqual(result.contents[0].external_ids, {})
+
     def test_avod_match_becomes_one_movie_offer(self):
         result = self.source.fetch(movie_request())
         self.assertEqual(len(result.offers), 1)
@@ -156,7 +165,7 @@ class SearchParsingTests(SimpleTestCase):
         self.assertEqual(offer.provider_content_id, KAROL_GUID)
         self.assertEqual(offer.country, "IT")
         self.assertEqual(offer.content_type, ContentType.MOVIE)
-        self.assertEqual(offer.tmdb_id, 64997)
+        self.assertIsNone(offer.tmdb_id)
         self.assertIsNone(offer.season_number)
         self.assertIsNone(offer.episode_number)
         self.assertEqual(offer.offer_type, OfferType.FREE_WITH_ADS)
@@ -179,7 +188,9 @@ class SearchParsingTests(SimpleTestCase):
         self.assertEqual(content.title, KAROL_TITLE)
         self.assertEqual(content.url, KAROL_URL)
         self.assertTrue(content.description.startswith("ITALIA, 2004"))
-        self.assertEqual(content.external_ids, {"tmdb": "64997"})
+        self.assertEqual(content.external_ids, {})
+        self.assertTrue(content.replace_external_ids)
+        self.assertEqual(content.identity_evidence["status"], "unresolved")
         self.assertEqual(content.source_id, "mediaset_infinity")
 
     def test_decoy_cards_ahead_of_the_match_do_not_shadow_it(self):
@@ -356,6 +367,18 @@ class RefreshPathTests(TestCase):
         self.movie = Movie.objects.create(
             tmdb_id=64997, title=KAROL_TITLE, year=2005, content_type="movie"
         )
+        source_row, _ = Source.objects.get_or_create(
+            slug="mediaset_infinity", defaults={"name": "Mediaset Infinity"}
+        )
+        ContentMapping.objects.create(
+            provider=self.provider,
+            source=source_row,
+            provider_content_id=KAROL_GUID,
+            content_type="movie",
+            tmdb_id=64997,
+            confidence=1.0,
+            match_method=MatchMethod.MANUAL,
+        )
 
     def test_refresh_content_persists_the_offer_and_a_targeted_sync_run(self):
         result = self.service.refresh_content(self.movie)
@@ -433,3 +456,205 @@ class RefreshPathTests(TestCase):
         self.assertEqual(result.created, 0)
         self.assertEqual(Offer.objects.count(), 0)
         self.assertEqual(SyncRun.objects.count(), 0)
+
+    @staticmethod
+    def dune_api(*, guids=("DUNE-1984",), description="USA, 1984 | Dune"):
+        search = load_fixture("search_karol.json")
+        items = search["data"]["getSearchPage"]["areaContainersConnection"]["areaContainers"][0]["areas"][0]["sections"][0]["collections"][0]["itemsConnection"]["items"]
+        items[:] = [
+            {
+                "__typename": "VideoItem",
+                "guid": guid,
+                "cardTitle": "Dune",
+                "editorialType": "Movie",
+                "url": f"https://mediasetinfinity.mediaset.it/movie/dune/{guid}",
+                "cardLink": {"value": f"https://mediasetinfinity.mediaset.it/movie/dune/{guid}"},
+            }
+            for guid in guids
+        ]
+        detail = load_fixture("movie_avod.json")
+        page = detail["data"]["getMoviePage"]
+        page["title"] = "Dune"
+        page["url"] = f"https://mediasetinfinity.mediaset.it/movie/dune/{guids[0]}"
+        page["dataSource"].update({
+            "guid": guids[0], "title": "Dune", "url": page["url"],
+            "description": description,
+        })
+        return FakeMediasetApi(searches={"Dune": search}, movies={guids[0]: detail})
+
+    def test_dune_1984_title_match_does_not_create_2021_mapping_or_offer(self):
+        dune_2021 = Movie.objects.create(
+            tmdb_id=438631, title="Dune", year=2021, content_type="movie"
+        )
+        Movie.objects.create(
+            tmdb_id=841, title="Dune", year=1984, content_type="movie"
+        )
+        ProviderContent.objects.create(
+            provider=self.provider,
+            source=Source.objects.get(slug="mediaset_infinity"),
+            provider_content_id="DUNE-1984",
+            content_type="movie",
+            title="Dune",
+            metadata={"external_ids": {"tmdb": "438631"}},
+            identity="mediaset_infinity|DUNE-1984|movie||",
+        )
+        api = self.dune_api()
+        service = AvailabilityRefreshService(source=make_source(api))
+
+        result = service.refresh_content(dune_2021)
+
+        provider_content = ProviderContent.objects.get(provider_content_id="DUNE-1984")
+        self.assertIsNone(provider_content.release_date)
+        self.assertEqual(provider_content.metadata["external_ids"], {})
+        self.assertFalse(ContentMapping.objects.filter(provider_content_id="DUNE-1984").exists())
+        self.assertFalse(Offer.objects.filter(provider_content_id="DUNE-1984").exists())
+        self.assertEqual(provider_content.metadata["identity_evidence"]["status"], "unresolved")
+        self.assertEqual(result.unresolved, 1)
+
+    def test_unknown_year_does_not_resolve_even_when_local_title_is_unique(self):
+        dune_2021 = Movie.objects.create(
+            tmdb_id=438631, title="Dune", year=2021, content_type="movie"
+        )
+        api = self.dune_api(description="Dune")
+
+        result = AvailabilityRefreshService(source=make_source(api)).refresh_content(dune_2021)
+
+        self.assertTrue(ProviderContent.objects.filter(provider_content_id="DUNE-1984").exists())
+        self.assertFalse(ContentMapping.objects.filter(provider_content_id="DUNE-1984").exists())
+        self.assertFalse(Offer.objects.filter(provider_content_id="DUNE-1984").exists())
+        self.assertEqual(result.unresolved, 1)
+
+    def test_ambiguous_same_title_provider_candidates_remain_unresolved(self):
+        dune_2021 = Movie.objects.create(
+            tmdb_id=438631, title="Dune", year=2021, content_type="movie"
+        )
+        api = self.dune_api(guids=("DUNE-1984", "DUNE-2021"))
+        service = AvailabilityRefreshService(source=make_source(api))
+
+        result = service.refresh_content(dune_2021)
+
+        self.assertEqual(ProviderContent.objects.count(), 2)
+        self.assertFalse(
+            ContentMapping.objects.filter(
+                provider=self.provider,
+                provider_content_id__startswith="DUNE-",
+            ).exists()
+        )
+        self.assertEqual(Offer.objects.count(), 0)
+        self.assertEqual(result.discovered, 0)
+        self.assertEqual(api.requests_matching("POST movie"), [])
+
+    def test_trusted_manual_mapping_is_reused_but_corrupt_external_mapping_is_not(self):
+        dune_2021 = Movie.objects.create(
+            tmdb_id=438631, title="Dune", year=2021, content_type="movie"
+        )
+        manual_api = self.dune_api(guids=("DUNE-MANUAL",), description="Dune")
+        ContentMapping.objects.create(
+            provider=self.provider,
+            source=Source.objects.create(slug="operator_review", name="Operator review"),
+            provider_content_id="DUNE-MANUAL",
+            content_type="movie", tmdb_id=438631, confidence=1.0,
+            match_method=MatchMethod.MANUAL,
+        )
+        AvailabilityRefreshService(source=make_source(manual_api)).refresh_content(dune_2021)
+        manual_offer = Offer.objects.get(provider_content_id="DUNE-MANUAL")
+        self.assertEqual(manual_offer.tmdb_id, 438631)
+        self.assertEqual(
+            ContentMapping.objects.get(provider_content_id="DUNE-MANUAL").match_method,
+            MatchMethod.MANUAL,
+        )
+
+        corrupt_api = self.dune_api(guids=("DUNE-CORRUPT",), description="USA, 1984 | Dune")
+        ContentMapping.objects.create(
+            provider=self.provider,
+            source=Source.objects.get(slug="mediaset_infinity"),
+            provider_content_id="DUNE-CORRUPT",
+            content_type="movie", tmdb_id=438631, confidence=0.95,
+            match_method=MatchMethod.EXTERNAL_ID,
+        )
+        AvailabilityRefreshService(source=make_source(corrupt_api)).refresh_content(dune_2021)
+        self.assertFalse(Offer.objects.filter(provider_content_id="DUNE-CORRUPT").exists())
+
+    def test_historical_external_id_mapping_cannot_make_an_offer_watchable(self):
+        dune_2021 = Movie.objects.create(
+            tmdb_id=438631, title="Dune", year=2021, content_type="movie"
+        )
+        source_row, _ = Source.objects.get_or_create(
+            slug="mediaset_infinity", defaults={"name": "Mediaset Infinity"}
+        )
+        country = Country.objects.get(code="IT")
+        ContentMapping.objects.create(
+            provider=self.provider, source=source_row,
+            provider_content_id="DUNE-CORRUPT", content_type="movie",
+            tmdb_id=dune_2021.tmdb_id, confidence=0.95,
+            match_method=MatchMethod.EXTERNAL_ID,
+        )
+        Offer.objects.create(
+            provider=self.provider, country=country, source=source_row,
+            content_type="movie", tmdb_id=dune_2021.tmdb_id,
+            offer_type=OfferType.SUBSCRIPTION,
+            provider_content_id="DUNE-CORRUPT",
+            identity="mediaset_infinity|IT|movie|438631|||subscription|DUNE-CORRUPT",
+        )
+        Offer.objects.create(
+            provider=self.provider, country=country, source=source_row,
+            content_type="movie", tmdb_id=dune_2021.tmdb_id,
+            offer_type=OfferType.SUBSCRIPTION,
+            provider_content_id="DUNE-UNMAPPED",
+            identity="mediaset_infinity|IT|movie|438631|||subscription|DUNE-UNMAPPED",
+        )
+        justwatch_source, _ = Source.objects.get_or_create(
+            slug="justwatch", defaults={"name": "JustWatch"}
+        )
+        Offer.objects.create(
+            provider=self.provider, country=country, source=justwatch_source,
+            content_type="movie", tmdb_id=dune_2021.tmdb_id,
+            offer_type=OfferType.SUBSCRIPTION,
+            provider_content_id="JUSTWATCH-DUNE-2021",
+            identity="mediaset_infinity|IT|movie|438631|||subscription|JUSTWATCH-DUNE-2021",
+        )
+
+        reconciled = AvailabilityReconciliationService().reconcile_content(
+            content_type="movie", tmdb_id=dune_2021.tmdb_id, country="IT"
+        )
+
+        observations = reconciled.offers[0].observations
+        self.assertEqual(len(observations), 3)
+        by_content_id = {
+            observation.provider_content_id: observation for observation in observations
+        }
+        self.assertFalse(by_content_id["DUNE-CORRUPT"].available_now)
+        self.assertEqual(
+            by_content_id["DUNE-CORRUPT"].mapping_doubt,
+            "provider-content mapping provenance is unverified",
+        )
+        self.assertFalse(by_content_id["DUNE-UNMAPPED"].available_now)
+        self.assertEqual(
+            by_content_id["DUNE-UNMAPPED"].mapping_doubt,
+            "provider-content mapping is unresolved",
+        )
+        self.assertTrue(by_content_id["JUSTWATCH-DUNE-2021"].available_now)
+        self.assertEqual(by_content_id["JUSTWATCH-DUNE-2021"].mapping_doubt, "")
+        doubts = {observation.mapping_doubt for observation in observations}
+        self.assertIn("provider-content mapping provenance is unverified", doubts)
+        self.assertIn("provider-content mapping is unresolved", doubts)
+
+    def test_non_authoritative_missing_result_preserves_existing_offer(self):
+        existing = Offer.objects.create(
+            provider=self.provider,
+            country=Country.objects.get(code="IT"),
+            source=Source.objects.get(slug="mediaset_infinity"),
+            content_type="movie", tmdb_id=64997,
+            offer_type=OfferType.FREE_WITH_ADS,
+            provider_content_id=KAROL_GUID,
+            identity=f"mediaset_infinity|IT|movie|64997|||free_with_ads|{KAROL_GUID}",
+        )
+        api = FakeMediasetApi(
+            searches={KAROL_TITLE: load_fixture("search_nomatch.json")},
+            movies={},
+        )
+
+        AvailabilityRefreshService(source=make_source(api)).refresh_content(self.movie)
+
+        existing.refresh_from_db()
+        self.assertTrue(existing.currently_available)
