@@ -107,6 +107,9 @@ export default function WatchlistPage() {
       access: sp.get("access") || "",
       duration_min: sp.get("duration_min") || "",
       duration_max: sp.get("duration_max") || "",
+      audio_languages: "",
+      subtitle_languages: "",
+      provider_categories: [],
     };
   };
 

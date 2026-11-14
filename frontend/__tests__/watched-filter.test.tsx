@@ -101,6 +101,12 @@ const BASE_FILTERS: FilterState = {
   score_min: "",
   sort_by: "",
   watched: "all",
+  access: "",
+  duration_min: "",
+  duration_max: "",
+  audio_languages: "",
+  subtitle_languages: "",
+  provider_categories: [],
 };
 
 /** Render the FilterBar and capture the next FilterState it emits. */

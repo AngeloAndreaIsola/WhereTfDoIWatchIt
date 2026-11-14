@@ -353,6 +353,18 @@ def unified_catalog(request):
             allowed_provider_slugs=allowed_provider_slugs,
             exclude_tmdb_ids=seen_tmdb_ids,
         )
+        raw_content_type = (
+            request.GET.get("content_type") or request.GET.get("type") or ""
+        ).strip().lower()
+        if raw_content_type in ("movie", "series", "tv"):
+            selected_content_type = (
+                "series" if raw_content_type in ("series", "tv") else "movie"
+            )
+            scraped_items = [
+                item
+                for item in scraped_items
+                if (item.get("content_type") or "movie") == selected_content_type
+            ]
         if watched_filter in ("watched", "unwatched", "all"):
             # An unofficial entry has watch state only once it resolves to a
             # local Movie; an unresolved entry has never been tracked, so it
@@ -404,6 +416,71 @@ def unified_catalog(request):
             unified_items.sort(key=get_item_title)
         elif sort_by in ("title_desc", "-title"):
             unified_items.sort(key=get_item_title, reverse=True)
+
+    # Language filters use the same canonical ISO codes as offer ingestion.
+    # Unknown or absent language data cannot satisfy an active filter.
+    def requested_languages(param_name: str) -> set[str] | None:
+        raw = (request.GET.get(param_name) or "").strip()
+        if not raw:
+            return None
+        return {
+            code
+            for part in raw.split(",")
+            if (code := normalize_language_code(part.strip()))
+        }
+
+    audio_filter = requested_languages("audio_languages")
+    subtitle_filter = requested_languages("subtitle_languages")
+    if audio_filter is not None or subtitle_filter is not None:
+        filtered_items = []
+        for item in unified_items:
+            available_audio: set[str] = set()
+            available_subtitles: set[str] = set()
+            if item.get("source") == "official":
+                watchability = item.get("watchability") or {}
+                offers = [
+                    offer
+                    for key in (
+                        "watchable_offers",
+                        "vpn_offers",
+                        "purchase_offers",
+                        "excluded_offers",
+                    )
+                    for offer in watchability.get(key) or []
+                ]
+                best_offer = watchability.get("best_offer")
+                if best_offer:
+                    offers.append(best_offer)
+                for offer in offers:
+                    available_audio.update(
+                        code
+                        for value in offer.get("audio_languages") or []
+                        if (code := normalize_language_code(str(value)))
+                    )
+                    available_subtitles.update(
+                        code
+                        for value in offer.get("subtitle_languages") or []
+                        if (code := normalize_language_code(str(value)))
+                    )
+            else:
+                details = item.get("unofficial_details") or {}
+                available_audio.update(
+                    code
+                    for value in details.get("audio_languages") or []
+                    if (code := normalize_language_code(str(value)))
+                )
+                available_subtitles.update(
+                    code
+                    for value in details.get("subtitle_languages") or []
+                    if (code := normalize_language_code(str(value)))
+                )
+
+            if audio_filter is not None and not audio_filter.intersection(available_audio):
+                continue
+            if subtitle_filter is not None and not subtitle_filter.intersection(available_subtitles):
+                continue
+            filtered_items.append(item)
+        unified_items = filtered_items
 
     page = int(request.GET.get("page", 1)) if str(request.GET.get("page", "")).isdigit() else 1
     page_size = int(request.GET.get("page_size", 24)) if str(request.GET.get("page_size", "")).isdigit() else 24
