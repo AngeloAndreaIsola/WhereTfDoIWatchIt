@@ -432,52 +432,103 @@ def unified_catalog(request):
     audio_filter = requested_languages("audio_languages")
     subtitle_filter = requested_languages("subtitle_languages")
     if audio_filter is not None or subtitle_filter is not None:
+        raw_access = request.GET.get("access") or request.GET.get("access_type") or ""
+        access_filter = {
+            value.strip().lower()
+            for value in raw_access.split(",")
+            if value.strip()
+        }
+        if "all" in access_filter:
+            access_filter.clear()
+        status_filter = (
+            request.GET.get("availability_status") or request.GET.get("status") or ""
+        ).strip().lower()
+        watchable_only = request.GET.get("watchable") in ("true", "1") or request.GET.get("watchable_only") in ("true", "1")
         filtered_items = []
         for item in unified_items:
-            available_audio: set[str] = set()
-            available_subtitles: set[str] = set()
+            matching_offer = False
             if item.get("source") == "official":
                 watchability = item.get("watchability") or {}
-                offers = [
-                    offer
-                    for key in (
-                        "watchable_offers",
-                        "vpn_offers",
-                        "purchase_offers",
-                        "excluded_offers",
-                    )
-                    for offer in watchability.get(key) or []
-                ]
-                best_offer = watchability.get("best_offer")
-                if best_offer:
-                    offers.append(best_offer)
+                # The resolver partitions offers by current entitlement and
+                # reachability. Excluded offers cannot make a language match;
+                # purchase offers remain eligible only when the resolver has
+                # already confirmed entitlement and territory reach.
+                offers = list(watchability.get("watchable_offers") or [])
+                offers.extend(watchability.get("purchase_offers") or [])
+                if allowed_provider_slugs is not None:
+                    offers = [
+                        offer for offer in offers
+                        if (offer.get("service") or "").lower() in allowed_provider_slugs
+                    ]
+                if access_filter:
+                    offers = [
+                        offer for offer in offers
+                        if (offer.get("access_type") or "").lower() in access_filter
+                    ]
+                if watchable_only or status_filter in ("watchable", "watchable_any"):
+                    offers = [offer for offer in offers if offer.get("is_accessible")]
+                elif status_filter == "watchable_here":
+                    offers = [
+                        offer for offer in offers
+                        if offer.get("is_accessible") and offer.get("is_current_country")
+                    ]
+                elif status_filter == "watchable_vpn":
+                    offers = [
+                        offer for offer in offers
+                        if offer.get("is_accessible") and offer.get("is_candidate_country")
+                    ]
+                elif status_filter == "purchase_only":
+                    offers = [offer for offer in offers if offer.get("requires_payment")]
+
                 for offer in offers:
-                    available_audio.update(
+                    available_audio = {
                         code
                         for value in offer.get("audio_languages") or []
                         if (code := normalize_language_code(str(value)))
-                    )
-                    available_subtitles.update(
+                    }
+                    available_subtitles = {
                         code
                         for value in offer.get("subtitle_languages") or []
                         if (code := normalize_language_code(str(value)))
-                    )
+                    }
+                    if (
+                        (audio_filter is None or audio_filter.intersection(available_audio))
+                        and (
+                            subtitle_filter is None
+                            or subtitle_filter.intersection(available_subtitles)
+                        )
+                    ):
+                        matching_offer = True
+                        break
             else:
+                # Each unofficial result is one canonical ProviderContent
+                # entry with its own provider identity. Keep both language
+                # checks on that same entry; never union across entries.
                 details = item.get("unofficial_details") or {}
-                available_audio.update(
+                available_audio = {
                     code
                     for value in details.get("audio_languages") or []
                     if (code := normalize_language_code(str(value)))
-                )
-                available_subtitles.update(
+                }
+                available_subtitles = {
                     code
                     for value in details.get("subtitle_languages") or []
                     if (code := normalize_language_code(str(value)))
+                }
+                matching_offer = bool(
+                    (item.get("provider") or {}).get("slug")
+                    and item.get("id")
+                    and (
+                        audio_filter is None
+                        or audio_filter.intersection(available_audio)
+                    )
+                    and (
+                        subtitle_filter is None
+                        or subtitle_filter.intersection(available_subtitles)
+                    )
                 )
 
-            if audio_filter is not None and not audio_filter.intersection(available_audio):
-                continue
-            if subtitle_filter is not None and not subtitle_filter.intersection(available_subtitles):
+            if not matching_offer:
                 continue
             filtered_items.append(item)
         unified_items = filtered_items
