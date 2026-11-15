@@ -1661,6 +1661,135 @@ def watchlist_report(request):
     )
 
 
+@api_view(["GET"])
+def watched_report(request):
+    """GET /api/watched/report/ — the Watchlist report scoped to watched titles.
+
+    Same evaluation, filters (including actor multi-AND and duration min/max)
+    and pagination as /api/watchlist/report/; the only difference is the source
+    of titles: ``UserMovieData.is_watched`` rows (the same watch state the
+    mark/unmark endpoints write), so there is no second watched-list model.
+    Ordered most-recently-watched first, undated rows last.
+    """
+    from datetime import date
+
+    curr_country = _active_country(request)
+    preference = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
+    user_subs = get_user_subscriptions(user_id=1)
+
+    watched = list(
+        UserMovieData.objects.select_related("movie")
+        .filter(user_id=1, is_watched=True)
+        .order_by("-updated_at")
+    )
+    # Most-recently-watched first, undated rows last. Sorted in Python rather
+    # than with F(...).desc(nulls_last=True) so the ordering also holds on
+    # backends without NULLS LAST (the SQLite test settings shim).
+    watched.sort(
+        key=lambda row: (
+            row.watched_date is not None,
+            row.watched_date or date.min,
+            row.updated_at,
+        ),
+        reverse=True,
+    )
+    watched_movies = [row.movie for row in watched]
+
+    refresh_states = refresh_states_for({m.id for m in watched_movies})
+
+    # Apply composable filters (actor multi-AND, duration min/max, content
+    # type, year, genre, score, country, provider, watchable, status, quality,
+    # watched) to the watched titles.
+    evaluated_filtered, _ = apply_composable_filters(
+        watched_movies,
+        request.GET,
+        preference,
+        user_subscriptions=user_subs,
+        current_country=curr_country,
+        refresh_states=refresh_states,
+    )
+
+    report = []
+    country_movie_sets: dict[str, set[int]] = {}
+    service_movie_sets: dict[str, set[int]] = {}
+    available_movies_count = 0
+    needs_recheck_movies_count = 0
+
+    for eval_item in evaluated_filtered:
+        movie = eval_item["movie"]
+        watch_res = eval_item["watchability"]
+
+        raw_offers = eval_item["offers"]
+        ranked = rank_offers(raw_offers, preference, current_country=curr_country)
+
+        countries = sorted(list({r.country.upper() for r in ranked if r.country}))
+        best = ranked[0] if ranked else None
+        best_country = best.country.upper() if best else None
+        best_service = best.service if best else None
+
+        if countries or watch_res.status in ("watchable_here", "watchable_vpn"):
+            available_movies_count += 1
+        elif watch_res.status == WatchabilityStatus.NEEDS_RECHECK:
+            needs_recheck_movies_count += 1
+
+        for c in countries:
+            country_movie_sets.setdefault(c, set()).add(movie.id)
+
+        movie_services = {r.service for r in ranked if r.service}
+        for s in movie_services:
+            service_movie_sets.setdefault(s, set()).add(movie.id)
+
+        report.append(
+            {
+                "movie": MovieSerializer(movie).data,
+                "available_countries": countries,
+                "best_country": best_country,
+                "best_service": best_service,
+                "watchability": watch_res.to_dict(),
+                "is_watched": True,
+                "user_data": None,
+            }
+        )
+
+    total_movies = len(report)
+    unavailable_movies_count = (
+        total_movies - available_movies_count - needs_recheck_movies_count
+    )
+
+    country_list = [
+        {"country": c, "count": len(m_set)}
+        for c, m_set in country_movie_sets.items()
+    ]
+    country_list.sort(key=lambda x: (-x["count"], x["country"]))
+
+    service_list = [
+        {"service": s, "count": len(m_set)}
+        for s, m_set in service_movie_sets.items()
+    ]
+    service_list.sort(key=lambda x: (-x["count"], x["service"]))
+
+    summary = {
+        "total_movies": total_movies,
+        "available_movies": available_movies_count,
+        "unavailable_movies": unavailable_movies_count,
+        "needs_recheck_movies": needs_recheck_movies_count,
+        "countries": country_list,
+        "services": service_list,
+    }
+
+    page = int(request.GET.get("page", 1)) if str(request.GET.get("page", "")).isdigit() else 1
+    page_size = int(request.GET.get("page_size", 24)) if str(request.GET.get("page_size", "")).isdigit() else 24
+    paged_report, pagination = paginate_list(report, page, page_size)
+
+    return Response(
+        {
+            "report": paged_report,
+            "pagination": pagination,
+            "summary": summary,
+        }
+    )
+
+
 def _canonical_provider(provider: str) -> str:
     """Resolve a provider string to the slug Regions are keyed by.
 

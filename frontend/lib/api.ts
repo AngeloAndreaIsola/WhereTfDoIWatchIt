@@ -1615,3 +1615,48 @@ export async function fetchWatched(params?: Record<string, string>): Promise<Wat
   if (!res.ok) throw new Error(`fetchWatched failed: ${res.status}`);
   return res.json();
 }
+
+export interface WatchedReportItem {
+  movie: WatchedMovie;
+  watchability: {
+    status?: string;
+    status_symbol?: string;
+    status_label?: string;
+    best_offer?: {
+      country: string;
+      service: string;
+      service_display?: string;
+      url: string;
+      is_current_country: boolean;
+    };
+    explanation?: string[];
+    excluded_offers?: Array<{ country?: string; service?: string; type?: string; reason?: string }>;
+    last_seen_at?: string | null;
+    refresh_state?: string;
+  } | null;
+  is_watched: boolean;
+  user_data: { is_watched: boolean; rating: number | null; review: string; watched_date: string | null } | null;
+}
+
+export interface WatchedReportResponse {
+  report: WatchedReportItem[];
+  pagination: WatchedPagination;
+  summary: {
+    total_movies: number;
+    available_movies: number;
+    unavailable_movies: number;
+    needs_recheck_movies: number;
+    countries: Array<{ country: string; count: number }>;
+    services: Array<{ service: string; count: number }>;
+  };
+}
+
+export async function fetchWatchedReport(
+  params?: Record<string, string>,
+  signal?: AbortSignal
+): Promise<WatchedReportResponse> {
+  const qs = params ? new URLSearchParams(params).toString() : "";
+  const res = await fetch(`/api/watched/report/${qs ? "?" + qs : ""}`, { signal });
+  if (!res.ok) throw new Error(`fetchWatchedReport failed: ${res.status}`);
+  return res.json();
+}
