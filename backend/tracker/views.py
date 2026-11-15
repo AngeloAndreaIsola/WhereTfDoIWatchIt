@@ -9,7 +9,7 @@ from typing import Any
 from django.conf import settings
 from django.db import connection, transaction
 from django.db.models import Count, Exists, F, Max, OuterRef, Q, Subquery
-from django.db.models.functions import Coalesce
+from django.db.models.functions import Coalesce, Lower
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.views.decorators.http import require_GET
@@ -1748,23 +1748,64 @@ def watched_report(request):
     if requires_candidate_scan and total_candidates > candidate_limit:
         return Response({"error": "This filter combination matches too many watched titles; narrow the filters and try again."}, status=400)
 
-    sort = request.GET.get("sort_by") or request.GET.get("sort")
-    if sort in ("watched_rating_desc", "rating"):
-        watched_qs = watched_qs.order_by(F("rating").desc(nulls_last=True), "movie__title", "movie__tmdb_id")
-    elif sort == "title":
-        watched_qs = watched_qs.order_by("movie__title", "movie__tmdb_id")
+    sort = (request.GET.get("sort_by") or request.GET.get("sort") or "").lower().strip()
+    title_tiebreakers = (Lower("movie__title"), "movie__title", "movie__tmdb_id")
+    if sort in ("watched_rating_desc", "personal_rating_desc", "rating"):
+        ordering = (F("rating").desc(nulls_last=True), *title_tiebreakers)
+    elif sort in ("rating_desc", "rating_high"):
+        ordering = (F("movie__tmdb_rating").desc(nulls_last=True), *title_tiebreakers)
+    elif sort in ("year_desc", "year_newest"):
+        ordering = (F("movie__year").desc(nulls_last=True), *title_tiebreakers)
+    elif sort in ("year_asc", "year_oldest"):
+        ordering = (F("movie__year").asc(nulls_last=True), *title_tiebreakers)
+    elif sort in ("title_desc", "-title"):
+        ordering = (Lower("movie__title").desc(), "movie__title", "movie__tmdb_id")
+    elif sort in ("title_asc", "title"):
+        ordering = (Lower("movie__title").asc(), "movie__title", "movie__tmdb_id")
     else:
-        watched_qs = watched_qs.order_by(F("last_watched_at").desc(nulls_last=True), "movie__title", "movie__tmdb_id")
+        # Empty/default and legacy last-watched keys share the event-based order.
+        ordering = (F("last_watched_at").desc(nulls_last=True), *title_tiebreakers)
+    watched_qs = watched_qs.order_by(*ordering)
+
+    # Sorting is owned by the queryset/candidate stage, so the shared filter
+    # evaluator must not re-sort an already paginated ordinary page.
+    filter_params = request.GET.copy()
+    filter_params.pop("sort_by", None)
+    filter_params.pop("sort", None)
 
     if requires_candidate_scan:
         watched = list(watched_qs)
         watched_movies = [row.movie for row in watched]
         filtered, _ = apply_composable_filters(
-            watched_movies, request.GET, preference, current_country=curr_country,
+            watched_movies, filter_params, preference, current_country=curr_country,
             refresh_states=refresh_states_for({m.id for m in watched_movies}),
         )
         allowed = {entry["movie"].id for entry in filtered}
         filtered_rows = [row for row in watched if row.movie_id in allowed]
+        # SQL ordering on the unfiltered candidates is not sufficient here:
+        # filters can remove arbitrary rows, so apply the same global key to
+        # the complete (bounded) matching set before page slicing.
+        def sort_candidate_rows(rows, value_for, *, descending=False):
+            rows.sort(key=lambda row: (row.movie.title.lower(), row.movie.title, row.movie.tmdb_id))
+            dated = [row for row in rows if value_for(row) is not None]
+            undated = [row for row in rows if value_for(row) is None]
+            dated.sort(key=value_for, reverse=descending)
+            return dated + undated
+
+        if sort in ("watched_rating_desc", "personal_rating_desc", "rating"):
+            filtered_rows = sort_candidate_rows(filtered_rows, lambda row: row.rating, descending=True)
+        elif sort in ("rating_desc", "rating_high"):
+            filtered_rows = sort_candidate_rows(filtered_rows, lambda row: row.movie.tmdb_rating, descending=True)
+        elif sort in ("year_desc", "year_newest"):
+            filtered_rows = sort_candidate_rows(filtered_rows, lambda row: row.movie.year, descending=True)
+        elif sort in ("year_asc", "year_oldest"):
+            filtered_rows = sort_candidate_rows(filtered_rows, lambda row: row.movie.year)
+        elif sort in ("title_desc", "-title"):
+            filtered_rows = sort_candidate_rows(filtered_rows, lambda row: row.movie.title.lower(), descending=True)
+        elif sort in ("title_asc", "title"):
+            filtered_rows = sort_candidate_rows(filtered_rows, lambda row: row.movie.title.lower())
+        else:
+            filtered_rows = sort_candidate_rows(filtered_rows, lambda row: row.last_watched_at, descending=True)
         total_movies = len(filtered_rows)
         start = (page - 1) * page_size
         watched = filtered_rows[start:start + page_size]
@@ -1786,7 +1827,7 @@ def watched_report(request):
     if not requires_candidate_scan:
         evaluated_filtered, _ = apply_composable_filters(
             watched_movies,
-            request.GET,
+            filter_params,
             preference,
             current_country=curr_country,
             refresh_states=refresh_states,

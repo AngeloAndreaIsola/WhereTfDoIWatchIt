@@ -211,3 +211,89 @@ class WatchedActorDurationFilterTests(TestCase):
         response = self.client.get("/api/watched/report/?watchable=true")
         self.assertEqual(response.status_code, 400)
         self.assertIn("too many watched titles", response.json()["error"])
+
+    def test_every_filterbar_sort_is_global_and_stable_across_pages(self):
+        sort_rows = []
+        for n in range(35):
+            title = f"Sortcase {34 - n:02d}"
+            year = None if n % 9 == 0 else 1990 + (n % 6)
+            tmdb_rating = None if n % 8 == 0 else float(n % 7)
+            personal_rating = None if n % 10 == 0 else float((n * 3) % 11)
+            last_date = None if n == 0 else date(2024, 1 + (n % 12), 1 + (n % 27))
+            movie = Movie.objects.create(
+                tmdb_id=4000 + n,
+                title=title,
+                year=year,
+                tmdb_rating=tmdb_rating,
+                content_type="movie",
+                runtime_minutes=90,
+                genre_ids=[1] if n % 3 == 0 else [],
+                cast=[{"id": 88, "name": "Sort Actor"}] if n % 2 == 0 else [],
+            )
+            _mark_watched(movie, watched_date=date(2023, 1, 1) if n == 0 else last_date,
+                          rating=personal_rating)
+            if last_date:
+                MovieWatchEvent.objects.create(movie=movie, watched_date=last_date)
+            sort_rows.append({"id": movie.tmdb_id, "title": title, "year": year,
+                              "tmdb_rating": tmdb_rating, "rating": personal_rating,
+                              "last": date(2023, 1, 1) if n == 0 else last_date})
+
+        sort_cases = (
+            ("", "last", True),
+            ("watched_rating_desc", "rating", True),
+            ("rating_desc", "tmdb_rating", True),
+            ("year_desc", "year", True),
+            ("year_asc", "year", False),
+            ("title_asc", "title", False),
+            ("title_desc", "title", True),
+        )
+        for sort_param, field, descending in sort_cases:
+            with self.subTest(sort=sort_param or "default"):
+                if field == "title":
+                    expected = sorted(sort_rows, key=lambda row: (row["title"], row["id"]))
+                    expected.sort(key=lambda row: row["title"].lower(), reverse=descending)
+                elif descending:
+                    # Keep NULLs last and title/id tie breakers ascending.
+                    expected = sorted(sort_rows, key=lambda row: (row[field] is None,
+                        -(row[field].toordinal() if field == "last" and row[field] else row[field] or 0),
+                        row["title"].lower(), row["title"], row["id"]))
+                else:
+                    expected = sorted(sort_rows, key=lambda row: (row[field] is None,
+                        row[field].toordinal() if field == "last" and row[field] else row[field] or 0,
+                        row["title"].lower(), row["title"], row["id"]))
+
+                all_ids = []
+                for page in range(1, 8):
+                    query = f"q=Sortcase&page={page}&page_size=5"
+                    if sort_param:
+                        query += f"&sort_by={sort_param}"
+                    response = self.client.get(f"/api/watched/report/?{query}")
+                    self.assertEqual(response.status_code, 200, response.content)
+                    self.assertEqual(response.json()["pagination"]["count"], 35)
+                    all_ids.extend(row["movie"]["tmdb_id"] for row in response.json()["report"])
+                self.assertEqual(all_ids, [row["id"] for row in expected])
+                self.assertEqual(len(all_ids), len(set(all_ids)))
+
+    def test_sorted_pages_remain_global_after_actor_duration_and_genre_filters(self):
+        for n in range(35):
+            movie = Movie.objects.create(
+                tmdb_id=5000 + n,
+                title=f"Filtered sort {34 - n:02d}",
+                year=2000 + n % 5,
+                tmdb_rating=float(n % 9),
+                content_type="movie",
+                runtime_minutes=90 if n % 4 else 160,
+                genre_ids=[1] if n % 3 == 0 else [],
+                cast=[{"id": 89, "name": "Filter Actor"}] if n % 2 == 0 else [],
+            )
+            _mark_watched(movie, watched_date=date(2024, 1, 1), rating=float(n % 10))
+        expected = [5000 + n for n in range(30, -1, -1) if n % 6 == 0]
+        actual = []
+        for page in (1, 2):
+            response = self.client.get(
+                f"/api/watched/report/?q=Filtered&actor_id=89&duration_min=90&duration_max=160&genre=1&sort_by=title_asc&page={page}&page_size=5"
+            )
+            self.assertEqual(response.status_code, 200, response.content)
+            self.assertEqual(response.json()["pagination"]["count"], len(expected))
+            actual.extend(row["movie"]["tmdb_id"] for row in response.json()["report"])
+        self.assertEqual(actual, expected)
