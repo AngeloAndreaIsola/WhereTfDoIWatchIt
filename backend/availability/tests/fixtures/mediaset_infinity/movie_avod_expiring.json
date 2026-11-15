@@ -1,0 +1,30 @@
+{
+ "data": {
+  "getMoviePage": {
+   "title": "Lupin III - La partita italiana",
+   "type": "movie",
+   "url": "https://mediasetinfinity.mediaset.it/movie/lupiniiilapartitaitaliana/lupin-iii-la-partita-italiana_F311059101000102",
+   "dataSource": {
+    "__typename": "VideoItem",
+    "guid": "F311059101000102",
+    "title": "Lupin III - La partita italiana",
+    "url": "https://mediasetinfinity.mediaset.it/movie/lupiniiilapartitaitaliana/lupin-iii-la-partita-italiana_F311059101000102",
+    "description": "GIAPPONE, 2016 | Dopo aver avuto notizia della scomparsa di Rebecca Rossellini, Lupin parte alla sua ricerca. Nel frattempo Lupin riceve anche una lettera di sfida da parte di un misterioso uomo mascherato chiamato semplicemente, il Conte Mascherato che lo invita ad una gara a chi per primo riuscirà ad impossessarsi dell'eredità del Conte di Cagliostro.",
+    "editorialType": "Movie",
+    "contentRight": "AVOD",
+    "channelRights": [
+     "MediasetPlay_ANY",
+     "MediasetPlay_AVOD"
+    ],
+    "channelLabels": null,
+    "expirationDate": "2026-10-27T22:59:00.000Z",
+    "audioLanguages": [
+     "ita",
+     "jpn"
+    ],
+    "subLanguages": null,
+    "duration": 5259
+   }
+  }
+ }
+}

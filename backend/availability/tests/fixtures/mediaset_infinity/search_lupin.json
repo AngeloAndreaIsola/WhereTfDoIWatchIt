@@ -1,0 +1,63 @@
+{
+ "data": {
+  "getSearchPage": {
+   "areaContainersConnection": {
+    "areaContainers": [
+     {
+      "areas": [
+       {
+        "sections": [
+         {
+          "collections": [
+           {
+            "itemsConnection": {
+             "items": [
+              {
+               "__typename": "VideoItem",
+               "guid": "F003490401000101",
+               "cardTitle": "La moglie giovane",
+               "editorialType": "Movie",
+               "url": "https://mediasetinfinity.mediaset.it/movie/lamogliegiovane/la-moglie-giovane_F003490401000101",
+               "cardLink": {
+                "value": "https://mediasetinfinity.mediaset.it/movie/lamogliegiovane/la-moglie-giovane_F003490401000101",
+                "referenceId": "F003490401000101",
+                "referenceType": "movie"
+               },
+               "channelLabels": [
+                {
+                 "id": "InfNero"
+                }
+               ]
+              },
+              {
+               "__typename": "VideoItem",
+               "guid": "F311059101000102",
+               "cardTitle": "Lupin III - La partita italiana",
+               "editorialType": "Movie",
+               "url": "https://mediasetinfinity.mediaset.it/movie/lupiniiilapartitaitaliana/lupin-iii-la-partita-italiana_F311059101000102",
+               "cardLink": {
+                "value": "https://mediasetinfinity.mediaset.it/movie/lupiniiilapartitaitaliana/lupin-iii-la-partita-italiana_F311059101000102",
+                "referenceId": "F311059101000102",
+                "referenceType": "movie"
+               },
+               "channelLabels": null
+              }
+             ],
+             "pageInfo": {
+              "endCursor": "1",
+              "hasNextPage": false,
+              "context": "{\"a\":{\"layout\":\"GRID\",\"template\":\"POSTER\"},\"pt\":\"search\"}"
+             }
+            }
+           }
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  }
+ }
+}

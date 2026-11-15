@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:video="http://www.google.com/schemas/sitemap-video/1.1" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+  <url><loc>https://tubitv.com/movies/578912/i-robot</loc><lastmod>2026-09-15</lastmod><video:video><video:title>I, Robot</video:title><video:duration>6882</video:duration></video:video><image:image><image:loc>https://canvas-lb.tubitv.com/opts/poster-i-robot</image:loc></image:image></url>
+  <url><loc>https://tubitv.com/movies/654137/clearcut</loc><lastmod>2026-09-14</lastmod><image:image><image:loc>https://canvas-lb.tubitv.com/opts/poster-clearcut</image:loc></image:image></url>
+  <url><loc>https://tubitv.com/movies/582004/permission</loc><lastmod>2026-09-13</lastmod><image:image><image:loc>https://canvas-lb.tubitv.com/opts/poster-permission</image:loc></image:image></url>
+  <url><loc>https://tubitv.com/about</loc><lastmod>2026-09-01</lastmod></url>
+</urlset>

@@ -1,0 +1,41 @@
+{
+ "seriesTitle": "7.30",
+ "seriesDescription": "News and current affairs.",
+ "seriesThumbnail": "https://cdn.iview.abc.net.au/thumbs/i/se/seven30_1280.jpg",
+ "episodes": [
+  {
+   "showID": "175337",
+   "seriesTitle": "7.30",
+   "description": "An episode.",
+   "title": "Royal Commission into Big Build begins",
+   "href": "programs/7-30/SEGS2026107218022",
+   "channel": "abc",
+   "channelTitle": "ABC TV",
+   "pubDate": "2026-10-01 19:30:00",
+   "thumbnail": "https://cdn.iview.abc.net.au/thumbs/i/cb/SEGS2026107218022_1621.jpg",
+   "livestream": "0",
+   "episodeHouseNumber": "SEGS2026107218022",
+   "duration": "1680",
+   "rating": "PG",
+   "label": "28m",
+   "oztamPublisherID": "5D3923E9-AC02-497C-BD9A-098C5CD3B9D4"
+  },
+  {
+   "showID": "175337",
+   "seriesTitle": "7.30",
+   "description": "An episode.",
+   "title": "1/10/2026",
+   "href": "programs/7-30/NC2601H156S00",
+   "channel": "abc",
+   "channelTitle": "ABC TV",
+   "pubDate": "2026-10-01 20:00:00",
+   "thumbnail": "https://cdn.iview.abc.net.au/thumbs/i/cb/NC2601H156S00_1621.jpg",
+   "livestream": "0",
+   "episodeHouseNumber": "NC2601H156S00",
+   "duration": "1680",
+   "rating": "PG",
+   "label": "28m",
+   "oztamPublisherID": "5D3923E9-AC02-497C-BD9A-098C5CD3B9D4"
+  }
+ ]
+}

@@ -1,0 +1,67 @@
+{
+ "data": {
+  "getSearchPage": {
+   "areaContainersConnection": {
+    "areaContainers": [
+     {
+      "areas": [
+       {
+        "sections": [
+         {
+          "collections": [
+           {
+            "itemsConnection": {
+             "items": [
+              {
+               "__typename": "VideoItem",
+               "guid": "F314406101000102",
+               "cardTitle": "Chopin - Notturno a Parigi",
+               "editorialType": "Movie",
+               "url": "https://mediasetinfinity.mediaset.it/movie/chopinnotturnoaparigi/chopin-notturno-a-parigi_F314406101000102",
+               "cardLink": {
+                "value": "https://mediasetinfinity.mediaset.it/movie/chopinnotturnoaparigi/chopin-notturno-a-parigi_F314406101000102",
+                "referenceId": "F314406101000102",
+                "referenceType": "movie"
+               },
+               "channelLabels": [
+                {
+                 "id": "Noleggio"
+                }
+               ]
+              },
+              {
+               "__typename": "VideoItem",
+               "guid": "F010285001000102",
+               "cardTitle": "Matrix",
+               "editorialType": "Movie",
+               "url": "https://mediasetinfinity.mediaset.it/movie/matrix/matrix_F010285001000102",
+               "cardLink": {
+                "value": "https://mediasetinfinity.mediaset.it/movie/matrix/matrix_F010285001000102",
+                "referenceId": "F010285001000102",
+                "referenceType": "movie"
+               },
+               "channelLabels": [
+                {
+                 "id": "Noleggio"
+                }
+               ]
+              }
+             ],
+             "pageInfo": {
+              "endCursor": "1",
+              "hasNextPage": false,
+              "context": "{\"a\":{\"layout\":\"GRID\",\"template\":\"POSTER\"},\"pt\":\"search\"}"
+             }
+            }
+           }
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  }
+ }
+}

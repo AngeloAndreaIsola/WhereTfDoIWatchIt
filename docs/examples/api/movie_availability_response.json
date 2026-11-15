@@ -1,0 +1,54 @@
+{
+ "movie": {
+  "tmdb_id": 27205,
+  "title": "Inception",
+  "year": 2010
+ },
+ "cache": {
+  "refreshed": false,
+  "reason": "local",
+  "offers": 2
+ },
+ "offers": [
+  {
+   "country": "us",
+   "service": "Netflix",
+   "offer_type": "subscription",
+   "quality": "4k",
+   "audio_languages": [
+    "EN"
+   ],
+   "subtitle_languages": [
+    "EN",
+    "ES"
+   ],
+   "ranking": {
+    "score": 100,
+    "reasons": [
+     "matches_candidate_country",
+     "matches_audio_language",
+     "matches_subtitle_language"
+    ]
+   }
+  },
+  {
+   "country": "gb",
+   "service": "Prime Video",
+   "offer_type": "subscription",
+   "quality": "hd",
+   "audio_languages": [
+    "EN"
+   ],
+   "subtitle_languages": [
+    "EN"
+   ],
+   "ranking": {
+    "score": 80,
+    "reasons": [
+     "matches_candidate_country",
+     "matches_audio_language"
+    ]
+   }
+  }
+ ]
+}

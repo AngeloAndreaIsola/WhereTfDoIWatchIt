@@ -1,0 +1,38 @@
+[
+ "oops-not-a-mapping",
+ {
+  "seriesTitle": "Culture By Design",
+  "latestEpisode": "programs/culture-by-design/CB2501H006S00",
+  "episodeCount": 13
+ },
+ {
+  "seriesTitle": "Culture By Design",
+  "latestEpisode": "programs/culture-by-design/CB2501H006S00",
+  "episodeCount": 13
+ },
+ {
+  "seriesTitle": "7.30",
+  "latestEpisode": "programs/7-30/NC2601H156S00",
+  "episodeCount": 62
+ },
+ {
+  "seriesTitle": "9/11 Stories",
+  "latestEpisode": "programs/9-11-stories/NS2158H001S00"
+ },
+ {
+  "seriesTitle": "Ghost Show",
+  "episodeCount": 5
+ },
+ {
+  "seriesTitle": "Empty Show",
+  "latestEpisode": "programs/empty-show/ES0001H001S00"
+ },
+ {
+  "seriesTitle": "No Eps Show",
+  "latestEpisode": "programs/no-eps-show/NE0001H001S00"
+ },
+ {
+  "seriesTitle": "Gone Show",
+  "latestEpisode": "programs/gone-show/GN0001H001S00"
+ }
+]
