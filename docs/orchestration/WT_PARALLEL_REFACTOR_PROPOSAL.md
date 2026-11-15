@@ -1,4 +1,63 @@
-# WT task queue: conflict-safe parallelization proposal (2026-11-09)
+# WT parallel task-scope proposal — archived reference
+
+**Status:** `ARCHIVED_REFERENCE_ONLY` as of 2026-11-15. **Not executable.** Jules is no longer available for this project; the historical task queue is **not** being reconciled to a live dispatcher, authorized, resumed, or executed. This is a snapshot of an old planning exercise, not the current product backlog.
+
+- Original proposal: 2026-11-09; source task manifest generated 2026-11-07 (`WhereTfDoIWatchIt_Jules_Tasks_v2.json`).
+- Reconciliation reference: remote `master` at `7cec749f40ec1bfad51ac6d3c54a5b80485fc5ec` (2026-11-15), repository tracked-file tree, selected implementation files, and merged PR evidence.
+- Historical task scopes: [`WT_PARALLEL_SCOPE_PATCH.json`](./WT_PARALLEL_SCOPE_PATCH.json), preserved as **non-executable archival data**. `dispatch_authorized=false`; no scope overrides are applied.
+- Reusable, agent-independent guidance: [`PARALLEL_DEVELOPMENT_GUIDE.md`](./PARALLEL_DEVELOPMENT_GUIDE.md).
+- This review **did not** inspect the complete original task markdown or a live Hermes/Jules DB and did not execute acceptance tests; a matching path or PR does not prove all original acceptance criteria were met.
+
+## Reconciliation of all 24 historical scope overrides
+
+Classification refers only to the *proposal's original work scope*, not to a live task state:
+
+- **Implemented:** strong evidence that the referenced implementation was merged, though no new acceptance tests were run here.
+- **Partially implemented:** related functionality is in master, but the proposed artifact or acceptance equivalence is unverified.
+- **Still relevant (candidate):** concept appears suitable for future reconsideration, **not** an approved task or automatic backlog item.
+- **Superseded:** independently demonstrated replacement; do not infer this merely because files are missing. None established by this limited review.
+- **Unknown:** not enough evidence to call the task completed, needed, missing, or superseded. Absence of a proposed file is *not* proof that functionality is absent.
+
+| Historical task | Classification | Evidence and disposition |
+| --- | --- | --- |
+| WT-005 | Unknown | Owner-model design decision document absent; original acceptance criteria not available. |
+| WT-006 | Implemented | Merged [PR #71](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/pull/71); EN/IT/JA locale modules and messages are in master. Historical scope only. |
+| WT-010 | Partially implemented | Catalog, watchlist and watched pages have URL-state handling; proposed `frontend/lib/url_state.ts` is absent. Shared-helper requirement unverified. |
+| WT-012 | Unknown | Proposed `AlphabetStrip.tsx` absent; no task-specific PR found. Feature need not established. |
+| WT-022 | Unknown | Ratings-rights research document absent; no task-specific PR found. |
+| WT-028 | Unknown | Google-lists feasibility document absent; no task-specific PR found. |
+| WT-031 | Unknown | Prime-import research document absent; no task-specific PR found. |
+| WT-036 | Still relevant (candidate) | Proposed `tag_search.py` and dedicated test absent. Potential future tag-search work; requires a new spec and migration review, not an old grant. |
+| WT-039 | Unknown | Semantic-retrieval research document absent; no task-specific PR found. |
+| WT-040 | Implemented | Merged [PR #72](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/pull/72); public-domain source, catalogue service and tests are in master. Historical scope only. |
+| WT-042 | Unknown | Specialist-sources research document absent; no task-specific PR found. |
+| WT-043 | Unknown | Worker-architecture research document absent; broader existing worker implementation not assessed. |
+| WT-054 | Unknown | Reel-recognition research document absent; no task-specific PR found. |
+| WT-056 | Unknown | Plex/NAS-boundary research document absent; no task-specific PR found. |
+| WT-058 | Unknown | App-direction design document absent; prior design decisions not verified. |
+| WT-059 | Unknown | Two proposed WT-059-specific regression files absent; equivalent generic test coverage not verified. |
+| WT-060 | Partially implemented | `availability_metrics.py`, `/availability-metrics` page and `test_availability_metrics.py` exist in master. Original WT-060 task acceptance/coverage not verified. |
+| WT-067 | Partially implemented | `unified_catalogue.py`, `catalogue_query.py` and unified view exist; proposed `test_catalogue_coverage_wt067.py` absent. Scope/acceptance not verified. |
+| WT-069 | Unknown | Unofficial-URL-policy research document absent; no task-specific PR found. |
+| WT-070 | Unknown | Two proposed aggregator-specific WT-070 test files absent; equivalent coverage not verified. |
+| WT-071 | Unknown | Proposed WT-071 broadcaster-normalization test file absent; equivalent coverage not verified. |
+| WT-072 | Unknown | Subtitle-rights research document absent; no task-specific PR found. |
+| WT-074 | Still relevant (candidate) | Proposed `streaming_changes.py`, tests and fixtures absent. Reevaluate as an independent offline parser only if still useful. |
+| WT-082 | Unknown | Proposed seed command, WT-082 fixtures, regression test and documentation absent; future need not verified. |
+
+**Counts:** 2 implemented; 3 partially implemented; 2 still-relevant candidates; 0 demonstrated superseded; 17 unknown. **No task is scheduled or authorized.**
+
+This is a *documentation-only*, file/PR-level reconciliation. GitHub searches for the exact WT IDs found task-specific PRs for WT-006 and WT-040; other related changes may exist under different names. The original task manifest/acceptance criteria must be reviewed before using any classification as a completion decision.
+
+## Reuse boundary
+
+The transferable lessons are dependency-aware ordering, exact write-scope ownership, file/directory conflict detection, isolated workspaces, exclusive migrations, separately reviewed integration steps, and tests on the final integrated branch. See the guide linked above.
+
+The historical account limits, live queue reservations, session fences, approvals, authorizations, and dispatch sequence **below** are retained only as context explaining the old design. They are **not instructions** for Codex, OpenCode, Hermes, or any future agent.
+
+---
+
+## Original 2026-11-09 proposal (historical record; do not execute)
 
 **Status:** Draft, offline task refactor. No queue writes, dispatch, authorization, provider API calls, or merges.
 
