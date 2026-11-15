@@ -1636,6 +1636,8 @@ export interface WatchedReportItem {
   } | null;
   is_watched: boolean;
   user_data: { is_watched: boolean; rating: number | null; review: string; watched_date: string | null } | null;
+  watch_count?: number;
+  last_watched_at?: string | null;
 }
 
 export interface WatchedReportResponse {
@@ -1652,11 +1654,14 @@ export interface WatchedReportResponse {
 }
 
 export async function fetchWatchedReport(
-  params?: Record<string, string>,
+  params?: URLSearchParams | Record<string, string>,
   signal?: AbortSignal
 ): Promise<WatchedReportResponse> {
   const qs = params ? new URLSearchParams(params).toString() : "";
   const res = await fetch(`/api/watched/report/${qs ? "?" + qs : ""}`, { signal });
-  if (!res.ok) throw new Error(`fetchWatchedReport failed: ${res.status}`);
+  if (!res.ok) {
+    const errorBody = await res.json().catch(() => ({}));
+    throw new Error(errorBody?.error || `Failed to load watched titles (${res.status})`);
+  }
   return res.json();
 }
