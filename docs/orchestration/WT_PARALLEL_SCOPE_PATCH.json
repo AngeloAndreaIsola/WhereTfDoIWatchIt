@@ -5,6 +5,10 @@
   "source_generated_at": "2026-11-07",
   "created_at": "2026-11-09",
   "status": "PROPOSAL_NOT_APPLIED_TO_LIVE_QUEUE",
+  "archive_status": "ARCHIVED_REFERENCE_ONLY",
+  "archived_as_of": "2026-11-15",
+  "non_executable": true,
+  "archive_notice": "Historical 2026-11-09 proposal, never applied to a live queue. Do not import, dispatch, or reuse authorization from this file. See WT_PARALLEL_REFACTOR_PROPOSAL.md for reconciliation.",
   "default_for_unlisted_tasks": "PRESERVE_ALL_EXISTING_FIELDS",
   "preserve": [
     "task ID",
