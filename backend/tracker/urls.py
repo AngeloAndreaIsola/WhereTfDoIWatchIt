@@ -85,6 +85,7 @@ urlpatterns = [
     path("watchlist/add/", views.add_to_watchlist, name="add-to-watchlist"),
     path("watchlist/remove/<int:tmdb_id>/", views.remove_from_watchlist, name="remove-from-watchlist"),
     path("watched/", views.watched_list, name="watched-list"),
+    path("watched/report/", views.watched_report, name="watched-report"),
     path("watched/<int:tmdb_id>/", views.mark_movie_watched, name="mark-movie-watched"),
     path("unwatched/<int:tmdb_id>/", views.unmark_movie_watched, name="unmark-movie-watched"),
     # --- API v2: Unofficial sources (Phase C) ---

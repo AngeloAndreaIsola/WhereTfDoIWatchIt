@@ -115,6 +115,7 @@ interface FilterBarProps {
   showStatusFilter?: boolean;
   showLanguageFilters?: boolean;
   showProviderCategories?: boolean;
+  showWatchedRatingSort?: boolean;
 }
 
 export function FilterBar({
@@ -123,6 +124,7 @@ export function FilterBar({
   showStatusFilter = true,
   showLanguageFilters = false,
   showProviderCategories = false,
+  showWatchedRatingSort = false,
 }: FilterBarProps) {
   // Controls edit a local draft; nothing reaches the parent (and so no request
   // is issued) until Apply is pressed. `filters` is the last applied value, so
@@ -609,6 +611,9 @@ export function FilterBar({
           >
             <option value="">Default / Newest</option>
             <option value="rating_desc">Rating (High to Low)</option>
+            {showWatchedRatingSort && (
+              <option value="watched_rating_desc">Your rating (High to Low)</option>
+            )}
             <option value="year_desc">Year (Newest First)</option>
             <option value="year_asc">Year (Oldest First)</option>
             <option value="title_asc">Title (A-Z)</option>

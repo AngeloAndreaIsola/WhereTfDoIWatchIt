@@ -9,7 +9,7 @@ from typing import Any
 from django.conf import settings
 from django.db import connection, transaction
 from django.db.models import Count, Exists, F, Max, OuterRef, Q, Subquery
-from django.db.models.functions import Coalesce
+from django.db.models.functions import Coalesce, Lower
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.views.decorators.http import require_GET
@@ -58,7 +58,7 @@ from .serializers import (
     WatchlistReportRowSerializer,
 )
 from tracker.scrapers import ContentMatcher, ScrapedItem
-from tracker.services.filtering import apply_composable_filters
+from tracker.services.filtering import apply_composable_filters, parse_actor_filters
 from tracker.services.unified_catalogue import resolve_catalogue_scope, unofficial_catalogue_items
 from tracker.services.watchability import (
     QUALIFYING_OFFER_TYPES,
@@ -1655,6 +1655,276 @@ def watchlist_report(request):
     return Response(
         {
             "report": paged_report,
+            "pagination": pagination,
+            "summary": summary,
+        }
+    )
+
+
+@api_view(["GET"])
+def watched_report(request):
+    """GET /api/watched/report/ — the Watchlist report scoped to watched titles.
+
+    Same evaluation, filters (including actor multi-AND and duration min/max)
+    and pagination as /api/watchlist/report/; the only difference is the source
+    of titles: ``UserMovieData.is_watched`` rows (the same watch state the
+    mark/unmark endpoints write), so there is no second watched-list model.
+    Ordered most-recently-watched first, undated rows last.
+    """
+    curr_country = _active_country(request)
+    preference = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
+    def positive_int(name, default, maximum=None):
+        raw = request.GET.get(name, str(default))
+        try:
+            value = max(1, int(raw)) if raw.isdecimal() else default
+        except (ValueError, TypeError):
+            value = default
+        return min(value, maximum) if maximum else value
+
+    page = positive_int("page", 1)
+    page_size = positive_int("page_size", 24, 100)
+    events = (
+        MovieWatchEvent.objects.filter(user_id=1, movie_id=OuterRef("movie_id"))
+        .order_by().values("movie_id")
+        .annotate(watch_count=Count("pk"), last_watched_at=Max("watched_date"))
+    )
+    watched_qs = UserMovieData.objects.filter(user_id=1, is_watched=True).select_related("movie")
+    if (request.GET.get("watched") or request.GET.get("watched_status") or "").strip().lower() == "unwatched":
+        watched_qs = watched_qs.none()
+    watched_qs = watched_qs.annotate(
+        watch_count=Coalesce(Subquery(events.values("watch_count")), 1),
+        last_watched_at=Coalesce(Subquery(events.values("last_watched_at")), F("watched_date")),
+    )
+
+    # Apply the common predicates before counting/slicing. The report only
+    # hydrates and evaluates the requested page for ordinary browsing.
+    search = (request.GET.get("q") or request.GET.get("query") or "").strip()
+    if search:
+        watched_qs = watched_qs.filter(Q(movie__title__icontains=search) | Q(movie__overview__icontains=search))
+    content_type = (request.GET.get("content_type") or request.GET.get("type") or "").lower()
+    if content_type in ("movie", "series", "tv"):
+        watched_qs = watched_qs.filter(movie__content_type="series" if content_type == "tv" else content_type)
+    year_exact = request.GET.get("year")
+    if year_exact and year_exact.isdigit():
+        watched_qs = watched_qs.filter(movie__year=int(year_exact))
+    else:
+        year_min = request.GET.get("year_min") or request.GET.get("year_start")
+        year_max = request.GET.get("year_max") or request.GET.get("year_end")
+        if year_min and year_min.isdigit(): watched_qs = watched_qs.filter(movie__year__gte=int(year_min))
+        if year_max and year_max.isdigit(): watched_qs = watched_qs.filter(movie__year__lte=int(year_max))
+    score = request.GET.get("score_min") or request.GET.get("min_score") or request.GET.get("rating_min")
+    if score:
+        try: watched_qs = watched_qs.filter(movie__tmdb_rating__gte=float(score))
+        except (ValueError, TypeError): pass
+    dur_min, dur_max = request.GET.get("duration_min"), request.GET.get("duration_max")
+    try: dur_min = int(dur_min) if dur_min not in (None, "") and int(dur_min) >= 0 else None
+    except (ValueError, TypeError): dur_min = None
+    try: dur_max = int(dur_max) if dur_max not in (None, "") and int(dur_max) >= 0 else None
+    except (ValueError, TypeError): dur_max = None
+    if dur_min is not None and dur_max is not None and dur_min > dur_max:
+        # Preserve the shared filter contract: an invalid interval is ignored.
+        dur_min = dur_max = None
+    if dur_min is not None or dur_max is not None:
+        watched_qs = watched_qs.filter(movie__content_type="movie", movie__runtime_minutes__gt=0)
+        if dur_min is not None: watched_qs = watched_qs.filter(movie__runtime_minutes__gte=dur_min)
+        if dur_max is not None: watched_qs = watched_qs.filter(movie__runtime_minutes__lte=dur_max)
+
+    actor_ids, actor_names = parse_actor_filters(request.GET)
+    # PostgreSQL JSONB containment keeps repeated numeric actor selections
+    # entirely in SQL, with AND semantics and no duplicate candidate rows.
+    for actor_id in set(actor_ids):
+        watched_qs = watched_qs.filter(movie__cast__contains=[{"id": actor_id}])
+
+    availability_dependent = any(request.GET.get(key) for key in (
+        "country", "availability_status", "status", "watchable", "watchable_only",
+        "providers", "provider", "service", "quality", "access", "access_type",
+    ))
+    # Remaining metadata filters (actor names/genre) and availability filters
+    # need Python evaluation. Bound this exceptional path explicitly; never
+    # silently paginate before filtering or return a misleading total.
+    requires_candidate_scan = availability_dependent or bool(actor_names) or bool(request.GET.get("genre") or request.GET.get("genre_id"))
+    candidate_limit = 5000
+    total_candidates = watched_qs.count()
+    if requires_candidate_scan and total_candidates > candidate_limit:
+        return Response({"error": "This filter combination matches too many watched titles; narrow the filters and try again."}, status=400)
+
+    sort = (request.GET.get("sort_by") or request.GET.get("sort") or "").lower().strip()
+    title_tiebreakers = (Lower("movie__title"), "movie__title", "movie__tmdb_id")
+    if sort in ("watched_rating_desc", "personal_rating_desc", "rating"):
+        ordering = (F("rating").desc(nulls_last=True), *title_tiebreakers)
+    elif sort in ("rating_desc", "rating_high"):
+        ordering = (F("movie__tmdb_rating").desc(nulls_last=True), *title_tiebreakers)
+    elif sort in ("year_desc", "year_newest"):
+        ordering = (F("movie__year").desc(nulls_last=True), *title_tiebreakers)
+    elif sort in ("year_asc", "year_oldest"):
+        ordering = (F("movie__year").asc(nulls_last=True), *title_tiebreakers)
+    elif sort in ("title_desc", "-title"):
+        ordering = (Lower("movie__title").desc(), "movie__title", "movie__tmdb_id")
+    elif sort in ("title_asc", "title"):
+        ordering = (Lower("movie__title").asc(), "movie__title", "movie__tmdb_id")
+    else:
+        # Empty/default and legacy last-watched keys share the event-based order.
+        ordering = (F("last_watched_at").desc(nulls_last=True), *title_tiebreakers)
+    watched_qs = watched_qs.order_by(*ordering)
+
+    # Sorting is owned by the queryset/candidate stage, so the shared filter
+    # evaluator must not re-sort an already paginated ordinary page.
+    filter_params = request.GET.copy()
+    filter_params.pop("sort_by", None)
+    filter_params.pop("sort", None)
+
+    if requires_candidate_scan:
+        watched = list(watched_qs)
+        watched_movies = [row.movie for row in watched]
+        filtered, _ = apply_composable_filters(
+            watched_movies, filter_params, preference, current_country=curr_country,
+            refresh_states=refresh_states_for({m.id for m in watched_movies}),
+        )
+        allowed = {entry["movie"].id for entry in filtered}
+        filtered_rows = [row for row in watched if row.movie_id in allowed]
+        # SQL ordering on the unfiltered candidates is not sufficient here:
+        # filters can remove arbitrary rows, so apply the same global key to
+        # the complete (bounded) matching set before page slicing.
+        def sort_candidate_rows(rows, value_for, *, descending=False):
+            rows.sort(key=lambda row: (row.movie.title.lower(), row.movie.title, row.movie.tmdb_id))
+            dated = [row for row in rows if value_for(row) is not None]
+            undated = [row for row in rows if value_for(row) is None]
+            dated.sort(key=value_for, reverse=descending)
+            return dated + undated
+
+        if sort in ("watched_rating_desc", "personal_rating_desc", "rating"):
+            filtered_rows = sort_candidate_rows(filtered_rows, lambda row: row.rating, descending=True)
+        elif sort in ("rating_desc", "rating_high"):
+            filtered_rows = sort_candidate_rows(filtered_rows, lambda row: row.movie.tmdb_rating, descending=True)
+        elif sort in ("year_desc", "year_newest"):
+            filtered_rows = sort_candidate_rows(filtered_rows, lambda row: row.movie.year, descending=True)
+        elif sort in ("year_asc", "year_oldest"):
+            filtered_rows = sort_candidate_rows(filtered_rows, lambda row: row.movie.year)
+        elif sort in ("title_desc", "-title"):
+            filtered_rows = sort_candidate_rows(filtered_rows, lambda row: row.movie.title.lower(), descending=True)
+        elif sort in ("title_asc", "title"):
+            filtered_rows = sort_candidate_rows(filtered_rows, lambda row: row.movie.title.lower())
+        else:
+            filtered_rows = sort_candidate_rows(filtered_rows, lambda row: row.last_watched_at, descending=True)
+        total_movies = len(filtered_rows)
+        start = (page - 1) * page_size
+        watched = filtered_rows[start:start + page_size]
+        watched_movies = [row.movie for row in watched]
+        evaluated_filtered = [entry for entry in filtered if entry["movie"].id in {m.id for m in watched_movies}]
+    else:
+        total_movies = total_candidates
+        start = (page - 1) * page_size
+        watched = list(watched_qs[start:start + page_size])
+        watched_movies = [row.movie for row in watched]
+
+    watched_by_id = {row.movie_id: row for row in watched}
+    watch_counts = {row.movie_id: row.watch_count for row in watched}
+    refresh_states = refresh_states_for({m.id for m in watched_movies})
+
+    # Apply composable filters (actor multi-AND, duration min/max, content
+    # type, year, genre, score, country, provider, watchable, status, quality,
+    # watched) to the watched titles.
+    if not requires_candidate_scan:
+        evaluated_filtered, _ = apply_composable_filters(
+            watched_movies,
+            filter_params,
+            preference,
+            current_country=curr_country,
+            refresh_states=refresh_states,
+        )
+
+    report = []
+    country_movie_sets: dict[str, set[int]] = {}
+    service_movie_sets: dict[str, set[int]] = {}
+    available_movies_count = 0
+    needs_recheck_movies_count = 0
+
+    for eval_item in evaluated_filtered:
+        movie = eval_item["movie"]
+        watch_res = eval_item["watchability"]
+
+        raw_offers = eval_item["offers"]
+        ranked = rank_offers(raw_offers, preference, current_country=curr_country)
+
+        countries = sorted(list({r.country.upper() for r in ranked if r.country}))
+        best = ranked[0] if ranked else None
+        best_country = best.country.upper() if best else None
+        best_service = best.service if best else None
+
+        if countries or watch_res.status in ("watchable_here", "watchable_vpn"):
+            available_movies_count += 1
+        elif watch_res.status == WatchabilityStatus.NEEDS_RECHECK:
+            needs_recheck_movies_count += 1
+
+        for c in countries:
+            country_movie_sets.setdefault(c, set()).add(movie.id)
+
+        movie_services = {r.service for r in ranked if r.service}
+        for s in movie_services:
+            service_movie_sets.setdefault(s, set()).add(movie.id)
+
+        report.append(
+            {
+                "movie": MovieSerializer(movie).data,
+                "available_countries": countries,
+                "best_country": best_country,
+                "best_service": best_service,
+                "watchability": watch_res.to_dict(),
+                "is_watched": True,
+                "user_data": {
+                    "is_watched": True,
+                    "rating": watched_by_id[movie.id].rating,
+                    "review": watched_by_id[movie.id].review,
+                    "watched_date": (
+                        watched_by_id[movie.id].watched_date.isoformat()
+                        if watched_by_id[movie.id].watched_date else None
+                    ),
+                },
+                "watch_count": watch_counts.get(movie.id, 1),
+                "last_watched_at": (
+                    watched_by_id[movie.id].last_watched_at.isoformat()
+                    if watched_by_id[movie.id].last_watched_at else None
+                ),
+            }
+        )
+
+    # The legacy watched page sorted by the user's own rating. Keep that
+    # ordering distinct from TMDb title-score sorting on the shared FilterBar.
+    unavailable_movies_count = (
+        len(report) - available_movies_count - needs_recheck_movies_count
+    )
+
+    country_list = [
+        {"country": c, "count": len(m_set)}
+        for c, m_set in country_movie_sets.items()
+    ]
+    country_list.sort(key=lambda x: (-x["count"], x["country"]))
+
+    service_list = [
+        {"service": s, "count": len(m_set)}
+        for s, m_set in service_movie_sets.items()
+    ]
+    service_list.sort(key=lambda x: (-x["count"], x["service"]))
+
+    summary = {
+        "total_movies": total_movies,
+        "available_movies": available_movies_count,
+        "unavailable_movies": unavailable_movies_count,
+        "needs_recheck_movies": needs_recheck_movies_count,
+        "countries": country_list,
+        "services": service_list,
+    }
+
+    total_pages = max(1, (total_movies + page_size - 1) // page_size)
+    pagination = {
+        "count": total_movies, "page": page, "page_size": page_size,
+        "total_pages": total_pages, "has_next": page < total_pages,
+        "has_previous": page > 1,
+    }
+
+    return Response(
+        {
+            "report": report,
             "pagination": pagination,
             "summary": summary,
         }
