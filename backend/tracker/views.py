@@ -1675,8 +1675,6 @@ def watched_report(request):
 
     curr_country = _active_country(request)
     preference = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
-    user_subs = get_user_subscriptions(user_id=1)
-
     watched = list(
         UserMovieData.objects.select_related("movie")
         .filter(user_id=1, is_watched=True)
@@ -1694,6 +1692,15 @@ def watched_report(request):
         reverse=True,
     )
     watched_movies = [row.movie for row in watched]
+    watched_by_id = {row.movie_id: row for row in watched}
+    # Keep the viewing-history fields exposed by the original watched endpoint.
+    # Aggregate events once rather than issuing one count query per title.
+    watch_counts = dict(
+        MovieWatchEvent.objects.filter(user_id=1, movie_id__in=watched_by_id)
+        .values("movie_id")
+        .annotate(total=Count("pk"))
+        .values_list("movie_id", "total")
+    )
 
     refresh_states = refresh_states_for({m.id for m in watched_movies})
 
@@ -1704,7 +1711,6 @@ def watched_report(request):
         watched_movies,
         request.GET,
         preference,
-        user_subscriptions=user_subs,
         current_country=curr_country,
         refresh_states=refresh_states,
     )
@@ -1747,7 +1753,20 @@ def watched_report(request):
                 "best_service": best_service,
                 "watchability": watch_res.to_dict(),
                 "is_watched": True,
-                "user_data": None,
+                "user_data": {
+                    "is_watched": True,
+                    "rating": watched_by_id[movie.id].rating,
+                    "review": watched_by_id[movie.id].review,
+                    "watched_date": (
+                        watched_by_id[movie.id].watched_date.isoformat()
+                        if watched_by_id[movie.id].watched_date else None
+                    ),
+                },
+                "watch_count": watch_counts.get(movie.id, 1),
+                "last_watched_at": (
+                    watched_by_id[movie.id].watched_date.isoformat()
+                    if watched_by_id[movie.id].watched_date else None
+                ),
             }
         )
 

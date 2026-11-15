@@ -109,9 +109,13 @@ class WatchedActorDurationFilterTests(TestCase):
         # m4 has runtime_minutes=None; excluded when duration filter active.
         self.assertNotIn(104, self._tmdb_ids("duration_min=1"))
 
-    def test_inverted_duration_range_returns_none(self):
-        # min > max is invalid; no titles match.
-        self.assertEqual(self._tmdb_ids("duration_min=200&duration_max=100"), [])
+    def test_inverted_duration_range_is_ignored(self):
+        # Preserve the existing shared duration-filter contract. Invalid
+        # bounds do not silently change results on other catalogue surfaces.
+        self.assertEqual(
+            sorted(self._tmdb_ids("duration_min=200&duration_max=100")),
+            [101, 102, 103, 104],
+        )
 
     # --- Combinations ---
 
