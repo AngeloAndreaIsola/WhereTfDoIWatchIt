@@ -29,7 +29,8 @@ Counter semantics per run:
 - offers_created / offers_updated: upsert outcomes for this group;
 - offers_deactivated: offers that became effectively unavailable under this
   run's snapshot — i.e. no source retained a present observation (§14.10).
-  Always 0 unless the run qualifies as an authoritative full snapshot. An offer
+  Unseen offers require an authoritative full snapshot; explicit observed
+  withdrawals are source-scoped and do not infer anything from absence. An offer
   a co-reporting source still observes is counted as neither deactivated nor
   updated;
 - error_count / last_error: populated when the run fails.
@@ -110,6 +111,7 @@ from django.db import transaction
 from tracker.models import ExternalProviderMapping, Provider
 
 from ..domain.enums import MatchMethod, SyncMode
+from .identity_policy import mapping_is_trusted
 from ..models import ContentMapping, Country, Source
 from ..sources.justwatch_providers import provider_slug_for_package
 from ..persistence.repositories import (
@@ -181,10 +183,16 @@ def _content_metadata(content) -> dict:
         metadata["description"] = content.description
     if content.external_ids:
         metadata["external_ids"] = dict(content.external_ids)
+    elif content.replace_external_ids:
+        metadata["external_ids"] = {}
+    if content.identity_evidence:
+        metadata["identity_evidence"] = dict(content.identity_evidence)
     if content.original_title:
         metadata["original_title"] = content.original_title
     if content.duration:
         metadata["duration"] = content.duration
+    if content.rights_provenance:
+        metadata["rights_provenance"] = dict(content.rights_provenance)
     return metadata
 
 
@@ -636,13 +644,31 @@ class AvailabilityRefreshService:
                     provider=provider,
                     provider_content_id=content.provider_content_id,
                 ).first()
-                match = match_local_catalog(content)
+                allow_title_mapping = self.source.capabilities.supports_automatic_title_mapping
+                trusted_existing = bool(
+                    existing
+                    and mapping_is_trusted(
+                        provider.slug,
+                        existing.match_method,
+                        existing.source.slug,
+                    )
+                    and existing.content_type == content_type
+                )
+                match = match_local_catalog(content) if allow_title_mapping else None
                 if existing is None and match is None:
                     logger.warning(
                         "availability_mapping_unresolved source=%s provider=%s "
                         "content=%s title=%r",
                         self.source.slug, provider.slug,
                         content.provider_content_id, content.title,
+                    )
+                    continue
+                if not allow_title_mapping and not trusted_existing:
+                    logger.warning(
+                        "availability_mapping_unresolved source=%s provider=%s "
+                        "content=%s reason=explicit_manual_mapping_required",
+                        self.source.slug, provider.slug,
+                        content.provider_content_id,
                     )
                     continue
                 if match is not None:
@@ -723,6 +749,17 @@ class AvailabilityRefreshService:
         with transaction.atomic():
             contents = self._persist_contents(result, source)
             result = self._attach_tmdb_ids(result, source, contents)
+            withdrawn = 0
+            for content in result.offer_withdrawals:
+                if (capabilities.supported_content_types is not None
+                        and content.content_type not in capabilities.supported_content_types):
+                    continue
+                provider = self._provider(content.provider_id)
+                country = Country.objects.filter(code=content.country.upper(), enabled=True).first()
+                if provider is not None and country is not None:
+                    withdrawn += self.offers.withdraw_observed(
+                        source=source, provider=provider, country=country, content=content,
+                    )
         # Everything still without a tmdb id is provider content that could
         # not be mapped (Offer.tmdb_id is non-null): discovered, counted,
         # logged by the mapping step, kept as a ProviderContent row, but never
@@ -801,7 +838,8 @@ class AvailabilityRefreshService:
             for (provider, country), group in grouped.items()
         ]
 
-        processed = created = updated = deactivated = 0
+        processed = created = updated = 0
+        deactivated = withdrawn
         try:
             with transaction.atomic():
                 for run, provider, country, group in runs:

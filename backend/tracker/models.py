@@ -474,6 +474,14 @@ class Preference(models.Model):
             "count as potentially reachable. Never inferred from IP or locale."
         ),
     )
+    ranking_preferences = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=(
+            "User-configurable source ranking preferences (official/local/unofficial, "
+            "provider priorities, and independent ordering booleans)."
+        ),
+    )
 
     def __str__(self):
         return f"Preference user {self.user_id}"

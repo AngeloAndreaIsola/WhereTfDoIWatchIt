@@ -104,7 +104,7 @@ UI show?":
 ### Approach
 Extract `present_offer(offer, provider_map) -> PresentedOffer` where
 `PresentedOffer` carries: `service_display`, `source_indicator`,
-`country` (with fallback). Each caller builds `provider_map` once and
+`country` (observed on the offer; provider home country is not substituted). Each caller builds `provider_map` once and
 passes it in.
 
 ### Dataclass
@@ -113,7 +113,7 @@ passes it in.
 class PresentedOffer:
     service_display: str       # provider.name or service_display_name(slug)
     source_indicator: str      # provider.source_indicator or "Official"
-    country: str               # offer.country or provider.country_code fallback
+    country: str               # observed offer country; blank stays unknown
     is_official: bool          # provider.category in {OFFICIAL, FREE}
 ```
 

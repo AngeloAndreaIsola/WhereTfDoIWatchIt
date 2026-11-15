@@ -21,7 +21,8 @@ import datetime as dt
 from django.test import TestCase
 
 from availability.freshness import declared_freshness
-from availability.models import Country, Offer, ProviderContent, Source, SyncRun
+from availability.domain.enums import MatchMethod
+from availability.models import Country, ContentMapping, Offer, ProviderContent, Source, SyncRun
 from availability.services.refresh import AvailabilityRefreshService
 from availability.sources import source_registry
 from availability.sources.abc_iview import AbcIviewClient, AbcIviewSource
@@ -171,6 +172,32 @@ class OnePipelineRunTests(TestCase):
                 content_type="series",
             ),
         ]
+        mediaset_provider = Provider.objects.get(slug="mediaset_infinity")
+        mediaset_source, _ = Source.objects.get_or_create(
+            slug="mediaset_infinity", defaults={"name": "Mediaset Infinity"}
+        )
+        ContentMapping.objects.create(
+            provider=mediaset_provider,
+            source=mediaset_source,
+            provider_content_id="F011844503000101",
+            content_type="movie",
+            tmdb_id=64997,
+            confidence=1.0,
+            match_method=MatchMethod.MANUAL,
+        )
+        youtube_provider = Provider.objects.get(slug="youtube")
+        youtube_source, _ = Source.objects.get_or_create(
+            slug="youtube", defaults={"name": "YouTube"}
+        )
+        ContentMapping.objects.create(
+            provider=youtube_provider,
+            source=youtube_source,
+            provider_content_id="_F8kU1vb_rk",
+            content_type="movie",
+            tmdb_id=460,
+            confidence=1.0,
+            match_method=MatchMethod.MANUAL,
+        )
 
     def _run_all_five(self):
         results = {}

@@ -17,8 +17,9 @@ from availability.domain.enums import (
     SyncStatus,
 )
 from availability.domain.reconciliation import ReconciliationResult
-from availability.models import ContentMapping, Offer, ProviderContent
+from availability.models import ContentMapping, Offer, ProviderContent, Source
 from availability.services.query import AvailabilityQueryService
+from tracker.models import Provider
 
 from .reconciliation_fixtures import ReconciliationFixtureMixin
 
@@ -322,6 +323,69 @@ class ReconciliationCoreTests(ReconciliationFixtureMixin, TestCase):
         self.assertEqual(audit.unresolved_contents, 1)
         self.assertEqual(audit.sources, ("recon-source-a",))
         self.assertEqual(audit.now, self.now)
+
+    def test_youtube_offer_without_identity_mapping_is_not_watchable(self):
+        youtube, _ = Provider.objects.get_or_create(
+            slug="youtube", defaults={"name": "YouTube"}
+        )
+        source, _ = Source.objects.get_or_create(
+            slug="youtube", defaults={"name": "YouTube"}
+        )
+        self.offer(provider=youtube, source=source, provider_content_id="native-video")
+
+        result = self.reconcile_movie()
+
+        observation = result.offers[0].observations[0]
+        self.assertFalse(observation.available_now)
+        self.assertEqual(observation.mapping_doubt, "provider-content mapping is unresolved")
+
+    def test_youtube_external_id_from_youtube_is_quarantined_by_reconciliation(self):
+        youtube, _ = Provider.objects.get_or_create(
+            slug="youtube", defaults={"name": "YouTube"}
+        )
+        source, _ = Source.objects.get_or_create(
+            slug="youtube", defaults={"name": "YouTube"}
+        )
+        content = ProviderContent.objects.create(
+            provider=youtube, source=source, provider_content_id="old-video",
+            content_type=ContentType.MOVIE, title="Matilda",
+        )
+        ContentMapping.objects.create(
+            provider=youtube, source=source, provider_content_id="old-video",
+            content_type=ContentType.MOVIE, tmdb_id=550,
+            match_method=MatchMethod.EXTERNAL_ID, confidence=0.95, content=content,
+        )
+        self.offer(provider=youtube, source=source, provider_content_id="old-video")
+
+        result = self.reconcile_movie()
+
+        observation = result.offers[0].observations[0]
+        self.assertFalse(observation.available_now)
+        self.assertEqual(
+            observation.mapping_doubt,
+            "provider-content mapping provenance is unverified",
+        )
+
+    def test_youtube_provider_content_with_synthetic_mapping_counts_unresolved(self):
+        youtube, _ = Provider.objects.get_or_create(
+            slug="youtube", defaults={"name": "YouTube"}
+        )
+        source, _ = Source.objects.get_or_create(
+            slug="youtube", defaults={"name": "YouTube"}
+        )
+        content = ProviderContent.objects.create(
+            provider=youtube, source=source, provider_content_id="old-video",
+            content_type=ContentType.MOVIE, title="Matilda",
+        )
+        ContentMapping.objects.create(
+            provider=youtube, source=source, provider_content_id="old-video",
+            content_type=ContentType.MOVIE, tmdb_id=550,
+            match_method=MatchMethod.EXTERNAL_ID, confidence=0.95, content=content,
+        )
+
+        audit = self.service.audit(now=self.now)
+
+        self.assertEqual(audit.unresolved_contents, 1)
 
     def test_empty_result_when_nothing_was_observed(self):
         result = self.service.reconcile(

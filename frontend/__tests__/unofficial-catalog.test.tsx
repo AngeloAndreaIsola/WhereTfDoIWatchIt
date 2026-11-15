@@ -101,6 +101,35 @@ describe("Unified catalog page", () => {
     });
   });
 
+  it("applies language and provider-category filters to the unified API and URL", async () => {
+    setupFetch({ count: 0, results: [], total_pages: 1 });
+
+    const CatalogPage = (await import("@/app/catalog/page")).default;
+    const user = userEvent.setup();
+    render(React.createElement(CatalogPage));
+
+    await screen.findByText(/No catalog titles found matching your search and filter criteria/);
+    await user.selectOptions(screen.getByLabelText("Audio language"), "EN");
+    await user.selectOptions(screen.getByLabelText("Subtitle language"), "FR");
+    await user.click(screen.getByLabelText("Unofficial sources"));
+    await user.click(screen.getByRole("button", { name: "Apply filters" }));
+
+    await waitFor(() => {
+      expect(
+        mockFetch.mock.calls.some(([url]) =>
+          String(url).includes("audio_languages=EN") &&
+          String(url).includes("subtitle_languages=FR") &&
+          String(url).includes("provider_categories=scraper")
+        )
+      ).toBe(true);
+    });
+    expect(routerReplace).toHaveBeenCalledWith(
+      expect.stringContaining("audio_languages=EN"),
+      { scroll: false }
+    );
+    expect(routerReplace.mock.calls.at(-1)?.[0]).toContain("provider_categories=scraper");
+  });
+
   it("displays official and scraper catalog items in unified grid", async () => {
     setupFetch({
       count: 2,

@@ -112,6 +112,7 @@ export default function OfferRow({
     }
     if (notEntitled) return "Not in your subscriptions — shown for reference";
     const reasons = (offer.rejection_reasons || []).join(" ").toLowerCase();
+    if (reasons.includes("territory information unknown")) return "Territory unknown";
     if (reasons.includes("language")) return "Not available in your languages";
     if (reasons.includes("reach") || reasons.includes("country") || reasons.includes("vpn")) {
       return "Not reachable from your settings";
@@ -124,6 +125,7 @@ export default function OfferRow({
         anywhere: { text: "Local", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300" },
         vpn: { text: "VPN required", className: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300" },
         out_of_reach: { text: "Not reachable", className: "bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300" },
+        unknown: { text: "Territory unknown", className: "bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300" },
       }[offer.locality]
     : null;
 
@@ -228,6 +230,15 @@ export default function OfferRow({
           {offer.is_language_match === false && (
             <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-semibold text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
               Language Mismatch
+            </span>
+          )}
+          {offer.ranking?.explanation && offer.ranking.explanation.length > 0 && (
+            <span
+              data-testid="ranking-explanation"
+              className="rounded-md bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300"
+              title={offer.ranking.explanation.join(" · ")}
+            >
+              {offer.ranking.explanation[0]}
             </span>
           )}
           {localityBadge ? (

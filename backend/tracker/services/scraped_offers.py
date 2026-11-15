@@ -12,16 +12,20 @@ to their ``ContentMapping`` resolution) and assemble ``Offer`` objects
 identically to the legacy block: ``offer_type="free"``, quality from
 ``Provider.config``, url/languages from the stored row, and
 ``is_scraped_source=True`` so presentation and ranking treat them as
-scraped. The country on each offer is the row's canonical scrape country
-(``metadata.country_code``), the value the legacy payload only carried when
-a mapping happened to record one.
+scraped. That provenance is independent of territory: the country on each
+offer is the row's canonical scrape country (``metadata.country_code``), the
+value the legacy payload only carried when a mapping happened to record one.
+
+Rows with a country get ``territorial_scope="country"``; rows without one get
+``unknown``. This reader never infers worldwide reach from provider category,
+scraper provenance, or a missing country.
 
 Local-only: this module reaches no source, HTTP client, or refresh module.
 """
 from __future__ import annotations
 
 from tracker.models import Provider
-from tracker.services.offers import Offer
+from tracker.services.offers import Offer, TerritorialScope
 
 from availability.services.catalogue_query import ProviderCatalogueQueryService
 
@@ -73,6 +77,10 @@ def get_scraped_offers(movie, *, provider_categories):
                     "audio": entry.audio_languages,
                     "subs": entry.subtitle_languages,
                     "is_scraped_source": True,
+                    "territorial_scope": (
+                        TerritorialScope.COUNTRY
+                        if entry.country else TerritorialScope.UNKNOWN
+                    ),
                 }
             )
         )

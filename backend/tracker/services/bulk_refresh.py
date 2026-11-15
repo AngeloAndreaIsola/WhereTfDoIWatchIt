@@ -48,7 +48,12 @@ from django.db.models import Max
 from django.utils import timezone
 
 from availability.domain.enums import ContentType
-from availability.freshness import freshness_for, source_is_stale, stale_sources
+from availability.freshness import (
+    freshness_for,
+    source_configuration_snapshot,
+    source_is_stale,
+    stale_sources,
+)
 from availability.models import Country, Offer, Source
 from availability.services.refresh import (
     AvailabilityRefreshService,
@@ -98,6 +103,7 @@ def is_stale(
     *,
     source: str = "",
     country: Optional[str] = None,
+    configuration=None,
     now=None,
 ) -> bool:
     """True when *source*'s observation of the movie is missing or too old.
@@ -119,6 +125,7 @@ def is_stale(
         source or DEFAULT_SOURCE_SLUG,
         country=country,
         content_type=movie.content_type,
+        configuration=configuration,
         now=now,
     )
 
@@ -177,6 +184,7 @@ def stale_refresh_scopes(
     *,
     country: Optional[str] = None,
     content_type: Optional[str] = None,
+    source_configurations=None,
     now=None,
 ) -> list[str]:
     """Refreshable sources whose observation of the title is stale.
@@ -191,7 +199,11 @@ def stale_refresh_scopes(
     return [
         slug
         for slug in stale_sources(
-            tmdb_id, country=country, content_type=content_type, now=now
+            tmdb_id,
+            country=country,
+            content_type=content_type,
+            source_configurations=source_configurations,
+            now=now,
         )
         if slug in refreshable
     ]
@@ -353,6 +365,34 @@ def process_watchlist_refresh(
     limiter: Optional[RateLimiter] = None,
     content_types: tuple[str, ...] | list[str] = ("movie", "series"),
 ) -> dict:
+    """Run the watchlist drain and stale sweep under the shared drain lock.
+
+    The lock covers both phases: otherwise a queue worker could begin draining
+    a newly queued request for a movie while this invocation is sweeping that
+    same movie. On contention this invocation defers without creating a run,
+    settling queue rows, or starting the sweep.
+    """
+    from .refresh_requests import title_drain_lock, _drain_lock_busy_summary
+
+    with title_drain_lock() as acquired:
+        if not acquired:
+            return _drain_lock_busy_summary(budget)
+        return _process_watchlist_refresh_locked(
+            budget=budget,
+            user_id=user_id,
+            refresh_service=refresh_service,
+            limiter=limiter,
+            content_types=content_types,
+        )
+
+
+def _process_watchlist_refresh_locked(
+    budget: int = 90,
+    user_id: int = 1,
+    refresh_service: Optional[AvailabilityRefreshService] = None,
+    limiter: Optional[RateLimiter] = None,
+    content_types: tuple[str, ...] | list[str] = ("movie", "series"),
+) -> dict:
     """Batch refresh watchlist movie availability up to budget limit.
 
     Candidates selection & priority:
@@ -423,6 +463,9 @@ def process_watchlist_refresh(
     # Nothing is persisted: a future quota reset must never be masked by a
     # stale in-memory or database flag.
     quota_circuit = SourceQuotaCircuit()
+    # One read-only snapshot for the queue drain and sweep. Configuration is
+    # resolved once per tick, then passed through per-title decisions.
+    source_configurations = source_configuration_snapshot()
 
     # Check upfront if the daily or monthly budget is already exhausted.
     if _is_spent(limiter):
@@ -439,13 +482,17 @@ def process_watchlist_refresh(
     # module load time. The returned set owns those titles for this run —
     # settled or still queued — so the sweep below neither re-attempts nor
     # double-counts them.
-    from .refresh_requests import drain_refresh_requests, _metered_source_is_unnecessary
+    from .refresh_requests import (
+        _drain_refresh_requests_locked,
+        _metered_source_is_unnecessary,
+    )
 
-    queue_owned = drain_refresh_requests(
+    queue_owned = _drain_refresh_requests_locked(
         summary=summary,
         service=service,
         limiter=limiter,
         quota_circuit=quota_circuit,
+        source_configurations=source_configurations,
     )
 
     pairs = _order_candidates(_candidate_pairs(user_id, content_types))
@@ -497,6 +544,7 @@ def process_watchlist_refresh(
             tmdb_id,
             country=current_country,
             content_type=movie.content_type,
+            source_configurations=source_configurations,
         )
         if not stale_scopes:
             summary.skipped_cached += 1
@@ -858,12 +906,15 @@ def stale_catalogue_sources(now=None) -> list[str]:
     """
     slugs, _disabled = _catalogue_source_slugs()
     last_success = last_successful_completions(slugs)
+    source_configurations = source_configuration_snapshot(slugs)
     moment = now or timezone.now()
     return sorted(
         slug
         for slug in slugs
         if last_success.get(slug) is None
-        or moment - last_success[slug] > freshness_for(slug)
+        or moment - last_success[slug] > freshness_for(
+            slug, source_configurations.get(slug, {})
+        )
     )
 
 

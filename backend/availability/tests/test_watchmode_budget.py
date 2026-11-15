@@ -112,6 +112,70 @@ class WatchmodeBudgetAccountingTests(TestCase):
         self.assertEqual(len(self.calls), 3)
         self.assertEqual(self._counts(), (3, 3))
 
+    def test_worker_reservation_and_first_http_attempt_are_charged_once(self):
+        class CountingLimiter:
+            service = "watchmode"
+
+            def __init__(self):
+                self.calls = 0
+
+            def acquire(self):
+                self.calls += 1
+
+        limiter = CountingLimiter()
+        client = self._client(fx.FakeResponse(payload=[]))
+        with patch.object(rate_limit, "rate_limiter_for", return_value=limiter):
+            with rate_limit.source_budget(limiter, source="watchmode"):
+                client.sources()
+
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(limiter.calls, 1)
+
+    def test_worker_retries_charge_each_additional_http_attempt(self):
+        class CountingLimiter:
+            service = "watchmode"
+
+            def __init__(self):
+                self.calls = 0
+
+            def acquire(self):
+                self.calls += 1
+
+        limiter = CountingLimiter()
+        client = self._client(
+            fx.FakeResponse(status_code=503, payload={"errorMessage": "flap"}),
+            fx.FakeResponse(status_code=503, payload={"errorMessage": "flap"}),
+            fx.FakeResponse(payload=[]),
+        )
+        with patch.object(rate_limit, "rate_limiter_for", return_value=limiter):
+            with rate_limit.source_budget(limiter, source="watchmode"):
+                client.sources()
+
+        self.assertEqual(len(self.calls), 3)
+        self.assertEqual(limiter.calls, 3)
+
+    def test_nested_coordinator_credits_do_not_restore_after_use(self):
+        class CountingLimiter:
+            service = "watchmode"
+
+            def __init__(self):
+                self.calls = 0
+
+            def acquire(self):
+                self.calls += 1
+
+        limiter = CountingLimiter()
+        with patch.object(rate_limit, "rate_limiter_for", return_value=limiter):
+            with rate_limit.source_budget(limiter, source="watchmode"):
+                with rate_limit.source_budget(limiter, source="watchmode"):
+                    rate_limit.reserve_watchmode_call()
+                    rate_limit.reserve_watchmode_call()
+                # Both coordinator credits were consumed above. Leaving the
+                # nested context must not resurrect the outer one.
+                rate_limit.reserve_watchmode_call()
+
+        self.assertEqual(limiter.calls, 3)
+
     def test_the_guard_refuses_before_http_and_persists_across_clients(self):
         self._limit(2)
         first = self._client(fx.FakeResponse(payload=[]),

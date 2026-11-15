@@ -18,6 +18,11 @@ from ..models import (
     build_provider_content_identity,
 )
 from ..services.normalize import truncate_field
+from ..services.identity_policy import (
+    legacy_catalogue_visibility_query,
+    mapping_is_trusted,
+    trusted_mapping_query,
+)
 
 #: Column width for a provider-native content id, read from the model itself so
 #: a future migration widening the column is picked up automatically instead of
@@ -440,6 +445,34 @@ class OfferRepository:
                 claims.setdefault(key, set()).add(tmdb_id)
         return claims
 
+    def withdraw_observed(self, *, source, provider, country, content):
+        """Withdraw one source's assertion after an explicit item observation.
+
+        This does not infer removal from a partial snapshot. It preserves any
+        independent positive evidence and never touches another source's price.
+        """
+        identities = OfferEvidence.objects.filter(
+            source=source, provider_slug=provider.slug,
+            country_code=country.code, provider_content_id=content.provider_content_id,
+        ).values_list("offer_identity", flat=True)
+        candidates = list(Offer.objects.filter(
+            Q(identity__in=identities) | Q(source=source),
+            provider=provider, country=country,
+            provider_content_id=content.provider_content_id,
+            content_type=content.content_type, season_number=content.season_number,
+            episode_number=content.episode_number, currently_available=True,
+        ).select_related("provider", "country"))
+        if not candidates:
+            return 0
+        now = timezone.now()
+        self.evidence.record_absent_bulk(candidates, source=source, now=now)
+        keys = [offer.identity for offer in candidates]
+        self.evidence.recompute_availability(keys, now=now)
+        OfferPrice.objects.filter(offer_identity__in=keys, source=source, is_current=True).update(
+            is_current=False, updated_at=now,
+        )
+        return Offer.objects.filter(identity__in=keys, currently_available=False).count()
+
     def deactivate_unseen(self, sync_run, seen_identities):
         """Mark this source's evidence absent for offers it did not see.
 
@@ -692,6 +725,13 @@ class ProviderContentRepository:
                 Q(provider__category=ProviderCategory.SCRAPER)
                 | Q(source__slug=LEGACY_SCRAPER_SOURCE_SLUG)
             )
+            .filter(
+                legacy_catalogue_visibility_query(
+                    provider_lookup="provider__slug",
+                    method_lookup="mappings__match_method",
+                    source_lookup="mappings__source__slug",
+                )
+            )
         )
         if currently_available is not None:
             qs = qs.filter(currently_available=currently_available)
@@ -737,6 +777,13 @@ class ProviderContentRepository:
                 Q(provider__category=ProviderCategory.SCRAPER)
                 | Q(source__slug=LEGACY_SCRAPER_SOURCE_SLUG)
             )
+            .filter(
+                trusted_mapping_query(
+                    provider_lookup="provider__slug",
+                    method_lookup="mappings__match_method",
+                    source_lookup="mappings__source__slug",
+                )
+            )
         )
         if provider_categories is not None:
             qs = qs.filter(provider__category__in=list(provider_categories))
@@ -776,16 +823,19 @@ class ProviderContentRepository:
         keys = {(row.provider_id, row.provider_content_id) for row in rows}
         if not keys:
             return {}
-        mappings = ContentMapping.objects.filter(
+        mappings = ContentMapping.objects.select_related("provider", "source").filter(
             provider_id__in={key[0] for key in keys},
             provider_content_id__in={key[1] for key in keys},
-        ).values_list("provider_id", "provider_content_id", "tmdb_id")
+        )
         # The two __in filters can cross-match rows of *different* providers
         # that share a native id, so only exact keys are kept.
         return {
-            (provider_id, provider_content_id): tmdb_id
-            for provider_id, provider_content_id, tmdb_id in mappings
-            if (provider_id, provider_content_id) in keys
+            (mapping.provider_id, mapping.provider_content_id): mapping.tmdb_id
+            for mapping in mappings
+            if (mapping.provider_id, mapping.provider_content_id) in keys
+            and mapping_is_trusted(
+                mapping.provider.slug, mapping.match_method, mapping.source.slug
+            )
         }
 
     def active_offer_counts(self, rows) -> dict:
@@ -987,14 +1037,20 @@ class MappingRepository:
         provider_ids = {provider_id for provider_id, _ in keys}
         pcids = {pcid for _, pcid in keys}
         resolved = {}
-        rows = ContentMapping.objects.filter(
+        rows = ContentMapping.objects.select_related("provider", "source").filter(
             provider_id__in=provider_ids,
             provider_content_id__in=pcids,
-        ).values_list("provider_id", "provider_content_id", "tmdb_id")
-        for provider_id, pcid, tmdb_id in rows:
-            key = (provider_id, pcid)
+        )
+        for mapping in rows:
+            key = (mapping.provider_id, mapping.provider_content_id)
             if key in keys:
-                resolved[key] = tmdb_id
+                resolved[key] = (
+                    mapping.tmdb_id
+                    if mapping_is_trusted(
+                        mapping.provider.slug, mapping.match_method, mapping.source.slug
+                    )
+                    else None
+                )
         return resolved
 
     def summaries_for_provider_content(self, observations) -> dict:
@@ -1012,20 +1068,17 @@ class MappingRepository:
         }
         if not keys:
             return {}
-        rows = ContentMapping.objects.filter(
+        rows = ContentMapping.objects.select_related("provider", "source").filter(
             provider_id__in={provider_id for provider_id, _ in keys},
             provider_content_id__in={pcid for _, pcid in keys},
-        ).values_list(
-            "provider_id", "provider_content_id",
-            "tmdb_id", "confidence", "match_method",
         )
         return {
-            (provider_id, provider_content_id): (
-                tmdb_id, confidence, match_method
+            (row.provider_id, row.provider_content_id): (
+                row.tmdb_id, row.confidence, row.match_method
             )
-            for provider_id, provider_content_id, tmdb_id, confidence, match_method
-            in rows
-            if (provider_id, provider_content_id) in keys
+            for row in rows
+            if (row.provider_id, row.provider_content_id) in keys
+            and mapping_is_trusted(row.provider.slug, row.match_method, row.source.slug)
         }
 
 

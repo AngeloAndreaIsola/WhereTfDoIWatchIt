@@ -584,6 +584,42 @@ class RecoverProviderEvidenceCommandTests(OfferRecoveryBaseTestCase):
 
 
 class AdversarialOfferRecoveryTests(OfferRecoveryBaseTestCase):
+    def test_corrupt_mediaset_external_id_mapping_is_rejected_before_fetch(self):
+        mediaset, _ = Provider.objects.get_or_create(
+            slug="mediaset_infinity", defaults={"name": "Mediaset Infinity"}
+        )
+        mediaset_source, _ = Source.objects.get_or_create(
+            slug="mediaset_infinity", defaults={"name": "Mediaset Infinity"}
+        )
+        content = ProviderContent.objects.create(
+            provider=mediaset,
+            source=mediaset_source,
+            provider_content_id="DUNE-CORRUPT",
+            content_type=ContentType.MOVIE,
+            title="Dune",
+        )
+        ContentMapping.objects.create(
+            provider=mediaset,
+            source=mediaset_source,
+            provider_content_id=content.provider_content_id,
+            content_type=ContentType.MOVIE,
+            tmdb_id=438631,
+            content=content,
+            confidence=0.95,
+            match_method=MatchMethod.EXTERNAL_ID,
+        )
+
+        result = recover_provider_evidence(
+            provider_content_pk=content.pk,
+            max_http_requests=10,
+            apply=False,
+        )
+
+        self.assertEqual(result.outcome, OUTCOME_MAPPING_CONFLICT)
+        self.assertEqual(result.reason_code, "unverified_mapping_provenance")
+        self.assertEqual(result.http_requests_attempted, 0)
+        self.assertEqual(Offer.objects.count(), 0)
+
     def test_provider_identity_mismatch_returns_mapping_conflict(self):
         content, mapping = self.create_movie_and_mapping(tmdb_id=1001)
 

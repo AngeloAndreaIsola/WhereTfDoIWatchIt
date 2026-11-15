@@ -249,19 +249,46 @@ class SourceQuotaCircuit:
         return tuple(sorted(self._terminal))
 
 
-#: Sources whose budget has already been reserved in the current execution
-#: context. The coordinator reserves once before ``refresh_content``; the SA
-#: client consults this so it cannot count the same upstream request twice while
-#: still enforcing the budget for direct callers that never went through the
-#: coordinator. Context-local means concurrent threads/workers do not share it.
-_reserved_sources: ContextVar[frozenset[str]] = ContextVar(
-    "reserved_source_budgets", default=frozenset()
+class _BudgetCredit:
+    """Mutable one-shot credit shared with parent contexts when nested."""
+
+    __slots__ = ("source", "consumed")
+
+    def __init__(self, source: str):
+        self.source = source
+        self.consumed = False
+
+
+#: One-shot coordinator reservation credits in the current execution context.
+#: The first outbound attempt consumes a credit; retries reserve separately.
+#: Context-local means concurrent threads/workers do not share the credits.
+_reserved_sources: ContextVar[tuple[_BudgetCredit, ...]] = ContextVar(
+    "reserved_source_budgets", default=()
 )
 
 
 def budget_is_reserved(source: str) -> bool:
     """True when *source*'s budget was already reserved in this context."""
-    return bool(source) and source in _reserved_sources.get()
+    return bool(source) and any(
+        credit.source == source and not credit.consumed
+        for credit in _reserved_sources.get()
+    )
+
+
+def consume_reserved_budget(source: str | None) -> bool:
+    """Consume one coordinator credit for one outbound attempt, if available.
+
+    This makes the coordinator reservation one-shot: the initial attempt reuses
+    it and each retry reserves another unit. A boolean context flag would make
+    every retry free.
+    """
+    if not source:
+        return False
+    for credit in reversed(_reserved_sources.get()):
+        if credit.source == source and not credit.consumed:
+            credit.consumed = True
+            return True
+    return False
 
 
 @contextmanager
@@ -269,12 +296,13 @@ def source_budget(limiter: "RateLimiter", *, source: str | None = None):
     """Reserve one call from *limiter* and mark *source* as already reserved.
 
     The coordinator uses this around ``refresh_content``. A source client that
-    supports central enforcement (Streaming Availability) then skips its own
-    reservation inside the context, so one upstream request is counted once.
+    supports central enforcement consumes the reservation for its first
+    outbound attempt, then accounts for retries itself.
     """
     limiter.acquire()
     reserve_for = source or getattr(limiter, "service", "") or ""
-    token = _reserved_sources.set(_reserved_sources.get() | {reserve_for})
+    credit = _BudgetCredit(reserve_for)
+    token = _reserved_sources.set(_reserved_sources.get() + (credit,))
     try:
         yield limiter
     finally:
@@ -576,7 +604,7 @@ def reserve_streaming_availability_call() -> None:
     each upstream request. When the coordinator already reserved the same call,
     the context flag makes this a no-op instead of a second charge.
     """
-    if budget_is_reserved(STREAMING_AVAILABILITY_SLUG):
+    if consume_reserved_budget(STREAMING_AVAILABILITY_SLUG):
         return
     rate_limiter_for(STREAMING_AVAILABILITY_SLUG).acquire()
 
@@ -590,4 +618,6 @@ def reserve_watchmode_call() -> None:
     :class:`RateLimitExceeded` before the HTTP call is made, so the guard is a
     true stop rather than an after-the-fact counter.
     """
+    if consume_reserved_budget(WATCHMODE_SLUG):
+        return
     rate_limiter_for(WATCHMODE_SLUG).acquire()

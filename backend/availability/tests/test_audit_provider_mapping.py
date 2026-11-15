@@ -210,6 +210,7 @@ class AuditProviderMappingTests(TestCase):
         self.assertEqual(before, provider_scoped_rows())
 
         snapshot = self.audit(snapshot=True)["snapshot"]
+        repeated_snapshot = self.audit(snapshot=True)["snapshot"]
 
         self.assertEqual(
             set(snapshot),
@@ -219,4 +220,5 @@ class AuditProviderMappingTests(TestCase):
             },
         )
         self.assertTrue(all(value["count"] == 1 and len(value["hash"]) == 64 for value in snapshot.values()))
+        self.assertEqual(snapshot, repeated_snapshot)
         self.assertEqual(before, provider_scoped_rows())

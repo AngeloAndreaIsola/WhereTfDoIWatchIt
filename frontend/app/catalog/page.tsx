@@ -46,6 +46,11 @@ function CatalogPageClient() {
     const quality = searchParams.get("quality") || "";
     const score_min = searchParams.get("score_min") || "";
     const sort_by = searchParams.get("sort_by") || "";
+    const watched = searchParams.get("watched") || "all";
+    const audio_languages = searchParams.get("audio_languages") || "";
+    const subtitle_languages = searchParams.get("subtitle_languages") || "";
+    const provider_categories = (searchParams.get("provider_categories") || "")
+      .split(",").map((value) => value.trim()).filter(Boolean);
     const access = searchParams.get("access") || "";
     const duration_min = searchParams.get("duration_min") || "";
     const duration_max = searchParams.get("duration_max") || "";
@@ -78,6 +83,10 @@ function CatalogPageClient() {
         quality,
         score_min,
         sort_by,
+        watched,
+        audio_languages,
+        subtitle_languages,
+        provider_categories,
         access,
         duration_min,
         duration_max,
@@ -156,6 +165,14 @@ function CatalogPageClient() {
     if (filters.quality) params.set("quality", filters.quality);
     if (filters.score_min) params.set("score_min", filters.score_min);
     if (filters.sort_by) params.set("sort_by", filters.sort_by);
+    if (filters.watched && filters.watched !== "all") {
+      params.set("watched", filters.watched);
+    }
+    if (filters.audio_languages) params.set("audio_languages", filters.audio_languages);
+    if (filters.subtitle_languages) params.set("subtitle_languages", filters.subtitle_languages);
+    if (filters.provider_categories.length > 0) {
+      params.set("provider_categories", filters.provider_categories.join(","));
+    }
     if (filters.access) params.set("access", filters.access);
     if (filters.duration_min) params.set("duration_min", filters.duration_min);
     if (filters.duration_max) params.set("duration_max", filters.duration_max);
@@ -194,6 +211,14 @@ function CatalogPageClient() {
     if (filters.quality) params.quality = filters.quality;
     if (filters.score_min) params.score_min = filters.score_min;
     if (filters.sort_by) params.sort_by = filters.sort_by;
+    if (filters.watched && filters.watched !== "all") {
+      params.watched = filters.watched;
+    }
+    if (filters.audio_languages) params.audio_languages = filters.audio_languages;
+    if (filters.subtitle_languages) params.subtitle_languages = filters.subtitle_languages;
+    if (filters.provider_categories.length > 0) {
+      params.provider_categories = filters.provider_categories.join(",");
+    }
     if (filters.access) params.access = filters.access;
     if (filters.duration_min) params.duration_min = filters.duration_min;
     if (filters.duration_max) params.duration_max = filters.duration_max;
@@ -305,7 +330,13 @@ function CatalogPageClient() {
         </p>
       </div>
 
-      <FilterBar filters={filters} onChange={handleFilterChange} showStatusFilter={true} />
+      <FilterBar
+        filters={filters}
+        onChange={handleFilterChange}
+        showStatusFilter={true}
+        showLanguageFilters={true}
+        showProviderCategories={true}
+      />
 
       {/* Scrape panel */}
       <div className="space-y-3">

@@ -1,0 +1,159 @@
+{
+  "schema": "wt-parallel-scope-patch/v1",
+  "repository": "AngeloAndreaIsola/WhereTfDoIWatchIt",
+  "source": "WhereTfDoIWatchIt_Jules_Tasks_v2.json",
+  "source_generated_at": "2026-11-07",
+  "created_at": "2026-11-09",
+  "status": "PROPOSAL_NOT_APPLIED_TO_LIVE_QUEUE",
+  "archive_status": "ARCHIVED_REFERENCE_ONLY",
+  "archived_as_of": "2026-11-15",
+  "non_executable": true,
+  "archive_notice": "Historical 2026-11-09 proposal, never applied to a live queue. Do not import, dispatch, or reuse authorization from this file. See WT_PARALLEL_REFACTOR_PROPOSAL.md for reconciliation.",
+  "default_for_unlisted_tasks": "PRESERVE_ALL_EXISTING_FIELDS",
+  "preserve": [
+    "task ID",
+    "dependencies",
+    "original exclusive locks unless doc-only locks can be demonstrated read-only",
+    "approval gates",
+    "queue state",
+    "active attempts and unknown fences",
+    "approval/grant history",
+    "base SHA policy",
+    "no auto-merge"
+  ],
+  "requires_live_review": [
+    "WT-014",
+    "WT-060",
+    "WT-082"
+  ],
+  "doc_only_task_ids": [
+    "WT-005",
+    "WT-022",
+    "WT-028",
+    "WT-031",
+    "WT-039",
+    "WT-042",
+    "WT-043",
+    "WT-054",
+    "WT-056",
+    "WT-058",
+    "WT-069",
+    "WT-072"
+  ],
+  "integration_review_required_task_ids": [
+    "WT-040",
+    "WT-058",
+    "WT-070",
+    "WT-071",
+    "WT-074",
+    "WT-082"
+  ],
+  "write_scope_overrides": {
+    "WT-005": [
+      "docs/design/WT-005-owner-model-decision.md"
+    ],
+    "WT-006": [
+      "frontend/app/layout.tsx",
+      "frontend/components/AppNav.tsx",
+      "frontend/lib/i18n/",
+      "frontend/messages/"
+    ],
+    "WT-010": [
+      "frontend/app/catalog/page.tsx",
+      "frontend/app/watchlist/page.tsx",
+      "frontend/app/watched/page.tsx",
+      "frontend/lib/url_state.ts"
+    ],
+    "WT-012": [
+      "frontend/app/catalog/page.tsx",
+      "frontend/components/AlphabetStrip.tsx"
+    ],
+    "WT-022": [
+      "docs/research/WT-022-ratings-rights.md"
+    ],
+    "WT-028": [
+      "docs/research/WT-028-google-lists-feasibility.md"
+    ],
+    "WT-031": [
+      "docs/research/WT-031-prime-import.md"
+    ],
+    "WT-036": [
+      "backend/tracker/models.py",
+      "backend/tracker/migrations/",
+      "backend/tracker/services/tag_search.py",
+      "backend/tracker/tests/test_tag_taxonomy_wt036.py"
+    ],
+    "WT-039": [
+      "docs/research/WT-039-semantic-retrieval.md"
+    ],
+    "WT-040": [
+      "backend/availability/sources/public_domain_archive.py",
+      "backend/availability/services/public_domain_catalogue.py",
+      "backend/availability/tests/test_public_domain_archive.py"
+    ],
+    "WT-042": [
+      "docs/research/WT-042-specialist-sources.md"
+    ],
+    "WT-043": [
+      "docs/research/WT-043-worker-architecture.md"
+    ],
+    "WT-054": [
+      "docs/research/WT-054-reel-recognition.md"
+    ],
+    "WT-056": [
+      "docs/research/WT-056-plex-nas-boundary.md"
+    ],
+    "WT-058": [
+      "docs/design/WT-058-app-direction.md"
+    ],
+    "WT-059": [
+      "backend/tracker/tests/test_entitlement_offers_wt059.py",
+      "backend/availability/tests/test_offer_contracts_wt059.py"
+    ],
+    "WT-060": [
+      "backend/tracker/services/availability_metrics.py",
+      "frontend/app/availability-metrics/",
+      "backend/tracker/tests/test_availability_metrics_wt060.py"
+    ],
+    "WT-067": [
+      "backend/tracker/services/unified_catalogue.py",
+      "backend/availability/services/catalogue_query.py",
+      "backend/tracker/views.py",
+      "backend/tracker/tests/test_catalogue_coverage_wt067.py"
+    ],
+    "WT-069": [
+      "docs/research/WT-069-unofficial-url-policy.md"
+    ],
+    "WT-070": [
+      "backend/tracker/tests/test_justwatch_aggregator_wt070.py",
+      "backend/availability/tests/test_aggregator_evidence_wt070.py"
+    ],
+    "WT-071": [
+      "backend/availability/tests/test_broadcaster_normalization_wt071.py"
+    ],
+    "WT-072": [
+      "docs/research/WT-072-subtitle-rights.md"
+    ],
+    "WT-074": [
+      "backend/tracker/services/streaming_changes.py",
+      "backend/tracker/tests/test_streaming_changes.py",
+      "backend/tracker/tests/fixtures/wt074/"
+    ],
+    "WT-082": [
+      "backend/tracker/management/commands/seed_dev_data.py",
+      "backend/tracker/tests/fixtures/wt082/",
+      "backend/tracker/tests/test_seed_dev_data.py",
+      "docs/WT-082-OFFLINE-FIXTURES.md"
+    ]
+  },
+  "checks": [
+    "An operator must reconcile each override against real task markdown and current repository",
+    "New files and renamed files must be validated before applying",
+    "Docs-only scopes permit reading source code but not editing it",
+    "If required acceptance criteria cannot be met in proposed scope, split a followup integration task",
+    "No migration lock relaxations",
+    "Never update assigned/in-flight task contracts or reuse earlier standing grants",
+    "Every task stays unapproved unless independently reviewed and authorized"
+  ],
+  "dispatch_authorized": false
+}

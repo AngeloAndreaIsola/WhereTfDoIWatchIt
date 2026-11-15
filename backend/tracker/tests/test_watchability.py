@@ -35,6 +35,7 @@ class WatchabilityEvaluationTests(TestCase):
             audio_languages=["EN", "JA"],
             subtitle_languages=["EN"],
             candidate_countries=["JP", "IT"],
+            vpn_enabled=True,
         )
 
     def test_watchable_here(self):
@@ -177,7 +178,7 @@ class WatchabilityEvaluationTests(TestCase):
         self.assertEqual(res.status_symbol, "🟠")
         self.assertEqual(res.status_label, "Available — not with your subscriptions")
 
-    def test_scraped_source_bypasses_vpn_but_respects_language_match(self):
+    def test_explicit_worldwide_scraped_source_bypasses_vpn_but_respects_language_match(self):
         offers = [Offer(
             country="BR",
             service="scraped_site",
@@ -187,6 +188,7 @@ class WatchabilityEvaluationTests(TestCase):
             audio_languages=["EN"],
             subtitle_languages=["EN"],
             is_scraped_source=True,
+            territorial_scope="worldwide",
         )]
         res = evaluate_watchability(
             self.movie,
@@ -209,6 +211,7 @@ class WatchabilityEvaluationTests(TestCase):
             audio_languages=["FR"],
             subtitle_languages=["FR"],
             is_scraped_source=True,
+            territorial_scope="worldwide",
         )]
         res = evaluate_watchability(
             self.movie,
@@ -284,9 +287,8 @@ class WatchabilityEvaluationTests(TestCase):
 class RefreshStateBadgeTests(TestCase):
     """With no offers stored, the queue's evidence picks the badge.
 
-    ⚫ Not available (checked, nothing found) vs 🔵 Checking (queued) vs
-    ⚪ Unknown (never fetched / last attempt failed) — the three states the
-    watchlist "Refresh all" UX depends on.
+    A completed source request is not proof of global absence; the canonical
+    availability report owns definitive negative evidence.
     """
 
     def setUp(self):
@@ -316,12 +318,12 @@ class RefreshStateBadgeTests(TestCase):
             refresh_state=refresh_state,
         )
 
-    def test_checked_but_empty_reads_not_available(self):
+    def test_checked_but_empty_reads_unknown_without_global_negative_evidence(self):
         res = self._evaluate(RefreshState.CHECKED)
 
-        self.assertEqual(res.status, WatchabilityStatus.NOT_WATCHABLE)
-        self.assertEqual(res.status_symbol, "⚫")
-        self.assertEqual(res.status_label, "Not available")
+        self.assertEqual(res.status, WatchabilityStatus.UNKNOWN)
+        self.assertEqual(res.status_symbol, "⚪")
+        self.assertEqual(res.status_label, "Unknown — no offers verified")
         self.assertEqual(res.refresh_state, RefreshState.CHECKED)
 
     def test_pending_but_never_checked_reads_checking(self):
@@ -376,4 +378,4 @@ class RefreshStateBadgeTests(TestCase):
         res = self._evaluate(RefreshState.CHECKED)
 
         self.assertEqual(res.to_dict()["refresh_state"], RefreshState.CHECKED)
-        self.assertEqual(res.to_dict()["status_symbol"], "⚫")
+        self.assertEqual(res.to_dict()["status_symbol"], "⚪")

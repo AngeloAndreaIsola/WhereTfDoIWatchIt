@@ -20,6 +20,7 @@ from .mediaset_infinity import MediasetInfinitySource
 from .pbs import PbsSource
 from .pluto_tv import PlutoTvSource
 from .prime_video import PrimeVideoSource
+from .public_domain_archive import PublicDomainArchiveSource
 from .rai_play import (
     RaiPlayClient,
     RaiPlayConfigurationError,
@@ -45,6 +46,7 @@ source_registry.register(PlutoTvSource.slug, PlutoTvSource)
 source_registry.register(MediasetInfinitySource.slug, MediasetInfinitySource)
 source_registry.register(PbsSource.slug, PbsSource)
 source_registry.register(AbcIviewSource.slug, AbcIviewSource)
+source_registry.register(PublicDomainArchiveSource.slug, PublicDomainArchiveSource)
 # Aggregators: broad cross-country fallback/discovery coverage. They are
 # additional sources, never replacements for the collectors above — and
 # both are permanently non-authoritative (see each module docstring).
@@ -63,6 +65,7 @@ __all__ = [
     "PbsSource",
     "AbcIviewSource",
     "PrimeVideoSource",
+    "PublicDomainArchiveSource",
     "RaiPlayClient",
     "RaiPlayConfigurationError",
     "RaiPlayHttpBudget",

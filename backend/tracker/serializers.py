@@ -314,10 +314,19 @@ class PreferenceSerializer(serializers.ModelSerializer):
     current_country = serializers.CharField(max_length=2, required=False, allow_blank=True)
     language_rule = serializers.JSONField(required=False, allow_null=True)
     vpn_enabled = serializers.BooleanField(required=False)
+    ranking_preferences = serializers.JSONField(required=False, allow_null=True)
 
     class Meta:
         model = Preference
-        fields = ["audio_languages", "subtitle_languages", "candidate_countries", "current_country", "language_rule", "vpn_enabled"]
+        fields = [
+            "audio_languages",
+            "subtitle_languages",
+            "candidate_countries",
+            "current_country",
+            "language_rule",
+            "vpn_enabled",
+            "ranking_preferences",
+        ]
 
     def validate_audio_languages(self, value: list) -> list[str]:
         return validate_language_codes(value)
@@ -367,6 +376,70 @@ class PreferenceSerializer(serializers.ModelSerializer):
                         raise serializers.ValidationError("Viewer languages must be a list.")
                     viewer["languages"] = validate_language_codes(langs)
         return value
+
+    def validate_ranking_preferences(self, value):
+        from tracker.services.preferences import get_default_ranking_preferences
+        if value is None or value == {} or value == "reset":
+            return get_default_ranking_preferences()
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("ranking_preferences must be a JSON object or null.")
+
+        # Check if reset is requested
+        if value.get("reset") is True:
+            return get_default_ranking_preferences()
+
+        cleaned = get_default_ranking_preferences()
+        version = value.get("version", 1)
+        if not isinstance(version, int):
+            raise serializers.ValidationError("version must be an integer.")
+        cleaned["version"] = version
+
+        # Source priority: must contain allowed source IDs
+        valid_sources = {"official", "local", "unofficial"}
+        if "source_priority" in value:
+            sp = value.get("source_priority")
+            if not isinstance(sp, list):
+                raise serializers.ValidationError("source_priority must be a list of strings.")
+            cleaned_sp = []
+            for item in sp:
+                if not isinstance(item, str):
+                    raise serializers.ValidationError("source_priority items must be strings.")
+                s = item.strip().lower()
+                if s not in valid_sources:
+                    raise serializers.ValidationError(
+                        f"Invalid source ID '{item}'. Valid source IDs: {sorted(valid_sources)}"
+                    )
+                if s not in cleaned_sp:
+                    cleaned_sp.append(s)
+            # Ensure all valid sources are present in priority order
+            for s in ["official", "local", "unofficial"]:
+                if s not in cleaned_sp:
+                    cleaned_sp.append(s)
+            cleaned["source_priority"] = cleaned_sp
+
+        # Independent booleans
+        for bool_field in ["prefer_official", "prefer_local", "prefer_entitled"]:
+            if bool_field in value:
+                val = value[bool_field]
+                if not isinstance(val, bool):
+                    raise serializers.ValidationError(f"{bool_field} must be a boolean.")
+                cleaned[bool_field] = val
+
+        # Provider priority (e.g. ["netflix", "prime"])
+        if "provider_priority" in value:
+            pp = value.get("provider_priority")
+            if not isinstance(pp, list):
+                raise serializers.ValidationError("provider_priority must be a list of provider slugs.")
+            cleaned_pp = []
+            for p in pp:
+                if not isinstance(p, str):
+                    raise serializers.ValidationError("provider_priority items must be strings.")
+                slug = p.strip().lower()
+                if slug and slug not in cleaned_pp:
+                    cleaned_pp.append(slug)
+            cleaned["provider_priority"] = cleaned_pp
+
+        return cleaned
 
 
 class WatchlistItemSerializer(serializers.ModelSerializer):

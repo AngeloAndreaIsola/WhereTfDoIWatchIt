@@ -9,14 +9,16 @@ and an upstream API error.
 """
 from __future__ import annotations
 
+import copy
 import datetime as dt
 
 from django.test import SimpleTestCase, TestCase
 
 from availability.domain.enums import ContentType, OfferType, SourceType, SyncMode
 from availability.freshness import declared_freshness
-from availability.models import Country, Offer, ProviderContent, Source, SyncRun
+from availability.models import ContentMapping, Country, Offer, ProviderContent, Source, SyncRun
 from availability.services.refresh import AvailabilityRefreshService
+from availability.services.identity_policy import mapping_is_trusted
 from availability.sources import SourceFetchError, source_registry
 from availability.sources.base import ContentRequest
 from availability.sources.youtube import (
@@ -61,6 +63,7 @@ class RegistrationTests(SimpleTestCase):
         self.assertFalse(caps.supports_incremental_sync)
         self.assertFalse(caps.supports_authoritative_snapshots)
         self.assertFalse(caps.supports_tmdb_ids)
+        self.assertFalse(caps.supports_automatic_title_mapping)
         self.assertFalse(caps.supports_seasons)
         self.assertFalse(caps.supports_episodes)
         self.assertFalse(caps.supports_languages)
@@ -120,6 +123,11 @@ class RegionTests(SimpleTestCase):
         self.assertEqual(YouTubeSource(client=client).fetch(movie_request()).offers[0].country, "GB")
         self.assertEqual(api.requests_matching("GET"), [])
 
+    def test_caller_country_cannot_relabel_the_detected_egress_market(self):
+        api = FakeYouTubeApi()
+        result = make_source(api).fetch(movie_request(), country="GB")
+        self.assertEqual(result.offers[0].country, "US")
+
 
 class SearchParsingTests(SimpleTestCase):
     def setUp(self):
@@ -134,7 +142,7 @@ class SearchParsingTests(SimpleTestCase):
         self.assertEqual(offer.provider_content_id, MATILDA_VIDEO_ID)
         self.assertEqual(offer.country, "US")
         self.assertEqual(offer.content_type, ContentType.MOVIE)
-        self.assertEqual(offer.tmdb_id, 460)
+        self.assertIsNone(offer.tmdb_id)
         self.assertEqual(offer.season_number, None)
         self.assertEqual(offer.episode_number, None)
         self.assertEqual(offer.offer_type, OfferType.FREE_WITH_ADS)
@@ -156,8 +164,37 @@ class SearchParsingTests(SimpleTestCase):
         self.assertEqual(content.content_type, ContentType.MOVIE)
         self.assertEqual(content.title, "Matilda")
         self.assertEqual(content.url, f"https://www.youtube.com/watch?v={MATILDA_VIDEO_ID}")
-        self.assertEqual(content.external_ids, {"tmdb": "460"})
+        self.assertEqual(content.external_ids, {})
         self.assertEqual(content.source_id, "youtube")
+
+    def test_same_title_search_results_across_years_are_kept_unresolved(self):
+        payload = load_search("search_matilda_free.json")
+        items = payload["contents"]["twoColumnSearchResultsRenderer"][
+            "itemSectionRenderer"]["contents"]
+        existing = next(
+            item["movieRenderer"] for item in items
+            if isinstance(item.get("movieRenderer"), dict)
+            and "Matilda" in str(item["movieRenderer"].get("title"))
+        )
+        alternate = copy.deepcopy(existing)
+        alternate["videoId"] = "matilda-2022"
+        alternate["title"] = {"simpleText": "Matilda (2022)"}
+        items.append({"movieRenderer": alternate})
+        api = FakeYouTubeApi(searches={"Matilda": payload})
+
+        result = make_source(api).fetch(movie_request(year=None))
+
+        self.assertEqual(result.offers, [])
+        self.assertEqual({c.provider_content_id for c in result.contents}, {
+            MATILDA_VIDEO_ID, "matilda-2022"
+        })
+        self.assertTrue(all(c.identity_evidence.get("status") == "unresolved"
+                            for c in result.contents))
+
+    def test_historical_request_copied_external_id_is_untrusted(self):
+        self.assertFalse(mapping_is_trusted("youtube", "external_id", "youtube"))
+        self.assertTrue(mapping_is_trusted("youtube", "manual", "youtube"))
+        self.assertTrue(mapping_is_trusted("youtube", "external_id", "justwatch"))
 
     def test_result_never_claims_authoritativeness_or_cursor(self):
         result = self.source.fetch(movie_request())
@@ -251,37 +288,126 @@ class RefreshPathTests(TestCase):
             tmdb_id=460, title="Matilda", year=1996, content_type="movie"
         )
 
-    def test_refresh_content_persists_the_offer_and_a_targeted_sync_run(self):
+    def test_uncertain_title_search_keeps_native_content_without_canonical_offer(self):
         result = self.service.refresh_content(self.movie)
 
         self.assertEqual(result.discovered, 1)
-        self.assertEqual(result.processed, 1)
-        self.assertEqual(result.created, 1)
-        self.assertEqual(result.skipped, 0)
+        self.assertEqual(result.processed, 0)
+        self.assertEqual(result.created, 0)
+        self.assertEqual(result.unresolved, 1)
+        self.assertEqual(result.skipped, 1)
         self.assertTrue(Source.objects.filter(slug="youtube", enabled=True).exists())
-        self.assertEqual(Offer.objects.count(), 1)
-        offer = Offer.objects.get()
-        self.assertEqual(
-            offer.identity,
-            f"youtube|US|movie|460|||free_with_ads|{MATILDA_VIDEO_ID}",
-        )
-        self.assertEqual(offer.provider, self.provider)
-        self.assertEqual(offer.country.code, "US")
-        self.assertEqual(offer.source.slug, "youtube")
-        self.assertEqual(offer.offer_type, OfferType.FREE_WITH_ADS)
-        self.assertEqual(offer.content_type, ContentType.MOVIE)
-        self.assertIsNone(offer.audio_languages)
-        self.assertTrue(offer.currently_available)
+        self.assertEqual(Offer.objects.count(), 0)
+        self.assertFalse(ContentMapping.objects.filter(provider=self.provider).exists())
 
-        run = SyncRun.objects.get()
-        self.assertEqual(run.status, "succeeded")
-        self.assertEqual(run.provider, self.provider)
-        self.assertEqual(run.country.code, "US")
-        self.assertEqual(run.source.slug, "youtube")
-        self.assertEqual(run.mode, "targeted")
-        self.assertFalse(run.authoritative)
-        self.assertEqual(run.items_processed, 1)
-        self.assertEqual(run.offers_created, 1)
+        # No SyncRun is attributed without a canonical offer group.
+        self.assertFalse(SyncRun.objects.exists())
+
+    def test_verified_manual_mapping_allows_offer_with_provider_native_video_id(self):
+        youtube_source, _ = Source.objects.get_or_create(
+            slug="youtube", defaults={"name": "YouTube", "type": "web"}
+        )
+        ContentMapping.objects.create(
+            provider=self.provider,
+            source=youtube_source,
+            provider_content_id=MATILDA_VIDEO_ID,
+            content_type="movie",
+            tmdb_id=self.movie.tmdb_id,
+            confidence=1.0,
+            match_method="manual",
+        )
+
+        result = self.service.refresh_content(self.movie)
+
+        self.assertEqual(result.created, 1)
+        self.assertEqual(Offer.objects.get().tmdb_id, self.movie.tmdb_id)
+        self.assertEqual(Offer.objects.get().provider_content_id, MATILDA_VIDEO_ID)
+
+    def test_search_hit_cannot_map_a_same_title_movie_from_another_year(self):
+        other = Movie.objects.create(
+            tmdb_id=999460, title="Matilda", year=2022, content_type="movie"
+        )
+
+        self.service.refresh_content(self.movie)
+
+        self.assertFalse(ContentMapping.objects.filter(
+            provider=self.provider, tmdb_id=other.tmdb_id
+        ).exists())
+        self.assertEqual(Offer.objects.count(), 0)
+
+    def test_missing_candidate_year_does_not_create_automatic_mapping(self):
+        self.service.refresh_content(self.movie)
+        mapping = ContentMapping.objects.filter(
+            provider=self.provider, provider_content_id=MATILDA_VIDEO_ID
+        ).first()
+        self.assertIsNone(mapping)
+        self.assertEqual(Offer.objects.count(), 0)
+
+    def test_historical_synthetic_external_mapping_cannot_create_offer(self):
+        youtube_source, _ = Source.objects.get_or_create(
+            slug="youtube", defaults={"name": "YouTube", "type": "web"}
+        )
+        ContentMapping.objects.create(
+            provider=self.provider,
+            source=youtube_source,
+            provider_content_id=MATILDA_VIDEO_ID,
+            content_type="movie",
+            tmdb_id=self.movie.tmdb_id,
+            confidence=0.95,
+            match_method="external_id",
+        )
+
+        result = self.service.refresh_content(self.movie)
+
+        self.assertEqual(result.created, 0)
+        self.assertEqual(Offer.objects.count(), 0)
+
+    def test_ambiguous_title_search_persists_native_candidates_without_offers(self):
+        payload = self.api.searches["Matilda 1996"]
+        raw_items = payload["contents"]["twoColumnSearchResultsRenderer"][
+            "itemSectionRenderer"]["contents"]
+        existing = next(item["movieRenderer"] for item in raw_items
+                        if isinstance(item.get("movieRenderer"), dict)
+                        and "Matilda" in str(item["movieRenderer"].get("title")))
+        alternate = copy.deepcopy(existing)
+        alternate["videoId"] = "matilda-unidentified-cut"
+        raw_items.append({"movieRenderer": alternate})
+        self.api.searches["Matilda 1996"] = payload
+
+        result = self.service.refresh_content(self.movie)
+
+        self.assertEqual(result.created, 0)
+        self.assertEqual(Offer.objects.count(), 0)
+        self.assertEqual(ProviderContent.objects.count(), 2)
+        self.assertFalse(ContentMapping.objects.filter(provider=self.provider).exists())
+
+    def test_independently_reported_external_mapping_is_accepted(self):
+        youtube_source, _ = Source.objects.get_or_create(
+            slug="youtube", defaults={"name": "YouTube", "type": "web"}
+        )
+        justwatch_source, _ = Source.objects.get_or_create(
+            slug="justwatch", defaults={"name": "JustWatch", "type": "aggregator"}
+        )
+        ContentMapping.objects.create(
+            provider=self.provider,
+            source=justwatch_source,
+            provider_content_id=MATILDA_VIDEO_ID,
+            content_type="movie",
+            tmdb_id=self.movie.tmdb_id,
+            confidence=0.95,
+            match_method="external_id",
+        )
+
+        result = self.service.refresh_content(self.movie)
+
+        self.assertEqual(result.created, 1)
+        self.assertEqual(Offer.objects.get().tmdb_id, self.movie.tmdb_id)
+        self.assertEqual(Offer.objects.get().provider_content_id, MATILDA_VIDEO_ID)
+
+    def test_conflicting_candidate_year_is_rejected(self):
+        result = self.source.fetch(movie_request(title="Grease", year=1990))
+        self.assertEqual(result.contents, [])
+        self.assertEqual(result.offers, [])
 
     def test_discovered_content_is_kept_even_for_the_targeted_path(self):
         self.service.refresh_content(self.movie)

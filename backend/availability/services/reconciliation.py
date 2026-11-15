@@ -37,10 +37,10 @@ from collections import Counter
 from datetime import datetime
 from typing import Iterable, Optional
 
-from django.db.models import Exists, OuterRef
+from django.db.models import Exists, OuterRef, Q
 from django.utils import timezone
 
-from ..domain.enums import AvailabilityEvidence, ConflictKind, ContentType, FreshnessState, SyncStatus
+from ..domain.enums import AvailabilityEvidence, ConflictKind, ContentType, FreshnessState, MatchMethod, SyncStatus
 from ..domain.reconciliation import (
     OfferObservation,
     PriceObservation,
@@ -56,6 +56,10 @@ from ..domain.reconciliation import (
 # Re-exported here so existing importers keep working.
 from ..freshness import FRESHNESS_INTERVAL_KEY, freshness_state
 from ..models import ContentMapping, ProviderContent
+from .identity_policy import (
+    EXTERNAL_ID_ASSERTION_SOURCES,
+    TITLE_SEARCH_IDENTITY_SOURCES,
+)
 from ..persistence.repositories import (
     MappingRepository,
     OfferPriceRepository,
@@ -241,15 +245,23 @@ class AvailabilityReconciliationService:
     def _observe(self, row, *, now, mappings, claims, statuses, prices=()) -> OfferObservation:
         detail = ""
         provider_content_id = row.provider_content_id
+        identity_sensitive_provider = row.provider.slug in TITLE_SEARCH_IDENTITY_SOURCES
+        has_trusted_source_identity = row.source.slug in EXTERNAL_ID_ASSERTION_SOURCES
         if provider_content_id:
             key = (row.provider_id, provider_content_id)
             mapped_tmdb = mappings.get(key)
-            if mapped_tmdb is not None and mapped_tmdb != row.tmdb_id:
+            if key in mappings and mapped_tmdb is None and not has_trusted_source_identity:
+                detail = "provider-content mapping provenance is unverified"
+            elif mapped_tmdb is not None and mapped_tmdb != row.tmdb_id:
                 detail = f"mapping points to tmdb {mapped_tmdb}"
+            elif identity_sensitive_provider and key not in mappings and not has_trusted_source_identity:
+                detail = "provider-content mapping is unresolved"
             others = sorted(claims.get(key, set()) - {row.tmdb_id})
             if others:
                 suffix = "also active for " + ", ".join(f"tmdb {other}" for other in others)
                 detail = f"{detail}; {suffix}" if detail else suffix
+        elif identity_sensitive_provider and not has_trusted_source_identity:
+            detail = "provider-content mapping is unresolved"
 
         window_open = (
             (row.available_from is None or _aware(row.available_from) <= now)
@@ -611,14 +623,31 @@ class AvailabilityReconciliationService:
 
     @staticmethod
     def _unresolved_contents() -> int:
-        """Provider catalogue rows with no stored TMDB mapping yet."""
-        return ProviderContent.objects.filter(
-            ~Exists(
-                ContentMapping.objects.filter(
-                    provider=OuterRef("provider"),
-                    provider_content_id=OuterRef("provider_content_id"),
+        """Provider catalogue rows with no mapping trusted for their source."""
+        has_any_mapping = Exists(
+            ContentMapping.objects.filter(
+                provider=OuterRef("provider"),
+                provider_content_id=OuterRef("provider_content_id"),
+            )
+        )
+        has_trusted_mapping = Exists(
+            ContentMapping.objects.filter(
+                provider=OuterRef("provider"),
+                provider_content_id=OuterRef("provider_content_id"),
+            ).filter(
+                Q(match_method=MatchMethod.MANUAL)
+                | Q(
+                    match_method=MatchMethod.EXTERNAL_ID,
+                    source__slug__in=EXTERNAL_ID_ASSERTION_SOURCES,
                 )
             )
+        )
+        return ProviderContent.objects.annotate(
+            has_any_mapping=has_any_mapping,
+            has_trusted_mapping=has_trusted_mapping,
+        ).filter(
+            Q(provider__slug__in=TITLE_SEARCH_IDENTITY_SOURCES, has_trusted_mapping=False)
+            | (~Q(provider__slug__in=TITLE_SEARCH_IDENTITY_SOURCES) & Q(has_any_mapping=False))
         ).count()
 
 

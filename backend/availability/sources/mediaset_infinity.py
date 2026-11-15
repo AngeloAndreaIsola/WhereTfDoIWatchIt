@@ -300,9 +300,11 @@ class MediasetInfinitySource:
         # One query's match is a subset of the catalogue: absence must never
         # deactivate offers.
         supports_authoritative_snapshots=False,
-        # The source provides no external ids of its own; offers carry the
-        # requested tmdb id after title verification.
+        # A matching title is not a stable identity: search/detail expose no
+        # year or external TMDb ID. Only an independently verified manual
+        # provider-content mapping may resolve this source's offers.
         supports_tmdb_ids=False,
+        supports_automatic_title_mapping=False,
         supports_seasons=False,
         supports_episodes=False,
         # The detail carries audio/subtitle language codes.
@@ -332,8 +334,8 @@ class MediasetInfinitySource:
             return SourceFetchResult(sync_mode=SyncMode.TARGETED)
 
         payload = self.client.search(request.title)
-        card = _find_movie_candidate(payload, request)
-        if card is None:
+        cards = _matching_movie_candidates(payload, request)
+        if not cards:
             # A well-formed search without a verified movie card observes
             # nothing — success, not failure.
             logger.info(
@@ -341,10 +343,54 @@ class MediasetInfinitySource:
                 request.tmdb_id, request.title,
             )
             return SourceFetchResult(sync_mode=SyncMode.TARGETED)
+        if len(cards) > 1:
+            logger.warning(
+                "mediaset_infinity_ambiguous_title_candidates tmdb_id=%s guids=%s",
+                request.tmdb_id,
+                sorted(str(card.get("guid") or "").strip() for card in cards),
+            )
+            unresolved_contents = [
+                DiscoveredContent(
+                    provider_id=self.slug,
+                    provider_content_id=str(card["guid"]).strip(),
+                    content_type=ContentType.MOVIE,
+                    title=str(card.get("cardTitle") or "").strip(),
+                    url=_detail_url({}, card),
+                    external_ids={},
+                    replace_external_ids=True,
+                    identity_evidence={
+                        "status": "unresolved",
+                        "basis": "ambiguous_normalized_title",
+                        "candidate_count": len(cards),
+                        "provider_reported_tmdb_id": False,
+                        "provider_reported_release_year": False,
+                    },
+                    source_id=self.slug,
+                )
+                for card in cards
+            ]
+            return SourceFetchResult(
+                contents=unresolved_contents,
+                authoritative=False,
+                complete_snapshot=False,
+                sync_mode=SyncMode.TARGETED,
+                cursor=None,
+            )
+        card = cards[0]
 
         guid = str(card.get("guid") or "").strip()
         detail = self.client.movie(guid)
         data = _movie_data(detail)
+        detail_guid = str(data.get("guid") or "").strip()
+        if detail_guid and detail_guid != guid:
+            raise SourceFetchError(
+                f"Mediaset movie detail identity differs from search GUID {guid}"
+            )
+        detail_title = str(data.get("title") or card.get("cardTitle") or "").strip()
+        if _normalize_title(detail_title) != _normalize_title(request.title):
+            raise SourceFetchError(
+                f"Mediaset movie detail title differs from requested title for {guid}"
+            )
 
         right = str(data.get("contentRight") or "").strip().upper()
         if not right:
@@ -374,7 +420,9 @@ class MediasetInfinitySource:
             provider_content_id=guid,
             country=normalize_country(COUNTRY),
             content_type=ContentType.MOVIE,
-            tmdb_id=request.tmdb_id,
+            # The caller's request is not evidence about the provider-native
+            # GUID. Refresh resolves this offer only through a trusted mapping.
+            tmdb_id=None,
             season_number=None,
             episode_number=None,
             offer_type=offer_type,
@@ -391,10 +439,17 @@ class MediasetInfinitySource:
             provider_id=self.slug,
             provider_content_id=guid,
             content_type=ContentType.MOVIE,
-            title=str(data.get("title") or card.get("cardTitle") or "").strip(),
+            title=detail_title,
             url=url,
             description=str(data.get("description") or "").strip(),
-            external_ids={"tmdb": str(request.tmdb_id)},
+            external_ids={},
+            replace_external_ids=True,
+            identity_evidence={
+                "status": "unresolved",
+                "basis": "normalized_title_only",
+                "provider_reported_tmdb_id": False,
+                "provider_reported_release_year": False,
+            },
             source_id=self.slug,
         )
         return SourceFetchResult(
@@ -448,16 +503,10 @@ def _as_dicts(value) -> list[dict]:
     return [entry for entry in value if isinstance(entry, dict)]
 
 
-def _find_movie_candidate(payload: dict, request: ContentRequest) -> Optional[dict]:
-    """First movie card whose normalized title equals the requested one.
-
-    Verification order per card: ``VideoItem`` (series cards are outside the
-    declared scope), ``editorialType == "Movie"``, normalized-title equality,
-    non-empty ``guid``. Search cards carry no year, so unlike YouTube there is
-    no candidate year to agree with the request — the match is title-only by
-    data availability, recorded with the requested tmdb id afterwards.
-    """
+def _matching_movie_candidates(payload: dict, request: ContentRequest) -> list[dict]:
+    """Return distinct provider-native movies with the requested normalized title."""
     wanted = _normalize_title(request.title)
+    candidates = {}
     for item in _search_items(payload):
         if item.get("__typename") != "VideoItem":
             continue
@@ -465,10 +514,30 @@ def _find_movie_candidate(payload: dict, request: ContentRequest) -> Optional[di
             continue
         if _normalize_title(item.get("cardTitle")) != wanted:
             continue
-        if not str(item.get("guid") or "").strip():
-            continue
-        return item
-    return None
+        guid = str(item.get("guid") or "").strip()
+        if guid:
+            candidates.setdefault(guid, item)
+    return list(candidates.values())
+
+
+def _find_movie_candidate(payload: dict, request: ContentRequest) -> Optional[dict]:
+    """Return one unique title candidate, or None when the result is ambiguous.
+
+    Search cards carry no year. A normalized-title match can therefore select
+    a provider-native catalogue row, but it cannot establish a TMDb identity.
+    More than one distinct matching GUID is ambiguous and must not proceed to
+    detail/offer processing.
+    """
+    candidates = _matching_movie_candidates(payload, request)
+    if len(candidates) != 1:
+        if candidates:
+            logger.warning(
+                "mediaset_infinity_ambiguous_title_candidates title=%r guids=%s",
+                request.title,
+                sorted(str(item.get("guid") or "").strip() for item in candidates),
+            )
+        return None
+    return candidates[0]
 
 
 def _movie_data(payload: dict) -> dict:
