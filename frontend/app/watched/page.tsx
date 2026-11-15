@@ -313,7 +313,7 @@ export default function WatchedPage() {
 
               return (
                 <div
-                  key={movie.id || movie.tmdb_id || idx}
+                  key={movie.tmdb_id || idx}
                   className="flex flex-col gap-2 relative"
                 >
                   <Link
