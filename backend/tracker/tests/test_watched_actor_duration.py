@@ -7,10 +7,14 @@ and their combinations. No live HTTP: titles are created directly.
 from __future__ import annotations
 
 from datetime import date
+from unittest.mock import patch
+
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 
 from django.test import TestCase
 
-from tracker.models import Movie, UserMovieData
+from tracker.models import Movie, MovieWatchEvent, UserMovieData
 
 
 def _mark_watched(movie, watched_date=date(2024, 1, 1), rating=None, user_id=1):
@@ -153,3 +157,57 @@ class WatchedActorDurationFilterTests(TestCase):
         UserMovieData.objects.filter(movie=self.m2).update(rating=9)
         ids = self._tmdb_ids("sort_by=watched_rating_desc")
         self.assertEqual(ids[:2], [102, 101])
+
+    def test_report_event_date_drives_default_order_and_watch_count(self):
+        UserMovieData.objects.filter(movie=self.m1).update(watched_date=date(2024, 1, 1))
+        MovieWatchEvent.objects.create(movie=self.m1, watched_date=date(2024, 6, 1))
+        MovieWatchEvent.objects.create(movie=self.m1, watched_date=date(2024, 5, 1), rewatch=True)
+        response = self.client.get("/api/watched/report/")
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["report"][0]["movie"]["tmdb_id"], 101)
+        row = next(r for r in response.json()["report"] if r["movie"]["tmdb_id"] == 101)
+        self.assertEqual(row["last_watched_at"], "2024-06-01")
+        self.assertEqual(row["watch_count"], 2)
+
+    def test_sql_pagination_pages_actor_filtered_results_without_gaps(self):
+        created = []
+        for n in range(30):
+            movie = Movie.objects.create(
+                tmdb_id=2000 + n, title=f"Paged {n:02d}", content_type="movie",
+                runtime_minutes=90, cast=[{"id": 77, "name": "Page Actor"}] if n % 2 == 0 else [],
+            )
+            _mark_watched(movie, watched_date=date(2024, 1, 1))
+            created.append(movie.tmdb_id)
+        pages = []
+        for page in (1, 2, 3):
+            response = self.client.get(
+                f"/api/watched/report/?actor_id=77&duration_min=90&page={page}&page_size=5"
+            )
+            self.assertEqual(response.status_code, 200, response.content)
+            body = response.json()
+            self.assertEqual(body["pagination"]["count"], 15)
+            self.assertEqual(body["pagination"]["total_pages"], 3)
+            pages.extend(row["movie"]["tmdb_id"] for row in body["report"])
+        self.assertEqual(len(pages), len(set(pages)))
+        self.assertEqual(pages, [2000 + n for n in range(0, 30, 2)])
+
+    def test_unfiltered_report_hydrates_only_requested_page(self):
+        for n in range(40):
+            movie = Movie.objects.create(tmdb_id=3000 + n, title=f"Large {n:02d}")
+            _mark_watched(movie)
+        with patch.object(UserMovieData, "from_db", wraps=UserMovieData.from_db) as hydrated, \
+                CaptureQueriesContext(connection) as queries:
+            response = self.client.get("/api/watched/report/?page=2&page_size=7")
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["pagination"]["count"], 44)
+        self.assertEqual(hydrated.call_count, 7)
+        self.assertLessEqual(len(queries), 10)
+
+    def test_expensive_availability_filter_refuses_unbounded_candidate_scan(self):
+        movies = Movie.objects.bulk_create([
+            Movie(tmdb_id=10000 + n, title=f"Candidate {n}") for n in range(5001)
+        ])
+        UserMovieData.objects.bulk_create([UserMovieData(movie=movie, is_watched=True) for movie in movies])
+        response = self.client.get("/api/watched/report/?watchable=true")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("too many watched titles", response.json()["error"])
