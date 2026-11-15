@@ -15,15 +15,16 @@ branch, stash, or container was removed or started.
 
 | Item | Value |
 |---|---|
-| Current `origin/master` | `7cec749f40ec1bfad51ac6d3c54a5b80485fc5ec` (branch `master`) |
+| Current `origin/master` | `ab85fd8643de325831971c388a974f2a39cf6f76` (branch `master`) |
+| Audit baseline (comparison baseline) | `7cec749f40ec1bfad51ac6d3c54a5b80485fc5ec` — ancestor of current master; the Wave 2 comparison was conducted against this baseline |
 | Wave 2 HEAD | `2fa128a048fcc780f7c257a11ca47876e889b914` (branch `integration/wave2-validation`) |
 | Wave 2 previously observed HEAD | `2fa128a` — matches, inventory still accurate |
-| Merge base (master ⋈ wave2) | `afdfdad1a80f25560a4da27acecaaf53a0e315ed` |
+| Merge base (audit-baseline master ⋈ wave2) | `afdfdad1a80f25560a4da27acecaaf53a0e315ed` |
 | Wave 2 unique commits (in wave2, not in master) | 3 — all merge commits: `bcd8dd8` (#50), `04352d7` (#52), `2fa128a` (#53) |
 | Master unique commits (in master, not in wave2) | Many — PRs #77–#90 and later (e.g. `7cec749` #89, `d700bd5` #87, …) |
 | Wave 2 worktree tracked modifications | None (clean working tree) |
 | Wave 2 untracked files | `docker-compose.wave2.yml` |
-| Wave 2 ignored files of possible value | `.env` (gitignored secrets file — not inspected, not committed) |
+| Wave 2 ignored files of possible value | `.env` (gitignored; **not inspected**; redundancy **not established**; must not be assumed disposable) |
 | Wave 2 worktree registration | Registered as `.worktrees/wave2-integration-validation` under the canonical checkout |
 | Active agent/process ownership | No agent process owns this worktree; no locks pending on it (verified via process and worktree listing) |
 
@@ -40,6 +41,19 @@ credential-sanitization, CSRF, loopback, and proxy-topology hardening commits
 The only commits reachable from Wave 2 but **not** from master are the three merge
 commits themselves (`bcd8dd8`, `04352d7`, `2fa128a`). Their **content** (the actual PR
 changes) is already present in master, as verified below.
+
+#### Historical baseline vs. current master (baseline distinction)
+
+The Wave 2 comparison in this report was conducted against the **audit baseline**
+`7cec749f40ec1bfad51ac6d3c54a5b80485fc5ec`, not against the latest master. Current
+`origin/master` has since advanced to `ab85fd8643de325831971c388a974f2a39cf6f76`. The
+audit baseline is an ancestor of current master; between them are exactly six commits
+(PR #70 merge plus five preparatory commits), all confined to documentation under
+`docs/orchestration/` (`PARALLEL_DEVELOPMENT_GUIDE.md`, `WT_PARALLEL_REFACTOR_PROPOSAL.md`,
+`WT_PARALLEL_SCOPE_PATCH.json`). **No application-code changes occurred** between the
+audit baseline and current master, so the Wave 2 integration conclusions remain valid
+against both. All integration/security commits referenced below are ancestors of the
+audit baseline and therefore of current master as well.
 
 ---
 
@@ -116,17 +130,17 @@ The `wave2-integration-validation` worktree contains **no unique data that would
 
 - All tracked work (PR #50/#52/#53 implementations + security hardening) is already in master.
 - The only untracked file, `docker-compose.wave2.yml`, is redundant with master's `docker-compose.yml` and adds an exposed postgres port (a security regression, not a benefit).
-- The ignored `.env` is a secrets file; it was not inspected and holds no project value to preserve.
+- The ignored `.env` was **not inspected**. Its contents may include unique environment settings or credentials; its redundancy has **not been established** and it **must not be assumed disposable**. Before removing the original Wave 2 worktree, the operator must securely preserve the file, independently verify it is redundant, or explicitly decide to retain it.
 - The three unique merge commits carry no content absent from master (their trees are subsumed).
 - No active agent owns the worktree; no locks or pending development remain.
 
-**Verdict:** `wave2-integration-validation` is a candidate for later cleanup once this documentation is archived and the three unique merge commits' redundancy is recorded. Do not remove it as part of this audit (task constraint); the removal decision belongs to a separate, later cleanup operation.
+**Verdict:** `wave2-integration-validation` is a candidate for later cleanup once this documentation is archived, the three unique merge commits' redundancy is recorded, **and the ignored `.env` (and any other ignored/untracked files) have been accounted for** — the `.env` was not inspected, its redundancy is not established, and it must not be assumed disposable. Before removing the original Wave 2 worktree, the operator must securely preserve the `.env`, independently verify it is redundant, or explicitly decide to retain it. Do not remove it as part of this audit (task constraint); the removal decision belongs to a separate, later cleanup operation.
 
 ---
 
 ## Validation
 
-- Every claim about master was verified against `origin/master` `7cec749f40ec1bfad51ac6d3c54a5b80485fc5ec` (file presence, byte-identity via `git diff`, `git merge-base --is-ancestor`).
+- Every claim about master was verified against the **audit baseline** `7cec749f40ec1bfad51ac6d3c54a5b80485fc5ec` (file presence, byte-identity via `git diff`, `git merge-base --is-ancestor`); current `origin/master` is `ab85fd8643de325831971c388a974f2a39cf6f76` and differs only by documentation-only commits under `docs/orchestration/`.
 - No application code was modified; no containers were started; no live provider requests or paid API calls were made.
 - No credentials appear in this report or in the archived Compose file (secrets are environment-variable references only).
 - The three original worktrees were inspected read-only; none was modified.
