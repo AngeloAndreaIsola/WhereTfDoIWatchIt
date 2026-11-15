@@ -1660,7 +1660,7 @@ export async function fetchWatchedReport(
   const qs = params ? new URLSearchParams(params).toString() : "";
   const res = await fetch(`/api/watched/report/${qs ? "?" + qs : ""}`, { signal });
   if (!res.ok) {
-    const errorBody = await res.json().catch(() => ({}));
+    const errorBody: { error?: string } = await res.json().catch(() => ({}));
     throw new Error(errorBody?.error || `Failed to load watched titles (${res.status})`);
   }
   return res.json();
