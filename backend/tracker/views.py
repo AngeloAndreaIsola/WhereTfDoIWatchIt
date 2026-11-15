@@ -1770,6 +1770,18 @@ def watched_report(request):
             }
         )
 
+    # The legacy watched page sorted by the user's own rating. Keep that
+    # ordering distinct from TMDb title-score sorting on the shared FilterBar.
+    if request.GET.get("sort_by") == "watched_rating_desc" or request.GET.get("sort") == "rating":
+        report.sort(
+            key=lambda item: (
+                item["user_data"]["rating"] is not None,
+                item["user_data"]["rating"] if item["user_data"]["rating"] is not None else -1,
+                item["movie"]["tmdb_id"],
+            ),
+            reverse=True,
+        )
+
     total_movies = len(report)
     unavailable_movies_count = (
         total_movies - available_movies_count - needs_recheck_movies_count

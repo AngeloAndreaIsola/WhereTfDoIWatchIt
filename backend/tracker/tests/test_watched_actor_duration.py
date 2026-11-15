@@ -138,3 +138,18 @@ class WatchedActorDurationFilterTests(TestCase):
     def test_actor_filter_with_no_watched_titles_returns_empty(self):
         UserMovieData.objects.all().delete()
         self.assertEqual(self._tmdb_ids("actor_id=1"), [])
+
+    def test_report_preserves_watched_history_fields(self):
+        response = self.client.get("/api/watched/report/")
+        self.assertEqual(response.status_code, 200)
+        entry = next(row for row in response.json()["report"] if row["movie"]["tmdb_id"] == 101)
+        self.assertTrue(entry["user_data"]["is_watched"])
+        self.assertEqual(entry["user_data"]["watched_date"], "2024-01-01")
+        self.assertEqual(entry["watch_count"], 1)
+        self.assertEqual(entry["last_watched_at"], "2024-01-01")
+
+    def test_watched_rating_sort_uses_user_rating(self):
+        UserMovieData.objects.filter(movie=self.m1).update(rating=2)
+        UserMovieData.objects.filter(movie=self.m2).update(rating=9)
+        ids = self._tmdb_ids("sort_by=watched_rating_desc")
+        self.assertEqual(ids[:2], [102, 101])
