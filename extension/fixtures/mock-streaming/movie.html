@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>Movie Test Stream</title>
+  <meta name="media-type" content="movie">
+  <style>
+    video { max-width: 100%; height: auto; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1 data-testid="media-title">The Test Film</h1>
+    <div data-testid="media-year">2024</div>
+    <video id="player" controls preload="auto" width="480">
+      <source src="mock-60s.mp4" type="video/mp4">
+    </video>
+    <div>Progress seconds: <span id="progress-seconds">0</span></div>
+  </main>
+  <script>
+    // Seek to 12s of the 60s fixture so extraction reads 20% playback.
+    const video = document.getElementById('player');
+    const seekToTwelve = () => {
+      try { video.currentTime = 12; } catch { /* metadata not ready yet */ }
+    };
+    if (video.readyState >= 1) {
+      seekToTwelve();
+    } else {
+      video.addEventListener('loadedmetadata', seekToTwelve, { once: true });
+    }
+    video.addEventListener('timeupdate', () => {
+      document.getElementById('progress-seconds').textContent = Math.floor(video.currentTime);
+    });
+  </script>
+</body>
+</html>

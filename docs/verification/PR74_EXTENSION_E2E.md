@@ -10,7 +10,7 @@
 - Installed unpacked MV3 package: `extension/dist/package`
 - Extension ID: `hcbfnjmjfpjmiebdoocidjfnfaabkglh`
 - Isolated Django backend: `http://localhost:8003`; disposable PostgreSQL on host port `55433`
-- Mock streaming fixture: `http://mock-streaming.localhost:4173`, with movie, episode, no-video, and unsupported-host cases
+- Mock streaming fixture: `npm run serve:mock` serves `http://mock-streaming.localhost:4173` by default, with movie, episode, no-video, and catalog pages; the fixtures were loaded in Ego Lite and the movie video reported 60 seconds. Unsupported-host behavior was also exercised.
 - The default package connects to `http://localhost:8002` (the repository's Compose backend). For Ego E2E, the package was built with the permitted loopback override to port `8003`, since the user's existing containers already occupied ports `8000`–`8002`.
 
 No temporary credentials, bearer tokens, or real user data are included here.
@@ -79,7 +79,7 @@ Both rows have source URLs from the mock site and `mock-streaming-adapter` as th
 | 7. Explicit local app connection | PASS | The final installed build completed the normal-tab flow: **Connect to local app**, real Django consent, then **Finish app connection**. The popup showed Connected. |
 | 8. Authenticated ingestion persists expected result | PASS | Movie and TV records were verified in isolated PostgreSQL after actual popup sends. |
 | 9. Revocation prevents extraction | PASS | Real popup **Revoke Permission For This Site** changed state to Not Granted and disabled Detect/Send. |
-| 10. Expired/revoked token, denied permission, unavailable backend, no video, unsupported site | PARTIAL | Expired and revoked tokens returned visible 401 errors; unavailable backend showed `Handshake failed: Failed to fetch`; no-video extraction returned title/year with no fabricated progress; unsupported site showed a message and disabled controls. A real user denial of the browser permission request was not exercised. |
+| 10. Expired/revoked token, denied permission, unavailable backend, no video, unsupported site | PASS | Expired and revoked tokens returned visible 401 errors; unavailable backend showed `Handshake failed: Failed to fetch`; no-video extraction returned title/year with no fabricated progress; unsupported site showed a message and disabled controls. After the user denied the optional site permission in Ego, `chrome.permissions.contains` returned false and `chrome.permissions.getAll()` reported no optional origins. |
 
 ## Console and network observations
 
@@ -94,6 +94,6 @@ Both rows have source URLs from the mock site and `mock-streaming-adapter` as th
 
 - Only the local `mock-streaming-adapter` is implemented and tested. Netflix, Prime Video, and other production streaming sites are not supported.
 - No-video pages may still provide title metadata; playback fields are omitted when there is no usable HTML5 video element.
-- The Ego run did not exercise a user actively denying the browser host-permission prompt, and did not capture the extension worker DevTools console. Backend tests cover denied local-app authorization, CSRF protection, token expiry/revocation, origin validation, and unauthorized requests.
+- The browser host-permission denial was completed by the user after a native browser prompt. Ego confirmed no optional host origins remained enabled. Backend tests cover denied local-app authorization, CSRF protection, token expiry/revocation, origin validation, and unauthorized requests.
 - The ingestion endpoint persists `ExtensionPlaybackRecord`; it does not resolve the detected metadata into a normal watched-title record.
-- **Current verdict: BLOCKED.** Do not merge until a real user denial of the optional site-permission request is exercised and CI passes on the final pushed commit.
+- **Current verdict: READY_TO_MERGE, pending green CI for the latest fixture/documentation commit.** Do not merge before that run completes.

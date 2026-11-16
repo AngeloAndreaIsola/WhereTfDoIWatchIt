@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>Episode Test Stream</title>
+  <meta name="media-type" content="tv">
+  <style>
+    video { max-width: 100%; height: auto; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1 data-testid="media-title">Example Series</h1>
+    <div data-testid="media-year">2021</div>
+    <div data-testid="season-episode">S02:E03</div>
+    <div data-testid="episode-title">The Example Episode</div>
+    <video id="player" controls preload="auto" width="480">
+      <source src="mock-60s.mp4" type="video/mp4">
+    </video>
+    <div>Progress seconds: <span id="progress-seconds">0</span></div>
+  </main>
+  <script>
+    const video = document.getElementById('player');
+    video.addEventListener('timeupdate', () => {
+      document.getElementById('progress-seconds').textContent = Math.floor(video.currentTime);
+    });
+  </script>
+</body>
+</html>

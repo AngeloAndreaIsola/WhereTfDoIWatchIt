@@ -13,6 +13,18 @@ The Companion is a Manifest V3 extension for explicit, user-initiated title and 
 
 The `mock-streaming-adapter` recognizes the E2E fixture selectors for title, year, season/episode, and episode title. It can read playback progress from an ordinary HTML5 `<video>` element. A page without the required title field or video fails gracefully. No production streaming-site adapter is implemented.
 
+### Mock streaming fixture
+
+The E2E fixture pages live in `extension/fixtures/mock-streaming/` and are served on port `4173`:
+
+```bash
+cd extension
+npm run serve:mock   # http://mock-streaming.localhost:4173/
+```
+
+Pages: `movie.html` (The Test Film, 2024, 12/60s = 20%), `episode.html` (Example Series, 2021, S02:E03), `no-video.html` (The Silent Test, 2025, no video element), and `index.html` (catalog). `mock-60s.mp4` is the shared 60-second source.
+
+
 ## Local app connection
 
 The extension connects to a local WhereTfDoIWatchIt server on `http://localhost:8002` (the host port in this repository's Docker Compose setup). The user explicitly starts the connection, approves the challenge in the app, then returns to the extension and finishes the connection. Local app cookies are neither sent nor used for extension authentication.
