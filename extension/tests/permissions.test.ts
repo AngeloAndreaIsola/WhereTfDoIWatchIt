@@ -35,12 +35,12 @@ describe('Host Permission Management and Boundaries', () => {
     };
 
     const manager = new PermissionManager(mockApi);
-    const url = 'https://mock-streaming.local/watch/123';
+    const url = 'https://mock-streaming.localhost/watch/123';
 
     // Initially not granted
     const statusBefore = await manager.checkHostPermission(url);
     expect(statusBefore.hasPermission).toBe(false);
-    expect(statusBefore.domain).toBe('mock-streaming.local');
+    expect(statusBefore.domain).toBe('mock-streaming.localhost');
 
     // Request grant
     const grantResult = await manager.requestHostPermission(url);
@@ -65,10 +65,36 @@ describe('Host Permission Management and Boundaries', () => {
     };
 
     const manager = new PermissionManager(mockApi);
-    const denied = await manager.requestHostPermission('https://mock-streaming.local/watch/123');
+    const denied = await manager.requestHostPermission('https://mock-streaming.localhost/watch/123');
     expect(denied).toBe(false);
 
-    const status = await manager.checkHostPermission('https://mock-streaming.local/watch/123');
+    const status = await manager.checkHostPermission('https://mock-streaming.localhost/watch/123');
     expect(status.hasPermission).toBe(false);
+  });
+
+  it('requires persistent explicit opt-in even when activeTab grants transient browser access', async () => {
+    const browserGranted = new Set<string>();
+    const values = new Map<string, string>();
+    const storage = {
+      get: async (key: string) => values.get(key) ?? null,
+      set: async (key: string, value: string) => { values.set(key, value); },
+      remove: async (key: string) => { values.delete(key); },
+    };
+    const api: PermissionsAPI = {
+      contains: async (permissions) => permissions.origins?.every((origin) => browserGranted.has(origin)) ?? false,
+      request: async (permissions) => { permissions.origins?.forEach((origin) => browserGranted.add(origin)); return true; },
+      remove: async (permissions) => { permissions.origins?.forEach((origin) => browserGranted.delete(origin)); return true; },
+    };
+    const url = 'http://mock-streaming.localhost:4173/movie/inception';
+    const manager = new PermissionManager(api, storage);
+
+    browserGranted.add('http://mock-streaming.localhost/*');
+    expect((await manager.checkHostPermission(url)).hasPermission).toBe(false);
+
+    await manager.requestHostPermission(url);
+    const reopenedPopupManager = new PermissionManager(api, storage);
+    expect((await reopenedPopupManager.checkHostPermission(url)).hasPermission).toBe(true);
+    await reopenedPopupManager.revokeHostPermission(url);
+    expect((await new PermissionManager(api, storage).checkHostPermission(url)).hasPermission).toBe(false);
   });
 });

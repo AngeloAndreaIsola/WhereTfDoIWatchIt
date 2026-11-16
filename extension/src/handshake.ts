@@ -47,6 +47,14 @@ export interface HandshakeConfig {
 }
 
 const STORAGE_KEY_TOKEN = 'wheretfdoiwatchit_capability_token';
+const STORAGE_KEY_PENDING = 'wheretfdoiwatchit_pending_handshake';
+
+interface PendingHandshake {
+  challengeId: string;
+  clientNonce: string;
+  serverNonce: string;
+  authorizationUrl: string;
+}
 
 /**
  * Validates whether an origin is an authorized local application host.
@@ -98,6 +106,10 @@ export class HandshakeClient {
     return this.localAppOrigin;
   }
 
+  async hasPendingHandshake(): Promise<boolean> {
+    return !!(await this.storage.get(STORAGE_KEY_PENDING));
+  }
+
   /**
    * Generates a cryptographically strong client nonce.
    * Fails closed if Web Cryptography API is unavailable.
@@ -117,15 +129,12 @@ export class HandshakeClient {
   /**
    * Perform handshake initialization and capability token exchange.
    */
-  async establishHandshake(
-    requestedScopes: CapabilityScope[] = ['title:send']
-  ): Promise<CapabilityToken> {
+  async beginHandshake(): Promise<string> {
     const clientNonce = this.generateNonce();
 
     // Step 1: Initialize handshake and obtain anti-CSRF challenge & server nonce
     const initReq: HandshakeInitRequest = {
       clientNonce,
-      origin: 'chrome-extension://self',
     };
 
     const initUrl = `${this.localAppOrigin}/api/extension/handshake/init`;
@@ -133,7 +142,7 @@ export class HandshakeClient {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Requested-With': 'WhereTfDoIWatchIt-Extension',
+        'X-WTDIW-Extension': '1',
       },
       credentials: 'omit', // DO NOT send or receive cookies
       body: JSON.stringify(initReq),
@@ -144,15 +153,41 @@ export class HandshakeClient {
     }
 
     const initData = (await initRes.json()) as HandshakeInitResponse;
-    if (!initData.csrfToken || !initData.serverNonce) {
+    if (!initData.challengeId || !initData.serverNonce || !initData.authorizationUrl) {
       throw new Error('Malformed handshake init response');
     }
 
-    // Step 2: Complete exchange with CSRF token and nonces
-    const exchangeReq: HandshakeExchangeRequest = {
+    const authorizationUrl = new URL(initData.authorizationUrl);
+    if (authorizationUrl.origin !== this.localAppOrigin || !authorizationUrl.pathname.startsWith('/api/extension/authorize/')) {
+      throw new Error('The local application returned an invalid authorization URL.');
+    }
+    await this.storage.set(STORAGE_KEY_PENDING, JSON.stringify({
+      challengeId: initData.challengeId,
       clientNonce,
       serverNonce: initData.serverNonce,
-      csrfToken: initData.csrfToken,
+      authorizationUrl: authorizationUrl.toString(),
+    } satisfies PendingHandshake));
+    return authorizationUrl.toString();
+  }
+
+  async completeHandshake(
+    requestedScopes: CapabilityScope[] = ['title:send']
+  ): Promise<CapabilityToken> {
+    const pendingRaw = await this.storage.get(STORAGE_KEY_PENDING);
+    if (!pendingRaw) throw new Error('No pending app authorization. Start Connect to local app first.');
+    let pending: PendingHandshake;
+    try {
+      pending = JSON.parse(pendingRaw) as PendingHandshake;
+    } catch {
+      await this.storage.remove(STORAGE_KEY_PENDING);
+      throw new Error('Pending app authorization is invalid. Start the connection again.');
+    }
+
+    // The server issues a token only after the local user approves the challenge.
+    const exchangeReq: HandshakeExchangeRequest = {
+      challengeId: pending.challengeId,
+      clientNonce: pending.clientNonce,
+      serverNonce: pending.serverNonce,
       requestedScopes,
     };
 
@@ -161,8 +196,7 @@ export class HandshakeClient {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-CSRF-Token': initData.csrfToken,
-        'X-Requested-With': 'WhereTfDoIWatchIt-Extension',
+        'X-WTDIW-Extension': '1',
       },
       credentials: 'omit', // DO NOT capture or send cookies
       body: JSON.stringify(exchangeReq),
@@ -179,7 +213,15 @@ export class HandshakeClient {
 
     // Save token in storage
     await this.storage.set(STORAGE_KEY_TOKEN, JSON.stringify(exchangeData.capabilityToken));
+    await this.storage.remove(STORAGE_KEY_PENDING);
     return exchangeData.capabilityToken;
+  }
+
+  async establishHandshake(
+    requestedScopes: CapabilityScope[] = ['title:send']
+  ): Promise<CapabilityToken> {
+    await this.beginHandshake();
+    return await this.completeHandshake(requestedScopes);
   }
 
   /**
@@ -226,6 +268,7 @@ export class HandshakeClient {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
+              'X-WTDIW-Extension': '1',
               Authorization: `Bearer ${tokenValue}`,
             },
             credentials: 'omit',
@@ -255,12 +298,14 @@ export class HandshakeClient {
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token.token}`,
+        'X-WTDIW-Extension': '1',
       },
       credentials: 'omit',
       body: JSON.stringify(metadata),
     });
 
     if (!res.ok) {
+      if (res.status === 401) await this.storage.remove(STORAGE_KEY_TOKEN);
       throw new Error(`Failed to ingest metadata: ${res.status}`);
     }
 

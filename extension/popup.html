@@ -57,12 +57,14 @@
   <div id="status-container">
     <div>Permission: <span id="permission-badge" class="badge badge-no">Not Granted</span></div>
     <div style="margin-top: 4px;">App Handshake: <span id="handshake-badge" class="badge badge-no">Disconnected</span></div>
+    <div id="status-message" role="status" aria-live="polite" style="margin-top: 8px; font-size: 12px;"></div>
   </div>
 
   <div id="actions-container" class="card">
     <button id="btn-request-permission">Grant Permission For This Site</button>
     <button id="btn-detect-title" class="secondary" disabled>Detect Title</button>
     <button id="btn-send-app" disabled>Send to WhereTfDoIWatchIt</button>
+    <button id="btn-connect-app" class="secondary">Connect to local app</button>
   </div>
 
   <div id="metadata-container" class="card" style="display: none;">
@@ -70,6 +72,6 @@
     <div id="meta-details" style="font-size: 12px; color: #94a3b8;"></div>
   </div>
 
-  <script type="module" src="dist/src/popup.js"></script>
+  <script type="module" src="src/popup.js"></script>
 </body>
 </html>

@@ -26,7 +26,7 @@ describe('Title and Metadata Detection with SiteAdapter', () => {
   });
 
   it('detects movie title, year, and playback progress on mock streaming page', () => {
-    const url = new URL('https://mock-streaming.local/movie/inception-2010');
+    const url = new URL('https://mock-streaming.localhost/movie/inception-2010');
     expect(adapter.canHandle(url)).toBe(true);
 
     const doc = new DOMParser().parseFromString(MOCK_MOVIE_PAGE, 'text/html');
@@ -46,11 +46,11 @@ describe('Title and Metadata Detection with SiteAdapter', () => {
       duration: 8880,
       progressPercent: 41,
     });
-    expect(metadata?.sourceUrl).toBe('https://mock-streaming.local/movie/inception-2010');
+    expect(metadata?.sourceUrl).toBe('https://mock-streaming.localhost/movie/inception-2010');
   });
 
   it('detects tv episode metadata (season, episode, episode title)', () => {
-    const url = new URL('https://mock-streaming.local/tv/breaking-bad/s05e14');
+    const url = new URL('https://mock-streaming.localhost/tv/breaking-bad/s05e14');
     const doc = new DOMParser().parseFromString(MOCK_SERIES_EPISODE_PAGE, 'text/html');
     const video = doc.querySelector('video')!;
     Object.defineProperty(video, 'currentTime', { value: 1200, writable: true });
@@ -72,21 +72,21 @@ describe('Title and Metadata Detection with SiteAdapter', () => {
   });
 
   it('handles empty / non-watch page gracefully without errors or phantom titles', () => {
-    const url = new URL('https://mock-streaming.local/catalog');
+    const url = new URL('https://mock-streaming.localhost/catalog');
     const doc = new DOMParser().parseFromString(MOCK_EMPTY_PAGE, 'text/html');
     const metadata = adapter.extract(doc, url);
     expect(metadata).toBeNull();
   });
 
   it('handles malformed / whitespace-only titles safely', () => {
-    const url = new URL('https://mock-streaming.local/watch/error');
+    const url = new URL('https://mock-streaming.localhost/watch/error');
     const doc = new DOMParser().parseFromString(MOCK_MALFORMED_PAGE, 'text/html');
     const metadata = adapter.extract(doc, url);
     expect(metadata).toBeNull();
   });
 
   it('registry disables adapters by default and requires explicit opt-in', () => {
-    const url = new URL('https://mock-streaming.local/movie/inception');
+    const url = new URL('https://mock-streaming.localhost/movie/inception');
     // Initially not enabled
     expect(registry.getAdapterForUrl(url)).toBeNull();
 

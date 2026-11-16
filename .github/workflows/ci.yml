@@ -100,3 +100,36 @@ jobs:
 
       - name: Run frontend tests
         run: npm test
+
+  extension:
+    name: Browser Extension Build, Typecheck & Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: extension
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: extension/package-lock.json
+
+      - name: Install extension dependencies
+        run: npm ci
+
+      - name: Typecheck extension
+        run: npm run typecheck
+
+      - name: Run extension tests
+        run: npm test
+
+      - name: Build installable package
+        run: npm run build
+
+      - name: Validate packaged Manifest V3 extension
+        run: npm run validate:package

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Authorize browser extension</title></head>
+<body>
+  <main>
+    <h1>Connect WhereTfDoIWatchIt Companion?</h1>
+    {% if expired %}
+      <p>This request expired or was already used. Start the connection again from the extension.</p>
+    {% elif approved %}
+      <p>Access approved. Return to the extension and choose “Finish app connection”.</p>
+    {% elif denied %}
+      <p>Access was not granted. You can close this tab.</p>
+    {% else %}
+      <p>The extension will be able to submit title and playback progress when you choose Send. It cannot read cookies or access video streams.</p>
+      <form method="post">
+        {% csrf_token %}
+        <button type="submit" name="decision" value="allow">Allow title metadata</button>
+        <button type="submit" name="decision" value="deny">Deny</button>
+      </form>
+    {% endif %}
+  </main>
+</body>
+</html>

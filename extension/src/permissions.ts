@@ -6,14 +6,33 @@ export interface PermissionsAPI {
   remove(permissions: chrome.permissions.Permissions): Promise<boolean>;
 }
 
+interface ConsentStorage {
+  get(key: string): Promise<string | null>;
+  set(key: string, value: string): Promise<void>;
+  remove(key: string): Promise<void>;
+}
+
 /**
  * Manage optional host permissions for streaming sites.
  * Ensures no ambient or automatic all-sites permissions are taken.
  */
 export class PermissionManager {
   private api: PermissionsAPI;
+  private storage: ConsentStorage;
 
-  constructor(api?: PermissionsAPI) {
+  constructor(api?: PermissionsAPI, storage?: ConsentStorage) {
+    const memory = new Map<string, string>();
+    this.storage = storage || (typeof chrome !== 'undefined' && chrome?.storage?.local
+      ? {
+          get: async (key) => (await chrome.storage.local.get(key))[key] ?? null,
+          set: async (key, value) => { await chrome.storage.local.set({ [key]: value }); },
+          remove: async (key) => { await chrome.storage.local.remove(key); },
+        }
+      : {
+          get: async (key) => memory.get(key) ?? null,
+          set: async (key, value) => { memory.set(key, value); },
+          remove: async (key) => { memory.delete(key); },
+        });
     if (api) {
       this.api = api;
     } else if (typeof chrome !== 'undefined' && chrome.permissions) {
@@ -54,8 +73,9 @@ export class PermissionManager {
       const hasPermission = await this.api.contains({
         origins: [originPattern],
       });
+      const explicitlyOptedIn = (await this.storage.get(this._consentKey(parsedUrl))) === 'granted';
       return {
-        hasPermission,
+        hasPermission: hasPermission && explicitlyOptedIn,
         domain: parsedUrl.hostname,
       };
     } catch {
@@ -73,9 +93,11 @@ export class PermissionManager {
     try {
       const parsedUrl = new URL(url);
       const originPattern = `${parsedUrl.protocol}//${parsedUrl.hostname}/*`;
-      return await this.api.request({
+      const granted = await this.api.request({
         origins: [originPattern],
       });
+      if (granted) await this.storage.set(this._consentKey(parsedUrl), 'granted');
+      return granted;
     } catch {
       return false;
     }
@@ -88,11 +110,17 @@ export class PermissionManager {
     try {
       const parsedUrl = new URL(url);
       const originPattern = `${parsedUrl.protocol}//${parsedUrl.hostname}/*`;
-      return await this.api.remove({
+      await this.api.remove({
         origins: [originPattern],
       });
+      await this.storage.remove(this._consentKey(parsedUrl));
+      return true;
     } catch {
       return false;
     }
+  }
+
+  private _consentKey(url: URL): string {
+    return `wheretfdoiwatchit_site_opt_in:${url.protocol}//${url.hostname}`;
   }
 }

@@ -39,7 +39,7 @@ describe('Extension to Local App Handshake & Security', () => {
   });
 
   describe('Handshake Protocol & Token Issuance', () => {
-    it('completes two-step handshake with challenge-response nonces and CSRF token', async () => {
+    it('starts a user-approved challenge and exchanges it for a scoped token', async () => {
       const recordedRequests: { url: string; init?: RequestInit }[] = [];
 
       const mockFetch: typeof fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -54,8 +54,8 @@ describe('Extension to Local App Handshake & Security', () => {
           return new Response(
             JSON.stringify({
               serverNonce: 'srv-nonce-98765',
-              csrfToken: 'csrf-secret-abcde',
-              allowedOrigins: ['http://localhost:3001'],
+              challengeId: '65b27100-550a-4500-a5a7-c5d785ab8d7f',
+              authorizationUrl: 'http://localhost:3001/api/extension/authorize/65b27100-550a-4500-a5a7-c5d785ab8d7f/',
             }),
             { status: 200, headers: { 'Content-Type': 'application/json' } }
           );
@@ -64,11 +64,11 @@ describe('Extension to Local App Handshake & Security', () => {
         if (urlStr.endsWith('/api/extension/handshake/exchange')) {
           expect(init?.credentials).toBe('omit');
           const headers = init?.headers as Record<string, string>;
-          expect(headers['X-CSRF-Token']).toBe('csrf-secret-abcde');
+          expect(headers['X-WTDIW-Extension']).toBe('1');
 
           const body = JSON.parse(init?.body as string);
           expect(body.serverNonce).toBe('srv-nonce-98765');
-          expect(body.csrfToken).toBe('csrf-secret-abcde');
+          expect(body.challengeId).toBe('65b27100-550a-4500-a5a7-c5d785ab8d7f');
           expect(body.requestedScopes).toEqual(['title:send']);
 
           return new Response(
@@ -79,7 +79,7 @@ describe('Extension to Local App Handshake & Security', () => {
                 issuedAt: Date.now(),
                 expiresAt: Date.now() + 3600_000,
                 scopes: ['title:send'],
-                origin: 'http://localhost:3001',
+                origin: 'chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
               },
             }),
             { status: 200, headers: { 'Content-Type': 'application/json' } }
@@ -141,7 +141,7 @@ describe('Extension to Local App Handshake & Security', () => {
           issuedAt: Date.now() - 100_000,
           expiresAt: Date.now() - 10_000, // Expired
           scopes: ['title:send'],
-          origin: 'http://localhost:3001',
+        origin: 'chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         })
       );
 
@@ -242,7 +242,7 @@ describe('Extension to Local App Handshake & Security', () => {
         title: 'Interstellar',
         contentType: 'movie',
         year: 2014,
-        sourceUrl: 'https://mock-streaming.local/movie/interstellar',
+        sourceUrl: 'https://mock-streaming.localhost/movie/interstellar',
         siteAdapterId: 'mock-streaming-adapter',
         detectedAt: new Date().toISOString(),
       };
@@ -275,7 +275,7 @@ describe('Extension to Local App Handshake & Security', () => {
       const metadata: DetectedMetadata = {
         title: 'Test',
         contentType: 'movie',
-        sourceUrl: 'https://mock-streaming.local/test',
+        sourceUrl: 'https://mock-streaming.localhost/test',
         siteAdapterId: 'mock',
         detectedAt: new Date().toISOString(),
       };

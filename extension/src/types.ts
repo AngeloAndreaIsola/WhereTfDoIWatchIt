@@ -43,19 +43,18 @@ export interface CapabilityToken {
 
 export interface HandshakeInitRequest {
   clientNonce: string;
-  origin: string;
 }
 
 export interface HandshakeInitResponse {
+  challengeId: string;
   serverNonce: string;
-  csrfToken: string;
-  allowedOrigins: string[];
+  authorizationUrl: string;
 }
 
 export interface HandshakeExchangeRequest {
+  challengeId: string;
   clientNonce: string;
   serverNonce: string;
-  csrfToken: string;
   requestedScopes: CapabilityScope[];
 }
 

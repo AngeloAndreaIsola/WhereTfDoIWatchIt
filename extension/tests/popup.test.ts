@@ -47,16 +47,16 @@ describe('Popup Opt-In and Controller Workflow', () => {
   });
 
   it('initializes popup state and reflects permission absence', async () => {
-    await controller.init('https://mock-streaming.local/movie/inception');
+    await controller.init('https://mock-streaming.localhost/movie/inception');
     const state = controller.getState();
-    expect(state.currentUrl).toBe('https://mock-streaming.local/movie/inception');
+    expect(state.currentUrl).toBe('https://mock-streaming.localhost/movie/inception');
     expect(state.hasHostPermission).toBe(false);
     expect(state.isAdapterEnabled).toBe(false);
     expect(state.detectedMetadata).toBeNull();
   });
 
   it('requests host opt-in permission and enables adapter upon user approval', async () => {
-    const url = 'https://mock-streaming.local/movie/inception';
+    const url = 'https://mock-streaming.localhost/movie/inception';
     await controller.init(url);
 
     const granted = await controller.requestOptIn(url);
@@ -69,7 +69,7 @@ describe('Popup Opt-In and Controller Workflow', () => {
   });
 
   it('revokes opt-in permission and disables adapter cleanly', async () => {
-    const url = 'https://mock-streaming.local/movie/inception';
+    const url = 'https://mock-streaming.localhost/movie/inception';
     await controller.init(url);
     await controller.requestOptIn(url);
 
@@ -82,8 +82,41 @@ describe('Popup Opt-In and Controller Workflow', () => {
     expect(state.statusMessage).toContain('Host permission revoked');
   });
 
+  it('restores the explicit site opt-in and adapter after popup closure and reopening', async () => {
+    const values = new Map<string, string>();
+    const consentStorage = {
+      get: async (key: string) => values.get(key) ?? null,
+      set: async (key: string, value: string) => { values.set(key, value); },
+      remove: async (key: string) => { values.delete(key); },
+    };
+    const url = 'http://mock-streaming.localhost:4173/movie/inception';
+    const origins = new Set<string>();
+    const api: PermissionsAPI = {
+      contains: async (perms) => perms.origins?.every((origin) => origins.has(origin)) ?? false,
+      request: async (perms) => { perms.origins?.forEach((origin) => origins.add(origin)); return true; },
+      remove: async (perms) => { perms.origins?.forEach((origin) => origins.delete(origin)); return true; },
+    };
+    const first = new PopupController({
+      handshakeClient,
+      permissionManager: new PermissionManager(api, consentStorage),
+      adapterRegistry: new AdapterRegistry(),
+    });
+    await first.init(url);
+    await first.requestOptIn(url);
+
+    const reopened = new PopupController({
+      handshakeClient,
+      permissionManager: new PermissionManager(api, consentStorage),
+      adapterRegistry: new AdapterRegistry(),
+    });
+    await reopened.init(url);
+    expect(reopened.getState().hasHostPermission).toBe(true);
+    expect(reopened.getState().isAdapterEnabled).toBe(true);
+    expect((await reopened.detectActiveTabTitle(new DOMParser().parseFromString(MOCK_MOVIE_PAGE, 'text/html')))?.title).toBe('Inception');
+  });
+
   it('extracts metadata only when host permission is granted', async () => {
-    const url = 'https://mock-streaming.local/movie/inception';
+    const url = 'https://mock-streaming.localhost/movie/inception';
     const siteDoc = new DOMParser().parseFromString(MOCK_MOVIE_PAGE, 'text/html');
 
     // Without permission -> blocked
@@ -203,15 +236,51 @@ describe('Popup Opt-In and Controller Workflow', () => {
       await new Promise((r) => setTimeout(r, 10));
 
       // Set activeTabId on state to simulate real browser active tab
-      await delegatedController.init('https://mock-streaming.local/watch/remote', 42);
+      await delegatedController.init('https://mock-streaming.localhost/watch/remote', 42);
 
       const btnDetect = popupDoc.getElementById('btn-detect-title') as HTMLButtonElement;
       btnDetect.click();
       await new Promise((r) => setTimeout(r, 10));
 
-      expect(mockScriptExecutor).toHaveBeenCalledWith(42, 'https://mock-streaming.local/watch/remote');
+      expect(mockScriptExecutor).toHaveBeenCalledWith(42, 'https://mock-streaming.localhost/watch/remote');
       const metaTitle = popupDoc.getElementById('meta-title')!;
       expect(metaTitle.textContent).toBe('Remote Streaming Title');
+    });
+
+    it('shows the user approval handoff when connecting to the local app', async () => {
+      const originalChrome = (globalThis as any).chrome;
+      const createTab = vi.fn(async () => ({ id: 88 }));
+      (globalThis as any).chrome = { tabs: { create: createTab } };
+      const fetchFn: typeof fetch = vi.fn(async (input: RequestInfo | URL) => {
+        if (input.toString().endsWith('/handshake/init')) {
+          return new Response(JSON.stringify({
+            challengeId: '65b27100-550a-4500-a5a7-c5d785ab8d7f',
+            serverNonce: 'server-nonce',
+            authorizationUrl: 'http://localhost:3001/api/extension/authorize/65b27100-550a-4500-a5a7-c5d785ab8d7f/',
+          }), { status: 200 });
+        }
+        return new Response('not approved', { status: 409 });
+      });
+      const appHandshake = new HandshakeClient({ localAppOrigin: 'http://localhost:3001', storage, fetchFn });
+      const appController = new PopupController({
+        handshakeClient: appHandshake,
+        permissionManager: new PermissionManager(mockApi),
+        adapterRegistry: new AdapterRegistry(),
+      });
+
+      try {
+        await appController.init('http://mock-streaming.localhost:4173/movie/inception');
+        expect(await appController.connectApp()).toBe(false);
+        expect(createTab).toHaveBeenCalledWith({
+          url: 'http://localhost:3001/api/extension/authorize/65b27100-550a-4500-a5a7-c5d785ab8d7f/',
+        });
+        expect(appController.getState().hasPendingHandshake).toBe(true);
+        expect(appController.getState().statusMessage).toContain('Approve access');
+        expect(await appController.connectApp()).toBe(false);
+        expect(appController.getState().statusMessage).toContain('409');
+      } finally {
+        (globalThis as any).chrome = originalChrome;
+      }
     });
   });
 });

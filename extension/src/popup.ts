@@ -12,6 +12,7 @@ export interface PopupState {
   isHandshakeActive: boolean;
   detectedMetadata: DetectedMetadata | null;
   statusMessage: string | null;
+  hasPendingHandshake: boolean;
 }
 
 export type TabScriptExecutor = (
@@ -32,6 +33,7 @@ export class PopupController {
     isHandshakeActive: false,
     detectedMetadata: null,
     statusMessage: null,
+    hasPendingHandshake: false,
   };
 
   constructor(options: {
@@ -50,6 +52,10 @@ export class PopupController {
     return { ...this.state };
   }
 
+  setStatusMessage(message: string): void {
+    this.state.statusMessage = message;
+  }
+
   async init(currentUrl: string, activeTabId: number | null = null): Promise<void> {
     this.state.currentUrl = currentUrl;
     this.state.activeTabId = activeTabId;
@@ -58,11 +64,14 @@ export class PopupController {
 
     const token = await this.handshakeClient.getStoredToken();
     this.state.isHandshakeActive = !!token;
+    this.state.hasPendingHandshake = await this.handshakeClient.hasPendingHandshake();
 
     try {
       const parsedUrl = new URL(currentUrl);
       const adapter = this.adapterRegistry.getAllAdapters().find((a) => a.canHandle(parsedUrl));
       if (adapter) {
+        if (this.state.hasHostPermission) this.adapterRegistry.enableAdapter(adapter.id);
+        else this.adapterRegistry.disableAdapter(adapter.id);
         this.state.isAdapterEnabled = this.adapterRegistry.isAdapterEnabled(adapter.id);
       }
     } catch {
@@ -71,17 +80,19 @@ export class PopupController {
   }
 
   async requestOptIn(currentUrl: string): Promise<boolean> {
+    const parsedUrl = new URL(currentUrl);
+    const adapter = this.adapterRegistry.getAllAdapters().find((a) => a.canHandle(parsedUrl));
+    if (!adapter) {
+      this.state.statusMessage = 'This site is not supported by an installed adapter.';
+      return false;
+    }
     const granted = await this.permissionManager.requestHostPermission(currentUrl);
     this.state.hasHostPermission = granted;
 
     if (granted) {
       try {
-        const parsedUrl = new URL(currentUrl);
-        const adapter = this.adapterRegistry.getAllAdapters().find((a) => a.canHandle(parsedUrl));
-        if (adapter) {
-          this.adapterRegistry.enableAdapter(adapter.id);
-          this.state.isAdapterEnabled = true;
-        }
+        this.adapterRegistry.enableAdapter(adapter.id);
+        this.state.isAdapterEnabled = true;
       } catch {
         // no-op
       }
@@ -96,6 +107,7 @@ export class PopupController {
     const removed = await this.permissionManager.revokeHostPermission(currentUrl);
     if (removed) {
       this.state.hasHostPermission = false;
+      this.state.detectedMetadata = null;
       try {
         const parsedUrl = new URL(currentUrl);
         const adapter = this.adapterRegistry.getAllAdapters().find((a) => a.canHandle(parsedUrl));
@@ -113,14 +125,44 @@ export class PopupController {
 
   async connectApp(): Promise<boolean> {
     try {
-      await this.handshakeClient.establishHandshake(['title:send']);
-      this.state.isHandshakeActive = true;
-      this.state.statusMessage = 'Handshake established with local application.';
-      return true;
+      const localOrigin = this.handshakeClient.getLocalAppOrigin();
+      const hasLocalHostPermission = (await this.permissionManager.checkHostPermission(`${localOrigin}/`)).hasPermission;
+      if (!hasLocalHostPermission) {
+        const granted = await this.permissionManager.requestHostPermission(`${localOrigin}/`);
+        if (!granted) {
+          this.state.statusMessage = 'Local app connection was denied because localhost access was not granted.';
+          return false;
+        }
+      }
+
+      if (await this.handshakeClient.hasPendingHandshake()) {
+        await this.handshakeClient.completeHandshake(['title:send']);
+        this.state.hasPendingHandshake = false;
+        this.state.isHandshakeActive = true;
+        this.state.statusMessage = 'Connected to the local app.';
+        return true;
+      }
+
+      const authorizationUrl = await this.handshakeClient.beginHandshake();
+      this.state.hasPendingHandshake = true;
+      if (typeof chrome === 'undefined' || !chrome.tabs?.create) {
+        this.state.statusMessage = `Open this local authorization page, approve access, then click Connect again: ${authorizationUrl}`;
+        return false;
+      }
+      await chrome.tabs.create({ url: authorizationUrl });
+      this.state.statusMessage = 'Approve access in the local app tab, then reopen the extension and click Finish app connection.';
+      return false;
     } catch (err: any) {
       this.state.statusMessage = `Handshake failed: ${err.message || err}`;
       return false;
     }
+  }
+
+  async disconnectApp(): Promise<void> {
+    await this.handshakeClient.revokeToken();
+    await this.permissionManager.revokeHostPermission(`${this.handshakeClient.getLocalAppOrigin()}/`);
+    this.state.isHandshakeActive = false;
+    this.state.statusMessage = 'Disconnected from the local app.';
   }
 
   /**
@@ -135,7 +177,10 @@ export class PopupController {
       return null;
     }
 
-    if (!this.state.hasHostPermission) {
+    const permission = await this.permissionManager.checkHostPermission(this.state.currentUrl);
+    this.state.hasHostPermission = permission.hasPermission;
+    if (!permission.hasPermission) {
+      this.state.isAdapterEnabled = false;
       this.state.statusMessage = 'Permission not granted for this domain.';
       return null;
     }
@@ -251,7 +296,12 @@ export class PopupController {
     if (!this.state.detectedMetadata) {
       return { success: false, message: 'No metadata detected to send.' };
     }
-    return await this.handshakeClient.sendMetadata(this.state.detectedMetadata);
+    try {
+      return await this.handshakeClient.sendMetadata(this.state.detectedMetadata);
+    } catch (error) {
+      this.state.isHandshakeActive = !!(await this.handshakeClient.getStoredToken());
+      throw error;
+    }
   }
 }
 
@@ -269,6 +319,10 @@ export function updatePopupUI(doc: Document, controller: PopupController): void 
   const metaContainer = doc.getElementById('metadata-container');
   const metaTitle = doc.getElementById('meta-title');
   const metaDetails = doc.getElementById('meta-details');
+  const statusMessage = doc.getElementById('status-message');
+  const btnConnect = doc.getElementById('btn-connect-app') as HTMLButtonElement | null;
+
+  if (statusMessage) statusMessage.textContent = state.statusMessage || '';
 
   if (permBadge) {
     if (state.hasHostPermission) {
@@ -302,6 +356,10 @@ export function updatePopupUI(doc: Document, controller: PopupController): void 
 
   if (btnSend) {
     btnSend.disabled = !state.detectedMetadata || !state.isHandshakeActive;
+  }
+  if (btnConnect) {
+    btnConnect.textContent = state.hasPendingHandshake ? 'Finish app connection' :
+      state.isHandshakeActive ? 'Disconnect local app' : 'Connect to local app';
   }
 
   if (metaContainer && metaTitle && metaDetails) {
@@ -337,7 +395,7 @@ export async function bootstrapPopup(
 
   if (!activeController) {
     const handshakeClient = new HandshakeClient({
-      localAppOrigin: 'http://localhost:3001',
+      localAppOrigin: 'http://localhost:8000',
     });
     const permissionManager = new PermissionManager();
     const adapterRegistry = new AdapterRegistry();
@@ -350,7 +408,7 @@ export async function bootstrapPopup(
   }
 
   // Determine current active URL & tab ID
-  let currentUrl = 'https://mock-streaming.local/';
+  let currentUrl = 'https://mock-streaming.localhost/';
   let activeTabId: number | null = null;
   if (typeof chrome !== 'undefined' && chrome.tabs?.query) {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -367,25 +425,59 @@ export async function bootstrapPopup(
   const btnPerm = doc.getElementById('btn-request-permission');
   const btnDetect = doc.getElementById('btn-detect-title');
   const btnSend = doc.getElementById('btn-send-app');
+  const btnConnect = doc.getElementById('btn-connect-app');
+
+  const currentTabStillActive = async (): Promise<boolean> => {
+    if (activeTabId == null || typeof chrome === 'undefined' || !chrome.tabs?.query) return true;
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    return tabs[0]?.id === activeTabId;
+  };
 
   btnPerm?.addEventListener('click', async () => {
     const state = activeController!.getState();
-    if (state.hasHostPermission) {
-      await activeController!.revokeOptIn(currentUrl);
-    } else {
-      await activeController!.requestOptIn(currentUrl);
+    try {
+      if (state.hasHostPermission) {
+        await activeController!.revokeOptIn(currentUrl);
+      } else {
+        await activeController!.requestOptIn(currentUrl);
+      }
+    } catch (error: any) {
+      activeController!.setStatusMessage(`Permission update failed: ${error?.message || error}`);
     }
     updatePopupUI(doc, activeController!);
   });
 
   btnDetect?.addEventListener('click', async () => {
     // Explicit on-demand extraction targeting the active tab (never inspecting popup DOM)
-    await activeController!.detectActiveTabTitle(activeTabDocumentFallback);
+    try {
+      if (!(await currentTabStillActive())) {
+        activeController!.setStatusMessage('The active tab changed. Reopen the extension on the intended site.');
+      } else {
+        await activeController!.detectActiveTabTitle(activeTabDocumentFallback);
+      }
+    } catch (error: any) {
+      activeController!.setStatusMessage(`Title detection failed: ${error?.message || error}`);
+    }
     updatePopupUI(doc, activeController!);
   });
 
   btnSend?.addEventListener('click', async () => {
-    await activeController!.sendDetectedTitle();
+    try {
+      const result = await activeController!.sendDetectedTitle();
+      activeController!.setStatusMessage(result.message);
+    } catch (error: any) {
+      activeController!.setStatusMessage(`Sending metadata failed: ${error?.message || error}`);
+    }
+    updatePopupUI(doc, activeController!);
+  });
+
+  btnConnect?.addEventListener('click', async () => {
+    const state = activeController!.getState();
+    if (state.isHandshakeActive) {
+      await activeController!.disconnectApp();
+    } else {
+      await activeController!.connectApp();
+    }
     updatePopupUI(doc, activeController!);
   });
 

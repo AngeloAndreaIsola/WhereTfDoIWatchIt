@@ -9,16 +9,16 @@
     "scripting"
   ],
   "optional_host_permissions": [
-    "https://*.netflix.com/*",
-    "https://*.primevideo.com/*",
-    "https://*.disneyplus.com/*",
-    "https://mock-streaming.local/*"
+    "http://mock-streaming.localhost/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
   ],
   "action": {
     "default_popup": "popup.html",
     "default_title": "WhereTfDoIWatchIt Companion"
   },
   "background": {
-    "service_worker": "dist/src/background.js"
+    "service_worker": "src/background.js",
+    "type": "module"
   }
 }

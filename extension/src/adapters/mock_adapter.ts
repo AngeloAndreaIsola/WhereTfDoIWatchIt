@@ -2,7 +2,7 @@ import { DetectedMetadata, SiteAdapter } from '../types.js';
 
 /**
  * Mock streaming site adapter for offline testing and verification.
- * Target domain: mock-streaming.local
+ * Target domain: mock-streaming.localhost
  *
  * Demonstrates:
  * - Detecting title, content type (movie or tv episode)
@@ -13,7 +13,7 @@ import { DetectedMetadata, SiteAdapter } from '../types.js';
 export class MockStreamingAdapter implements SiteAdapter {
   id = 'mock-streaming-adapter';
   name = 'Mock Streaming Service';
-  domains = ['mock-streaming.local'];
+  domains = ['mock-streaming.localhost'];
 
   canHandle(url: URL): boolean {
     return this.domains.includes(url.hostname);

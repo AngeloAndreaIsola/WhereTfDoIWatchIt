@@ -1,120 +1,45 @@
-# WhereTfDoIWatchIt Browser Extension Foundation (WT-049)
+# WhereTfDoIWatchIt browser extension
 
-## Overview
+The Companion is a Manifest V3 extension for explicit, user-initiated title and playback metadata capture. The only implemented site adapter is the local E2E fixture at `mock-streaming.localhost`; Netflix, Prime Video, and other streaming services are not supported.
 
-The WhereTfDoIWatchIt Companion is a minimal cross-browser extension built using Manifest V3 (TypeScript). It enables manual, explicit opt-in detection of video title metadata on streaming sites and securely handshakes with a local instance of WhereTfDoIWatchIt.
+## Privacy and permissions
 
-## Security & Privacy Invariants
+- The extension has no `<all_urls>` or wildcard host access. Its only required permissions are `storage`, `activeTab`, and `scripting`.
+- Optional host access is requested only when the user opts into the supported site or starts a connection to a local app. Streaming-site consent is recorded separately from transient `activeTab` access, so reopening the popup does not silently grant consent.
+- The extension does not read cookies, inspect streaming-site network traffic, access DRM data, or read media streams. It reads supported title fields and the current time and duration from an HTML5 video element only after the user selects **Detect Title**.
+- Local app requests use `credentials: 'omit'`. The server requires an allowlisted extension origin, a matching extension request marker, an explicit CSRF-protected Allow action, an unexpired one-use challenge, and a scoped bearer capability.
 
-### 1. Minimal Permissions & No All-Sites Access
-- **No `<all_urls>` or `*://*/*`**: The extension manifest does not request broad permissions or access to all URLs.
-- **`optional_host_permissions`**: Host permissions are declared under `optional_host_permissions` and must be explicitly approved by the user per domain via `chrome.permissions.request`.
-- **Zero background history access**: The extension does not declare the `history` permission and cannot read browser history or web navigation events.
+## Supported local adapter
 
-### 2. Cookie & Credential Protection
-- **No Cookie Capture**: All network communications between the extension and the local application use `credentials: 'omit'`.
-- The extension does not read cookies, session headers, credentials, or DRM parameters from visited sites.
-- The extension does not inspect network requests or intercept video stream payloads.
+The `mock-streaming-adapter` recognizes the E2E fixture selectors for title, year, season/episode, and episode title. It can read playback progress from an ordinary HTML5 `<video>` element. A page without the required title field or video fails gracefully. No production streaming-site adapter is implemented.
 
-### 3. Authenticated & Scoped Local App Handshake
-- **Origin-Guarded**: Extension strictly communicates with verified localhost origins (e.g. `http://localhost:3000`, `http://localhost:3001`, `http://localhost:8000`).
-- **Fail-Closed Cryptography**: Nonce generation requires the Web Cryptography API (`crypto.getRandomValues`); pseudo-random generators such as `Math.random` are forbidden.
-- **CSRF & Nonce Protection**: Handshake involves a two-step handshake:
-  1. `POST /api/extension/handshake/init` returns a server challenge nonce and a scoped `X-CSRF-Token`.
-  2. `POST /api/extension/handshake/exchange` signs and exchanges client/server nonces with the CSRF token for a scoped `CapabilityToken`.
-- **Scoped Capabilities**: Tokens are restricted to granular actions (e.g., `'title:send'`) and cannot perform unauthorized administrative operations.
-- **Revocability**: Tokens can be revoked at any time by the user locally or via `POST /api/extension/handshake/revoke`. Expired tokens are purged atomically from storage without recursive lookups.
+## Local app connection
 
-### 4. Backend Dependency Notice
-- The client-side handshake protocol targets the `/api/extension/handshake/*` and `/api/extension/titles/ingest` routes.
-- Full end-to-end integration requires the companion backend implementation task providing token issuance, secret signing, and CSRF challenge validation.
+The extension connects to a local WhereTfDoIWatchIt server on `http://localhost:8000` (or `127.0.0.1:8000`). The user explicitly starts the connection, approves the challenge in the app, then returns to the extension and finishes the connection. Local app cookies are neither sent nor used for extension authentication.
 
-## Architecture & Code Boundaries
+Set `EXTENSION_ALLOWED_ORIGINS` on the Django server to a comma-separated list of allowed extension origins, for example `chrome-extension://<installed-extension-id>`. The server routes are:
 
-```
-extension/
-├── manifest.json              # Manifest V3 declaration (points to dist/src/background.js)
-├── package.json               # Isolated build & test scripts
-├── tsconfig.json              # TypeScript configuration
-├── vitest.config.ts           # Vitest configuration (happy-dom environment)
-├── popup.html                 # Action popup markup with active JS script inclusion
-├── dist/                      # Emitted JavaScript runtime files for browser loading
-├── src/
-│   ├── types.ts               # Core domain models (DetectedMetadata, CapabilityToken, etc.)
-│   ├── permissions.ts         # Optional host permission manager
-│   ├── handshake.ts           # Scoped local app handshake client & storage abstraction
-│   ├── popup.ts               # Action popup controller & DOM bootstrap wiring
-│   ├── background.ts          # Service worker lifecycle
-│   └── adapters/
-│       ├── index.ts           # AdapterRegistry (disabled by default)
-│       └── mock_adapter.ts    # Mock streaming site adapter
-└── tests/
-    ├── fixtures/
-    │   └── mock_pages.ts      # Offline HTML fixtures
-    ├── handshake.test.ts      # Local handshake, recursion prevention, & anti-CSRF security tests
-    ├── permissions.test.ts    # Host permissions denial and manifest guard tests
-    ├── popup.test.ts          # Popup opt-in workflow & DOM button wiring integration tests
-    └── title_detection.test.ts# Pure DOM title, season, episode, and progress tests
-```
+- `POST /api/extension/handshake/init` creates a five-minute challenge and returns the same-origin authorization URL.
+- `GET/POST /api/extension/authorize/<challenge-id>/` displays an explicit Allow/Deny form protected by Django CSRF middleware.
+- `POST /api/extension/handshake/exchange` issues a one-hour `title:send` capability only after explicit approval and nonce validation.
+- `POST /api/extension/titles/ingest` validates the bearer token, origin, scope, adapter, source host, and metadata before persisting an `ExtensionPlaybackRecord`.
+- `POST /api/extension/handshake/revoke` revokes the capability. Expired and revoked tokens are rejected server-side.
 
-## Site Adapter Interface
+Capability tokens are stored as SHA-256 digests by the server. The current ingestion endpoint stores an extension playback record; it does not resolve the title into TMDb or claim that it has created a normal watched item in the app.
 
-Streaming site adapters implement the `SiteAdapter` interface:
+## Build and load in Chromium
 
-```typescript
-export interface SiteAdapter {
-  id: string;
-  name: string;
-  domains: string[];
-  canHandle(url: URL): boolean;
-  extract(document: Document, url: URL): DetectedMetadata | null;
-}
-```
-
-### Metadata Model
-
-```typescript
-export interface DetectedMetadata {
-  title: string;
-  contentType: 'movie' | 'tv' | 'unknown';
-  year?: number | null;
-  season?: number | null;
-  episode?: number | null;
-  episodeTitle?: string | null;
-  playbackProgress?: {
-    currentTime: number;
-    duration: number;
-    progressPercent: number;
-  } | null;
-  sourceUrl: string;
-  siteAdapterId: string;
-  detectedAt: string;
-}
-```
-
-### Invariants for Adapters
-- Adapters are **disabled by default**.
-- Adapters must never invent positive results for missing/unknown data (e.g. absent year or episode returns `null` or explicit `'unknown'`).
-- Adapters must be testable with static offline HTML without requiring live network access or accounts.
-
-## Building and Loading Extension in Browsers
-
-1. Build JavaScript artifacts:
-   ```bash
-   cd extension && npm run build
-   ```
-2. In Google Chrome / Chromium / Brave:
-   - Navigate to `chrome://extensions/`
-   - Enable "Developer mode" (top right toggle)
-   - Click "Load unpacked" and select the `extension/` directory.
-3. In Mozilla Firefox:
-   - Navigate to `about:debugging#/runtime/this-firefox`
-   - Click "Load Temporary Add-on..." and select `extension/manifest.json`.
-
-## Running Tests
-
-From repo root:
 ```bash
-cd extension && npm test
-cd extension && npm run typecheck
+cd extension
+npm ci
+npm run typecheck
+npm test
+npm run build
+npm run validate:package
 ```
+
+Load the generated unpacked package from `extension/dist/package` in `chrome://extensions/` with Developer mode enabled. The build copies the Manifest V3 manifest, popup, and emitted scripts into a self-contained directory. Do not load the TypeScript source directory directly.
+
+## Tests
+
+Extension unit tests cover permission persistence, popup flows, extraction, and handshake behavior. Backend tests cover explicit authorization, CSRF, scopes, expiry, revocation, origin validation, and persistence. These tests do not replace real-browser verification. See [PR #74 E2E verification](verification/PR74_EXTENSION_E2E.md) for installed Ego Lite results and limitations.
