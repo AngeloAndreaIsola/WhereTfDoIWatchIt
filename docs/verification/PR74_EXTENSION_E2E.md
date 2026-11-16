@@ -5,7 +5,8 @@
 - Repository: `AngeloAndreaIsola/WhereTfDoIWatchIt`
 - PR branch under test: `feat/wt-049-extension-foundation-3441011916249609102`
 - Isolated checkout: `/Users/angeloandreaisola/Documents/GitHub/WhereTfDoIWatchIt-pr74`
-- Base commit before these uncommitted changes: `6ff946d` (merge of latest `origin/master` at `47d78dd`)
+- Revision at this verification snapshot: `7b404f8e1c425efd85e9578b182a92ac034c25f5`
+- Base commit before these changes: `6ff946d` (merge of latest `origin/master` at `47d78dd`)
 - Ego Lite: installed on macOS; Ego browser runtime reported Chromium `156.0.0.0` (`Chrome/156.0.0.0`, macOS user agent `10_15_7`)
 - Extension ID: `hcbfnjmjfpjmiebdoocidjfnfaabkglh`
 - Package loaded in Ego: `extension/dist/package`
@@ -24,6 +25,7 @@ Commands run in `extension/`:
 | `npm test` | PASS, 29 tests |
 | `npm run build` | PASS; emitted package at `extension/dist/package` |
 | `npm run validate:package` | PASS |
+| `frontend: npm test` | PASS, 274 tests across 33 files |
 
 Backend validation used the isolated Python 3.12 environment and disposable PostgreSQL database:
 
@@ -31,7 +33,9 @@ Backend validation used the isolated Python 3.12 environment and disposable Post
 | --- | --- |
 | `python manage.py migrate` | PASS |
 | `python manage.py test tracker.tests.test_extension_api -v 2 --noinput` | PASS, 5 tests |
-| Extension CI workflow | Added; GitHub result pending final push |
+| GitHub `Backend Tests` | PASS, run `43832992726` |
+| GitHub `Frontend Lint, Build & Test` | PASS, run `43832992726` |
+| GitHub `Browser Extension Build, Typecheck & Tests` | PASS, run `43832992726` |
 
 ## Real Ego Lite evidence
 
