@@ -34,7 +34,7 @@ Backend command, run with the isolated PostgreSQL test database:
 | `python manage.py test tracker.tests.test_extension_api -v 2 --noinput` | PASS, 5 tests: CSRF approval, explicit denial, challenge expiry/origin/nonce binding, scoped token expiry/revocation, unauthorized origin/bearer |
 | `python manage.py migrate` | PASS |
 
-The extension CI job runs build, typecheck, unit tests, and package validation. The latest previously pushed revision (`69891e0`) had passing Backend Tests, Frontend Lint/Build/Test, and Browser Extension Build/Typecheck/Tests (GitHub Actions run `43833533630`). CI must be rechecked after this final revision is pushed.
+The extension CI job runs build, typecheck, unit tests, and package validation. GitHub Actions run `43884685315` passed Backend Tests, Frontend Lint/Build/Test, and Browser Extension Build/Typecheck/Tests for the implementation and fixture. The later commits changed verification documentation only.
 
 ## Ego Lite evidence
 
@@ -96,4 +96,4 @@ Both rows have source URLs from the mock site and `mock-streaming-adapter` as th
 - No-video pages may still provide title metadata; playback fields are omitted when there is no usable HTML5 video element.
 - The browser host-permission denial was completed by the user after a native browser prompt. Ego confirmed no optional host origins remained enabled. Backend tests cover denied local-app authorization, CSRF protection, token expiry/revocation, origin validation, and unauthorized requests.
 - The ingestion endpoint persists `ExtensionPlaybackRecord`; it does not resolve the detected metadata into a normal watched-title record.
-- **Current verdict: READY_TO_MERGE, pending green CI for the latest fixture/documentation commit.** Do not merge before that run completes.
+- **Current verdict: READY_TO_MERGE.** All acceptance criteria passed and the latest green CI run covers the executable implementation and fixture. The PR remains open.
