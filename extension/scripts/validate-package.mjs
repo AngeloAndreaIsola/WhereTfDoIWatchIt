@@ -15,6 +15,10 @@ for (const relativePath of [manifest.background.service_worker, manifest.action.
 if (!manifest.optional_host_permissions.includes('http://mock-streaming.localhost/*')) {
   throw new Error('Mock adapter host permission is missing');
 }
+const config = await readFile(path.join(packageDir, 'src', 'config.js'), 'utf8');
+if (!/LOCAL_APP_ORIGIN = 'http:\/\/(localhost|127\.0\.0\.1):(3000|3001|8000|8001|8002|8003)'/.test(config)) {
+  throw new Error('Packaged local app origin must use an approved loopback port');
+}
 for (const host of manifest.optional_host_permissions) {
   if (/netflix|primevideo|disneyplus/i.test(host)) throw new Error(`Unsupported adapter advertised: ${host}`);
 }

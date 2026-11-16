@@ -15,7 +15,9 @@ The `mock-streaming-adapter` recognizes the E2E fixture selectors for title, yea
 
 ## Local app connection
 
-The extension connects to a local WhereTfDoIWatchIt server on `http://localhost:8000` (or `127.0.0.1:8000`). The user explicitly starts the connection, approves the challenge in the app, then returns to the extension and finishes the connection. Local app cookies are neither sent nor used for extension authentication.
+The extension connects to a local WhereTfDoIWatchIt server on `http://localhost:8002` (the host port in this repository's Docker Compose setup). The user explicitly starts the connection, approves the challenge in the app, then returns to the extension and finishes the connection. Local app cookies are neither sent nor used for extension authentication.
+
+For a local development server using another approved loopback port, build with `WTDIW_EXTENSION_LOCAL_APP_ORIGIN=http://localhost:<port> npm run build`. The package script accepts only HTTP origins on `localhost` or `127.0.0.1` and ports 3000, 3001, or 8000–8003.
 
 Set `EXTENSION_ALLOWED_ORIGINS` on the Django server to a comma-separated list of allowed extension origins, for example `chrome-extension://<installed-extension-id>`. The server routes are:
 

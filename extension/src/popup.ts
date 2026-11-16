@@ -3,10 +3,12 @@ import { PermissionManager } from './permissions.js';
 import { AdapterRegistry } from './adapters/index.js';
 import { DetectedMetadata } from './types.js';
 import { extractMetadataFromTabDocument } from './content_extractor.js';
+import { LOCAL_APP_ORIGIN } from './config.js';
 
 export interface PopupState {
   currentUrl: string | null;
   activeTabId: number | null;
+  isSupportedSite: boolean;
   hasHostPermission: boolean;
   isAdapterEnabled: boolean;
   isHandshakeActive: boolean;
@@ -28,6 +30,7 @@ export class PopupController {
   private state: PopupState = {
     currentUrl: null,
     activeTabId: null,
+    isSupportedSite: false,
     hasHostPermission: false,
     isAdapterEnabled: false,
     isHandshakeActive: false,
@@ -56,23 +59,32 @@ export class PopupController {
     this.state.statusMessage = message;
   }
 
-  async init(currentUrl: string, activeTabId: number | null = null): Promise<void> {
+  async init(currentUrl: string | null, activeTabId: number | null = null): Promise<void> {
     this.state.currentUrl = currentUrl;
     this.state.activeTabId = activeTabId;
-    const perm = await this.permissionManager.checkHostPermission(currentUrl);
-    this.state.hasHostPermission = perm.hasPermission;
-
+    this.state.isSupportedSite = false;
     const token = await this.handshakeClient.getStoredToken();
     this.state.isHandshakeActive = !!token;
     this.state.hasPendingHandshake = await this.handshakeClient.hasPendingHandshake();
+    if (!currentUrl) {
+      this.state.hasHostPermission = false;
+      this.state.isAdapterEnabled = false;
+      this.state.statusMessage = 'Could not read the active tab URL. Reopen the extension on a supported site.';
+      return;
+    }
+    const perm = await this.permissionManager.checkHostPermission(currentUrl);
+    this.state.hasHostPermission = perm.hasPermission;
 
     try {
       const parsedUrl = new URL(currentUrl);
       const adapter = this.adapterRegistry.getAllAdapters().find((a) => a.canHandle(parsedUrl));
       if (adapter) {
+        this.state.isSupportedSite = true;
         if (this.state.hasHostPermission) this.adapterRegistry.enableAdapter(adapter.id);
         else this.adapterRegistry.disableAdapter(adapter.id);
         this.state.isAdapterEnabled = this.adapterRegistry.isAdapterEnabled(adapter.id);
+      } else {
+        this.state.statusMessage = 'This site is not supported by an installed adapter.';
       }
     } catch {
       // invalid URL
@@ -83,9 +95,11 @@ export class PopupController {
     const parsedUrl = new URL(currentUrl);
     const adapter = this.adapterRegistry.getAllAdapters().find((a) => a.canHandle(parsedUrl));
     if (!adapter) {
+      this.state.isSupportedSite = false;
       this.state.statusMessage = 'This site is not supported by an installed adapter.';
       return false;
     }
+    this.state.isSupportedSite = true;
     const granted = await this.permissionManager.requestHostPermission(currentUrl);
     this.state.hasHostPermission = granted;
 
@@ -177,19 +191,28 @@ export class PopupController {
       return null;
     }
 
-    const permission = await this.permissionManager.checkHostPermission(this.state.currentUrl);
-    this.state.hasHostPermission = permission.hasPermission;
-    if (!permission.hasPermission) {
-      this.state.isAdapterEnabled = false;
-      this.state.statusMessage = 'Permission not granted for this domain.';
-      return null;
-    }
-
     let parsedUrl: URL;
     try {
       parsedUrl = new URL(this.state.currentUrl);
     } catch {
       this.state.statusMessage = 'Invalid active tab URL.';
+      return null;
+    }
+    const supportedAdapter = this.adapterRegistry.getAllAdapters().find((adapter) => adapter.canHandle(parsedUrl));
+    this.state.isSupportedSite = !!supportedAdapter;
+    if (!supportedAdapter) {
+      this.state.hasHostPermission = false;
+      this.state.isAdapterEnabled = false;
+      this.state.detectedMetadata = null;
+      this.state.statusMessage = 'This site is not supported by an installed adapter.';
+      return null;
+    }
+
+    const permission = await this.permissionManager.checkHostPermission(this.state.currentUrl);
+    this.state.hasHostPermission = permission.hasPermission;
+    if (!permission.hasPermission) {
+      this.state.isAdapterEnabled = false;
+      this.state.statusMessage = 'Permission not granted for this domain.';
       return null;
     }
 
@@ -345,13 +368,16 @@ export function updatePopupUI(doc: Document, controller: PopupController): void 
   }
 
   if (btnPerm) {
-    btnPerm.textContent = state.hasHostPermission
-      ? 'Revoke Permission For This Site'
-      : 'Grant Permission For This Site';
+    btnPerm.disabled = !state.isSupportedSite;
+    btnPerm.textContent = !state.isSupportedSite
+      ? 'Unsupported Site'
+      : state.hasHostPermission
+        ? 'Revoke Permission For This Site'
+        : 'Grant Permission For This Site';
   }
 
   if (btnDetect) {
-    btnDetect.disabled = !state.hasHostPermission;
+    btnDetect.disabled = !state.isSupportedSite || !state.hasHostPermission;
   }
 
   if (btnSend) {
@@ -389,13 +415,14 @@ export function updatePopupUI(doc: Document, controller: PopupController): void 
 export async function bootstrapPopup(
   doc: Document = document,
   controller?: PopupController,
-  activeTabDocumentFallback?: Document
+  activeTabDocumentFallback?: Document,
+  activeTabOverride?: { id: number | null; url: string | null }
 ): Promise<PopupController> {
   let activeController = controller;
 
   if (!activeController) {
     const handshakeClient = new HandshakeClient({
-      localAppOrigin: 'http://localhost:8000',
+      localAppOrigin: LOCAL_APP_ORIGIN,
     });
     const permissionManager = new PermissionManager();
     const adapterRegistry = new AdapterRegistry();
@@ -408,13 +435,23 @@ export async function bootstrapPopup(
   }
 
   // Determine current active URL & tab ID
-  let currentUrl = 'https://mock-streaming.localhost/';
+  let currentUrl: string | null = null;
   let activeTabId: number | null = null;
-  if (typeof chrome !== 'undefined' && chrome.tabs?.query) {
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tabs[0]?.url) {
-      currentUrl = tabs[0].url;
-      activeTabId = tabs[0].id ?? null;
+  if (activeTabOverride) {
+    currentUrl = activeTabOverride.url;
+    activeTabId = activeTabOverride.id;
+  } else if (typeof chrome !== 'undefined' && chrome.tabs?.query) {
+    try {
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tabs[0]?.url) {
+        currentUrl = tabs[0].url;
+        activeTabId = tabs[0].id ?? null;
+      }
+    } catch {
+      // Extension pages opened as ordinary tabs may have no active browser window.
+      // Keep the popup usable for app connection, but fail closed for site access.
+      currentUrl = null;
+      activeTabId = null;
     }
   }
 
@@ -436,7 +473,9 @@ export async function bootstrapPopup(
   btnPerm?.addEventListener('click', async () => {
     const state = activeController!.getState();
     try {
-      if (state.hasHostPermission) {
+      if (!currentUrl) {
+        activeController!.setStatusMessage('Could not read the active tab URL. Reopen the extension on a supported site.');
+      } else if (state.hasHostPermission) {
         await activeController!.revokeOptIn(currentUrl);
       } else {
         await activeController!.requestOptIn(currentUrl);

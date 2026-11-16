@@ -55,6 +55,17 @@ describe('Popup Opt-In and Controller Workflow', () => {
     expect(state.detectedMetadata).toBeNull();
   });
 
+  it('does not request host permission for a site without an installed adapter', async () => {
+    const request = vi.spyOn(mockApi, 'request');
+    const url = 'http://unsupported.localhost:4173/';
+    await controller.init(url);
+
+    expect(controller.getState().isSupportedSite).toBe(false);
+    expect(await controller.requestOptIn(url)).toBe(false);
+    expect(request).not.toHaveBeenCalled();
+    expect(controller.getState().statusMessage).toContain('not supported');
+  });
+
   it('requests host opt-in permission and enables adapter upon user approval', async () => {
     const url = 'https://mock-streaming.localhost/movie/inception';
     await controller.init(url);
@@ -155,10 +166,57 @@ describe('Popup Opt-In and Controller Workflow', () => {
       expect(handshakeBadge.textContent).toBe('Disconnected');
       expect(btnDetect.disabled).toBe(true);
       expect(btnSend.disabled).toBe(true);
+      expect(controller.getState().currentUrl).toBeNull();
+      expect(controller.getState().isSupportedSite).toBe(false);
+      expect(popupDoc.getElementById('status-message')?.textContent).toContain('Could not read the active tab URL');
+    });
+
+    it('restores app connection state when the active tab URL is unavailable', async () => {
+      await storage.set('wheretfdoiwatchit_capability_token', JSON.stringify({
+        token: 'test-capability-token',
+        expiresAt: Date.now() + 60_000,
+        scopes: ['title:send'],
+        origin: 'chrome-extension://test-extension-id',
+      }));
+      await bootstrapPopup(popupDoc, controller);
+
+      expect(controller.getState().isHandshakeActive).toBe(true);
+      expect((popupDoc.getElementById('handshake-badge') as HTMLElement).textContent).toBe('Connected');
+      expect((popupDoc.getElementById('btn-request-permission') as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    it('handles an unavailable active browser window without an unhandled query error', async () => {
+      const originalChrome = (globalThis as any).chrome;
+      (globalThis as any).chrome = {
+        tabs: { query: vi.fn(async () => { throw new Error('Could not find an active browser window.'); }) },
+      };
+      try {
+        await expect(bootstrapPopup(popupDoc, controller)).resolves.toBe(controller);
+        expect(controller.getState().currentUrl).toBeNull();
+        expect((popupDoc.getElementById('btn-request-permission') as HTMLButtonElement).disabled).toBe(true);
+        expect(popupDoc.getElementById('status-message')?.textContent).toContain('Could not read the active tab URL');
+      } finally {
+        (globalThis as any).chrome = originalChrome;
+      }
+    });
+
+    it('shows unsupported sites without offering a host permission prompt', async () => {
+      await controller.init('http://unsupported.localhost:4173/');
+      updatePopupUI(popupDoc, controller);
+
+      const btnPerm = popupDoc.getElementById('btn-request-permission') as HTMLButtonElement;
+      const btnDetect = popupDoc.getElementById('btn-detect-title') as HTMLButtonElement;
+      expect(btnPerm.disabled).toBe(true);
+      expect(btnPerm.textContent).toBe('Unsupported Site');
+      expect(btnDetect.disabled).toBe(true);
+      expect(popupDoc.getElementById('status-message')?.textContent).toContain('not supported');
     });
 
     it('toggles permission button click and enables detection', async () => {
-      await bootstrapPopup(popupDoc, controller);
+      await bootstrapPopup(popupDoc, controller, undefined, {
+        id: 42,
+        url: 'http://mock-streaming.localhost:4173/movie.html',
+      });
 
       const btnPerm = popupDoc.getElementById('btn-request-permission') as HTMLButtonElement;
       const permBadge = popupDoc.getElementById('permission-badge')!;
@@ -186,7 +244,10 @@ describe('Popup Opt-In and Controller Workflow', () => {
       const activeStreamingDoc = new DOMParser().parseFromString(MOCK_SERIES_EPISODE_PAGE, 'text/html');
 
       // Bootstrap popup with active streaming document passed as active tab fallback
-      await bootstrapPopup(popupDoc, controller, activeStreamingDoc);
+      await bootstrapPopup(popupDoc, controller, activeStreamingDoc, {
+        id: 42,
+        url: 'http://mock-streaming.localhost:4173/episode.html',
+      });
 
       // Grant permission
       const btnPerm = popupDoc.getElementById('btn-request-permission') as HTMLButtonElement;
@@ -228,7 +289,10 @@ describe('Popup Opt-In and Controller Workflow', () => {
         scriptExecutor: mockScriptExecutor,
       });
 
-      await bootstrapPopup(popupDoc, delegatedController);
+      await bootstrapPopup(popupDoc, delegatedController, undefined, {
+        id: 42,
+        url: 'https://mock-streaming.localhost/watch/remote',
+      });
 
       // Grant permission
       const btnPerm = popupDoc.getElementById('btn-request-permission') as HTMLButtonElement;

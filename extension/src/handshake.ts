@@ -63,7 +63,7 @@ export function isValidLocalAppOrigin(origin: string): boolean {
   try {
     const url = new URL(origin);
     const isLocalhost = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
-    const isAllowedPort = url.port === '3000' || url.port === '3001' || url.port === '8000';
+    const isAllowedPort = ['3000', '3001', '8000', '8001', '8002', '8003'].includes(url.port);
     return isLocalhost && isAllowedPort && (url.protocol === 'http:' || url.protocol === 'https:');
   } catch {
     return false;

@@ -4,10 +4,15 @@ import {
   MemoryStorageAdapter,
   isValidLocalAppOrigin,
 } from '../src/handshake.js';
+import { LOCAL_APP_ORIGIN } from '../src/config.js';
 import { DetectedMetadata } from '../src/types.js';
 
 describe('Extension to Local App Handshake & Security', () => {
   let storage: MemoryStorageAdapter;
+
+  it('defaults to the repository Docker Compose backend port', () => {
+    expect(LOCAL_APP_ORIGIN).toBe('http://localhost:8002');
+  });
 
   beforeEach(() => {
     storage = new MemoryStorageAdapter();
@@ -18,6 +23,8 @@ describe('Extension to Local App Handshake & Security', () => {
       expect(isValidLocalAppOrigin('http://localhost:3000')).toBe(true);
       expect(isValidLocalAppOrigin('http://localhost:3001')).toBe(true);
       expect(isValidLocalAppOrigin('http://localhost:8000')).toBe(true);
+      expect(isValidLocalAppOrigin('http://localhost:8002')).toBe(true);
+      expect(isValidLocalAppOrigin('http://localhost:8003')).toBe(true);
       expect(isValidLocalAppOrigin('http://127.0.0.1:3000')).toBe(true);
     });
 

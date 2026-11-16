@@ -3,80 +3,97 @@
 ## Environment
 
 - Repository: `AngeloAndreaIsola/WhereTfDoIWatchIt`
-- PR branch under test: `feat/wt-049-extension-foundation-3441011916249609102`
+- PR branch: `feat/wt-049-extension-foundation-3441011916249609102`
 - Isolated checkout: `/Users/angeloandreaisola/Documents/GitHub/WhereTfDoIWatchIt-pr74`
-- Revision at this verification snapshot: `7b404f8e1c425efd85e9578b182a92ac034c25f5`
-- Base commit before these changes: `6ff946d` (merge of latest `origin/master` at `47d78dd`)
-- Ego Lite: installed on macOS; Ego browser runtime reported Chromium `156.0.0.0` (`Chrome/156.0.0.0`, macOS user agent `10_15_7`)
+- Tested source revision before the final fixes: `69891e0`; this report is committed with the final evidence revision.
+- Ego Lite on macOS, Chromium `156.0.0.0` (`Chrome/156.0.0.0`, user agent platform `10_15_7`)
+- Installed unpacked MV3 package: `extension/dist/package`
 - Extension ID: `hcbfnjmjfpjmiebdoocidjfnfaabkglh`
-- Package loaded in Ego: `extension/dist/package`
-- Local test app: Django on `localhost:8000`; isolated PostgreSQL test database on port `55433`
-- Local test site: `mock-streaming.localhost:4173`, with movie and episode pages and a decoded 60-second MP4 in an HTML5 video element
+- Isolated Django backend: `http://localhost:8003`; disposable PostgreSQL on host port `55433`
+- Mock streaming fixture: `http://mock-streaming.localhost:4173`, with movie, episode, no-video, and unsupported-host cases
+- The default package connects to `http://localhost:8002` (the repository's Compose backend). For Ego E2E, the package was built with the permitted loopback override to port `8003`, since the user's existing containers already occupied ports `8000`–`8002`.
 
-Temporary database credentials and capability tokens are not stored in this repository or this report.
+No temporary credentials, bearer tokens, or real user data are included here.
 
 ## Build and automated checks
 
-Commands run in `extension/`:
+Commands run from `extension/`:
 
 | Command | Result |
 | --- | --- |
 | `npm run typecheck` | PASS |
-| `npm test` | PASS, 29 tests |
-| `npm run build` | PASS; emitted package at `extension/dist/package` |
+| `npm test` | PASS, 34 tests across 4 files |
+| `WTDIW_EXTENSION_LOCAL_APP_ORIGIN=http://localhost:8003 npm run build` | PASS, packaged MV3 output |
 | `npm run validate:package` | PASS |
-| `frontend: npm test` | PASS, 274 tests across 33 files |
+| `frontend: npm test -- --run` | PASS, 274 tests across 33 files |
 
-Backend validation used the isolated Python 3.12 environment and disposable PostgreSQL database:
+Backend command, run with the isolated PostgreSQL test database:
 
-| Command/check | Result |
+| Command | Result |
 | --- | --- |
+| `python manage.py test tracker.tests.test_extension_api -v 2 --noinput` | PASS, 5 tests: CSRF approval, explicit denial, challenge expiry/origin/nonce binding, scoped token expiry/revocation, unauthorized origin/bearer |
 | `python manage.py migrate` | PASS |
-| `python manage.py test tracker.tests.test_extension_api -v 2 --noinput` | PASS, 5 tests |
-| GitHub `Backend Tests` | PASS, run `43832992726` |
-| GitHub `Frontend Lint, Build & Test` | PASS, run `43832992726` |
-| GitHub `Browser Extension Build, Typecheck & Tests` | PASS, run `43832992726` |
 
-## Real Ego Lite evidence
+The extension CI job runs build, typecheck, unit tests, and package validation. The latest previously pushed revision (`69891e0`) had passing Backend Tests, Frontend Lint/Build/Test, and Browser Extension Build/Typecheck/Tests (GitHub Actions run `43833533630`). CI must be rechecked after this final revision is pushed.
 
-These are screenshots captured from the actual Ego Lite window and installed extension, not generated from HTML or test output.
+## Ego Lite evidence
 
-| Evidence | Screenshot |
+Every image below was captured from the installed extension or the local authorization page in Ego Lite.
+
+| Check | Evidence |
 | --- | --- |
-| Installed Manifest V3 extension enabled | ![Ego Lite extension installation](pr74/installation.png) |
-| Initial state: supported site not authorized | ![Permission not granted](pr74/permission-not-granted.png) |
-| User approved access to the selected mock site | ![Permission approved](pr74/permission-approved.png) |
-| Detect Title read the active movie page | ![Movie title extraction](pr74/title-extraction.png) |
-| Video progress displayed at 20% | ![Playback progress](pr74/playback-progress.png) |
-| Episode title and S2:E3 displayed | ![Episode extraction](pr74/tv-episode-extraction.png) |
-| Localhost permission prompt shown by Chromium | ![Localhost permission prompt](pr74/localhost-permission-prompt.png) |
+| Extension installed and enabled | ![Installed MV3 extension](pr74/installation.png) |
+| Initial opt-in state | ![Permission not granted](pr74/permission-not-granted.png) |
+| Selected-site permission approval | ![Permission approved](pr74/permission-approved.png) |
+| Movie active-tab extraction | ![Movie title extraction](pr74/title-extraction.png) |
+| Movie playback progress at 20% | ![Movie progress](pr74/playback-progress.png) |
+| TV season and episode | ![Episode extraction](pr74/tv-episode-extraction.png) |
+| Local Django authorization approval | ![Local app authorization](pr74/local-app-authorization.png) |
+| Extension connection completed | ![Connected extension](pr74/local-app-connected.png) |
+| Actual toolbar popup detected the active page | ![Active tab detection while connected](pr74/active-tab-detection-connected.png) |
+| Actual toolbar popup sent metadata | ![Metadata ingestion success](pr74/metadata-ingested.png) |
+| Permission revocation disabled extraction | ![Permission revoked](pr74/permission-revoked-final.png) |
+| Missing-video page returned title without fabricated progress | ![No-video behavior](pr74/no-video-graceful.png) |
 
-The installation page showed the extension enabled and no manifest error banner. The service worker displayed “Inactive” before the first action; it woke for popup actions. The browser version and extension ID above were read from Ego and `chrome://extensions/`.
+For the local-app flow, the actual installed extension popup opened a CSRF-protected Django approval page. **Allow title metadata** was clicked in Django; returning to the popup and clicking **Finish app connection** produced `App Handshake: Connected`. The popup then sent movie and episode metadata through the authenticated endpoint.
+
+The isolated database contained these results after the real popup sends:
+
+| Title | Kind | Year | Episode | Persisted playback |
+| --- | --- | --- | --- | --- |
+| The Test Film | Movie | 2024 | — | 12/60 seconds, 20% |
+| Example Series | TV | 2021 | S2:E3 | 0/60 seconds, 0% |
+
+Both rows have source URLs from the mock site and `mock-streaming-adapter` as their adapter ID.
 
 ## Acceptance results
 
-| Criterion | Result | Evidence / remaining work |
+| Criterion | Result | Evidence / limitation |
 | --- | --- | --- |
-| 1. Installs without manifest or worker errors | PASS | Installed unpacked MV3 package in Ego; no manifest error banner. Console inspection remains outstanding. |
-| 2. Initially no streaming site is authorized | PASS | Real popup showed `Permission: Not Granted` and disabled Detect before opt-in. |
-| 3. Opt-in grants only the selected site | PASS | Chromium permission prompt and resulting popup showed permission for the mock fixture site only. |
-| 4. Detect reads the active page, not popup DOM | PASS | Real popup extracted “The Test Film” from the active mock movie page. |
-| 5. Movie, episode/season, and progress display | PASS | Movie/year, S2:E3, and 20% progress screenshots above. |
-| 6. Popup close/reopen preserves intended permission | PASS | Reopened popup retained the mock-site permission state. |
-| 7. Local app connection completes explicit approval | BLOCKED | Popup **Connect to local app** action still needs a user click in Ego. The GUI bridge can open the popup but closes it before dispatching a click to popup controls. The user was handed the existing Ego space to click Connect and approve localhost access if prompted. |
-| 8. Authenticated ingestion persists expected app result | BLOCKED | Must resume after criterion 7; verify the real popup request and database record. |
-| 9. Revocation prevents further extraction | NOT RUN | Must complete via real popup after local app flow. |
-| 10. Expiry, revocation, denial, unavailable backend, missing video, unsupported site fail gracefully | PARTIAL | Backend automated tests cover challenge expiry, denied authorization, token expiry/revocation, invalid origin, and unauthorized requests. Ego testing for these failure states remains incomplete; missing-video and unsupported-site browser cases are not yet run. |
+| 1. Installs without manifest, worker, or console errors | PARTIAL | `chrome://extensions/` showed the package enabled with no manifest error; the worker woke for actions. After the final build, the normal extension page produced no console exceptions. Ego did not expose the service-worker DevTools console. |
+| 2. Initially no streaming site authorized | PASS | Real toolbar popup showed `Permission: Not Granted` and disabled Detect before opt-in. |
+| 3. Opt-in grants only selected site | PASS | User-approved optional host permission was for the mock fixture host; no all-sites access was added. |
+| 4. Detect reads active page, not popup DOM | PASS | Actual action popup extracted `The Test Film` and `Example Series` from active mock tabs. |
+| 5. Movie, episode/season, and progress display | PASS | Movie 2024 at 20%; episode S2:E3 at 0%. |
+| 6. Popup close/reopen preserves site state | PASS | Reopened popup restored selected-site permission and connected-app state. A browser-only stale Disconnected state when the URL was unavailable was fixed and covered by regression tests; the final installed popup retained Connected while site controls failed closed. |
+| 7. Explicit local app connection | PASS | The final installed build completed the normal-tab flow: **Connect to local app**, real Django consent, then **Finish app connection**. The popup showed Connected. |
+| 8. Authenticated ingestion persists expected result | PASS | Movie and TV records were verified in isolated PostgreSQL after actual popup sends. |
+| 9. Revocation prevents extraction | PASS | Real popup **Revoke Permission For This Site** changed state to Not Granted and disabled Detect/Send. |
+| 10. Expired/revoked token, denied permission, unavailable backend, no video, unsupported site | PARTIAL | Expired and revoked tokens returned visible 401 errors; unavailable backend showed `Handshake failed: Failed to fetch`; no-video extraction returned title/year with no fabricated progress; unsupported site showed a message and disabled controls. A real user denial of the browser permission request was not exercised. |
 
 ## Console and network observations
 
-- No manifest load error was shown by `chrome://extensions/`.
-- The initial connection attempt did not create a server-side challenge. The isolated PostgreSQL container had stopped, so the test backend was unavailable during that attempt; the disposable container has since been restarted. No token or user credential was exposed in screenshots.
-- A repeated installed-extension authorization and ingestion run is still required after the user completes the popup action. No authenticated request or persisted playback record is claimed as passed yet.
-- Ego's computer-use bridge reports the popup as a transient Chromium popup window. Bringing Ego forward closes that popup before its button click is delivered, preventing agent-driven activation of the connection control. This is why criterion 7 is awaiting a manual handoff.
+- No manifest load error was shown. The service worker was inactive while idle and activated for extension actions.
+- Successful extension sends created the two rows above. After revoking the server-side capability, a send attempt showed `Failed to ingest metadata: 401` and cleared the connected state. An expired capability produced the same visible 401 failure.
+- With the isolated server stopped, **Connect to local app** showed `Handshake failed: Failed to fetch`; the server was then restarted.
+- The initial attempt against a different local service on port `8000` returned HTTP 404. The extension default was corrected to this repository's Compose backend port `8002`; the Ego test build used loopback port `8003` to avoid touching the user's running containers.
+- The extension worker DevTools console was not captured. Screenshots contain no bearer tokens or credentials.
+- Initial Ego console-event capture found an uncaught `chrome.tabs.query` rejection when the normal extension page had no active browser window. The popup now catches this and fails closed; an automated regression was added. A second real Ego run of the final package produced no extension-page console exceptions, and the local-app flow still completed.
 
-## Limitations and remaining work
+## Limitations and merge status
 
-- Only `mock-streaming-adapter` for the local fixture is implemented. No production streaming platform is supported.
-- The ingestion route persists `ExtensionPlaybackRecord`; it does not resolve metadata into TMDb or assert that a normal watched item was created.
-- Complete the manual Ego authorization step, then repeat real-browser connect, send, and persisted-result checks; exercise revocation and graceful failure cases in Ego; capture authorization, connected, and ingestion screenshots; rerun affected checks; inspect final GitHub checks; and update this report with the resulting commit SHA before considering the PR merge-ready.
+- Only the local `mock-streaming-adapter` is implemented and tested. Netflix, Prime Video, and other production streaming sites are not supported.
+- No-video pages may still provide title metadata; playback fields are omitted when there is no usable HTML5 video element.
+- The Ego run did not exercise a user actively denying the browser host-permission prompt, and did not capture the extension worker DevTools console. Backend tests cover denied local-app authorization, CSRF protection, token expiry/revocation, origin validation, and unauthorized requests.
+- The ingestion endpoint persists `ExtensionPlaybackRecord`; it does not resolve the detected metadata into a normal watched-title record.
+- **Current verdict: BLOCKED.** Do not merge until the browser permission-denial case and service-worker console check are completed and CI passes on the final pushed commit.
