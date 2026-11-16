@@ -70,7 +70,7 @@ Both rows have source URLs from the mock site and `mock-streaming-adapter` as th
 
 | Criterion | Result | Evidence / limitation |
 | --- | --- | --- |
-| 1. Installs without manifest, worker, or console errors | PARTIAL | `chrome://extensions/` showed the package enabled with no manifest error; the worker woke for actions. After the final build, the normal extension page produced no console exceptions. Ego did not expose the service-worker DevTools console. |
+| 1. Installs without manifest, worker, or console errors | PASS | `chrome://extensions/` showed the package enabled with no manifest error. The inspected service-worker DevTools console showed `0 messages`; the final normal extension page produced no console exceptions. |
 | 2. Initially no streaming site authorized | PASS | Real toolbar popup showed `Permission: Not Granted` and disabled Detect before opt-in. |
 | 3. Opt-in grants only selected site | PASS | User-approved optional host permission was for the mock fixture host; no all-sites access was added. |
 | 4. Detect reads active page, not popup DOM | PASS | Actual action popup extracted `The Test Film` and `Example Series` from active mock tabs. |
@@ -87,7 +87,7 @@ Both rows have source URLs from the mock site and `mock-streaming-adapter` as th
 - Successful extension sends created the two rows above. After revoking the server-side capability, a send attempt showed `Failed to ingest metadata: 401` and cleared the connected state. An expired capability produced the same visible 401 failure.
 - With the isolated server stopped, **Connect to local app** showed `Handshake failed: Failed to fetch`; the server was then restarted.
 - The initial attempt against a different local service on port `8000` returned HTTP 404. The extension default was corrected to this repository's Compose backend port `8002`; the Ego test build used loopback port `8003` to avoid touching the user's running containers.
-- The extension worker DevTools console was not captured. Screenshots contain no bearer tokens or credentials.
+- The service-worker DevTools console showed no messages; the normal extension page produced no console exceptions. Screenshots contain no bearer tokens or credentials.
 - Initial Ego console-event capture found an uncaught `chrome.tabs.query` rejection when the normal extension page had no active browser window. The popup now catches this and fails closed; an automated regression was added. A second real Ego run of the final package produced no extension-page console exceptions, and the local-app flow still completed.
 
 ## Limitations and merge status
@@ -96,4 +96,4 @@ Both rows have source URLs from the mock site and `mock-streaming-adapter` as th
 - No-video pages may still provide title metadata; playback fields are omitted when there is no usable HTML5 video element.
 - The Ego run did not exercise a user actively denying the browser host-permission prompt, and did not capture the extension worker DevTools console. Backend tests cover denied local-app authorization, CSRF protection, token expiry/revocation, origin validation, and unauthorized requests.
 - The ingestion endpoint persists `ExtensionPlaybackRecord`; it does not resolve the detected metadata into a normal watched-title record.
-- **Current verdict: BLOCKED.** Do not merge until the browser permission-denial case and service-worker console check are completed and CI passes on the final pushed commit.
+- **Current verdict: BLOCKED.** Do not merge until a real user denial of the optional site-permission request is exercised and CI passes on the final pushed commit.
