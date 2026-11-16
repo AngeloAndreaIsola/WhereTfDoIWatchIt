@@ -31,6 +31,11 @@ ALLOWED_HOSTS = [
     for host in os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1,backend").split(",")
     if host.strip()
 ]
+EXTENSION_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get("EXTENSION_ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
+]
 USE_X_FORWARDED_HOST = True
 
 # Internal frontend proxy configuration for containerized local Compose deployments.

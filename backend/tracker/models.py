@@ -1139,6 +1139,43 @@ class MovieWatchEvent(models.Model):
         return f"User {self.user_id} watched {self.movie} on {self.watched_date}"
 
 
+class ExtensionHandshakeChallenge(models.Model):
+    challenge_id = models.UUIDField(primary_key=True, editable=False)
+    extension_origin = models.CharField(max_length=255)
+    client_nonce = models.CharField(max_length=64)
+    server_nonce = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    approved_at = models.DateTimeField(null=True, blank=True)
+    denied_at = models.DateTimeField(null=True, blank=True)
+    consumed_at = models.DateTimeField(null=True, blank=True)
+
+
+class ExtensionCapability(models.Model):
+    token_digest = models.CharField(max_length=64, unique=True)
+    extension_origin = models.CharField(max_length=255)
+    scopes = models.JSONField(default=list)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    revoked_at = models.DateTimeField(null=True, blank=True)
+
+
+class ExtensionPlaybackRecord(models.Model):
+    """User-approved metadata received from the local browser extension."""
+    user_id = models.IntegerField(default=1)
+    title = models.CharField(max_length=255)
+    content_type = models.CharField(max_length=16)
+    year = models.IntegerField(null=True, blank=True)
+    season = models.IntegerField(null=True, blank=True)
+    episode = models.IntegerField(null=True, blank=True)
+    episode_title = models.CharField(max_length=255, null=True, blank=True)
+    playback_progress = models.JSONField(null=True, blank=True)
+    source_url = models.URLField(max_length=1000)
+    site_adapter_id = models.CharField(max_length=100)
+    detected_at = models.DateTimeField()
+    received_at = models.DateTimeField(auto_now_add=True)
+
+
 # --------------------------------------------------------------------------
 # Attribution: which refresh requested which execution
 # --------------------------------------------------------------------------

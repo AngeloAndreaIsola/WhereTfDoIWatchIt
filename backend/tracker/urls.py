@@ -1,7 +1,13 @@
 from django.urls import path, re_path
 from . import views, api_v2
+from . import extension_views
 
 urlpatterns = [
+    path("extension/handshake/init", extension_views.extension_handshake_init, name="extension-handshake-init"),
+    path("extension/handshake/exchange", extension_views.extension_handshake_exchange, name="extension-handshake-exchange"),
+    path("extension/handshake/revoke", extension_views.extension_revoke, name="extension-handshake-revoke"),
+    path("extension/authorize/<uuid:challenge_id>/", extension_views.extension_authorize, name="extension-authorize"),
+    path("extension/titles/ingest", extension_views.extension_titles_ingest, name="extension-titles-ingest"),
     path("health/", views.health, name="health"),
     path("geo/ip/", views.geo_ip, name="geo-ip"),
     path("search/", views.search, name="search"),

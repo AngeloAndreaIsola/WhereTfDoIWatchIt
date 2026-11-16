@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "WhereTfDoIWatchIt Companion",
+  "version": "0.1.0",
+  "description": "Opt-in title metadata capture and authenticated local app handshake for WhereTfDoIWatchIt",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting"
+  ],
+  "optional_host_permissions": [
+    "http://mock-streaming.localhost/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "WhereTfDoIWatchIt Companion"
+  },
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  }
+}
