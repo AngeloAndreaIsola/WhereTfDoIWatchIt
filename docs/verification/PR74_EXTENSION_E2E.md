@@ -5,12 +5,12 @@
 - Repository: `AngeloAndreaIsola/WhereTfDoIWatchIt`
 - PR branch: `feat/wt-049-extension-foundation-3441011916249609102`
 - Isolated checkout: `/Users/angeloandreaisola/Documents/GitHub/WhereTfDoIWatchIt-pr74`
-- Tested code revision: `6eae992` (this report-only correction is committed immediately afterward).
+- Extension implementation tested at `6eae992`; the reusable browser fixture and its Ego run were added in `b72bd1f`.
 - Ego Lite on macOS, Chromium `156.0.0.0` (`Chrome/156.0.0.0`, user agent platform `10_15_7`)
 - Installed unpacked MV3 package: `extension/dist/package`
 - Extension ID: `hcbfnjmjfpjmiebdoocidjfnfaabkglh`
 - Isolated Django backend: `http://localhost:8003`; disposable PostgreSQL on host port `55433`
-- Mock streaming fixture: `npm run serve:mock` serves `http://mock-streaming.localhost:4173` by default, with movie, episode, no-video, and catalog pages; the fixtures were loaded in Ego Lite and the movie video reported 60 seconds. Unsupported-host behavior was also exercised.
+- Mock streaming fixture: `npm run serve:mock` serves `http://mock-streaming.localhost:4173` by default, with movie, episode, no-video, and catalog pages. The committed fixture was loaded in Ego Lite on port `4174` to avoid an existing local server; its movie video reported 60 seconds. Unsupported-host behavior was also exercised.
 - The default package connects to `http://localhost:8002` (the repository's Compose backend). For Ego E2E, the package was built with the permitted loopback override to port `8003`, since the user's existing containers already occupied ports `8000`–`8002`.
 
 No temporary credentials, bearer tokens, or real user data are included here.
