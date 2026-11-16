@@ -5,7 +5,7 @@
 - Repository: `AngeloAndreaIsola/WhereTfDoIWatchIt`
 - PR branch: `feat/wt-049-extension-foundation-3441011916249609102`
 - Isolated checkout: `/Users/angeloandreaisola/Documents/GitHub/WhereTfDoIWatchIt-pr74`
-- Tested source revision before the final fixes: `69891e0`; this report is committed with the final evidence revision.
+- Tested code revision: `6eae992` (this report-only correction is committed immediately afterward).
 - Ego Lite on macOS, Chromium `156.0.0.0` (`Chrome/156.0.0.0`, user agent platform `10_15_7`)
 - Installed unpacked MV3 package: `extension/dist/package`
 - Extension ID: `hcbfnjmjfpjmiebdoocidjfnfaabkglh`
