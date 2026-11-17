@@ -4,9 +4,9 @@ The command `discover_unofficial_catalogue` now persists raw listing observation
 in `DiscoveredCatalogueRecord`. These records remain pending classification and
 do not create canonical mappings, TMDb associations, or playback offers. Migration
 `0053` adds conservative URL identity, original URL history, provenance state,
-and access-policy state. The Compose database remains at migration `0049`; all
-counts below are from the disposable `docker-compose.test.yml` PostgreSQL
-instance migrated through `0053`.
+and access-policy state. Counts in the provider traversal sections below describe
+the isolated staged inventory. A fresh live database audit and restore-first
+validation are recorded in “Current database rollout validation” below.
 
 Requests are sequential, bounded, robots-checked, and checkpointed. The budget
 counts each HTTP dispatch, including `robots.txt`. Hydra runs used one-second
@@ -26,10 +26,10 @@ scraping. See the official [terms](https://www.animeworld.ac/termini) and
 | StreamingCommunity | 0 | 0 | 0 | Unknown | No listing request authorized by provenance | `CATALOGUE_DISCOVERY_BLOCKED` |
 | KissKH | 0 in this task | 0 | 0 | Unknown | Preserved prior state; HTTP 451 remains a hard stop | `CATALOGUE_DISCOVERY_PARTIAL` |
 
-**Overall verdict: `CATALOGUE_STAGING_PARTIAL`.** The inventory is durably
-exported and import/replay verified. Hydra traversal remains open because its
-page links do not expose stable totals or a terminal boundary. The available
-backup cannot validate integration against the current Compose database.
+**Catalogue coverage verdict: `CATALOGUE_STAGING_PARTIAL`.** The inventory is
+durably exported and import/replay verified. Hydra traversal remains open because
+its page links do not expose stable totals or a terminal boundary. The current
+database rollout validation is reported separately below.
 
 The original disposable PostgreSQL container stopped after the first export;
 its `tmpfs` database no longer survives container restart. The durable staging
@@ -163,36 +163,166 @@ records, zero `ScrapedContentMapping` rows, and zero `Offer` rows. Staging tests
 also verify discovery timestamps, original URLs and metadata, checksum failure,
 and checkpoint replay.
 
-The available SQL backup
+The tracked SQL backup
 [`tracker_backup_20260926_140128.sql`](../../backups/tracker_backup_20260926_140128.sql)
 has SHA-256 `693f7b40976b71cf7e19a4d01d69f9e5b8209f94083db5efac2b9cfa33a6d2a0`.
-It restored successfully into an isolated database. It is not a valid substitute
-for the stated post-incident live backup: its migration history ends at the
-different `0033_fix_preference_json_fields` lineage, while the current branch
-has a different `0033_merge_duplicate_providers`, and applied migration
-`0013_merge_20260830_1219` is missing its `0011_availability_price_info_and_more`
-dependency. A direct migration attempt failed with
-`InconsistentMigrationHistory` before applying any migrations. The restored
-clone contains zero `ScrapedContentMapping` rows and 4 `Movie` rows, not the
-3,300-row baseline described for Compose. I did not fake or edit the migration
-history. Mapping IDs and field hashes therefore cannot be compared against the
-live baseline from this file.
+It is stale and incompatible with this branch: its tracker ledger ends at the
+different `0033_fix_preference_json_fields` lineage, and its applied
+`0013_merge_20260830_1219` lacks the `0011_availability_price_info_and_more`
+dependency. Its clone has zero `ScrapedContentMapping` rows and four `Movie`
+rows. It is not the post-incident dump identified by SHA
+`9417b89cc9c47a4022bcbab9de0d24a3d761cacc599b7149e5ba0f982ffd96cf`.
 
-**Persistent rollout readiness: blocked on a current, verified migration-0049
-backup.** The explicit rollout plan is:
+### Current database rollout validation (2026-11-17)
 
-1. Produce a fresh restricted backup from the Compose database at `0049`; verify
-   its checksum and record the mapping count and ordered ID/field hashes.
-2. Restore that backup to an isolated PostgreSQL clone. Confirm the migration
-   ledger is consistent with this branch before running any migration.
-3. Apply `0050`–`0053` explicitly in the clone. Compare mapping IDs, row count,
-   and hashes of all pre-existing mapping fields; investigate any difference.
-4. Import the staged inventory twice. Require first-pass counts to match the
-   manifest, second-pass `unchanged` count to equal 3,031, and zero mapping,
-   TMDb association, or offer changes.
-5. Restore the backup into a second clone to verify rollback. Only after these
-   checks should a separate rollout be proposed and authorized. No live
-   migration or import was run here.
+The independent staging copy is outside every Git worktree and Docker volume:
+`/Users/angeloandreaisola/Documents/catalogue-staging/WhereTfDoIWatchIt/`.
+The compressed inventory SHA-256 is
+`0c38ce93f7257c513a4d6760d4cc0d7a55718ca1ded9397db2a9b34ba17dfe02`; the
+manifest SHA-256 is
+`3fca6f67663b3ebc16d557c43192c20084aa0fcfceb495cae4e1165006670a47`. Source
+and independent copies match both checksums; `cp -p` preserved their timestamps
+and file modes. The original ignored worktree copy was retained.
+
+The inspected Compose target is project `new-sources`, service/container
+`db`/`new-sources-db-1`, database `tracker`, PostgreSQL 16.15, volume
+`new-sources_pgdata`. It currently has 50 providers, 3,300
+`ScrapedContentMapping` rows, zero `Movie` rows, zero discovery records, zero
+`ProviderContent`, zero `ContentMapping`, and zero offers/evidence/prices. The
+tracker migration ledger has 55 rows through
+`0053_catalogue_url_identity_provenance`. Thus the earlier statement that the
+live database remained at `0049` is superseded by this direct observation.
+Read-only container logs show that the running backend applied migrations
+`0050`–`0053` at 2026-11-17 13:41:19–13:41:20 UTC; a later startup reported no
+migrations pending. This audit performed no live migration or write.
+
+The backup discrepancy was file selection. The expected older checksum
+`9417b89...ffd96cf` identifies
+`/Users/angeloandreaisola/Documents/WhereTfDoIWatchIt-DBBackups/new-sources-tracker-postmigration-7617f73.dump`.
+That file's checksum was reverified, its archive list was readable, and a fresh
+restore confirmed 3,300 mappings, zero movies, and tracker migration `0049`.
+That verified `0049` clone then applied migrations `0050`–`0053` successfully.
+The failed zero-mapping restore instead used the tracked September SQL file
+above (SHA `693f7b...d2a0`), which has a divergent migration history. No
+evidence indicates a stale Compose volume was selected: the live container
+labels, Compose project files, database identity, and mounted volume all match
+the documented `new-sources` target. This is a wrong-file restore, not a wrong
+Compose target.
+
+A fresh direct `pg_dump --format=custom --no-owner --no-acl` from that
+identified live container is stored outside Git and database volumes at
+`/Users/angeloandreaisola/Documents/database-backups/WhereTfDoIWatchIt/new-sources_tracker_20261117T143100Z.dump`.
+SHA-256:
+`fd04b86731fdc1419f5cc78ea1cab7186d494750137e8f4b67f9e038d557703e`.
+The dump restored successfully with `pg_restore --exit-on-error` into
+disposable PostgreSQL database `wtdwi_live_restore2`. Before and after staging
+import, live and clone matched on all 3,300 mapping IDs, all mapping field
+values (`a4dc1f57b43fa66cbeb48107af072154f2694637d23e4b6c0a1a34d67ec88079`),
+provider rows (`cf6b4d7e137f9e6ea0dedc9880c490be337c22278c53de784190e9cc2d0d609c`),
+and the complete migration history (`08833c313f96f379389c2071b5bd0a13049aa6b7f04b6b5793ac37e6689acd68`). Mapping ID hash:
+`6307580580df5823adc49e2b91631216e90268b7d22c2cdad9982a4e7548a09a`.
+Both schemas were dumped from the same PostgreSQL 16.15 version; the only
+textual schema diff was pg_dump's random `\restrict` token and equivalent
+formatting of one check constraint. Clone `migrate --check` found no pending
+migrations through `0053`.
+
+Import from the independent copy into the fresh live backup clone inserted
+3,031 records (HydraHD 2,952, AnimeWorld 79) and restored two checkpoints.
+Replay inserted/updated zero and reported 3,031 unchanged. The expected
+`9417...` backup clone was separately migrated from `0049` through `0053` and
+passed the same import/replay: 3,031 inserted on the first pass, then 3,031
+unchanged and zero inserts/updates on replay. Both clones retain all 3,300
+legacy mappings with IDs and field hashes matching live. The imported records
+are all `PENDING`; source URL, identity URL, timestamps and original metadata
+are carried in the inventory. Both clones still have zero movies, zero
+`ProviderContent`, zero `ContentMapping`, and zero offers. No automatic
+canonical mapping or playback offer was made.
+
+**Database rollout verdict: `CATALOGUE_ROLLOUT_READY` for a separately
+authorized rollout.** The following commands are the proposed rollout sequence;
+they are documentation only and were not run against the live database.
+
+1. Stop writes and confirm project/service/database/volume and migration head:
+
+   ```sh
+   docker compose ps db backend
+   docker inspect new-sources-db-1 --format '{{ index .Config.Labels "com.docker.compose.project" }} {{ index .Config.Labels "com.docker.compose.service" }} {{ range .Mounts }}{{ .Name }} {{ end }}'
+   docker exec new-sources-db-1 psql -X -U tracker -d tracker -tAc "SELECT current_database(), current_user; SELECT name FROM django_migrations WHERE app='tracker' ORDER BY name DESC LIMIT 1;"
+   ```
+
+2. Create and verify a fresh direct backup outside Git and database volumes;
+   record mapping count and ID/field hashes and restore-test the exact file
+   before proceeding:
+
+   ```sh
+   docker exec new-sources-db-1 sh -c 'pg_dump --format=custom --no-owner --no-acl -U "$POSTGRES_USER" -d "$POSTGRES_DB"' > "$BACKUP"
+   shasum -a 256 "$BACKUP"
+   docker exec -i new-sources-db-test-1 pg_restore --list < "$BACKUP"
+   ```
+
+   Restore into a newly created disposable database and require counts,
+   migration history, schema, IDs and mapping field hashes to match source.
+   The audited baseline was 3,300 mappings, 50 providers, zero movies,
+   zero discovery rows, and zero provider content/content mappings/offers.
+   For the audit backup, the mapping ID SHA-256 was
+   `6307580580df5823adc49e2b91631216e90268b7d22c2cdad9982a4e7548a09a` and the
+   all-field mapping SHA-256 was
+   `a4dc1f57b43fa66cbeb48107af072154f2694637d23e4b6c0a1a34d67ec88079`.
+3. Check the staged gzip and manifest against the recorded SHA-256 values above.
+   Apply migrations only after an explicit deployment authorization, with the
+   guarded service and exact-target confirmation:
+
+   ```sh
+   docker compose --profile ops run --rm \
+     -e EXPECTED_DATABASE_NAME=tracker -e EXPECTED_DATABASE_HOST=db \
+     -e CONFIRM_MIGRATION_TARGET=tracker@db migrate
+   ```
+
+4. Import the inventory with the backend entrypoint explicitly replaced (so
+   this one-shot operation cannot trigger application startup work):
+
+   ```sh
+   docker compose run --rm --entrypoint python \
+     -v "$STAGING_DIR:/app/stage:ro" backend manage.py import_catalogue_inventory \
+     --data /app/stage/catalogue-inventory-v1.jsonl.gz \
+     --manifest /app/stage/catalogue-inventory-v1.manifest.json
+   ```
+
+5. Require tracker migration head `0053`, 3,031 discovered records (2,952
+   HydraHD and 79 AnimeWorld), zero pending staged rows omitted, unchanged
+   legacy mapping count/hash, and zero newly created mappings, canonical
+   movies, `ProviderContent`, `ContentMapping`, or offers. Replay once and
+   require zero inserts, updates, or deletes and 3,031 unchanged.
+6. If any preflight, backup restore, migration, import, count, or hash check
+   fails, stop and do not retry against the partially changed database. For an
+   approved rollback, stop application writers and restore the verified
+   pre-rollout backup into the documented Compose database/volume; verify its
+   checksum and baseline counts/hashes before reopening writes. Do not reverse
+   migrations or restore a different file by basename alone. Rollback commands
+   for the audited custom-format backup are:
+
+   ```sh
+   docker compose stop backend
+   shasum -a 256 "$BACKUP"
+   docker exec -i new-sources-db-1 pg_restore --clean --if-exists \
+     --exit-on-error --no-owner --no-privileges --dbname=tracker < "$BACKUP"
+   docker exec new-sources-db-1 psql -X -U tracker -d tracker -c \
+     "SELECT count(*) AS mappings FROM tracker_scrapedcontentmapping;"
+   docker compose start backend
+   ```
+
+   Reopen writes only after checking the restored migration head and recorded
+   mapping ID/field hashes against the backup manifest. The example rollback
+   uses the fresh **pre-import** backup above; a backup made after import cannot
+   roll back the imported inventory.
+
+No live migration or import was performed in this task. The existing Compose
+database was only read and backed up; its migration state was already `0053`.
+Focused isolated tests passed (36 tests across staging, identity, discovery,
+and guarded migration modules). The complete isolated backend suite passed
+(3,264 tests in 125.0 seconds). `makemigrations --check --dry-run` reported no
+drift, both restored clones passed `migrate --check` at `0053`, and
+`git diff --check` passed.
 
 ### Why earlier probes returned no listings
 

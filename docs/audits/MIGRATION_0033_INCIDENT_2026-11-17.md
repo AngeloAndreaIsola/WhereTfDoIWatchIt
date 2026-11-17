@@ -4,6 +4,89 @@ Audit date: 2026-11-17
 Repository reference: `7617f73` (`new-sources`)
 Verdict for historical integrity: **unverified**
 
+## Re-audit and backup reconciliation (`4bda936`, 2026-11-17)
+
+The database state described below was a historical observation and is no
+longer current. A read-only inspection of `new-sources-db-1` identified Compose
+project `new-sources`, service `db`, database `tracker`, PostgreSQL 16.15, and
+volume `new-sources_pgdata`. The live database has 3,300
+`ScrapedContentMapping` rows, 50 providers, zero `Movie` rows, zero
+`DiscoveredCatalogueRecord` rows, zero `ProviderContent`, zero
+`ContentMapping`, and zero offers, evidence, or offer prices. Its tracker
+migration history is now through
+`0053_catalogue_url_identity_provenance` (55 tracker migration rows).
+
+Container logs establish the intervening migration event: the running backend
+applied `0050`–`0053` at 2026-11-17 13:41:19–13:41:20 UTC. Its later startup
+reported “No migrations to apply.” This audit did not start or restart that
+application and made no live database writes.
+
+The reported SHA-256
+`9417b89cc9c47a4022bcbab9de0d24a3d761cacc599b7149e5ba0f982ffd96cf` belongs to
+the custom-format dump
+`/Users/angeloandreaisola/Documents/WhereTfDoIWatchIt-DBBackups/new-sources-tracker-postmigration-7617f73.dump`.
+The failed restore that returned zero scraper mappings used a different file:
+the tracked
+`backups/tracker_backup_20260926_140128.sql`, SHA-256
+`693f7b40976b71cf7e19a4d01d69f9e5b8209f94083db5efac2b9cfa33a6d2a0`. Both the
+repository-root and worktree copies have that same stale digest. That SQL file
+contains the divergent `0033_fix_preference_json_fields` lineage and its
+`0013_merge_20260830_1219` lacks the declared `0011_availability_price_info_and_more`
+dependency; it restores with zero mappings and four Movie rows. Evidence
+therefore points to selecting a different backup file, not selecting the
+wrong Compose project or volume. Do not identify backups by filename alone.
+
+A fresh custom-format backup was made directly from the identified PostgreSQL
+container with `pg_dump`, without invoking an application entrypoint. It is
+outside Git and database volumes:
+
+```text
+/Users/angeloandreaisola/Documents/database-backups/WhereTfDoIWatchIt/new-sources_tracker_20261117T143100Z.dump
+SHA-256 fd04b86731fdc1419f5cc78ea1cab7186d494750137e8f4b67f9e038d557703e
+```
+
+It restored successfully with `pg_restore --exit-on-error` into disposable
+database `wtdwi_live_restore2`. Live and restored clone have identical counts,
+mapping IDs and field values, provider rows, tracker migration history, and
+schema. Hashes: mapping IDs
+`6307580580df5823adc49e2b91631216e90268b7d22c2cdad9982a4e7548a09a`, mapping
+fields `a4dc1f57b43fa66cbeb48107af072154f2694637d23e4b6c0a1a34d67ec88079`,
+provider rows `cf6b4d7e137f9e6ea0dedc9880c490be337c22278c53de784190e9cc2d0d609c`,
+and all migrations `08833c313f96f379389c2071b5bd0a13049aa6b7f04b6b5793ac37e6689acd68`.
+`migrate --check` on the clone found no migration pending through `0053`.
+
+The independently copied catalogue artifact also passed checksum verification
+and import/replay in that restored clone: first pass inserted 3,031 pending
+records (2,952 HydraHD and 79 AnimeWorld) and restored two checkpoints; replay
+inserted/updated zero and reported 3,031 unchanged. The clone retained all
+3,300 original mapping rows and still had zero canonical movies, provider
+content, content mappings, and offers. No migration or import was run against
+the live Compose database. The direct backup and current clone validation
+establish a restore point for the database's current state; they do not
+reconstruct the pre-`0033` 3,711-row state discussed below.
+
+The separately reported `9417...ffd96cf` dump was also reverified at its
+documented path and restored to a second isolated database. That restore had
+3,300 mappings, zero movies, and migration `0049`; migrations `0050`–`0053`
+then applied successfully. Its mapping ID and all-field hashes match both the
+live database and the migrated clone. Importing the independent staging copy
+into this migrated clone inserted 3,031 records, then replay inserted/updated
+zero and reported 3,031 unchanged. Its post-import counts also remained at
+3,300 mappings, zero movies/provider content/content mappings/offers, and
+3,031 pending discoveries. This exercises the original backup through the
+actual outstanding migration sequence as well as validating the fresh current
+backup restore.
+
+**Current rollout assessment:** a checksum-verified backup of the actual
+database restored and passed through the `0053` migration check; staging import
+and replay passed without altering original rows. A separate authorized live
+rollout is therefore technically ready, subject to the documented preflight,
+maintenance window, and exact-target guard. This is not authorization to run it.
+Focused isolated tests passed (36/36), the complete isolated backend suite
+passed (3,264 tests in 125.0 seconds), and `makemigrations --check --dry-run`
+reported no model drift. Both the fresh-backup clone and the `0049` backup clone
+passed migration checks through `0053`.
+
 ## Current Compose database and backup
 
 The inspected Compose target is project `new-sources`, service `db`, image
