@@ -1645,3 +1645,216 @@ checkpoint, fixed-selection resume, ambiguous/remake/media-collision negatives,
 no-op replay, two fresh restores, and migration drift checks passed. Migration
 `0056` remains unapplied on live. The limited rollout is prepared, but live
 canonical writes and further catalogue expansion still require separate scopes.
+
+### First canonical rollout readiness and continued reconciliation (2026-11-17)
+
+Verdict: **`CANONICAL_ROLLOUT_READY`** for a separately authorized, narrow
+**387-association** first rollout. **No live canonical application or migration
+was performed.** The actual `new-sources/tracker` database still has 5,095
+discoveries, 3,300 legacy mappings, zero canonical titles, zero canonical
+associations and zero offers. All 57 live table counts and complete row hashes
+match the fresh pre-rehearsal backup after this work.
+
+The [current canonical audit](../audits/canonical_rollout_20261117.json)
+supersedes the earlier scale report for rollout decisions. The historical
+[scale audit](../audits/canonical_scale_20261117.json) remains unchanged.
+Two self-contained machine-readable manifests contain each source record ID,
+complete source observation and hash, provider-content identity, typed TMDb
+canonical ID, original search results, details evidence and expiry, and
+expected database changes:
+
+- [First live proposal: 387 associations](../audits/canonical_first_live_20261117.manifest.json).
+  SHA-256: `eec5c6717a0e7bf185cf29c7c3f213eeff5b4382ff6d0d1277f140322518df8a`.
+- [Next isolated batch: 475 associations](../audits/canonical_next_batch_20261117.manifest.json).
+  SHA-256: `2496712fc69725d6b814c4c4ee516718341920485ffb8ef6846c150064de316f`.
+  These are **not part of the first live proposal**.
+
+#### Complete first-set audit and the held association
+
+All **388/388 retained record-specific proofs** were rechecked against the
+freshly restored source observations and retained TMDb search/details evidence.
+Checks cover identifier and namespace, explicit release year, compatible display
+or original title, a unique exact candidate, complete search results, competing
+same-title source releases, trusted-ID contradictions, existing canonical years,
+provider-content collisions and existing operator mappings. Thresholds were
+preserved. Typed identity remains `(tmdb_id, content_type)`; a clone's `Movie`
+primary key is not a portable canonical identifier.
+
+`Blue` (1968), source record **1771**, TMDb **movie 169869**, is excluded. Its
+cached year-filtered search/details, source URL year, director Silvio Narizzano
+and cast are internally consistent. The retained independent broad-title
+search did not return this ID within its capped results, and there is no
+additional source-specific corroboration. This remains inconclusive, so the
+proposed first rollout contains **387**, rather than 388, associations. It
+requires stronger evidence before inclusion; it was not automatically retried.
+The other 49 historical independent sample checks remain confirmed. Such
+queries share the TMDb authority and do not establish independent provider-detail
+ground truth or a catalogue-wide false-positive rate.
+
+#### Fresh guarded backup, restore, import and replay
+
+The exact source was checked as project `new-sources`, service `db`, container
+`new-sources-db-1`, database `tracker`, volume `new-sources_pgdata`, tracker
+migration head `0053`. The backend writer was stopped for the backup and then
+returned to its started state. A pre-existing restart/endpoint failure reports
+missing `tracker_cataloguediscoverystate.heartbeat_at`; the live schema was left
+untouched. Authorized rollout must first apply `0054`–`0056` using the guarded
+migration workflow. Clone checks validate that schema prerequisite; they do not
+constitute a live application health check.
+
+Fresh custom-format backup, outside Git and database volumes:
+
+`/Users/angeloandreaisola/Documents/database-backups/WhereTfDoIWatchIt/new-sources_tracker_canonical_20261117T193249Z.dump`
+
+SHA-256: `b1f01749b4137b82f46b57cc1f0d58ca81e47ed644c1289a988ec305c7379d24`.
+The dump passed TOC inspection and three disposable PostgreSQL restores. The
+initial and final restores matched every source table's count and complete row
+hash before migrations. Migrations used `guarded_migrate` with exact database,
+host and target-token confirmation, only on `canonical_*` clones.
+
+The final first-rollout rehearsal used `canonical_rollout_final_20261117` and
+**did not import any TMDb cache fixtures**. Its embedded, reviewed manifest
+alone inserted 387 typed canonical titles, 387 record-specific evidence rows,
+387 unavailable provider-content identities and 387 canonical mappings, plus
+one disabled HydraHD identity-only `Source`. It preserved existing Source
+settings. All 4,708 unselected discoveries were checked in full, including
+pending outcomes. All 3,300 legacy rows, discovery identities, checkpoints and
+provider settings were unchanged; there were zero offers and zero HTTP calls.
+Replay changed no table row or timestamp. All 14 preservation/relationship
+checks passed.
+
+The next 475 associations were imported and replayed separately on
+`canonical_rollout_20261117`. The same 14 checks passed. Its final counts are
+862 canonical titles/evidence/mappings/provider-content rows, 5,095 discoveries,
+3,300 legacy rows and zero offers. Every prior association and unselected
+source row was preserved. Replay again preserved complete database row hashes.
+
+#### Consecutive batch coverage
+
+The next 500 previously unevaluated IDs were frozen into two 250-record
+selections (3 and 4). They exclude **every ID from both earlier batches**,
+including ambiguous and unmatched outcomes. Discovery records with changed or
+new observations can enter future reviewed selections; completed pending
+outcomes are not silently reselected. The continuation driver now accepts
+`--previous-audit` and requires it for batches after 2. Use the current audit,
+which retains all four ID selections, when continuing.
+
+The earlier two sub-batches below reflect the completed audit: `Blue` now
+appears as a hold in sub-batch 1, rather than a successful rollout association.
+HTTP/cache figures in this table cover initial proposals and independent
+validation; historical apply/replay cache savings are accounted separately.
+
+| Metric | Sub-batch 1 | Sub-batch 2 | Sub-batch 3 | Sub-batch 4 |
+|---|---:|---:|---:|---:|
+| Previously evaluated | 0 | 250 | 500 | 750 |
+| Newly evaluated | 250 | 250 | 250 | 250 |
+| Exact candidates | 158 | 237 | 238 | 239 |
+| Verified associations | 151 | 236 | 237 | 238 |
+| Rejected candidate observations | 154 | 135 | 86 | 107 |
+| Ambiguous candidates | 82 | 10 | 8 | 9 |
+| Unmatched records | 16 | 4 | 5 | 3 |
+| Explicit rollout holds | 1 | 0 | 0 | 0 |
+| Unique canonical titles | 151 | 236 | 237 | 238 |
+| TMDb requests, including validation | 351 | 506 | 511 | 512 |
+| Cache hits, proposal/validation scope | 7 | 0 | 0 | 0 |
+| Independent validation confirmed | 29 | 20 | 24 | 24 |
+| Independent validation inconclusive | 1, excluded | 0 | 0 | 0 |
+| Remaining unevaluated inventory | 4,845 | 4,595 | 4,345 | 4,095 |
+| Remaining unassociated inventory | 4,944 | 4,708 | 4,471 | 4,233 |
+| Verified association yield | 60.4% | 94.4% | 94.8% | 95.2% |
+
+The new 500 yield **475 verified, 17 ambiguous and 8 unmatched**, with 477 exact
+candidate proposals and 193 rejected candidate observations. All 48 newly
+sampled year-free validations confirmed the selected ID/year/type. Full
+record-specific evidence audit passed for all 475 before isolated application.
+
+| Provider / content type, new selection | Evaluated | Verified | Ambiguous | Unmatched | Yield | Bootstrap HTTP |
+|---|---:|---:|---:|---:|---:|---:|
+| HydraHD movies | 300 | 282 | 14 | 4 | 94.0% | 582 |
+| HydraHD series | 200 | 193 | 3 | 4 | 96.5% | 393 |
+
+Cumulatively, HydraHD movies have 507/550 verified and series 355/371 verified.
+The earlier AnimeWorld inventory retains 64 unresolved types and 15 missing-year
+outcomes (one movie, 14 series), with zero verified associations. The audit
+includes provider/content-type breakdowns for every sub-batch. Older per-record
+HTTP allocation was not recorded and is reported as unavailable; sub-batch 3's
+allocation is reconstructed exactly from its dispatch shape and zero
+failures/retries/cache hits. Sub-batch 4 and subsequent bootstrap runs record
+per-record HTTP/cache and candidate accounting directly in their journals.
+
+Overall, **1,000/5,095 evaluated (19.63%)** and **862/5,095 verified proposals
+(16.92%)** leave **4,095 unevaluated** and **4,233 unassociated**. Among evaluated
+records, 109 are ambiguous, 28 unmatched and one explicitly held. The initial
+500's audited yield is 77.4%, the next 500's yield is 95.0%, and the combined
+yield is 86.2%. Selections differ, particularly the AnimeWorld blockers in the
+first selection; these measurements do not project future catalogue yield.
+All these association figures describe isolated databases/reviewed proposals;
+live still has zero canonical associations.
+
+#### Resource bounds, tooling and authorized rollout boundary
+
+New bootstrap ceilings were 520 HTTP attempts per 250 records (actual 487 and
+488), plus 50 attempts per independent validation pass (actual 24 each).
+Minimum dispatch spacing remains 0.3 seconds, transient retries at most two,
+and service restrictions stop the batch. Existing Retry-After handling, positive
+and negative TTLs, and checkpoint resumption remain intact. No restriction,
+failure, retry or restricted-provider request occurred. There is no unattended
+loop. Current work consumed **1,023 new requests and zero cache hits**;
+cumulative accounting is **1,880 HTTP requests and 849 cache hits**. All
+manifest imports and replays used zero HTTP requests and zero cache mutations;
+embedded proof reuse is not counted as a cache hit.
+
+`export_canonical_manifest` audits and exports exact evidence. The new
+`apply_canonical_manifest` is offline and dry-run by default. Apply requires
+an actual PostgreSQL target, exact expected database/host, matching confirmation
+token, and the reviewed file's SHA-256. It locks identity tables, preflights the
+whole set and applies atomically through the existing bootstrap/classification
+requirements. Expired evidence, source changes, incomplete/multiple candidates,
+new competing releases, provider identity collisions or mapping conflicts fail
+closed. The first embedded proof expires **2026-12-17 19:03:32 UTC**; a later
+rollout requires fresh reviewed evidence. Reapplication preserves existing
+metadata and row timestamps. No live apply command was executed.
+
+After **separate explicit live authorization**, take another fresh guarded
+backup and restore-test it, compare source/settings/checkpoint hashes, then
+apply required migrations through the guarded service. A reviewable example of
+the subsequent offline first-manifest operation is:
+
+```sh
+# ONLY after separate live authorization and guarded migration/backup checks.
+docker compose run --rm --entrypoint python \
+  -v "$PWD/docs/audits:/app/rollout:ro" backend \
+  manage.py apply_canonical_manifest \
+  --manifest /app/rollout/canonical_first_live_20261117.manifest.json \
+  --apply --expected-database tracker --expected-host db \
+  --confirm-target tracker@db \
+  --confirm-manifest-sha256 eec5c6717a0e7bf185cf29c7c3f213eeff5b4382ff6d0d1277f140322518df8a
+```
+
+Use the new pre-live backup as the rollback artifact, rather than the older
+pre-rehearsal dump if live has since changed. Preserve the current 387-only
+scope, compare all relationships/counts/hashes, then replay and require no row
+changes before considering another batch. The clone-only
+[`verify_canonical_rollout.py`](../../scripts/verify_canonical_rollout.py)
+provides `snapshot` and `verify` phases, checks the actual expected
+`canonical_*` PostgreSQL database/host, and verifies full preservation and
+replay hashes plus every manifest relationship. Its verify phase takes
+`--before`, `--imported` and `--manifest` snapshots and writes a machine-readable
+report. Local receipts/checkpoints remain under the ignored
+`.catalogue-staging/canonical-scale/rollout/` and
+`.catalogue-staging/canonical-rollout/` directories.
+
+HydraHD historical checkpoints remain movies **132**, series **77**; the
+incremental window and AnimeWorld RSS state are unchanged. Provider identities,
+scheduling controls and restricted-provider safeguards are preserved. No
+unattended discovery/reconciliation was enabled. CineBlog01, AltaDefinizione,
+StreamingCommunity and KissKH retain their documented provenance/access
+blockers. There is no audio/subtitle enrichment or playback availability work.
+
+Validation: **67 focused tests passed**, including canonical identity,
+movie/TV collisions, offline manifest rejection/atomic rollback/replay,
+bootstrap checkpoint/cache/budget and gateway retry/restriction checks.
+The complete isolated PostgreSQL backend suite passed **3,334 tests**. Both
+actual backup-clone integration imports passed all 14 checks. Migration
+consistency (`makemigrations --check --dry-run`, `migrate --check`) and Django
+system checks passed. No live migration was applied.

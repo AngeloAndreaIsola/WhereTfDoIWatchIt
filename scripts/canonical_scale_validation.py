@@ -30,12 +30,16 @@ def main():
     parser.add_argument('--database', required=True)
     parser.add_argument('--host', required=True)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--batch', type=int, choices=(1, 2), default=1)
+    parser.add_argument('--batch', type=int, default=1)
+    parser.add_argument('--previous-audit', type=Path, action='append', default=[])
+    parser.add_argument('--sample-per-type', type=int, default=None)
     parser.add_argument('--allow-network', action='store_true')
     parser.add_argument('--apply', action='store_true')
     parser.add_argument('--request-budget', type=int, default=350)
     parser.add_argument('phase', choices=('audit', 'plan', 'bootstrap', 'reconcile', 'sample'))
     args = parser.parse_args()
+    if args.batch < 1 or (args.sample_per_type is not None and not 1 <= args.sample_per_type <= 25):
+        parser.error('Require positive batch number and sample-per-type 1..25')
     import django
     django.setup()
     from django.core.management import call_command
@@ -87,12 +91,20 @@ def main():
             groups[(record.provider_id, _type_evidence(record)[0], _extract_year(record)[0],
                     _normal_title(record.title))].append(record.pk)
         excluded = set(CanonicalBootstrapEvidence.objects.values_list('discovered_record_id', flat=True))
+        for audit_path in args.previous_audit:
+            audit = json.loads(audit_path.read_text())
+            excluded.update(pk for batch in audit['batches'] for pk in batch['record_ids'])
+        if args.batch > 2 and not args.previous_audit:
+            parser.error('Continuation requires --previous-audit including every evaluated/pending record')
         if args.batch == 1:
             selected = {r.pk for r in records if r.provider.slug == 'animeworld'}
             selected.update(pk for group in groups.values() if len(group) > 1 for pk in group)
             targets = [('movie', 100), ('series', 71)]
         else:
-            excluded.update(json.loads((args.output / 'batch-1-ids.json').read_text()))
+            for previous in args.output.glob('batch-*-ids.json'):
+                excluded.update(json.loads(previous.read_text()))
+            if args.batch == 2 and not (args.output / 'batch-1-ids.json').exists():
+                parser.error('Batch 2 requires the first frozen selection')
             selected = set()
             targets = [('movie', 150), ('series', 100)]
         rng = random.Random(20261116 + args.batch)
@@ -140,7 +152,8 @@ def main():
         sample = []
         for kind in ('movie', 'series'):
             pool = [r for r in report['records'] if r['status'] == 'VERIFIED' and r['content_type'] == kind]
-            for row in rng.sample(pool, min(15 if args.batch == 1 else 10, len(pool))):
+            sample_size = args.sample_per_type or (15 if args.batch == 1 else 10)
+            for row in rng.sample(pool, min(sample_size, len(pool))):
                 candidates = gateway.search(row['title'], content_type=kind, authorize_network=args.allow_network)
                 sample.append({**row, 'independent_search_confirmed': any(
                     c['tmdb_id'] == row['tmdb_id'] and c['year'] == row['year']

@@ -122,6 +122,8 @@ class Command(BaseCommand):
         for record in records:
             if record.pk in completed:
                 continue
+            usage_before = budget.to_dict()
+            totals_before = dict(totals)
             totals["evaluated"] += 1
             media, _, type_evidence = _type_evidence(record)
             year, year_evidence = _extract_year(record)
@@ -163,6 +165,12 @@ class Command(BaseCommand):
                 result.update(status="SERVICE_RESTRICTED" if stopped else "REQUEST_FAILED",
                               evidence=[f"TMDb HTTP {status or 'transport/response error'}; resume after service recovery"])
                 complete = False
+            result["metrics"] = {
+                "tmdb_requests": budget.attempted - usage_before["attempted"],
+                "cache_hits": budget.cache_hits - usage_before["cache_hits"],
+                "exact_candidates": totals["exact_proposed"] - totals_before["exact_proposed"],
+                "rejected_candidates": totals["rejected_candidates"] - totals_before["rejected_candidates"],
+            }
             rows.append(result)
             if not complete:
                 break
