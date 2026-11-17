@@ -48,6 +48,29 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # Schema writes are a separate, operator-invoked action. This service is
+  # hidden from normal `up` and refuses to proceed without exact DB/host
+  # confirmation supplied at `compose run` time.
+  migrate:
+    build: ./backend
+    entrypoint: ["/guarded-migrate-entrypoint.sh"]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_HOST: ${POSTGRES_HOST:-db}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      EXPECTED_DATABASE_NAME: ${EXPECTED_DATABASE_NAME:-}
+      EXPECTED_DATABASE_HOST: ${EXPECTED_DATABASE_HOST:-}
+      CONFIRM_MIGRATION_TARGET: ${CONFIRM_MIGRATION_TARGET:-}
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
+      DJANGO_DEBUG: ${DJANGO_DEBUG}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS}
+    depends_on:
+      db:
+        condition: service_healthy
+    profiles: ["ops"]
+
   frontend:
     build: ./frontend
     command: npm run start

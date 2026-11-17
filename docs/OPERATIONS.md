@@ -8,9 +8,13 @@ Short runbook for the importers and the most common failure modes.
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
-docker compose -f docker-compose.yml -f docker-compose.dev.yml exec backend python manage.py test tracker -v 2
+./scripts/test-backend-isolated.sh tracker availability -v 2
 docker compose -f docker-compose.yml -f docker-compose.dev.yml exec frontend npm run lint
 ```
+
+Schema migrations are a separately confirmed operation; runtime entrypoints
+only check the current schema. See `docs/DEPLOYMENT.md` before using the
+`migrate` service.
 
 Frontend: http://localhost:3001 — backend health: http://localhost:8000/api/health/ — admin: http://localhost:8000/admin/
 

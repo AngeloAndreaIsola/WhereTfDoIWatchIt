@@ -36,8 +36,8 @@ The workflow consists of two independent jobs running on `ubuntu-latest`:
   1. Checks out repository (`actions/checkout@v4`).
   2. Sets up Python 3.12 with pip cache (`actions/setup-python@v5`).
   3. Installs requirements via `pip install -r requirements.txt`.
-  4. Runs database migrations via `python manage.py migrate`.
-  5. Executes test suite via `python manage.py test tracker -v 2`.
+  4. Applies migrations explicitly to the disposable CI PostgreSQL service.
+  5. Executes `python manage.py test tracker availability -v 2 --noinput`; Django creates its separate test database.
 
 > **Mocking External APIs:** All backend unit tests mock calls to TMDb and RapidAPI (Streaming Availability API). `TMDB_API_KEY` and `RAPIDAPI_KEY` are explicitly set to empty strings in CI so that no external network calls or rate limits are consumed during testing.
 
@@ -62,10 +62,12 @@ If a CI run fails, follow these instructions to reproduce and fix the failure lo
 
 ### Backend Failures
 
-To run backend tests locally using Docker Compose (recommended):
+To run backend tests locally using Docker Compose (recommended), use the
+isolated test profile. It starts a separate PostgreSQL service on tmpfs and
+cleans up its unique Compose project on exit:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml exec backend python manage.py test tracker -v 2
+./scripts/test-backend-isolated.sh tracker availability -v 2
 ```
 
 To run backend tests locally on bare metal / host environment with PostgreSQL running:
@@ -81,9 +83,12 @@ export TMDB_API_KEY=""
 export RAPIDAPI_KEY=""
 
 pip install -r requirements.txt
-python manage.py migrate
-python manage.py test tracker -v 2
+python manage.py test tracker availability -v 2 --noinput
 ```
+
+The Django test runner creates and migrates its own `test_tracker` database;
+do not run `migrate` against the configured application database as a test
+setup step.
 
 ### Frontend Failures
 

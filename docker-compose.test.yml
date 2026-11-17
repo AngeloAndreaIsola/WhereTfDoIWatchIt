@@ -1,0 +1,37 @@
+services:
+  db-test:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: wtdwi_test
+      POSTGRES_PASSWORD: wtdwi_test
+      POSTGRES_DB: wtdwi_test
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wtdwi_test -d wtdwi_test"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    profiles: ["test"]
+
+  backend-test:
+    build: ./backend
+    entrypoint: ["python"]
+    command: ["manage.py", "test", "--noinput"]
+    environment:
+      POSTGRES_USER: wtdwi_test
+      POSTGRES_PASSWORD: wtdwi_test
+      POSTGRES_DB: wtdwi_test
+      POSTGRES_HOST: db-test
+      POSTGRES_PORT: 5432
+      DJANGO_SECRET_KEY: wtdwi-test-only
+      DJANGO_DEBUG: "1"
+      DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,backend
+      PYTHONPATH: /app/scripts
+    volumes:
+      - ./scripts:/app/scripts:ro
+      - ./docker-compose.test.yml:/app/docker-compose.test.yml:ro
+    depends_on:
+      db-test:
+        condition: service_healthy
+    profiles: ["test"]

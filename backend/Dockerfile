@@ -16,6 +16,9 @@ RUN chmod +x /entrypoint.sh
 COPY worker-entrypoint.sh /worker-entrypoint.sh
 RUN chmod +x /worker-entrypoint.sh
 
+COPY guarded-migrate-entrypoint.sh /guarded-migrate-entrypoint.sh
+RUN chmod +x /guarded-migrate-entrypoint.sh
+
 EXPOSE 8000
 
 ENTRYPOINT ["/entrypoint.sh"]

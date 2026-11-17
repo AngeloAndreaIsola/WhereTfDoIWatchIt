@@ -76,9 +76,13 @@ The live Compose database originally had 46 migration-history rows and no
 discovery-state table. During validation, the backend image entrypoint ran the
 normal migration command before the test command; it applied pending migrations
 through `0049`. The six unofficial-provider mapping counts above were unchanged.
-The total `ScrapedContentMapping` count moved from 3,711 to 3,300 because
-`0033_merge_duplicate_providers` folded duplicate-provider rows into canonical
-rows. `0050_scraped_provider_native_identity` remains unapplied to that database.
+The reported `ScrapedContentMapping` count moved from 3,711 to 3,300 during
+the migration run that included `0033_merge_duplicate_providers`. This is
+consistent with that migration's mapping deletion paths, but no pre-run row
+IDs or deletion count were retained. It is not verified that all 411 removed
+rows were semantic duplicates, and historical field conflicts cannot be
+reconstructed from the current database. See the [migration incident audit](../audits/MIGRATION_0033_INCIDENT_2026-11-17.md).
+`0050_scraped_provider_native_identity` remains unapplied to that database.
 
 Do not reverse or fake this history. Before any further runtime migration,
 create a restorable PostgreSQL backup, restore it into a disposable database,
