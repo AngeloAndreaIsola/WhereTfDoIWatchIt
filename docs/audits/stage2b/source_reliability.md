@@ -55,8 +55,8 @@ Assessment of each source's usefulness as evidence for this audit, based on actu
 |---|---|
 | Total title-country cases | 30 (15 IT, 15 NL) |
 | Cases with real-world evidence | 14 |
-| VERIFIED_CORRECT (reality confirmed available) | 14 |
-| UNVERIFIED | 16 |
+| EXTERNAL_AVAILABILITY_OBSERVED (reality confirmed available) | 14 |
+| EXTERNAL_UNVERIFIED | 16 |
 | Official provider pages directly confirming a title | 0 (all geo-blocked, login-gated, or not fetched) |
 | Secondary aggregator confirmations (JustWatch IT title pages) | 5 (Godfather, Matrix, Inception, Parasite IT) |
 | Secondary aggregator confirmations (JustWatch searches) | 9 |
@@ -66,5 +66,5 @@ Assessment of each source's usefulness as evidence for this audit, based on actu
 ## Reliability conclusions
 - JustWatch IT title pages are the most reliable accessible evidence in this audit (explicit providers, offer types, timestamps). JustWatch NL search is usable but provider names are not extractable.
 - Official provider pages (RaiPlay search, Pluto TV IT, Netflix, Prime Video, Mediaset) could not be queried for per-title evidence within constraints: geo-block, JS-driven undocumented search, login walls, or budget.
-- Therefore no "primary official evidence" was obtained for any title. All 14 verified cases rest on JustWatch secondary evidence. Per task rules, JustWatch is not a final authority, so these 14 are marked VERIFIED_CORRECT for real-world availability but NOT confirmed against the application.
+- Therefore no "primary official evidence" was obtained for any title. All 14 verified cases rest on JustWatch secondary evidence. Per task rules, JustWatch is not a final authority, so these 14 are marked EXTERNAL_AVAILABILITY_OBSERVED for real-world availability but NOT confirmed against the application.
 - The 16 unverified cases reflect evidence-collection limits, not application incorrectness.

@@ -1,6 +1,6 @@
 # Discrepancies — Stage 2B Live Availability Verification
 
-Scope: 30 title-country cases (15 IT, 15 NL). 14 cases verified correct (real-world availability confirmed via secondary evidence); 16 unverified (not checked due to budget/geo-block limits). No case is reported as "unavailable" merely because it is absent from one source, per audit rules. No production data was changed; no application defect is claimed without corroboration.
+Scope: 30 title-country cases (15 IT, 15 NL). 14 cases EXTERNAL_AVAILABILITY_OBSERVED (external availability observed via secondary evidence); 16 EXTERNAL_UNVERIFIED (not checked due to budget/geo-block limits). No case is reported as "unavailable" merely because it is absent from one source, per audit rules. No production data was changed; no application defect is claimed without corroboration.
 
 ## Confirmed observations (reality, secondary evidence)
 
@@ -61,18 +61,18 @@ Scope: 30 title-country cases (15 IT, 15 NL). 14 cases verified correct (real-wo
 | Netflix / Prime Video / Mediaset Infinity title pages | Not fetched (expected geo-block/login walls; budget conservation) | No direct primary evidence from these official pages. |
 | Application (app DB / runtime) | No access | "Whether the application agrees" not checkable for any case. |
 
-These are evidence-collection limitations, not discrepancies in the application. They cap verification coverage: 14 of 30 cases verified; 16 unverified.
+These are evidence-collection limitations, not discrepancies in the application. They cap verification coverage: 14 of 30 cases externally observed; 16 externally unverified.
 
 ## Confirmed incorrect / correct
-- VERIFIED_CORRECT (reality confirmed available): 14 cases (9 IT, 5 NL) — listed in live_sample.csv.
+- EXTERNAL_AVAILABILITY_OBSERVED (reality confirmed available): 14 cases (9 IT, 5 NL) — listed in live_sample.csv.
 - VERIFIED_INCORRECT: 0 (no negative availability could be confirmed; rules prohibit inferring unavailability from absence).
 - CONFLICTING: 0 (no two sources disagreed on a verified title).
-- UNVERIFIED: 16 cases.
+- EXTERNAL_UNVERIFIED: 16 cases.
 
 ## Application defects vs source failures vs incomplete evidence
 - No application defect is confirmed, because no application output (API response, serialized offer, frontend verdict) was observed. The application was not queried, no refresh was run, and no DB row was read.
 - Source failures: none confirmed. JustWatch IT title pages and searches returned data; JustWatch NL title pages 404 (a JustWatch URL/access issue, not an application issue). Pluto TV IT and RaiPlay search are access limitations.
-- Incomplete external evidence: the dominant category. 16 cases unverified; provider names not extractable from JustWatch NL search; audio/subtitle language not documented anywhere; playback never verified.
+- Incomplete external evidence: the dominant category. 16 cases externally unverified; provider names not extractable from JustWatch NL search; audio/subtitle language not documented anywhere; playback never verified.
 
 ## Distinguishing per audit rule
 Per Stage 2 guidance, aggregator omission, failed/geo-blocked access, incomplete scans, and missing provider mappings are NOT negative evidence and do not deactivate independent positive offers. None of the above limitations are reported as "title unavailable in country X."

@@ -59,11 +59,23 @@ This audit made 0 Watchmode calls (per budget policy), so U1 remains unverified.
 | Streaming Availability / Watchmode | 0 calls | 0% | Metered, per policy not used |
 
 ## What could NOT be determined (honest limitations)
+
+The available research supports **external positive observations** (positive external listing evidence collected, primarily from the JustWatch secondary aggregator). It does **not** establish:
+
+1. **External availability advertised by an aggregator** — established for the 14 `EXTERNAL_AVAILABILITY_OBSERVED` cases (JustWatch listing only).
+2. **Availability confirmed by an official provider** — NOT established. No official provider page (RaiPlay, Mediaset Infinity, Prime Video, Netflix, Pluto TV) was directly queried for per-title evidence within constraints.
+3. **Actual playable availability** — NOT established. No playback was attempted (no accounts, no automated streaming). All evidence is advertised/listing only.
+4. **Subscription entitlement** — NOT established. No user/subscription rows were inspected.
+5. **Audio/subtitle compatibility** — NOT established. No language evidence was documented by the sources consulted.
+6. **Application correctness** — NOT established. No application output (serialized offers, API responses, frontend verdicts) or database/runtime state was accessible. Whether the application agrees with reality is `APP_AGREEMENT_UNVERIFIED` for every case.
+
+Consequences of these limitations:
 - Whether the application agrees with reality for any case (no app/DB access).
 - Whether playback actually works (no playback attempted; all evidence is advertised/listing only).
 - Audio/subtitle language documentation (not provided by the sources consulted).
 - Per-user subscription entitlement verdicts (no user/subscription rows inspected).
 - Any negative/unavailability conclusion (rules prohibit inferring absence from access failure or aggregator omission).
+
 
 ## Next steps
 1. Implement P1 (observability) so the next audit can diff reality vs application.
@@ -71,3 +83,35 @@ This audit made 0 Watchmode calls (per budget policy), so U1 remains unverified.
 3. Complete A5/A6/A7 follow-ups.
 4. Review U1 against current Watchmode docs; change code only if documentation supports it.
 5. Re-run a live audit with direct official-page access (RaiPlay, Mediaset, Prime Video, Netflix, Pluto TV) once access is possible, within the same 60-visit / 0-metered-API-call policy.
+
+## Stage 2C Handoff — Next Application Accuracy Audit
+
+The next audit must assess whether the application agrees with the externally observed availability, using **read-only local application data** and avoiding metered provider requests (Streaming Availability, Watchmode). No application code or production data should be modified; no metered API calls should be made.
+
+For each title-country case the next audit must collect:
+
+| Field | Description |
+|---|---|
+| TMDb ID | Canonical title identity (TMDb identifier) used for matching. |
+| Media type | `movie` or `series`, used to disambiguate titles across media types. |
+| Country | Territorial scope of the availability check (e.g., IT, NL). |
+| Canonical provider | The provider name as registered in the application, with its declared country scope. |
+| Offer type | Subscription (Flat/Abbo), rent/buy (TVOD), or free/ad-supported. |
+| Source | Evidence source (e.g., JustWatch IT title page, JustWatch search, official provider page). |
+| Observation timestamp | When the external evidence was collected (UTC). |
+| Freshness | How current the external evidence is relative to the application's last refresh/seeding. |
+| Territorial scope | Whether the provider is registered/enabled for the country being audited. |
+| Availability confidence | Confidence level of the external observation (e.g., Medium title page, Low-Medium search). |
+| Entitlement | Whether the observing account/subscription is entitled to the offer (if determinable without metered calls). |
+| Language evidence | Audio/subtitle language compatibility observed (if documented by the source). |
+| Final watchability verdict | Whether the title is watchable in that country on that provider (advertised only; playback not attempted). |
+| External reference | URL or other reference to the external evidence page. |
+| Agreement assessment | Whether the application's offer set matches the external observation (agree / disagree / unverifiable). |
+
+The next audit should:
+- Use read-only local application data (catalogue, offers, provider registration, refresh output) as the application side of the comparison.
+- Diff application output against the external evidence collected above.
+- Avoid metered provider requests (0 Streaming Availability, 0 Watchmode calls), consistent with Stage 2B policy.
+- Not modify application code or production data.
+- Preserve D1–D5 as observations and risks, not confirmed application bugs.
+
