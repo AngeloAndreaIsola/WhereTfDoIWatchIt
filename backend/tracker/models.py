@@ -458,6 +458,41 @@ class CatalogueDiscoveryState(models.Model):
         return f"{self.provider.slug}: {self.status} ({self.mode})"
 
 
+class KissKHPendingClassification(models.Model):
+    """A real KissKH listing record whose movie/series type is unverified.
+
+    These observations intentionally do not enter ScrapedContentMapping or the
+    canonical catalogue until explicit detail metadata resolves their type.
+    """
+    STATUS_CHOICES = [("PENDING", "Pending"), ("RESOLVED", "Resolved")]
+    CONTENT_TYPE_CHOICES = [("movie", "Movie"), ("series", "Series")]
+
+    provider = models.ForeignKey(Provider, on_delete=models.CASCADE, related_name="kisskh_pending_classifications")
+    native_id = models.CharField(max_length=255)
+    title = models.CharField(max_length=255)
+    partition = models.CharField(max_length=16)
+    detail_url = models.URLField(max_length=500)
+    release_year = models.IntegerField(null=True, blank=True)
+    listing_observation = models.JSONField(default=dict, blank=True)
+    detail_enrichment = models.JSONField(default=dict, blank=True)
+    status = models.CharField(max_length=12, choices=STATUS_CHOICES, default="PENDING")
+    resolved_content_type = models.CharField(max_length=12, choices=CONTENT_TYPE_CHOICES, null=True, blank=True)
+    classification_reason = models.CharField(max_length=255, blank=True, default="")
+    detail_attempts = models.PositiveIntegerField(default=0)
+    last_detail_error = models.TextField(blank=True, default="")
+    first_seen = models.DateTimeField(auto_now_add=True)
+    last_seen = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["provider", "native_id", "partition"],
+                name="uniq_kisskh_pending_provider_id_partition",
+            )
+        ]
+        indexes = [models.Index(fields=["provider", "status"], name="idx_kisskh_pending_status")]
+
+
 class Subscription(models.Model):
     user_id = models.IntegerField(default=1)
     provider = models.ForeignKey(

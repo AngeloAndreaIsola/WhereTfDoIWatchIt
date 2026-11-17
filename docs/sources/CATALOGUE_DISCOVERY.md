@@ -127,16 +127,74 @@ The public detail API route was found in the current site JavaScript as
 KissKH's repository adapter previously had no detail-fetch method. Listing
 fields remain the persisted observations; detail probes were used to validate
 the partition signal and metadata availability, not to claim playback. The
-provider's `Anime` detail type includes both a series and a film, so type 3 is
-no longer treated wholesale as series: multi-episode anime is classified as a
-series, while a one-episode anime row without explicit `Movie` or `TVSeries`
-evidence blocks that page instead of being guessed. The type 2 and type 1
-partition signals were corroborated by the detail samples above.
+provider's `Anime` detail type includes both a series and a film. Partition
+membership and episode count therefore do not establish a title's movie/series
+type. Discovery now persists rows without explicit `Movie` or `TVSeries`
+evidence in `KissKHPendingClassification`; they do not create canonical
+movie/series records. A reusable detail fetcher and resolver promote the
+observation only after explicit detail type metadata arrives. Episode count and
+`Anime` alone remain ambiguous.
 
 The detail responses contained release dates and episode lists, but no audio
 or subtitle language fields. `country`, `sub` and the website's English-facing
-interface are not language evidence. Audio and subtitle values stay unknown;
-the API's title/episode metadata does not confirm playable availability.
+interface are not language evidence. Current status:
+`LANGUAGE_METADATA_UNAVAILABLE`. Audio and subtitle values stay unknown; the
+API's title/episode metadata does not confirm playable availability.
+
+### KissKH bounded partition and boundary probes (2026-11-17)
+
+After the earlier three-page type 2 ingestion, a separate bounded probe made
+12 listing API requests: page 1, a middle page, the reported last page and one
+page beyond the reported end for each partition, all at `pageSize=20`. It also
+requested `/robots.txt` and `/` once each. The listing endpoint answered HTTP
+200 JSON for all 12 requests. `/robots.txt` again returned HTML; `/` returned
+HTTP 451 HTML. The API was still directly reachable, but the homepage response
+is an access restriction signal, so no discovery command, ingestion or further
+live request was run after these probes. There were 0 failed listing requests
+and 1 HTTP 451 access response.
+
+| Partition | API total | Pages sampled (first / middle / last) | Rows / sampled IDs | Beyond-last behavior | Catalogue traversal |
+|---|---:|---|---:|---|---|
+| Type 1 | 6,899 | 1 / 172 / 345 | 59 / 59 | Request 346 returned page 345 again (19 rows) | Not traversed sequentially; PARTIAL |
+| Type 2 | 1,595 | 1 / 40 / 80 | 55 / 55 | Request 81 returned page 80 again (15 rows) | Not traversed sequentially; PARTIAL |
+| Type 3 | 2,552 | 1 / 64 / 128 | 52 / 52 | Request 129 returned page 128 again (12 rows) | Not traversed sequentially; PARTIAL |
+
+Across the nine distinct sampled pages, 166 listing rows and 166 distinct
+native IDs were observed after deduplicating the captured page-ID sets across
+all partitions. No sampled ID repeated within or between those pages. This is a
+boundary sample, not a sequential page traversal or a count of the complete
+catalogue. The first and middle pages returned 20 rows each. The final short pages (19, 15 and 12 rows)
+fit the reported totals and expected page counts (345, 80 and 128). Beyond-last
+requests were clamped to the final page rather than returning an empty page.
+The reported totals stayed constant across the sampled pages.
+
+The endpoint is absent from the public JavaScript bundle inspected in the
+previous probe and is therefore an undocumented, potentially legacy API. Its
+continued HTTP 200 responses demonstrate current accessibility, not permission
+for an unrestricted crawl. Stability risk is high. The root 451 response and
+unreadable robots body leave the site's applicable access policy unclear, so
+only this small probe was completed. No direct detail API requests were made in
+this follow-up. Existing detail samples remain the four records above.
+
+| Metric | Type 1 | Type 2 | Type 3 |
+|---|---:|---:|---:|
+| Reported records | 6,899 | 1,595 | 2,552 |
+| Distinct pages probed / pages traversed | 3 / 0 sequential | 3 / 0 sequential | 3 / 0 sequential |
+| Sampled unique native IDs | 59 | 55 | 52 |
+| Movie / series classifications in this probe | 0 / 0 | 0 / 0 | 0 / 0 |
+| Movie / series / ambiguous sampled rows | 0 / 0 / 59 | 0 / 0 / 55 | 0 / 0 / 52 |
+| Duplicate IDs measured | 0 within/between sampled pages | 0 within/between sampled pages | 0 within/between sampled pages |
+| Failed listing pages / HTTP requests | 0 / 4 | 0 / 4 | 0 / 4 |
+| Last reported page / terminal evidence | 345 / short page and clamp confirmed | 80 / short page and clamp confirmed | 128 / short page and clamp confirmed |
+| Sequential coverage | Unknown | Unknown | Unknown |
+
+Total probe requests were 14 (12 catalogue, 1 robots, 1 homepage); the
+discovery command dispatched 0 requests in this follow-up. The 166 sampled
+observations were not persisted because of the 451 access signal. No
+classification detail requests were made. The previous
+60-row scratch ingestion is historical evidence from the preceding task, not
+the current database state. Backend changes add pending-classification storage
+in migration `0051`; isolated tests are the only database use for that schema.
 
 An isolated `catalogue_discovery_scratch` database was migrated from an empty
 PostgreSQL database through all migrations. Its command status was empty before
@@ -145,6 +203,10 @@ provider identity support and is exercised by the focused backend tests.
 All 3,215 backend tests passed in a test container using that fixture plus a
 read-only mount of the repository `scripts/` directory; all 274 frontend tests
 passed. `makemigrations --check --dry-run` reported no model/migration drift.
+For the classification follow-up, migration `0051` applied in the isolated
+test database, 100 focused backend tests passed, and the complete isolated
+backend suite passed 3,247 tests. `makemigrations --check --dry-run` reported
+no drift. No frontend files changed, so frontend tests were not rerun.
 
 ### Runtime database migration state
 
@@ -174,7 +236,7 @@ runtime migrations were run during validation.
 | Provider | Strategy | Completion evidence / current limit |
 |---|---|---|
 | AnimeWorld | `/az-list?page=N`, card-local parser | Traversal logic is fixture-tested. The live domain probe did not return a listing, so page links, classification and terminal behavior remain unverified. |
-| KissKH | API `type` partitions 2/1/3 and `pageSize=20` | Types 2 and 1 were corroborated as Movie and TVSeries by detail samples. Type 3 is the mixed Anime category; a one-episode Anime detail is ambiguous and blocks that page. Type 2 has 80 reported pages; only pages 1–3 were traversed, so the provider remains PARTIAL. |
+| KissKH | Undocumented API `type` partitions 1/2/3 and `pageSize=20` | Bounded probes verified first/middle/last page numbering, short final pages and beyond-last clamping for all partitions; no intermediate pages were traversed. Title-level explicit detail type is required because partition and episode count are not reliable classification evidence. The public homepage returned HTTP 451, so ingestion stopped. The provider remains PARTIAL. |
 | HydraHD | `movies/date/N` and `tv-shows/date/N` | Separate cursor logic is fixture-tested. Live fallback did not produce listing HTML; pagination and terminal behavior remain unverified. |
 | CineBlog01 | `/film/` and `/serie-tv/`, `/page/N/` | Archive traversal logic is fixture-tested. Live fallback did not produce a listing; pagination links and terminal behavior remain unverified. |
 | StreamingCommunity | Existing root, film, series, archive listing paths | Live response was HTTP 403. No workaround or additional path guessing was attempted; public pagination is unverified. |

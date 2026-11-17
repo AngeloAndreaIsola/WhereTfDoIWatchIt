@@ -27,7 +27,7 @@ from tracker.services.availability_report import title_source_report
 
 class UnknownScraperMetadataTests(SimpleTestCase):
     def test_adapters_do_not_invent_playback_metadata(self):
-        kisskh = KissKHScraper().parse_items([{"id": "1", "title": "Plain"}])[0]
+        kisskh = KissKHScraper().parse_items([{"id": "1", "title": "Plain", "type": "Movie"}])[0]
         generic = GenericURLAdapter("fixture", "fixture.example").parse_items([
             {"id": "1", "title": "Plain"}
         ])[0]
@@ -48,7 +48,7 @@ class UnknownScraperMetadataTests(SimpleTestCase):
     def test_observed_metadata_is_preserved(self):
         item = KissKHScraper().parse_items([
             {
-                "id": "1", "title": "Observed", "audio": ["Italian"],
+                "id": "1", "title": "Observed", "type": "Movie", "audio": ["Italian"],
                 "subtitles": ["English"], "quality": "4k",
             }
         ])[0]

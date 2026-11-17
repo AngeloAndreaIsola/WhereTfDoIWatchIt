@@ -19,7 +19,7 @@ import requests
 
 from django.utils import timezone as django_timezone
 
-from tracker.models import CatalogueDiscoveryState, Provider
+from tracker.models import CatalogueDiscoveryState, KissKHPendingClassification, Provider
 from tracker.scrapers import resolve_scraper_class
 from tracker.scrapers.adapters import KissKHScraper
 from tracker.scrapers.cineblog01 import BROWSE_SECTIONS
@@ -51,6 +51,67 @@ class CatalogueDiscoveryError(RuntimeError):
         super().__init__(report.get("last_error") or "Catalogue discovery failed")
 
 
+class CataloguePageRows(list):
+    """Classified rows plus valid observations awaiting stronger type evidence."""
+    def __init__(self, items=(), pending=(), *, total_count=None, page=None, page_size=None):
+        super().__init__(items)
+        self.pending = list(pending)
+        self.total_count = total_count
+        self.page = page
+        self.page_size = page_size
+
+
+def resolve_kisskh_pending_classification(pending, detail):
+    """Promote a pending row only when detail type explicitly says Movie/TVSeries.
+
+    Calling this again with a non-resolving payload records another attempt and
+    leaves the row pending, making retries safe and idempotent.
+    """
+    from tracker.scrapers.base import ScrapedItem
+
+    scraper = KissKHScraper()
+    metadata = scraper.extract_detail_metadata(detail, native_id=pending.native_id)
+    pending.detail_attempts += 1
+    if not metadata:
+        pending.last_detail_error = "missing_or_mismatched_detail_metadata"
+        pending.save(update_fields=["detail_attempts", "last_detail_error", "last_seen"])
+        return False
+    normalized_type = metadata["source_media_type"].strip().casefold().replace(" ", "")
+    content_type = {
+        "movie": "movie", "tvseries": "series", "tv_series": "series",
+        "tv-series": "series", "series": "series",
+    }.get(normalized_type)
+    pending.detail_enrichment = metadata
+    pending.last_detail_error = ""
+    if content_type is None:
+        pending.classification_reason = f"unresolved provider type: {metadata['source_media_type'] or 'missing'}"
+        pending.save(update_fields=["detail_attempts", "detail_enrichment", "last_detail_error", "classification_reason", "last_seen"])
+        return False
+
+    raw_payload = {
+        "id": pending.native_id,
+        "listing_observation": pending.listing_observation,
+        "detail_enrichment": metadata,
+        "unverified_discovery": True,
+    }
+    item = ScrapedItem(
+        title=metadata["title"] or pending.title,
+        original_title=metadata["original_title"] or None,
+        year=metadata["release_year"] or pending.release_year,
+        content_type=content_type,
+        provider_slug="kisskh",
+        source_url=metadata["detail_url"] or pending.detail_url,
+        raw_payload=raw_payload,
+    )
+    from tracker.services.scraped_mapping import persist_scraped_item
+    persist_scraped_item(provider=pending.provider, item=item)
+    pending.status = "RESOLVED"
+    pending.resolved_content_type = content_type
+    pending.classification_reason = f"explicit detail type: {metadata['source_media_type']}"
+    pending.save(update_fields=["status", "resolved_content_type", "detail_attempts", "detail_enrichment", "last_detail_error", "classification_reason", "last_seen"])
+    return True
+
+
 def _same_persisted_observation(mapping, item):
     """Compare against the payload normalized by persist_scraped_item()."""
     expected_payload = dict(item.raw_payload) if isinstance(item.raw_payload, dict) else {}
@@ -77,7 +138,6 @@ def _parts(slug):
 def _page(scraper, slug, part, page, query=None):
     """Return (items, terminal, known_pages, evidence). None means failure."""
     if slug == "kisskh":
-        kind = dict((k, t) for k, t in KissKHScraper.BROWSE_TYPES)[part]
         path = f"/api/DramaList/List?page={page}&type={part}&sub=0&country=0&status=0&order=1&pageSize={scraper.DISCOVERY_PAGE_SIZE}"
         raw = scraper._fetch_api(path)
         if not isinstance(raw, dict): return None, False, None, "missing_or_unexpected_api_response"
@@ -91,20 +151,27 @@ def _page(scraper, slug, part, page, query=None):
             total = int(raw.get("totalCount"))
         except (TypeError, ValueError):
             return None, False, None, "missing_or_invalid_pagination_metadata"
-        if response_page != page or page_size < 1 or total < 0:
+        if page_size < 1 or total < 0 or response_page < 1 or response_page > page:
             return None, False, None, "inconsistent_pagination_metadata"
         if not rows and page <= (total + page_size - 1) // page_size:
             return None, False, None, "empty_page_before_reported_terminal_page"
-        items = scraper.parse_items(rows, content_type=kind)
+        items, pending = scraper.parse_catalogue_rows(rows)
         page_total = (total + page_size - 1) // page_size
         totals = getattr(scraper, "catalogue_totals", {})
         totals[part] = total
         scraper.catalogue_totals = totals
-        terminal = page >= page_total
-        if len(items) != len(rows):
-            evidence = "unclassified_or_malformed_anime_rows" if part == "3" else "malformed_listing_rows"
+        clamped_to_terminal = (
+            response_page == page_total and page == page_total + 1 and page_total > 0
+        )
+        if response_page != page and not clamped_to_terminal:
+            return None, False, page_total, "inconsistent_pagination_metadata"
+        terminal = page >= page_total or clamped_to_terminal
+        if len(items) + len(pending) != len(rows):
+            evidence = "malformed_listing_rows"
             return None, False, page_total, evidence
-        return items, terminal, page_total, "api_total_count"
+        return CataloguePageRows(
+            items, pending, total_count=total, page=response_page, page_size=page_size
+        ), terminal, page_total, "api_clamped_terminal_page" if clamped_to_terminal else "api_total_count"
     if slug == "hydrahd":
         kind = "series" if part == "tv-shows" else "movie"
         last = None
@@ -264,6 +331,10 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
             "pages_scanned": 0, "pages_remaining": None, "items_seen": 0,
             "items_unique": 0, "items_inserted": 0, "items_updated": 0,
             "items_unchanged": 0, "duplicates_skipped": 0, "errors": 0,
+            "items_pending_classification": 0, "pending_inserted": 0,
+            "pending_updated": 0, "pending_unchanged": 0,
+            "pagination_total_changes": [],
+            "duplicate_native_ids_across_partitions": 0,
             "known_site_total": None, "coverage_percent": "UNKNOWN",
             "mapped_titles": "UNKNOWN", "confirmed_offers": "UNKNOWN",
             "last_successful_checkpoint": None, "last_success_at": None,
@@ -278,6 +349,7 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
             state.report = report
             state.save()
         completed_parts = set(cursor.get("done", []))
+        seen_native_partitions = {}
         try:
             if mode == "targeted":
                 # Existing provider search adapters are real search routes for
@@ -335,12 +407,28 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                         report["status"] = "BLOCKED"
                         report["last_error"] = evidence
                         raise RuntimeError(evidence)
+                    pending_rows = list(getattr(rows, "pending", []))
+                    response_total = getattr(rows, "total_count", None)
+                    stored_totals = cursor.setdefault("reported_totals", {})
+                    old_total = stored_totals.get(part)
+                    total_changed = response_total is not None and old_total is not None and int(old_total) != int(response_total)
+                    if response_total is not None:
+                        stored_totals[part] = int(response_total)
+                    if total_changed:
+                        report["pagination_total_changes"].append({
+                            "partition": part, "previous": int(old_total), "current": int(response_total),
+                        })
+                    observed_count = len(rows) + len(pending_rows)
+                    fingerprint_ids = [
+                        str((item.raw_payload or {}).get("id") or (item.raw_payload or {}).get("title_id") or item.source_url)
+                        for item in rows
+                    ] + [str(row.get("id") or "") for row in pending_rows]
                     fingerprint = hashlib.sha256(json.dumps(
-                        [str((item.raw_payload or {}).get("id") or (item.raw_payload or {}).get("title_id") or item.source_url) for item in rows],
+                        fingerprint_ids,
                         separators=(",", ":"),
                     ).encode("utf-8")).hexdigest()
                     previous_fingerprint = (cursor.get("fingerprints") or {}).get(part)
-                    if rows and not terminal and previous_fingerprint == fingerprint:
+                    if observed_count and not terminal and previous_fingerprint == fingerprint:
                         report["status"] = "PARTIAL"
                         report["last_error"] = f"{part}: repeated non-terminal page detected"
                         break
@@ -352,17 +440,66 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                     if all(value in totals for value in parts):
                         report["known_site_total"] = sum(totals[value] for value in parts)
                     report["pages_discovered"] = max(report["pages_discovered"], total_pages or page)
-                    report["items_seen"] += len(rows)
+                    report["items_seen"] += observed_count
                     page_seen = set()
+                    for observed in pending_rows:
+                        native_id = str(observed.get("id") or "").strip()
+                        identity = (native_id, "pending", part)
+                        if identity in page_seen:
+                            report["duplicates_skipped"] += 1
+                            continue
+                        page_seen.add(identity)
+                        prior_partitions = seen_native_partitions.setdefault(native_id, set())
+                        if not prior_partitions:
+                            report["items_unique"] += 1
+                        elif part not in prior_partitions:
+                            report["duplicate_native_ids_across_partitions"] += 1
+                        prior_partitions.add(part)
+                        report["items_pending_classification"] += 1
+                        if dry_run:
+                            continue
+                        metadata = scraper.extract_detail_metadata(observed, native_id=native_id)
+                        pending, created = KissKHPendingClassification.objects.get_or_create(
+                            provider=provider,
+                            native_id=native_id,
+                            partition=part,
+                            defaults={
+                                "title": metadata["title"] or "",
+                                "release_year": metadata["release_year"],
+                                "detail_url": metadata["detail_url"],
+                                "listing_observation": observed,
+                            },
+                        )
+                        if created:
+                            report["items_inserted"] += 1
+                            report["pending_inserted"] += 1
+                        else:
+                            unchanged = (
+                                pending.title == (metadata["title"] or "")
+                                and pending.release_year == metadata["release_year"]
+                                and pending.detail_url == metadata["detail_url"]
+                                and pending.listing_observation == observed
+                            )
+                            if unchanged:
+                                report["items_unchanged"] += 1
+                                report["pending_unchanged"] += 1
+                                pending.save(update_fields=["last_seen"])
+                            else:
+                                pending.title = metadata["title"] or pending.title
+                                pending.release_year = metadata["release_year"] or pending.release_year
+                                pending.detail_url = metadata["detail_url"] or pending.detail_url
+                                pending.listing_observation = observed
+                                pending.save(update_fields=["title", "release_year", "detail_url", "listing_observation", "last_seen"])
+                                report["items_updated"] += 1
+                                report["pending_updated"] += 1
                     for item in rows:
-                        identity = provider_content_id_for_item(item) or item.source_url or (item.title, item.year, item.content_type)
-                        identity = str(identity)
+                        native_id = provider_content_id_for_item(item)
+                        identity = (native_id, item.content_type) if native_id else (item.source_url or item.title, item.content_type)
                         if identity in page_seen:
                             report["duplicates_skipped"] += 1
                             continue
                         page_seen.add(identity)
                         from tracker.models import ScrapedContentMapping
-                        native_id = provider_content_id_for_item(item)
                         repeated_url = (
                             not native_id
                             and ScrapedContentMapping.objects.filter(provider=provider, scraped_url=item.source_url)
@@ -373,8 +510,18 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                         if repeated_url:
                             report["duplicates_skipped"] += 1
                             continue
-                        report["items_unique"] += 1
+                        if native_id:
+                            prior_partitions = seen_native_partitions.setdefault(native_id, set())
+                            if not prior_partitions:
+                                report["items_unique"] += 1
+                            elif part not in prior_partitions:
+                                report["duplicate_native_ids_across_partitions"] += 1
+                            prior_partitions.add(part)
+                        else:
+                            report["items_unique"] += 1
                         item.raw_payload = {**(item.raw_payload or {}), "unverified_discovery": True}
+                        if slug == "kisskh":
+                            item.raw_payload["catalogue_partition"] = part
                         if not dry_run:
                             prior = None
                             if native_id:
@@ -392,10 +539,19 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                                     scraped_content_type=item.content_type,
                                 ).first()
                             persist_scraped_item(provider=provider, item=item)
+                            if slug == "kisskh" and native_id:
+                                pending_type = item.content_type
+                                KissKHPendingClassification.objects.filter(
+                                    provider=provider, native_id=native_id, status="PENDING"
+                                ).update(
+                                    status="RESOLVED",
+                                    resolved_content_type=pending_type,
+                                    classification_reason="explicit listing type",
+                                )
                             if prior is None: report["items_inserted"] += 1
                             elif _same_persisted_observation(prior, item): report["items_unchanged"] += 1
                             else: report["items_updated"] += 1
-                    pagination_is_partial = evidence in {"pagination_not_demonstrated", "pagination_follow_not_verified"}
+                    pagination_is_partial = evidence in {"pagination_not_demonstrated", "pagination_follow_not_verified"} or total_changed
                     if not dry_run and not pagination_is_partial:
                         cursor.setdefault("parts", {})[part] = page
                         cursor.setdefault("fingerprints", {})[part] = fingerprint
@@ -406,7 +562,19 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                         state.save(update_fields=["cursor", "report", "last_successful_checkpoint", "updated_at"])
                     if pagination_is_partial:
                         report["status"] = "PARTIAL"
-                        report["last_error"] = f"{part}: {evidence}"
+                        if total_changed:
+                            report["last_error"] = f"{part}: pagination_total_changed_restart_partition"
+                            if not dry_run:
+                                # The index may have shifted. Preserve inserted
+                                # records, but restart this partition next time.
+                                cursor.setdefault("parts", {})[part] = 0
+                                cursor.setdefault("fingerprints", {}).pop(part, None)
+                                cursor["done"] = sorted(completed_parts - {part})
+                                state.cursor, state.report = cursor, report
+                                state.last_successful_checkpoint = django_timezone.now()
+                                state.save(update_fields=["cursor", "report", "last_successful_checkpoint", "updated_at"])
+                        else:
+                            report["last_error"] = f"{part}: {evidence}"
                         break
                     if terminal:
                         break
@@ -415,8 +583,15 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                 if requests_made >= request_budget and part not in completed_parts:
                     report["status"] = "PARTIAL"
                     break
-            if len(completed_parts) == len(parts):
+            unresolved_count = KissKHPendingClassification.objects.filter(
+                provider=provider, status="PENDING"
+            ).count() if slug == "kisskh" else 0
+            report["unresolved_classifications"] = unresolved_count
+            if len(completed_parts) == len(parts) and not unresolved_count:
                 report["status"] = "COMPLETED"
+            elif len(completed_parts) == len(parts):
+                report["status"] = "PARTIAL"
+                report["last_error"] = "unresolved_title_classifications_remain"
             elif report["status"] == "RUNNING":
                 report["status"] = "PARTIAL"
             if all(part in known_pages_by_part for part in parts):

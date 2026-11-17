@@ -176,7 +176,10 @@ class KissKHClassificationTests(TestCase):
 
     def test_parse_items_uses_the_declared_type(self):
         rows = [{"id": 1, "title": "Some Show", "year": 2020}]
+        self.assertEqual(self.scraper.parse_items(rows, content_type="series"), [])
+        rows = [{**rows[0], "type": "TVSeries"}]
         series = self.scraper.parse_items(rows, content_type="series")
+        rows = [{**rows[0], "type": "Movie"}]
         movies = self.scraper.parse_items(rows, content_type="movie")
         self.assertEqual(series[0].content_type, "series")
         self.assertEqual(movies[0].content_type, "movie")
@@ -185,9 +188,9 @@ class KissKHClassificationTests(TestCase):
     def test_browse_requests_each_type_and_classifies(self, mock_fetch):
         def fake_fetch(url, *args, **kwargs):
             if "type=2" in url:
-                return {"data": [{"id": 10, "title": "A Film", "year": 2020}]}
+                return {"data": [{"id": 10, "title": "A Film", "year": 2020, "type": "Movie"}]}
             if "type=1" in url:
-                return {"data": [{"id": 11, "title": "A Drama", "year": 2021}]}
+                return {"data": [{"id": 11, "title": "A Drama", "year": 2021, "type": "TVSeries"}]}
             if "type=3" in url:
                 return {"data": [{"id": 12, "title": "An Anime", "year": 2022, "episodesCount": 12}]}
             return None
@@ -206,12 +209,11 @@ class KissKHClassificationTests(TestCase):
         self.assertEqual(by_title, {
             "A Film": "movie",
             "A Drama": "series",
-            "An Anime": "series",
         })
 
     @patch.object(KissKHScraper, "fetch_url")
     def test_search_queries_every_type(self, mock_fetch):
-        mock_fetch.return_value = [{"id": 1, "title": "Result", "year": 2020}]
+        mock_fetch.return_value = [{"id": 1, "title": "Result", "year": 2020, "type": "Movie"}]
         self.scraper.run(query="dune")
 
         urls = [c.args[0] for c in mock_fetch.call_args_list]
@@ -221,8 +223,9 @@ class KissKHClassificationTests(TestCase):
 
     @patch.object(KissKHScraper, "fetch_url")
     def test_same_native_id_in_movie_and_series_partitions_stays_separate(self, mock_fetch):
-        entry = {"id": 77, "title": "Shared", "year": 2019}
-        mock_fetch.return_value = [entry]
+        def result(url, *args, **kwargs):
+            return [{"id": 77, "title": "Shared", "year": 2019, "type": "TVSeries" if "type=1" in url else "Movie"}]
+        mock_fetch.side_effect = result
         items = self.scraper.run(query="shared")
         self.assertEqual({item.content_type for item in items}, {"movie", "series"})
         self.assertEqual(len(items), 2)

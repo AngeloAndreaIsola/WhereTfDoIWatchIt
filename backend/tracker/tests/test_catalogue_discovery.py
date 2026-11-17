@@ -4,7 +4,7 @@ from django.test import TestCase
 
 from tracker.models import CatalogueDiscoveryState, Movie, Provider, ScrapedContentMapping
 from tracker.scrapers.base import ScrapedItem
-from tracker.services.catalogue_discovery import CatalogueDiscoveryError, PROVIDERS, run_discovery
+from tracker.services.catalogue_discovery import CatalogueDiscoveryError, CataloguePageRows, PROVIDERS, run_discovery
 from tracker.services.scraped_mapping import persist_scraped_item
 
 
@@ -75,6 +75,51 @@ class CatalogueDiscoveryTests(TestCase):
         self.assertEqual(first["items_inserted"], 1)
         self.assertEqual(replay["items_unchanged"], 1)
         self.assertEqual(ScrapedContentMapping.objects.filter(provider=self.providers[slug]).count(), 1)
+
+    def test_duplicate_native_id_across_partitions_is_counted_once_but_types_stay_separate(self):
+        slug = "kisskh"
+        def pages(scraper, _provider_slug, part, page, query=None):
+            scraper.session.get("https://fixture.invalid/page")
+            kind = "movie" if part == "1" else "series"
+            item = ScrapedItem(
+                title="Shared native record", provider_slug=slug, content_type=kind,
+                source_url="https://kisskh.do/Drama/shared",
+                raw_payload={"id": "shared", "type": "Movie" if kind == "movie" else "TVSeries"},
+            )
+            return CataloguePageRows([item]), True, 1, "api_total_count"
+        with patch("tracker.services.catalogue_discovery._page", side_effect=pages), \
+             patch("tracker.services.catalogue_discovery._parts", return_value=["1", "2"]), \
+             patch("requests.Session.get", return_value=object()):
+            result = run_discovery(slug, request_budget=3, delay=0)
+        rows = ScrapedContentMapping.objects.filter(provider=self.providers[slug])
+        self.assertEqual(rows.count(), 2)
+        self.assertEqual(result["items_unique"], 1)
+        self.assertEqual(result["duplicate_native_ids_across_partitions"], 1)
+
+    def test_changed_partition_total_restarts_partition_and_stays_partial(self):
+        slug = "kisskh"
+        provider = self.providers[slug]
+        state = CatalogueDiscoveryState.objects.create(
+            provider=provider,
+            cursor={"done": [], "parts": {"2": 1}, "reported_totals": {"2": 40}},
+        )
+        item = ScrapedItem(
+            title="Page two", provider_slug=slug, content_type="movie",
+            source_url="https://kisskh.do/Drama/2", raw_payload={"id": "2"},
+        )
+        def pages(scraper, _provider_slug, part, page, query=None):
+            scraper.session.get("https://fixture.invalid/page")
+            return CataloguePageRows([item], total_count=41, page=2, page_size=20), False, 3, "api_total_count"
+        with patch("tracker.services.catalogue_discovery._page", side_effect=pages), \
+             patch("tracker.services.catalogue_discovery._parts", return_value=["2"]), \
+             patch("requests.Session.get", return_value=object()):
+            result = run_discovery(slug, request_budget=2, delay=0)
+        state.refresh_from_db()
+        self.assertEqual(result["status"], "PARTIAL")
+        self.assertEqual(result["pagination_total_changes"], [{"partition": "2", "previous": 40, "current": 41}])
+        self.assertEqual(state.cursor["parts"]["2"], 0)
+        self.assertEqual(state.cursor["reported_totals"]["2"], 41)
+        self.assertEqual(ScrapedContentMapping.objects.filter(provider=provider).count(), 1)
 
     def test_failed_run_exposes_dispatched_request_count_and_durable_report(self):
         slug = "animeworld"

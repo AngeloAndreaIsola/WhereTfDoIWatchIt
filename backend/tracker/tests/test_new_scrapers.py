@@ -202,7 +202,7 @@ class AltaDefinizioneScraperTest(TestCase):
 class LegacyScraperPaginationTest(TestCase):
     @patch.object(KissKHScraper, "fetch_url")
     def test_kisskh_requests_large_pages_for_every_type(self, mock_fetch):
-        rows = [{"id": i, "title": f"Movie {i}"} for i in range(200)]
+        rows = [{"id": i, "title": f"Movie {i}", "type": "Movie"} for i in range(200)]
 
         def fake_fetch(url, *args, **kwargs):
             return {"data": rows} if "type=2" in url else {"data": []}

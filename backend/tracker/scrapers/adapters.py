@@ -87,6 +87,58 @@ class KissKHScraper(BaseScraper):
                 return data
         return None
 
+    def fetch_detail(self, native_id: str | int):
+        """Fetch optional title metadata through KissKH's public detail API."""
+        from urllib.parse import quote
+
+        return self._fetch_api(f"/api/DramaList/Drama/{quote(str(native_id), safe='')}?isq=false")
+
+    @staticmethod
+    def extract_detail_metadata(detail: Any, *, native_id: str | None = None) -> dict[str, Any]:
+        """Return only explicit detail fields; episode counts never imply type."""
+        if not isinstance(detail, dict):
+            return {}
+        provider_id = detail.get("id")
+        if native_id is not None and provider_id is not None and str(provider_id) != str(native_id):
+            return {}
+        release = detail.get("releaseDate") or detail.get("release_date")
+        year = detail.get("year") or detail.get("releaseYear")
+        if not year and release:
+            try:
+                year = datetime.fromisoformat(str(release).replace("Z", "+00:00")).year
+            except ValueError:
+                year = None
+        try:
+            year = int(year) if year else None
+        except (TypeError, ValueError):
+            year = None
+        if year is not None and not 1900 <= year <= 2100:
+            year = None
+        episodes = detail.get("episodes")
+        episode_ids = []
+        if isinstance(episodes, list):
+            for episode in episodes:
+                if isinstance(episode, dict):
+                    episode_id = episode.get("id") or episode.get("episodeId") or episode.get("episodeID")
+                    if episode_id is not None:
+                        episode_ids.append(str(episode_id))
+        try:
+            episode_count = int(detail.get("episodesCount"))
+        except (TypeError, ValueError):
+            episode_count = len(episodes) if isinstance(episodes, list) else None
+        return {
+            "native_id": str(provider_id if provider_id is not None else native_id or ""),
+            "title": str(detail.get("title") or detail.get("name") or ""),
+            "original_title": str(detail.get("originalTitle") or detail.get("original_title") or ""),
+            "release_date": str(release or ""),
+            "release_year": year,
+            "source_media_type": str(detail.get("type") or ""),
+            "episode_count": episode_count,
+            "episode_ids": episode_ids,
+            "detail_url": f"https://kisskh.do/Drama/{provider_id if provider_id is not None else native_id}",
+            "raw": detail,
+        }
+
     # KissKH's API `type` parameter is the site's own structured content flag and
     # 2 = movie partition, 1 = TV-series partition, 3 = anime partition. `type=0`
     # is avoided because it carries no partition signal. The anime partition is
@@ -194,25 +246,17 @@ class KissKHScraper(BaseScraper):
                 year_int = None
             if year_int is not None and not 1900 <= year_int <= 2100:
                 year_int = None
-            provider_type = str(entry.get("type") or "").strip().casefold()
-            detail_types = {"movie": "movie", "tvseries": "series"}
+            provider_type = str(entry.get("type") or "").strip().casefold().replace(" ", "")
+            detail_types = {
+                "movie": "movie", "tvseries": "series", "tv_series": "series",
+                "tv-series": "series", "series": "series",
+            }
             item_type = detail_types.get(provider_type)
             if item_type is None:
-                if content_type == "anime" or provider_type == "anime":
-                    try:
-                        episodes_count = int(entry.get("episodesCount"))
-                    except (TypeError, ValueError):
-                        continue
-                    # Multiple source-reported episodes establish a series.
-                    # One episode may be a film or a single-episode series; do
-                    # not guess between them.
-                    if episodes_count <= 1:
-                        continue
-                    item_type = "series"
-                elif content_type in {"movie", "series"}:
-                    item_type = content_type
-                else:
-                    continue
+                # Partition membership and episode counts are not title-level
+                # classification evidence. The discovery path stores these
+                # rows as pending until detail metadata supplies Movie/TVSeries.
+                continue
 
             # Missing fields mean the provider did not report metadata.  Do
             # not turn that absence into an English/1080p claim: ranking treats
@@ -237,6 +281,24 @@ class KissKHScraper(BaseScraper):
                 )
             )
         return items
+
+    def parse_catalogue_rows(self, rows: Any) -> tuple[list[ScrapedItem], list[dict[str, Any]]]:
+        """Split listing records into explicitly typed items and pending rows."""
+        if not isinstance(rows, list):
+            return [], []
+        classified, pending = [], []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            items = self.parse_items([row])
+            if items:
+                classified.extend(items)
+            else:
+                title = row.get("title") or row.get("name")
+                native_id = row.get("id")
+                if title and native_id is not None and not isinstance(native_id, (dict, list, bool)) and str(native_id).strip():
+                    pending.append(row)
+        return self._dedupe(classified), pending
 
 
 class GenericURLAdapter(BaseScraper):

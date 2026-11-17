@@ -143,6 +143,7 @@ class ProviderSystemTests(TestCase):
             {
                 "id": 101,
                 "title": "Demon Slayer",
+                "type": "Movie",
                 "year": 2019,
                 "audio": ["Japanese"],
                 "subtitles": ["English"],
@@ -152,8 +153,8 @@ class ProviderSystemTests(TestCase):
 
         scraper = KissKHScraper()
         items = scraper.run(query="Demon Slayer")
-        self.assertEqual(len(items), 2)
-        self.assertSetEqual({item.content_type for item in items}, {"movie", "series"})
+        self.assertEqual(len(items), 1)
+        self.assertSetEqual({item.content_type for item in items}, {"movie"})
         item = items[0]
         self.assertEqual(item.title, "Demon Slayer")
         self.assertEqual(item.year, 2019)
@@ -213,6 +214,7 @@ class ProviderSystemTests(TestCase):
             {
                 "id": 101,
                 "title": "Demon Slayer",
+                "type": "Movie",
                 "year": 2019,
                 "audio": ["Japanese"],
                 "subtitles": ["English"],
@@ -227,5 +229,5 @@ class ProviderSystemTests(TestCase):
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
         data = resp.json()
         self.assertEqual(data["provider"]["slug"], "kisskh")
-        self.assertEqual(data["count"], 2)
+        self.assertEqual(data["count"], 1)
         self.assertTrue(Subscription.objects.filter(user_id=1, provider__slug="kisskh").exists())
