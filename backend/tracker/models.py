@@ -389,6 +389,12 @@ class ScrapedContentMapping(models.Model):
     scraped_title = models.CharField(max_length=255)
     scraped_year = models.IntegerField(null=True, blank=True)
     scraped_content_type = models.CharField(max_length=12, choices=[("movie", "Movie"), ("series", "Series")], default="movie")
+    provider_content_id = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text="Stable native ID supplied by the provider, when available.",
+    )
     scraped_url = models.URLField(max_length=500, blank=True, default="")
     country_code = models.CharField(max_length=2, blank=True, default="", help_text="Country this scrape result applies to.")
     movie = models.ForeignKey(
@@ -410,7 +416,13 @@ class ScrapedContentMapping(models.Model):
         constraints = [
             models.UniqueConstraint(
                 fields=["provider", "scraped_title", "scraped_year", "scraped_content_type"],
-                name="uniq_scraped_content_mapping",
+                condition=models.Q(provider_content_id=""),
+                name="uniq_scraped_content_mapping_legacy",
+            ),
+            models.UniqueConstraint(
+                fields=["provider", "provider_content_id", "scraped_content_type"],
+                condition=~models.Q(provider_content_id=""),
+                name="uniq_scraped_content_mapping_native",
             )
         ]
 

@@ -13,6 +13,25 @@ from availability.services.legacy_ingest import ingest_scraped_mapping
 from tracker.models import ScrapedContentMapping
 
 
+_NATIVE_ID_KEYS = (
+    "provider_content_id", "content_id", "contentId", "dramaId", "dramaID",
+    "movieId", "movieID", "animeId", "animeID", "title_id", "id",
+)
+
+
+def provider_content_id_for_item(item):
+    """Return an explicit, stable provider identifier when the adapter has one."""
+    payload = item.raw_payload if isinstance(item.raw_payload, dict) else {}
+    for key in _NATIVE_ID_KEYS:
+        value = payload.get(key)
+        if value is None or isinstance(value, (dict, list, bool)):
+            continue
+        value = str(value).strip()
+        if value:
+            return value[:255]
+    return ""
+
+
 def persist_scraped_item(
     *,
     provider,
@@ -30,6 +49,7 @@ def persist_scraped_item(
     """
     payload = dict(item.raw_payload) if isinstance(item.raw_payload, dict) else {}
     payload.setdefault("content_type", item.content_type)
+    native_id = provider_content_id_for_item(item)
     defaults = {
         "scraped_url": item.source_url,
         "scraped_content_type": item.content_type if item.content_type in {"movie", "series"} else "movie",
@@ -42,12 +62,32 @@ def persist_scraped_item(
             is_confirmed=False,
             confidence_score=confidence,
         )
-    mapping, _created = ScrapedContentMapping.objects.update_or_create(
-        provider=provider,
-        scraped_title=item.title,
-        scraped_year=item.year,
-        scraped_content_type=defaults["scraped_content_type"],
-        defaults=defaults,
-    )
+    identity = {"provider": provider, "scraped_content_type": defaults["scraped_content_type"]}
+    if native_id:
+        mapping = ScrapedContentMapping.objects.filter(
+            **identity, provider_content_id=native_id
+        ).first()
+        if mapping is None:
+            # Promote a prior title-keyed row in place when a later observation
+            # supplies the provider's native ID. This preserves its manual match.
+            mapping = ScrapedContentMapping.objects.filter(
+                **identity, provider_content_id="", scraped_title=item.title,
+                scraped_year=item.year,
+            ).first()
+    else:
+        mapping = ScrapedContentMapping.objects.filter(
+            **identity, provider_content_id="", scraped_title=item.title,
+            scraped_year=item.year,
+        ).first()
+    if mapping is None:
+        mapping = ScrapedContentMapping(provider=provider)
+    mapping.scraped_title = item.title
+    mapping.scraped_year = item.year
+    mapping.scraped_content_type = defaults["scraped_content_type"]
+    if native_id:
+        mapping.provider_content_id = native_id
+    for field, value in defaults.items():
+        setattr(mapping, field, value)
+    mapping.save()
     ingest_scraped_mapping(mapping)
     return mapping

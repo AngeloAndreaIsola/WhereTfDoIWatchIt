@@ -25,7 +25,7 @@ from tracker.scrapers.adapters import KissKHScraper
 from tracker.scrapers.cineblog01 import BROWSE_SECTIONS
 from tracker.scrapers.streamingcommunity import BROWSE_PATHS as SC_PATHS
 from tracker.scrapers.altadefinizione import BROWSE_PATHS as AD_PATHS
-from tracker.services.scraped_mapping import persist_scraped_item
+from tracker.services.scraped_mapping import persist_scraped_item, provider_content_id_for_item
 from tracker.services.bulk_refresh import try_source_lock, release_source_lock
 
 
@@ -41,6 +41,14 @@ class _HttpFailure(Exception):
         self.status = status
         self.retry_after = retry_after
         super().__init__(f"HTTP {status}")
+
+
+class CatalogueDiscoveryError(RuntimeError):
+    """A failed bounded run with its request and checkpoint evidence attached."""
+
+    def __init__(self, report):
+        self.report = report
+        super().__init__(report.get("last_error") or "Catalogue discovery failed")
 
 
 def _parts(slug):
@@ -259,7 +267,17 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                     item.raw_payload = {**(item.raw_payload or {}), "unverified_discovery": True}
                     if not dry_run:
                         from tracker.models import ScrapedContentMapping
-                        prior = ScrapedContentMapping.objects.filter(provider=provider, scraped_title=item.title, scraped_year=item.year, scraped_content_type=item.content_type).first()
+                        native_id = provider_content_id_for_item(item)
+                        prior = ScrapedContentMapping.objects.filter(
+                            provider=provider, provider_content_id=native_id,
+                            scraped_content_type=item.content_type,
+                        ).first() if native_id else None
+                        if prior is None:
+                            prior = ScrapedContentMapping.objects.filter(
+                                provider=provider, provider_content_id="",
+                                scraped_title=item.title, scraped_year=item.year,
+                                scraped_content_type=item.content_type,
+                            ).first()
                         persist_scraped_item(provider=provider, item=item)
                         if prior is None: report["items_inserted"] += 1
                         elif prior.scraped_url == item.source_url and prior.raw_payload == item.raw_payload: report["items_unchanged"] += 1
@@ -310,20 +328,42 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                     report["items_seen"] += len(rows)
                     page_seen = set()
                     for item in rows:
-                        identity = str((item.raw_payload or {}).get("id") or (item.raw_payload or {}).get("title_id") or item.source_url or (item.title, item.year, item.content_type))
+                        identity = provider_content_id_for_item(item) or item.source_url or (item.title, item.year, item.content_type)
+                        identity = str(identity)
                         if identity in page_seen:
                             report["duplicates_skipped"] += 1
                             continue
                         page_seen.add(identity)
                         from tracker.models import ScrapedContentMapping
-                        repeated_url = ScrapedContentMapping.objects.filter(provider=provider, scraped_url=item.source_url).exclude(scraped_title=item.title, scraped_year=item.year, scraped_content_type=item.content_type).exists() if item.source_url else False
+                        native_id = provider_content_id_for_item(item)
+                        repeated_url = (
+                            not native_id
+                            and ScrapedContentMapping.objects.filter(provider=provider, scraped_url=item.source_url)
+                            .exclude(scraped_title=item.title, scraped_year=item.year, scraped_content_type=item.content_type)
+                            .exists()
+                            if item.source_url else False
+                        )
                         if repeated_url:
                             report["duplicates_skipped"] += 1
                             continue
                         report["items_unique"] += 1
                         item.raw_payload = {**(item.raw_payload or {}), "unverified_discovery": True}
                         if not dry_run:
-                            prior = ScrapedContentMapping.objects.filter(provider=provider, scraped_title=item.title, scraped_year=item.year, scraped_content_type=item.content_type).first()
+                            prior = None
+                            if native_id:
+                                prior = ScrapedContentMapping.objects.filter(
+                                    provider=provider,
+                                    provider_content_id=native_id,
+                                    scraped_content_type=item.content_type,
+                                ).first()
+                            if prior is None:
+                                prior = ScrapedContentMapping.objects.filter(
+                                    provider=provider,
+                                    provider_content_id="",
+                                    scraped_title=item.title,
+                                    scraped_year=item.year,
+                                    scraped_content_type=item.content_type,
+                                ).first()
                             persist_scraped_item(provider=provider, item=item)
                             if prior is None: report["items_inserted"] += 1
                             elif prior.scraped_url == item.source_url and prior.raw_payload == item.raw_payload: report["items_unchanged"] += 1
@@ -366,10 +406,17 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
         except KeyboardInterrupt:
             report["status"] = "PARTIAL"
             report["last_error"] = "Stopped by operator; committed page checkpoint retained"
-        except Exception:
+        except Exception as exc:
             if report["status"] != "BLOCKED": report["status"] = "FAILED"
             if not report.get("last_error"): report["last_error"] = "Catalogue page failed; checkpoint retained"
-            raise
+            report["requests_dispatched"] = requests_made
+            raise CatalogueDiscoveryError({
+                **report,
+                "provider": slug,
+                "requests_made": requests_made,
+                "dry_run": dry_run,
+                "checkpoint": cursor,
+            }) from exc
         finally:
             if not dry_run:
                 state.status = report["status"]

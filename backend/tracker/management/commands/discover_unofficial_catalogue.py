@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from django.core.management.base import BaseCommand, CommandError
 
-from tracker.services.catalogue_discovery import PROVIDERS, discovery_status, run_discovery
+from tracker.services.catalogue_discovery import CatalogueDiscoveryError, PROVIDERS, discovery_status, run_discovery
 
 
 class Command(BaseCommand):
@@ -35,6 +35,8 @@ class Command(BaseCommand):
                 retry_limit=options["retry_limit"],
                 dry_run=options["dry_run"], targeted_query=options["query"],
             )
+        except CatalogueDiscoveryError as exc:
+            raise CommandError(json.dumps({"error": str(exc), **exc.report}, default=str)) from exc
         except Exception as exc:
             raise CommandError(str(exc)) from exc
         self.stdout.write(json.dumps(result, indent=2, default=str))

@@ -2,9 +2,9 @@ from unittest.mock import patch
 
 from django.test import TestCase
 
-from tracker.models import CatalogueDiscoveryState, Provider, ScrapedContentMapping
+from tracker.models import CatalogueDiscoveryState, Movie, Provider, ScrapedContentMapping
 from tracker.scrapers.base import ScrapedItem
-from tracker.services.catalogue_discovery import PROVIDERS, run_discovery
+from tracker.services.catalogue_discovery import CatalogueDiscoveryError, PROVIDERS, run_discovery
 from tracker.services.scraped_mapping import persist_scraped_item
 
 
@@ -56,6 +56,23 @@ class CatalogueDiscoveryTests(TestCase):
         self.assertEqual(second["pages_scanned"], 1)
         self.assertEqual(ScrapedContentMapping.objects.filter(provider=self.providers[slug]).count(), 2)
 
+    def test_failed_run_exposes_dispatched_request_count_and_durable_report(self):
+        slug = "animeworld"
+
+        def failed_page(scraper, provider_slug, part, page, query=None):
+            scraper.session.get("https://fixture.invalid/page")
+            raise RuntimeError("fixture page failure")
+
+        with patch("tracker.services.catalogue_discovery._page", side_effect=failed_page), \
+             patch("requests.Session.get", return_value=object()):
+            with self.assertRaises(CatalogueDiscoveryError) as caught:
+                run_discovery(slug, request_budget=3, delay=0)
+
+        self.assertEqual(caught.exception.report["requests_made"], 1)
+        state = CatalogueDiscoveryState.objects.get(provider=self.providers[slug])
+        self.assertEqual(state.report["requests_dispatched"], 1)
+        self.assertEqual(state.status, "FAILED")
+
     def test_targeted_results_are_never_reported_complete(self):
         slug = "kisskh"
         with patch("tracker.services.catalogue_discovery.resolve_scraper_class") as resolve:
@@ -79,6 +96,54 @@ class CatalogueDiscoveryTests(TestCase):
         rows = ScrapedContentMapping.objects.filter(provider=provider, scraped_title="Same Name", scraped_year=2020)
         self.assertEqual(rows.count(), 2)
         self.assertSetEqual(set(rows.values_list("scraped_content_type", flat=True)), {"movie", "series"})
+
+    def test_native_ids_preserve_distinct_same_title_releases_and_are_idempotent(self):
+        provider = self.providers["animeworld"]
+        for native_id, url in (("release-a", "https://animeworld.example/a"), ("release-b", "https://animeworld.example/b")):
+            persist_scraped_item(
+                provider=provider,
+                item=ScrapedItem(
+                    title="Same Name", year=2020, content_type="movie",
+                    provider_slug="animeworld", source_url=url,
+                    raw_payload={"id": native_id, "unverified_discovery": True},
+                ),
+            )
+        persist_scraped_item(
+            provider=provider,
+            item=ScrapedItem(
+                title="Same Name", year=2020, content_type="movie",
+                provider_slug="animeworld", source_url="https://animeworld.example/a-new-url",
+                raw_payload={"id": "release-a", "unverified_discovery": True},
+            ),
+        )
+        rows = ScrapedContentMapping.objects.filter(provider=provider, scraped_title="Same Name", scraped_year=2020)
+        self.assertEqual(rows.count(), 2)
+        self.assertSetEqual(set(rows.values_list("provider_content_id", flat=True)), {"release-a", "release-b"})
+        self.assertEqual(rows.get(provider_content_id="release-a").scraped_url, "https://animeworld.example/a-new-url")
+
+    def test_native_id_promotes_existing_legacy_row_without_losing_manual_match(self):
+        provider = self.providers["animeworld"]
+        movie = Movie.objects.create(tmdb_id=992020, title="Same Name", year=2020)
+        legacy_item = ScrapedItem(
+            title="Same Name", year=2020, content_type="movie", provider_slug="animeworld",
+            source_url="https://animeworld.example/title", raw_payload={"unverified_discovery": True},
+        )
+        mapping = persist_scraped_item(provider=provider, item=legacy_item)
+        mapping.movie = movie
+        mapping.is_confirmed = True
+        mapping.save(update_fields=["movie", "is_confirmed"])
+        upgraded = persist_scraped_item(
+            provider=provider,
+            item=ScrapedItem(
+                title="Same Name", year=2020, content_type="movie", provider_slug="animeworld",
+                source_url=legacy_item.source_url,
+                raw_payload={"id": "native-992020", "unverified_discovery": True},
+            ),
+        )
+        self.assertEqual(upgraded.pk, mapping.pk)
+        self.assertEqual(upgraded.provider_content_id, "native-992020")
+        self.assertEqual(upgraded.movie_id, movie.pk)
+        self.assertTrue(upgraded.is_confirmed)
 
     def test_dry_run_does_not_create_state_or_mappings(self):
         slug = "animeworld"

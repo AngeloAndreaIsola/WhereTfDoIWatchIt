@@ -36,41 +36,78 @@ including robots checks and domain fallback. Requests run sequentially
 retries honor `Retry-After`; robots directives and crawl delay are checked for
 each origin before catalogue requests.
 
-## Current measured state
+## Measured state (2026-11-17)
 
-The database still contains the Phase 1 snapshot counts below. No catalogue
-backfill was executed in this change, so “new count” is the unchanged count,
-not a crawl result. The running backend database does not record its migration
-history and lacks the new discovery table; its two-request dry-run stopped
-before any network request. Migration and smoke evidence must be collected in
-an environment with the tracker migrations applied.
+The live discovery probes used the existing command in dry-run mode and a
+separate migrated scratch database. No titles were persisted and no checkpoint
+was created. The prior counts are the pre-probe provider counts; after counts
+are unchanged. The live backend's current post-migration counts match these
+values. These probes did not establish catalogue completeness.
 
-| Provider | Previous count | New count | Site total | Pages scanned | Coverage | Status |
-|---|---:|---:|---:|---:|---:|---|
-| KissKH | 1,800 | 1,800 | UNKNOWN | 0 | UNKNOWN | IDLE / unverified |
-| HydraHD | 480 | 480 | UNKNOWN | 0 | UNKNOWN | IDLE / unverified |
-| AnimeWorld | 174 | 174 | 6,879 reported on 2026-11-17; not rechecked | 0 | UNKNOWN | IDLE / unverified |
-| StreamingCommunity | 143 | 143 | UNKNOWN | 0 | UNKNOWN | IDLE / PARTIAL traversal |
-| CineBlog01 | 182 | 182 | UNKNOWN | 0 | UNKNOWN | IDLE / unverified |
-| AltaDefinizione | 110 | 110 | UNKNOWN | 0 | UNKNOWN | IDLE / PARTIAL traversal |
+| Provider | Before | After | Tested domain | Listing result | Pages | Site total / coverage | HTTP dispatch evidence | Errors | Checkpoint / status |
+|---|---:|---:|---|---|---:|---|---|---:|---|
+| KissKH | 1,800 | 1,800 | `kisskh.co` | Unexpected API response shape; no parsed listing | 0 | Unknown / unknown | Budget 2 was exhausted before a page; second probe budget 4, exact dispatch count not returned on error | 1 API response error | None; BLOCKED pending valid API response |
+| HydraHD | 480 | 480 | `hydrahd.ru` | Domain fallback did not produce a listing | 0 | Unknown / unknown | Budget 2 exhausted before a page; second probe budget 4, exact dispatch count not returned on error | 1 fetch error | None; BLOCKED pending accessible listing |
+| AnimeWorld | 174 | 174 | `animeworld.ac` | Listing unavailable or blocked | 0 | 6,879 is a stale 2026-11-17 report, not revalidated; coverage unknown | Probe budgets 2 and 4; exact dispatch counts not returned on raised errors | 1 fetch error | None; BLOCKED pending accessible listing |
+| StreamingCommunity | 143 | 143 | `streamingcommunityz.nexus` | HTTP 403; stopped without challenge workarounds | 0 | Unknown / unknown | Probe budget 4; exact dispatch count not returned on raised error | 1 HTTP 403 | None; BLOCKED by access response |
+| CineBlog01 | 182 | 182 | `cineblog001.tires` | Domain fallback did not produce a listing | 0 | Unknown / unknown | Probe budget 4; exact dispatch count not returned on raised error | 1 fetch error | None; BLOCKED pending accessible listing |
+| AltaDefinizione | 110 | 110 | `altadefinizionex.fit` | Domain fallback did not produce a listing | 0 | Unknown / unknown | Probe budget 4; exact dispatch count not returned on raised error | 1 fetch error | None; BLOCKED pending accessible listing |
+
+The first two probes reported `requests_made=2`; at the time of later probes,
+the command raised on page errors before returning its counter. Those historical
+dispatch counts remain unknown rather than inferred from their budgets. Failed
+runs now include the exact dispatched count and checkpoint in their structured
+error report. No provider had a parsed page, duplicate sample, classification
+sample, terminal-page signal, or resumable live checkpoint. Fixture tests
+exercise persistence, duplicate handling, movie/series identity,
+interruption/resumption and checkpoint writes, but do not replace live evidence.
+
+An isolated `catalogue_discovery_scratch` database was migrated from an empty
+PostgreSQL database through all migrations. Its command status was empty before
+provider rows were seeded for bounded dry runs. Migration `0050` adds native
+provider identity support and is exercised by the focused backend tests.
+All 3,215 backend tests passed in a test container using that fixture plus a
+read-only mount of the repository `scripts/` directory; all 274 frontend tests
+passed. `makemigrations --check --dry-run` reported no model/migration drift.
+
+### Runtime database migration state
+
+The live Compose database originally had 46 migration-history rows and no
+discovery-state table. During validation, the backend image entrypoint ran the
+normal migration command before the test command; it applied pending migrations
+through `0049`. The six unofficial-provider mapping counts above were unchanged.
+The total `ScrapedContentMapping` count moved from 3,711 to 3,300 because
+`0033_merge_duplicate_providers` folded duplicate-provider rows into canonical
+rows. `0050_scraped_provider_native_identity` remains unapplied to that database.
+
+Do not reverse or fake this history. Before any further runtime migration,
+create a restorable PostgreSQL backup, restore it into a disposable database,
+apply the exact pending migrations there, and compare provider counts, mapping
+IDs and fields, canonical legacy projections, and uniqueness constraints. For
+the current schema, plan the `0050` rollout against that clone; keep the
+pre-rollout backup as the rollback mechanism because restoring it is safer than
+reverse-applying a migration after ingestion has written native IDs. No further
+runtime migrations were run during validation.
 
 ## Traversal status and current limits
 
 | Provider | Strategy | Completion evidence / current limit |
 |---|---|---|
-| AnimeWorld | `/az-list?page=N`, card-local parser | Follows explicit page links and probes until an empty page when no total is shown. Page count is not itself a title total. No live snapshot was fetched in this implementation, so the published 6,879 / 276 observation is not treated as verification. |
-| KissKH | API `type` partitions 2/1/3 and `pageSize=200` | Uses API page/total metadata when present; otherwise requires an empty page. Provider totals and page semantics still need live fixture evidence. |
-| HydraHD | `movies/date/N` and `tv-shows/date/N` | Separate cursors; follows pagination metadata or probes until an empty listing. Layout/domain failure is BLOCKED, never terminal success. |
-| CineBlog01 | `/film/` and `/serie-tv/`, `/page/N/` | Page count comes from page links; without it, an empty page is required. Redirects use verified fallback hosts. |
-| StreamingCommunity | Existing root, film, series, archive listing paths | Partial. No verified public paginator was available in the repository snapshot; the command records each current listing but does not invent `/page/N/` endpoints. |
-| AltaDefinizione | Existing root, film, series, archive listing paths | Partial for the same evidence gap. The code does not invent pagination endpoints. |
+| AnimeWorld | `/az-list?page=N`, card-local parser | Traversal logic is fixture-tested. The live domain probe did not return a listing, so page links, classification and terminal behavior remain unverified. |
+| KissKH | API `type` partitions 2/1/3 and `pageSize=200` | Traversal logic is fixture-tested. The live API response shape did not match the expected `data` array; totals, empty-page behavior and partition termination remain unverified. |
+| HydraHD | `movies/date/N` and `tv-shows/date/N` | Separate cursor logic is fixture-tested. Live fallback did not produce listing HTML; pagination and terminal behavior remain unverified. |
+| CineBlog01 | `/film/` and `/serie-tv/`, `/page/N/` | Archive traversal logic is fixture-tested. Live fallback did not produce a listing; pagination links and terminal behavior remain unverified. |
+| StreamingCommunity | Existing root, film, series, archive listing paths | Live response was HTTP 403. No workaround or additional path guessing was attempted; public pagination is unverified. |
+| AltaDefinizione | Existing root, film, series, archive listing paths | Live fallback did not produce a listing. Public pagination is unverified; the command does not invent `/page/N/` endpoints. |
 
 `coverage_percent` stays `UNKNOWN` unless the fetched population and a reliable
 provider total are known to be comparable. `items_unique` describes observed
-catalogue identities, not TMDb links or confirmed playback offers. The legacy
-mapping identity still uses provider/title/year/type; provider-native variants
-that share all four values need a future explicit native-ID identity migration
-before they can be represented separately.
+catalogue identities, not TMDb links or confirmed playback offers. Legacy rows
+continue to use provider/title/year/type. New observations with an explicit
+provider ID use provider/provider-ID/content-type identity; movie and series
+remain separate, and an existing legacy row is promoted in place when a native
+ID later becomes available. The new partial unique constraints preserve both
+identity forms without rewriting existing scraped records.
 
 No full-traversal request estimate, run time, or peak-memory figure is
 available: the live traversal was deliberately not started. One command
