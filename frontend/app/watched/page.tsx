@@ -124,6 +124,8 @@ export default function WatchedPage() {
   const [count, setCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [pendingTmdbId, setPendingTmdbId] = useState<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   // A filter is "active" whenever anything other than the default All type is set.
@@ -216,14 +218,19 @@ export default function WatchedPage() {
     r.movie.content_type === "series" ? `/tv/${r.movie.tmdb_id}` : `/movie/${r.movie.tmdb_id}`;
 
   const handleUnwatch = async (tmdbId: number) => {
+    setActionError(null);
+    setPendingTmdbId(tmdbId);
     try {
       await unmarkMovieWatched(tmdbId);
       setItems((prev) => prev.filter((row) => row.movie?.tmdb_id !== tmdbId));
       setCount((prev) => Math.max(0, prev - 1));
     } catch (err) {
-      setError(
+      // Keep the card visible: an action failure is not a load failure.
+      setActionError(
         err instanceof Error ? err.message : "Failed to remove from Watched"
       );
+    } finally {
+      setPendingTmdbId(null);
     }
   };
 
@@ -253,8 +260,19 @@ export default function WatchedPage() {
         showWatchedRatingSort={true}
       />
 
+      {actionError && (
+        <div
+          role="alert"
+          className="p-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-xl text-red-800 dark:text-red-200 text-sm font-medium"
+        >
+          {actionError}
+        </div>
+      )}
+
       {error && (
-        <div className="p-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-xl text-red-800 dark:text-red-200 text-sm font-medium">
+        <div
+          role="alert"
+          className="p-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-xl text-red-800 dark:text-red-200 text-sm font-medium">
           Error: {error}
         </div>
       )}
@@ -303,47 +321,91 @@ export default function WatchedPage() {
           <p className="text-xs text-gray-500 dark:text-gray-400">
             {count} watched {count === 1 ? "title" : "titles"}
           </p>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
             {items.map((row, idx) => {
               const movie = row.movie || {};
               if (!movie.tmdb_id) return null;
               const watchRes = row.watchability || {};
               const symbol = watchRes.status_symbol || "⚪";
               const label = watchRes.status_label || "Unknown";
+              const isSeries = movie.content_type === "series";
+              const isWatched = !!(
+                row.user_data?.is_watched ?? row.is_watched ?? true
+              );
 
               return (
-                <div
+                <article
                   key={movie.tmdb_id || idx}
-                  className="flex flex-col gap-2 relative"
+                  className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-all flex flex-col"
                 >
                   <Link
                     href={detailHref(row)}
-                    className="border rounded p-2 flex flex-col gap-1"
+                    aria-label={`${movie.title || "Untitled"} details`}
+                    className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
                   >
-                    <div className="font-semibold">{movie.title || "Untitled"}</div>
-                    <div className="text-sm text-gray-500">
-                      {movie.year} · {movie.content_type}
+                    <div className="aspect-[2/3] bg-gray-100 dark:bg-gray-800 relative">
+                      {movie.poster_path ? (
+                        <img
+                          src={`https://image.tmdb.org/t/p/w500${movie.poster_path}`}
+                          alt={movie.title || "Poster"}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-gray-400 text-xs">
+                          No Poster
+                        </div>
+                      )}
+                      <span className="absolute top-2 left-2 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded-md bg-gray-900/80 text-white backdrop-blur-sm">
+                        {isSeries ? "Series" : "Movie"}
+                      </span>
+                      {isWatched && (
+                        <span className="absolute top-2 right-2 px-2 py-1 rounded-md text-xs font-bold bg-black/70 text-white backdrop-blur-sm">
+                          ✓ Watched
+                        </span>
+                      )}
+                      <span className="absolute bottom-2 left-2 inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold bg-black/60 text-white">
+                        {symbol} {label}
+                      </span>
                     </div>
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold bg-black/60 text-white">
-                      {symbol} {label}
-                    </span>
-                    {row.user_data?.rating != null && (
-                      <div className="text-sm">★ {row.user_data.rating}</div>
-                    )}
-                    {row.last_watched_at && (
-                      <div className="text-xs text-gray-400">{row.last_watched_at}</div>
-                    )}
-                    {row.watch_count != null && (
-                      <div className="text-xs text-gray-400">watches: {row.watch_count}</div>
-                    )}
                   </Link>
-                  <button
-                    onClick={() => handleUnwatch(movie.tmdb_id as number)}
-                    className="w-full py-1.5 text-xs font-medium rounded-lg border border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-800/30 transition-colors"
-                  >
-                    ✓ Remove from Watched
-                  </button>
-                </div>
+
+                  <div className="p-4 flex-1 flex flex-col justify-between space-y-3">
+                    <div>
+                      <h3 className="font-bold text-gray-900 dark:text-gray-100 line-clamp-1">
+                        {movie.title || "Untitled"}
+                      </h3>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        <span>{isSeries ? "TV Series" : "Movie"}</span>
+                        {movie.year ? <span> • {movie.year}</span> : null}
+                      </p>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500 dark:text-gray-400">
+                      {row.user_data?.rating != null && (
+                        <span className="font-semibold text-gray-700 dark:text-gray-200">
+                          ★ {row.user_data.rating}
+                        </span>
+                      )}
+                      {row.last_watched_at && (
+                        <span>{row.last_watched_at}</span>
+                      )}
+                      {row.watch_count != null && (
+                        <span>watches: {row.watch_count}</span>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleUnwatch(movie.tmdb_id as number)}
+                      disabled={pendingTmdbId === movie.tmdb_id}
+                      className="w-full py-2 text-xs font-medium rounded-lg border border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-800/30 transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                    >
+                      {pendingTmdbId === movie.tmdb_id
+                        ? "Removing…"
+                        : "✓ Remove from Watched"}
+                    </button>
+                  </div>
+                </article>
               );
             })}
           </div>
