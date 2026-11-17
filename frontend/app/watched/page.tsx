@@ -56,7 +56,9 @@ const parseFiltersFromURL = (sp: URLSearchParams): FilterState => {
     quality: sp.get("quality") || "",
     score_min: sp.get("score_min") || "",
     sort_by: sortBy,
-    watched: sp.get("watched") || "all",
+    // The /watched endpoint is already scoped to watched titles. Legacy
+    // ?watched=... links are normalized away below and never reach the API.
+    watched: "all",
     access: sp.get("access") || "",
     duration_min: sp.get("duration_min") || "",
     duration_max: sp.get("duration_max") || "",
@@ -151,13 +153,23 @@ export default function WatchedPage() {
   const queryFromURL = searchParams?.toString() || "";
   useEffect(() => {
     const params = new URLSearchParams(queryFromURL);
+    // Obsolete watched= links (notably watched=unwatched) would otherwise
+    // intersect with a watched-only endpoint and strand the user on an
+    // unexplained empty page. Strip only that key, keep everything else,
+    // and stop here: the router update re-runs this effect with clean URL.
+    if (params.has("watched")) {
+      params.delete("watched");
+      const query = params.toString();
+      router.replace(query ? `/watched/?${query}` : "/watched/", { scroll: false });
+      return;
+    }
     const restored = parseFiltersFromURL(params);
     setFilters((current) =>
       JSON.stringify(current) === JSON.stringify(restored) ? current : restored
     );
     const restoredPage = parsePage(params);
     setPage((current) => current === restoredPage ? current : restoredPage);
-  }, [queryFromURL]);
+  }, [queryFromURL, router]);
 
   const replaceWatchedURL = (nextFilters: FilterState, nextPage: number) => {
     const params = new URLSearchParams(searchParams?.toString() || "");
@@ -258,6 +270,7 @@ export default function WatchedPage() {
         onChange={handleSetFilters}
         showStatusFilter={true}
         showWatchedRatingSort={true}
+        showWatchedFilter={false}
       />
 
       {actionError && (

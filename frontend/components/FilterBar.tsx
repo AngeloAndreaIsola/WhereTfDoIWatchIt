@@ -116,6 +116,8 @@ interface FilterBarProps {
   showLanguageFilters?: boolean;
   showProviderCategories?: boolean;
   showWatchedRatingSort?: boolean;
+  /** Hide the watched selector on pages already scoped to watched titles. */
+  showWatchedFilter?: boolean;
 }
 
 export function FilterBar({
@@ -125,6 +127,7 @@ export function FilterBar({
   showLanguageFilters = false,
   showProviderCategories = false,
   showWatchedRatingSort = false,
+  showWatchedFilter = true,
 }: FilterBarProps) {
   // Controls edit a local draft; nothing reaches the parent (and so no request
   // is issued) until Apply is pressed. `filters` is the last applied value, so
@@ -655,22 +658,24 @@ export function FilterBar({
         )}
       </div>
 
-      {/* Watched Filter */}
-      <div>
-        <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
-          Watched
-        </label>
-        <select
-          value={draft.watched || "all"}
-          onChange={(e) => updateDraft({ watched: e.target.value })}
-          aria-label="Watched status"
-          className="w-full px-3 py-1.5 text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
-        >
-          <option value="all">All</option>
-          <option value="watched">✓ Watched</option>
-          <option value="unwatched">○ Unwatched</option>
-        </select>
-      </div>
+      {/* Watched Filter — hidden where the endpoint is already watched-only */}
+      {showWatchedFilter && (
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+            Watched
+          </label>
+          <select
+            value={draft.watched || "all"}
+            onChange={(e) => updateDraft({ watched: e.target.value })}
+            aria-label="Watched status"
+            className="w-full px-3 py-1.5 text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+          >
+            <option value="all">All</option>
+            <option value="watched">✓ Watched</option>
+            <option value="unwatched">○ Unwatched</option>
+          </select>
+        </div>
+      )}
 
       {showLanguageFilters && (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
