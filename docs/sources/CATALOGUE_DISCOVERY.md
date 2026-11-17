@@ -987,3 +987,57 @@ No candidate catalogue page was fetched and no records were added for these
 providers. Their discovery states remain `BLOCKED` with zero dispatches. No
 new AnimeWorld RSS item was fetched in this follow-up; its permitted RSS
 checkpoint remains resumable. KissKH remains paused at HTTP 451.
+
+## Authorized live import (2026-11-17)
+
+The user explicitly authorized the one-time import to Compose project
+`new-sources`, database `tracker`. Before import, the exact target was
+confirmed as `tracker@db`, the tracker migration head was
+`0053_catalogue_url_identity_provenance`, and the database had 3,300 scraped
+mappings and zero discovery records, movies, provider content, content
+mappings, or offers. The running backend entrypoint was
+`/runtime-guard-entrypoint.sh`; it runs `migrate --check` and never applies
+migrations. That check passed before and after import. No migration was run.
+
+The staging gzip and manifest matched their expected hashes. A fresh direct
+pre-import backup was saved outside Git and database volumes at
+`/Users/angeloandreaisola/Documents/database-backups/WhereTfDoIWatchIt/new-sources_tracker_preimport_20261117T162513Z.dump`;
+SHA-256 `e41b17529d7bfad63233d459da5ee5b0dab60dad3d00f5f0ebaff5cff3d03a6a`.
+It was restored with `pg_restore --exit-on-error` into a disposable PostgreSQL
+database. The restored clone matched migration `0053`, all baseline counts,
+and the live mapping export byte-for-byte (SHA-256
+`47eea20212bf43be6e60acff43ea48bd1d7c58bc048e4718b448886d00985845`).
+The backend writer was paused while the fresh backup and import ran, then
+restarted through the migration-check guard.
+
+The existing `import_catalogue_inventory` management command inserted 4,903
+records: 4,824 HydraHD and 79 AnimeWorld, and restored five provider discovery
+states. It reported zero updates. The live database now contains 4,903
+discoveries, all 4,903 pending classification; no pending row was omitted.
+The staged and live identity/content tuples match exactly: 4,903 unique rows,
+zero missing, zero unexpected. Provider and partition counts are:
+
+| Provider | Partition | Pending records |
+|---|---|---:|
+| HydraHD | Movies | 3,072 |
+| HydraHD | TV shows | 1,752 |
+| AnimeWorld | RSS snapshot | 79 |
+
+Import replay reported 4,903 unchanged, zero inserted, zero updated, and five
+checkpoints restored. The original 3,300 scraped mappings remain byte-for-byte
+unchanged from the pre-import export (SHA-256 above). The provider count
+remains 50. Canonical movies, `ProviderContent`, `ContentMapping`, and offers
+remain zero. No TMDb associations or playback offers were created.
+
+Restored checkpoints retain HydraHD `PARTIAL` at movies page 128 and TV page
+73 (rolling navigation values 131 and 76), and AnimeWorld `PARTIAL` at RSS
+snapshot page 1. CineBlog01, AltaDefinizione, and StreamingCommunity remain
+`BLOCKED` on provenance with no requests dispatched. KissKH remains paused.
+
+The running `/api/providers/` response now reports pending counts independently
+of existing active scraped mappings: HydraHD 4,824 pending and 480 active
+mappings; AnimeWorld 79 pending and 174 active mappings. The provider cards
+label these separately as “Pending classification” and “active mappings”; the
+20 focused ProviderGrid and subscriptions tests passed after that label change.
+No availability offers were created. The inventory is live and still pending
+classification; catalogue coverage remains partial.

@@ -77,7 +77,7 @@ describe("ProviderGrid Component", () => {
     };
     render(<ProviderGrid providers={[provider]} onToggle={vi.fn()} />);
 
-    expect(screen.getByText("0 discovered titles")).toBeInTheDocument();
+    expect(screen.getByText("0 active mappings")).toBeInTheDocument();
     expect(screen.getByText("Pending classification 12 · 12 discovered")).toBeInTheDocument();
     expect(screen.getByText("Checkpoint movies 8 · tv-shows 3")).toBeInTheDocument();
     expect(screen.getByText("Coverage partial")).toBeInTheDocument();
@@ -118,7 +118,7 @@ describe("ProviderGrid Component", () => {
     render(<ProviderGrid providers={refreshableProviders} onToggle={vi.fn()} />);
 
     expect(screen.getByText("857 available")).toBeInTheDocument();
-    expect(screen.getByText("61 discovered titles")).toBeInTheDocument();
+    expect(screen.getByText("61 active mappings")).toBeInTheDocument();
     // Never ran vs. a relative age from the batched status.
     expect(screen.getByText("Last run Never run")).toBeInTheDocument();
     expect(screen.getByText("Last run 10d ago")).toBeInTheDocument();
