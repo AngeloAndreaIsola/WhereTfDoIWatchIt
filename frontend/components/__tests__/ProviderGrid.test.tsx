@@ -96,7 +96,7 @@ describe("ProviderGrid Component", () => {
     render(<ProviderGrid providers={refreshableProviders} onToggle={vi.fn()} />);
 
     expect(screen.getByText("857 available")).toBeInTheDocument();
-    expect(screen.getByText("61 available")).toBeInTheDocument();
+    expect(screen.getByText("61 discovered titles")).toBeInTheDocument();
     // Never ran vs. a relative age from the batched status.
     expect(screen.getByText("Last run Never run")).toBeInTheDocument();
     expect(screen.getByText("Last run 10d ago")).toBeInTheDocument();

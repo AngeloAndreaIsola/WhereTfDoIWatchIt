@@ -32,6 +32,8 @@ export interface ProviderItem {
   available_items?: number;
   /** Queue/worker state read server-side — the card must not guess it. */
   refreshing?: boolean;
+  catalogue_sync_status?: string;
+  catalogue_sync_report?: { pages_scanned?: number; pages_remaining?: number | null; items_unique?: number; last_error?: string };
   /** Site host used to fetch this card's favicon. Absent for catalogue providers, which use the brand badges. */
   favicon_domain?: string;
   /** True when this service is an add-on channel sold through a base platform. */
@@ -222,7 +224,7 @@ export default function ProviderGrid({
                 {/* Operational meta: counts and last run come batched with the
                     list response, so the card never fetches its own data. */}
                 <span className="mt-2 text-[10px] text-gray-500 dark:text-gray-400">
-                  {provider.available_items ?? 0} available
+                  {provider.available_items ?? 0} {provider.refresh_kind === "scraper" ? "discovered titles" : "available"}
                 </span>
                 <span className="text-[10px] text-gray-400 dark:text-gray-500">
                   {isRefreshing ? (
@@ -237,6 +239,15 @@ export default function ProviderGrid({
                     <>Last run {formatRelativeTime(provider.last_run)}</>
                   )}
                 </span>
+                {provider.catalogue_sync_status && provider.catalogue_sync_status !== "IDLE" && (
+                  <span className="text-[10px] text-gray-400 dark:text-gray-500" role="status">
+                    Catalogue {provider.catalogue_sync_status.toLowerCase()}
+                    {provider.catalogue_sync_report?.pages_scanned != null &&
+                      ` · ${provider.catalogue_sync_report.pages_scanned} pages scanned`}
+                    {provider.catalogue_sync_report?.pages_remaining != null &&
+                      ` · ${provider.catalogue_sync_report.pages_remaining} remaining`}
+                  </span>
+                )}
 
                 {errorText && !isRefreshing && (
                   <span

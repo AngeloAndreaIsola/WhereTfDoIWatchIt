@@ -588,8 +588,8 @@ class AnimeWorldScraper(BaseScraper):
             except (ValueError, TypeError):
                 year_int = None
 
-            audio = entry.get("dub") or ["JA"]
-            subs = entry.get("sub") or ["EN"]
+            audio = entry.get("dub") or []
+            subs = entry.get("sub") or []
             source_url = entry.get("link") or f"https://animeworld.ac/play/{entry.get('id')}"
 
             items.append(
@@ -600,9 +600,9 @@ class AnimeWorldScraper(BaseScraper):
                     source_url=str(source_url),
                     audio_languages=audio if isinstance(audio, list) else [str(audio)],
                     subtitle_languages=subs if isinstance(subs, list) else [str(subs)],
-                    quality="1080p",
+                    quality=str(entry.get("quality")) if entry.get("quality") else None,
                     availability=True,
-                    raw_payload=entry,
+                    raw_payload={**entry, "unverified_discovery": True},
                 )
             )
         return items

@@ -62,6 +62,7 @@ from availability.sources import DEFAULT_SOURCE_SLUG, source_registry
 from ..models import (
     CatalogueRefreshRequest,
     CatalogueRefreshStatus,
+    CatalogueDiscoveryState,
     Provider,
     ProviderCategory,
     RefreshRun,
@@ -126,6 +127,8 @@ def minimal_card_status(provider: Provider) -> dict:
         "last_run_error": "",
         "available_items": 0,
         "refreshing": False,
+        "catalogue_sync_status": "IDLE",
+        "catalogue_sync_report": {},
     }
 
 
@@ -249,12 +252,17 @@ def provider_card_status(providers) -> dict[int, dict]:
             provider_id__in=provider_ids, is_available=True
         )
     )
+    discovery_rows = {
+        row.provider_id: row
+        for row in CatalogueDiscoveryState.objects.filter(provider_id__in=provider_ids)
+    }
 
     status: dict[int, dict] = {}
     for provider in providers:
         kind, source_slug = targets[provider.id]
         if kind == CATALOGUE:
             run = run_status.get(source_slug, {})
+            discovery = discovery_rows.get(provider.id)
             status[provider.id] = {
                 "refresh_kind": CATALOGUE,
                 "source_slug": source_slug,
@@ -264,8 +272,11 @@ def provider_card_status(providers) -> dict[int, dict]:
                 or offer_counts.get(provider.id, 0),
                 "refreshing": bool(run.get("running"))
                 or source_slug in pending_sources,
+                "catalogue_sync_status": discovery.status if discovery else "IDLE",
+                "catalogue_sync_report": discovery.report if discovery else {},
             }
         elif kind == SCRAPER:
+            discovery = discovery_rows.get(provider.id)
             status[provider.id] = {
                 "refresh_kind": SCRAPER,
                 "source_slug": None,
@@ -276,6 +287,8 @@ def provider_card_status(providers) -> dict[int, dict]:
                 # so pending state is tracked by the caller that pressed the
                 # button; there is no queue row to read here.
                 "refreshing": False,
+                "catalogue_sync_status": discovery.status if discovery else "IDLE",
+                "catalogue_sync_report": discovery.report if discovery else {},
             }
         else:
             status[provider.id] = {
@@ -285,5 +298,7 @@ def provider_card_status(providers) -> dict[int, dict]:
                 "last_run_error": "",
                 "available_items": offer_counts.get(provider.id, 0),
                 "refreshing": False,
+                "catalogue_sync_status": "IDLE",
+                "catalogue_sync_report": {},
             }
     return status

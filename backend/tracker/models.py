@@ -388,6 +388,7 @@ class ScrapedContentMapping(models.Model):
     )
     scraped_title = models.CharField(max_length=255)
     scraped_year = models.IntegerField(null=True, blank=True)
+    scraped_content_type = models.CharField(max_length=12, choices=[("movie", "Movie"), ("series", "Series")], default="movie")
     scraped_url = models.URLField(max_length=500, blank=True, default="")
     country_code = models.CharField(max_length=2, blank=True, default="", help_text="Country this scrape result applies to.")
     movie = models.ForeignKey(
@@ -408,7 +409,7 @@ class ScrapedContentMapping(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["provider", "scraped_title", "scraped_year"],
+                fields=["provider", "scraped_title", "scraped_year", "scraped_content_type"],
                 name="uniq_scraped_content_mapping",
             )
         ]
@@ -416,6 +417,33 @@ class ScrapedContentMapping(models.Model):
     def __str__(self):
         status_str = "Confirmed" if self.is_confirmed else "Unconfirmed"
         return f"{self.provider.slug}: '{self.scraped_title}' -> {self.movie} ({status_str})"
+
+
+class CatalogueDiscoveryState(models.Model):
+    """Durable progress and honest coverage report for unofficial catalogues.
+
+    The cursor is traversal state only. Counts describe observations and never
+    imply playback availability or a TMDb match.
+    """
+    STATUS_CHOICES = [(v, v) for v in ("IDLE", "RUNNING", "PARTIAL", "COMPLETED", "BLOCKED", "FAILED")]
+    MODE_CHOICES = [(v, v) for v in ("full", "incremental", "targeted")]
+
+    provider = models.OneToOneField(Provider, on_delete=models.CASCADE, related_name="catalogue_discovery")
+    status = models.CharField(max_length=12, choices=STATUS_CHOICES, default="IDLE")
+    mode = models.CharField(max_length=12, choices=MODE_CHOICES, default="full")
+    cursor = models.JSONField(default=dict, blank=True)
+    report = models.JSONField(default=dict, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    last_success_at = models.DateTimeField(null=True, blank=True)
+    last_successful_checkpoint = models.DateTimeField(null=True, blank=True)
+    last_error = models.TextField(blank=True, default="")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "catalogue discovery state"
+
+    def __str__(self):
+        return f"{self.provider.slug}: {self.status} ({self.mode})"
 
 
 class Subscription(models.Model):

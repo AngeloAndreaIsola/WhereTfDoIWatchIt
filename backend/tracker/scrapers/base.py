@@ -163,6 +163,7 @@ class ContentMatcher:
             provider=provider,
             scraped_title__iexact=item.title,
             scraped_year=item.year,
+            scraped_content_type=item.content_type,
         ).first()
 
         if existing and existing.movie:

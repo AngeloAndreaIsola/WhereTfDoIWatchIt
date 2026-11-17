@@ -1,5 +1,12 @@
 # Unofficial scraper integration and completeness notes
 
+Phase 2 adds the explicit checkpointed discovery operation documented in
+[`CATALOGUE_DISCOVERY.md`](CATALOGUE_DISCOVERY.md). The bounded execution in
+this table describes the normal scraper/refresh button path; it remains
+synchronous and is intentionally not used for full discovery. The new
+management command is separate, provider-scoped, request-budgeted, and writes
+only unverified catalogue observations through the existing canonical bridge.
+
 These are the bounded discovery paths retained by the integration. They describe
 the current implementation only; they do not schedule or perform catalogue
 backfills.

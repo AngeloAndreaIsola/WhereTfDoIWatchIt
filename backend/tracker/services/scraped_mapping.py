@@ -32,6 +32,7 @@ def persist_scraped_item(
     payload.setdefault("content_type", item.content_type)
     defaults = {
         "scraped_url": item.source_url,
+        "scraped_content_type": item.content_type if item.content_type in {"movie", "series"} else "movie",
         "raw_payload": payload,
         "is_available": item.availability,
     }
@@ -45,6 +46,7 @@ def persist_scraped_item(
         provider=provider,
         scraped_title=item.title,
         scraped_year=item.year,
+        scraped_content_type=defaults["scraped_content_type"],
         defaults=defaults,
     )
     ingest_scraped_mapping(mapping)
