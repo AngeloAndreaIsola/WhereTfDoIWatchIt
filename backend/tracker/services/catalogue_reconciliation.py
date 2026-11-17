@@ -97,8 +97,10 @@ def _match(record, classified_type, year, titles_by_norm, movies_by_tmdb, altern
         return {"status": "UNMATCHED", "confidence": 0.0, "evidence": ["media type unresolved"], "candidates": []}
     bootstrap = bootstrap_by_record.get(record.pk)
     if bootstrap:
+        from tracker.services.canonical_verification import evidence_agrees
         target = bootstrap.movie
-        if (target.content_type == classified_type and target.year == year
+        if (evidence_agrees(record, bootstrap)
+                and target.content_type == classified_type and target.year == year
                 and bootstrap.evidence.get("source_title") == record.title
                 and bootstrap.evidence.get("source_year") == year
                 and bootstrap.evidence.get("content_type") == classified_type
@@ -114,7 +116,7 @@ def _match(record, classified_type, year, titles_by_norm, movies_by_tmdb, altern
                                  "exact normalized title", "exact release year",
                                  "media type agrees"], "candidates": [_movie_candidate(target)]}
         return {"status": "POSSIBLE_REVIEW", "confidence": 0.0,
-                "evidence": ["stored bootstrap evidence conflicts with current type or year"],
+                "evidence": ["stored bootstrap evidence is stale or conflicts with current matching inputs"],
                 "candidates": [_movie_candidate(target)]}
     untrusted_tmdb_id = _external_tmdb_id(record)
     tmdb_id = _trusted_external_tmdb_id(record)

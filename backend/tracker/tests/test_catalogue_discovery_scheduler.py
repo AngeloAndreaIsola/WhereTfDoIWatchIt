@@ -4,7 +4,7 @@ from unittest.mock import patch
 from django.test import TestCase
 from django.utils import timezone
 
-from tracker.models import CatalogueDiscoveryState, Provider
+from tracker.models import CatalogueDiscoveryState, CatalogueReconciliationRun, Provider
 from tracker.services.catalogue_discovery import CatalogueDiscoveryError
 from tracker.services.catalogue_discovery_scheduler import process_due_discovery_schedules
 
@@ -103,3 +103,54 @@ class CatalogueDiscoverySchedulerTests(TestCase):
         self.assertEqual([r["provider"] for r in result["runs"]], ["hydrahd", "animeworld"])
         self.assertEqual(result["runs"][0]["status"], "FAILED")
         self.assertEqual(result["runs"][1]["status"], "PARTIAL")
+
+    def test_reconciliation_has_independent_switch_limits_and_network_opt_in(self):
+        config = {"enabled": True, "providers": {"hydrahd": {"enabled": True,
+            "historical": {"enabled": False}, "incremental": {"enabled": False},
+            "reconciliation": {"enabled": True, "interval_seconds": 60, "record_limit": 7, "request_budget": 3},
+        }}}
+        with patch("tracker.services.catalogue_discovery_scheduler.run_discovery") as discovery, patch(
+                "tracker.services.catalogue_discovery_scheduler.run_incremental_reconciliation",
+                return_value={"status": "COMPLETED"}) as reconcile:
+            report = process_due_discovery_schedules(config=config)
+        discovery.assert_not_called()
+        reconcile.assert_called_once_with("hydrahd", limit=7, request_budget=3, interval=1.0,
+                                          retries=1, allow_network=False, apply=True)
+        self.assertEqual(len(report["runs"]), 1)
+        config["providers"]["hydrahd"]["reconciliation"]["enabled"] = False
+        with patch("tracker.services.catalogue_discovery_scheduler.run_incremental_reconciliation") as reconcile:
+            self.assertEqual(process_due_discovery_schedules(config=config)["runs"], [])
+        reconcile.assert_not_called()
+
+    def test_reconciliation_respects_its_own_due_time_and_cooldown(self):
+        now = timezone.now()
+        CatalogueDiscoveryState.objects.create(provider=self.hydra, status="PARTIAL", mode="incremental",
+            cursor={"modes": {"incremental": {"cooldown_until": (now + timedelta(days=1)).isoformat()}}})
+        state = CatalogueReconciliationRun.objects.create(provider=self.hydra, started_at=now - timedelta(minutes=2))
+        config = {"enabled": True, "providers": {"hydrahd": {"enabled": True,
+            "reconciliation": {"enabled": True, "interval_seconds": 60}}}}
+        with patch("tracker.services.catalogue_discovery_scheduler.run_incremental_reconciliation", return_value={"status": "COMPLETED"}) as reconcile:
+            self.assertEqual(len(process_due_discovery_schedules(config=config, now=now)["runs"]), 1)
+            state.cooldown_until = now + timedelta(minutes=10)
+            state.save()
+            skipped = process_due_discovery_schedules(config=config, now=now)
+        self.assertEqual(reconcile.call_count, 1)
+        self.assertEqual(skipped["skipped"][0]["reason"], "retry_after_cooldown")
+        state.cooldown_until = None
+        state.started_at = now
+        state.save()
+        self.assertEqual(process_due_discovery_schedules(config=config, now=now)["skipped"][0]["reason"], "interval_not_elapsed")
+
+    def test_reconciliation_failure_isolated_and_provider_limits_validated(self):
+        config = {"enabled": True, "providers": {slug: {"enabled": True,
+            "reconciliation": {"enabled": True, "record_limit": 2}} for slug in ("hydrahd", "animeworld")}}
+        with patch("tracker.services.catalogue_discovery_scheduler.run_incremental_reconciliation",
+                side_effect=[RuntimeError("fixture"), {"provider": "animeworld", "status": "COMPLETED"}]):
+            report = process_due_discovery_schedules(config=config)
+        self.assertEqual(report["runs"][0]["status"], "FAILED")
+        self.assertEqual(report["runs"][1]["status"], "COMPLETED")
+        config["providers"]["hydrahd"]["reconciliation"]["record_limit"] = 251
+        with patch("tracker.services.catalogue_discovery_scheduler.run_incremental_reconciliation", return_value={"status": "COMPLETED"}) as reconcile:
+            report = process_due_discovery_schedules(config=config)
+        self.assertEqual(reconcile.call_count, 1)
+        self.assertEqual(report["skipped"][0]["provider"], "hydrahd")

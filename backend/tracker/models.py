@@ -515,6 +515,39 @@ class DiscoveredCatalogueRecord(models.Model):
         indexes = [models.Index(fields=["provider", "classification_state"], name="idx_disc_catalog_class")]
 
 
+class CatalogueReconciliationRecord(models.Model):
+    """Durable eligibility and outcome, independent of observation freshness."""
+
+    STATUS_CHOICES = [(v, v) for v in (
+        "BASELINED", "ASSOCIATED", "AMBIGUOUS", "UNMATCHED", "CONFLICTING",
+        "ERROR", "CACHE_MISS", "BUDGET_EXHAUSTED", "BLOCKED",
+    )]
+    discovered_record = models.OneToOneField(
+        DiscoveredCatalogueRecord, on_delete=models.CASCADE, related_name="reconciliation",
+    )
+    input_fingerprint = models.CharField(max_length=64)
+    status = models.CharField(max_length=24, choices=STATUS_CHOICES)
+    attempts = models.PositiveIntegerField(default=0)
+    processed_at = models.DateTimeField(default=timezone.now)
+    next_attempt_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    result = models.JSONField(default=dict, blank=True)
+
+
+class CatalogueReconciliationRun(models.Model):
+    """Provider lease and successful checkpoint for the existing worker lane."""
+
+    provider = models.OneToOneField(Provider, on_delete=models.CASCADE)
+    status = models.CharField(max_length=24, default="IDLE")
+    lease_owner = models.CharField(max_length=100, blank=True, default="")
+    lease_expires_at = models.DateTimeField(null=True, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    cooldown_until = models.DateTimeField(null=True, blank=True)
+    last_successful_checkpoint = models.DateTimeField(null=True, blank=True)
+    last_completed_record_id = models.BigIntegerField(null=True, blank=True)
+    report = models.JSONField(default=dict, blank=True)
+    last_error = models.TextField(blank=True, default="")
+
+
 class CanonicalBootstrapEvidence(models.Model):
     """Auditable proof for a canonical Movie bootstrapped from a discovery.
 

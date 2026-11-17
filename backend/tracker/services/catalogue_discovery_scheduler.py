@@ -1,8 +1,8 @@
-"""Opt-in schedules for bounded unofficial catalogue discovery.
+"""Opt-in schedules for bounded catalogue discovery and canonical reconciliation.
 
 The existing ``refresh_worker`` catalogue lane calls this once per tick. An
 empty/unset ``UNOFFICIAL_CATALOGUE_DISCOVERY_SCHEDULES`` value disables every
-recurring discovery run. Configuration is JSON so providers and the two modes
+recurring catalogue run. Configuration is JSON so providers and the three modes
 can be enabled independently without adding a scheduling dependency or schema.
 """
 from __future__ import annotations
@@ -14,7 +14,8 @@ from datetime import datetime, timedelta, timezone
 
 from django.utils import timezone as django_timezone
 
-from tracker.models import CatalogueDiscoveryState, Provider
+from tracker.models import CatalogueDiscoveryState, CatalogueReconciliationRun, Provider
+from tracker.services.incremental_catalogue_reconciliation import run_incremental_reconciliation
 from tracker.services.catalogue_discovery import (
     CatalogueDiscoveryError,
     PROVENANCE_BLOCKED,
@@ -24,8 +25,8 @@ from tracker.services.catalogue_discovery import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_INTERVALS = {"historical": 24 * 60 * 60, "incremental": 6 * 60 * 60}
-SCHEDULE_MODES = {"historical", "incremental"}
+DEFAULT_INTERVALS = {"historical": 24 * 60 * 60, "incremental": 6 * 60 * 60, "reconciliation": 60 * 60}
+SCHEDULE_MODES = set(DEFAULT_INTERVALS)
 
 
 def _parse_timestamp(value):
@@ -72,7 +73,7 @@ def _validated_mode_config(provider_slug, mode, value):
         raise ValueError("scheduled retry_limit must be between 0 and 2")
     if not 1 <= overlap_pages <= 10:
         raise ValueError("scheduled overlap_pages must be between 1 and 10")
-    return {
+    result = {
         "enabled": bool(value.get("enabled", False)),
         "interval_seconds": interval,
         "request_budget": request_budget,
@@ -80,6 +81,12 @@ def _validated_mode_config(provider_slug, mode, value):
         "retry_limit": retry_limit,
         "overlap_pages": overlap_pages,
     }
+    if mode == "reconciliation":
+        limit = int(value.get("record_limit", 25))
+        if not 1 <= limit <= 250:
+            raise ValueError("scheduled record_limit must be between 1 and 250")
+        result.update(record_limit=limit, allow_network=bool(value.get("allow_network", False)))
+    return result
 
 
 def process_due_discovery_schedules(*, config=None, now=None):
@@ -111,7 +118,7 @@ def process_due_discovery_schedules(*, config=None, now=None):
         cursor = (state.cursor or {}) if state else {}
         modes = cursor.get("modes", {}) if isinstance(cursor, dict) else {}
         mode_reports = (state.report or {}).get("mode_reports", {}) if state else {}
-        for mode in ("incremental", "historical"):
+        for mode in ("incremental", "historical", "reconciliation"):
             raw_mode_config = provider_config.get(mode)
             if raw_mode_config is None:
                 continue
@@ -128,6 +135,10 @@ def process_due_discovery_schedules(*, config=None, now=None):
             last_started = _parse_timestamp(mode_cursor.get("last_run_started_at"))
             if last_started is None and state and state.mode == ("full" if mode == "historical" else mode):
                 last_started = state.started_at
+            if mode == "reconciliation":
+                reconciliation = CatalogueReconciliationRun.objects.filter(provider__slug=provider_slug).first()
+                last_started = reconciliation.started_at if reconciliation else None
+                cooldown_until = reconciliation.cooldown_until if reconciliation else None
             if cooldown_until and cooldown_until > now:
                 result["skipped"].append({"provider": provider_slug, "mode": mode, "reason": "retry_after_cooldown", "next_run_at": cooldown_until.isoformat()})
                 continue
@@ -135,14 +146,22 @@ def process_due_discovery_schedules(*, config=None, now=None):
                 result["skipped"].append({"provider": provider_slug, "mode": mode, "reason": "interval_not_elapsed"})
                 continue
             try:
-                report = run_discovery(
-                    provider_slug,
-                    mode=mode,
-                    request_budget=mode_config["request_budget"],
-                    delay=mode_config["delay_seconds"],
-                    retry_limit=mode_config["retry_limit"],
-                    overlap_pages=mode_config["overlap_pages"],
-                )
+                if mode == "reconciliation":
+                    report = run_incremental_reconciliation(
+                        provider_slug, limit=mode_config["record_limit"],
+                        request_budget=mode_config["request_budget"],
+                        interval=mode_config["delay_seconds"], retries=mode_config["retry_limit"],
+                        allow_network=mode_config["allow_network"], apply=True,
+                    )
+                else:
+                    report = run_discovery(
+                        provider_slug,
+                        mode=mode,
+                        request_budget=mode_config["request_budget"],
+                        delay=mode_config["delay_seconds"],
+                        retry_limit=mode_config["retry_limit"],
+                        overlap_pages=mode_config["overlap_pages"],
+                    )
             except CatalogueDiscoveryError as exc:
                 report = exc.report
                 logger.warning("unofficial_discovery_scheduled_run_failed provider=%s mode=%s report=%s", provider_slug, mode, report)

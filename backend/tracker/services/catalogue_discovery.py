@@ -33,6 +33,7 @@ from tracker.scrapers.altadefinizione import BROWSE_PATHS as AD_PATHS
 from tracker.services.scraped_mapping import persist_scraped_item, provider_content_id_for_item
 from tracker.services.bulk_refresh import try_source_lock, release_source_lock
 from tracker.services.catalogue_identity import normalize_catalogue_url
+from tracker.services.catalogue_reconciliation_inputs import MEANINGFUL_KEYS_V1
 
 
 PROVIDERS = {"animeworld", "kisskh", "hydrahd", "cineblog01", "streamingcommunity", "altadefinizione"}
@@ -142,10 +143,7 @@ def _same_persisted_observation(mapping, item):
     )
 
 
-_SEMANTIC_METADATA_KEYS = {
-    "year", "release_year", "original_title", "feed_title", "anime_type",
-    "source_media_type", "external_ids", "tmdb_id", "listing_content_type_hint",
-}
+_SEMANTIC_METADATA_KEYS = set(MEANINGFUL_KEYS_V1)
 
 
 def _semantic_metadata(metadata):

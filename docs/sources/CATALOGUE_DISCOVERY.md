@@ -2033,3 +2033,11 @@ and 387 import/replay checks, physical namespace probes, provider endpoint smoke
 check and exact rollback restoration. The runbook's Bash blocks pass syntax
 validation without executing the live procedure. A final read-only live check
 confirmed every source row, history entry and inspected schema object unchanged.
+
+## Incremental reconciliation operation
+
+The completed inventory now continues through a bounded incremental worker.
+See [Incremental unofficial canonical reconciliation](INCREMENTAL_RECONCILIATION.md)
+for eligibility, deferred retries, leases, atomic checkpoints, disabled schedule
+configuration, management commands and disposable-clone validation. Existing
+discoveries are acknowledged as a baseline; this does not rerun bulk matching.

@@ -21,17 +21,7 @@ from tracker.models import CanonicalBootstrapEvidence, DiscoveredCatalogueRecord
 from tracker.services.catalogue_reconciliation import (
     _extract_year, _normal_title, _trusted_external_tmdb_id, _type_evidence,
 )
-
-
-def source_snapshot(record):
-    return {"source_title": record.title, "source_year": _extract_year(record)[0],
-            "provider": record.provider.slug, "provider_native_id": record.provider_native_id,
-            "source_url": record.source_url, "identity_url": record.identity_url,
-            "content_type": _type_evidence(record)[0]}
-
-
-def fingerprint(record):
-    return hashlib.sha256(json.dumps(source_snapshot(record), sort_keys=True).encode()).hexdigest()
+from tracker.services.canonical_verification import CanonicalVerifier, source_snapshot, fingerprint, evidence_agrees
 
 
 def write_checkpoint(path, state):
@@ -48,7 +38,7 @@ def write_checkpoint(path, state):
             os.unlink(temporary)
 
 
-class Command(BaseCommand):
+class Command(CanonicalVerifier, BaseCommand):
     help = "Bootstrap at most 250 discoveries per frozen batch; dry-run by default."
 
     def add_arguments(self, parser):
@@ -135,12 +125,7 @@ class Command(BaseCommand):
             try:
                 evidence = prior.get(record.pk)
                 if evidence:
-                    stored = evidence.evidence
-                    if (all(stored.get(k) == v for k, v in source_snapshot(record).items()) and stored.get("source_title") == record.title
-                            and stored.get("source_year") == year and stored.get("content_type") == media
-                            and evidence.movie.content_type == media and evidence.movie.year == year
-                            and (not _trusted_external_tmdb_id(record)
-                                 or int(_trusted_external_tmdb_id(record)) == evidence.movie.tmdb_id)):
+                    if evidence_agrees(record, evidence):
                         result.update(status="VERIFIED", tmdb_id=evidence.movie.tmdb_id,
                                       action="already_verified", evidence=["record-specific verified evidence reused"])
                         totals["verified"] += 1
@@ -185,91 +170,3 @@ class Command(BaseCommand):
             "batch_remaining": len(records) - len(state["records"]),
             "checkpoint_file": str(path) if path else None, "records": rows,
         }, indent=2, ensure_ascii=False, default=str))
-
-    def evaluate(self, record, media, year, gateway, options, totals, result):
-        trusted = _trusted_external_tmdb_id(record)
-        if trusted:
-            candidates = [{"tmdb_id": int(trusted), "content_type": media}]
-            exact = candidates
-        else:
-            before = gateway.budget.cache_hits if hasattr(gateway, "budget") else None
-            candidates = gateway.search(record.title, year=year, content_type=media,
-                                        authorize_network=options["allow_network"])
-            if (not candidates and not options["allow_network"] and before is not None
-                    and gateway.budget.cache_hits == before):
-                result.update(status="CACHE_MISS", evidence=["no fresh search cache; network not authorized"])
-                return
-            exact = list({int(c["tmdb_id"]): c for c in candidates
-                          if c.get("content_type") == media and c.get("year") == year
-                          and _normal_title(c.get("title")) == _normal_title(record.title)
-                          and _normal_title(record.title)}.values())
-        totals["rejected_candidates"] += len(candidates) - len(exact)
-        result["candidates"] = [{k: c.get(k) for k in ("tmdb_id", "title", "year", "content_type")} for c in candidates]
-        if (not trusted and (any(c.get("search_truncated") for c in candidates)
-                or self.title_groups[(record.provider_id, media, year, _normal_title(record.title))] > 1)):
-            result.update(status="AMBIGUOUS", evidence=["multiple source releases or incomplete search; record-specific distinction required"])
-            totals["exact_proposed"] += int(len(exact) == 1)
-            totals["ambiguous"] += 1
-            return
-        if len(exact) != 1:
-            result.update(status="AMBIGUOUS" if len(exact) > 1 else "UNMATCHED",
-                          evidence=["search did not produce one exact title/year/type candidate"])
-            totals["ambiguous" if len(exact) > 1 else "unmatched"] += 1
-            return
-        if not trusted:
-            totals["exact_proposed"] += 1
-        candidate = exact[0]
-        before = gateway.budget.cache_hits if hasattr(gateway, "budget") else None
-        details = gateway.get_details(int(candidate["tmdb_id"]), content_type=media,
-                                      authorize_network=options["allow_network"])
-        if (details is None and not options["allow_network"] and before is not None
-                and gateway.budget.cache_hits == before):
-            result.update(status="CACHE_MISS", evidence=["no usable details cache; not verified"])
-            return
-        if (not details or details.get("tmdb_id") != int(candidate["tmdb_id"])
-                or details.get("content_type") != media or details.get("year") != year
-                or not _normal_title(record.title)
-                or _normal_title(record.title) not in {
-                    _normal_title(details.get("title")), _normal_title(details.get("original_title"))}):
-            result.update(status="CONFLICTING", evidence=["details rejected identifier/title/year/type proposal"])
-            totals["conflicting"] += 1
-            totals["rejected_candidates"] += 1
-            return
-        movie = Movie.objects.filter(tmdb_id=int(candidate["tmdb_id"]), content_type=media).first()
-        if movie and movie.year != year:
-            result.update(status="CONFLICTING", evidence=["existing canonical release year conflicts"])
-            totals["conflicting"] += 1
-            return
-        totals["verified"] += 1
-        totals["already_present" if movie else "would_create"] += 1
-        result.update(status="VERIFIED", tmdb_id=int(candidate["tmdb_id"]),
-                      canonical_title=details["title"], canonical_year=year,
-                      evidence=["record-specific details verified identifier, title, year and media type"],
-                      action="PENDING_APPLY" if options["apply"] else "DRY_RUN")
-        if not options["apply"]:
-            return
-        with transaction.atomic():
-            locked = DiscoveredCatalogueRecord.objects.select_for_update().select_related("provider").get(pk=record.pk)
-            if fingerprint(locked) != fingerprint(record):
-                raise CommandError("Source changed during verification; rerun for review")
-            movie, created = Movie.objects.get_or_create(
-                tmdb_id=int(candidate["tmdb_id"]), content_type=media,
-                defaults={"title": details["title"], "year": year,
-                          **{k: details.get(k) or fallback for k, fallback in (
-                              ("overview", ""), ("poster_path", ""), ("genres", []),
-                              ("genre_ids", []), ("cast", []), ("director", []), ("seasons_data", []))},
-                          "runtime_minutes": details.get("runtime_minutes"),
-                          "tmdb_rating": details.get("tmdb_rating")})
-            if movie.year != year:
-                raise CommandError("Canonical year changed during verification; review before retry")
-            evidence, _ = CanonicalBootstrapEvidence.objects.get_or_create(
-                discovered_record=record, defaults={"movie": movie,
-                    "source_kind": "tmdb_trusted_id_details" if trusted else "tmdb_search_and_details",
-                    "verification_method": "exact_title_year_type",
-                    "evidence": {**source_snapshot(record), "tmdb_id": movie.tmdb_id,
-                                 "tmdb_title": details["title"], "tmdb_year": year}})
-            if evidence.movie_id != movie.pk:
-                raise CommandError("Existing evidence has another canonical identity; operator review required")
-            totals["created"] += int(created)
-            totals["applied"] += 1
-            result["action"] = "created" if created else "existing_identity_evidence_recorded"
