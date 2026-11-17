@@ -288,8 +288,9 @@ they are documentation only and were not run against the live database.
      --manifest /app/stage/catalogue-inventory-v1.manifest.json
    ```
 
-5. Require tracker migration head `0053`, 3,031 discovered records (2,952
-   HydraHD and 79 AnimeWorld), zero pending staged rows omitted, unchanged
+5. At the original 3,031-record snapshot, require tracker migration head
+   `0053`, 3,031 discovered records (2,952 HydraHD and 79 AnimeWorld), zero
+   pending staged rows omitted, unchanged
    legacy mapping count/hash, and zero newly created mappings, canonical
    movies, `ProviderContent`, `ContentMapping`, or offers. Replay once and
    require zero inserts, updates, or deletes and 3,031 unchanged.
@@ -341,8 +342,8 @@ were resumed from the imported cursors, not sampled out of order:
 
 | Provider/partition | Sequential pages in this follow-up | Listing records observed | New identities persisted | Duplicates | Requests | Latest checkpoint / navigation window |
 |---|---:|---:|---:|---:|---:|---|
-| HydraHD movies | 90–103 (two batches) | 672 | 672 | 0 | 16 | page 103; navigation max 106 |
-| HydraHD TV | 35–48 (two batches) | 672 | 672 | 0 | 16 | page 48; navigation max 51 |
+| HydraHD movies | 90–103 (two batches) | 672 | 336 | 0 | 16 | page 103; navigation max 106 |
+| HydraHD TV | 35–48 (two batches) | 672 | 336 | 0 | 16 | page 48; navigation max 51 |
 | AnimeWorld RSS | 1 snapshot | 15 | 0 new GUIDs; 15 metadata updates | 0 | 2 | RSS build `Tue, 17 Nov 2026 14:53:12 GMT` |
 
 Hydra totals are not exposed. Its navigation maxima are rolling links, not
@@ -372,7 +373,7 @@ Recent official AGCOM material names other StreamingCommunity domains
 No candidate catalogue page was fetched or ingested. KissKH was not requested;
 its HTTP 451 remains a hard stop and was not bypassed.
 
-The durable export is now **3,703 records**: 3,624 HydraHD and 79 AnimeWorld.
+The durable export at this snapshot was **3,703 records**: 3,624 HydraHD and 79 AnimeWorld.
 The 3,031-record source artifact was retained as
 `catalogue-inventory-v1-baseline-3031.jsonl.gz` with its original manifest.
 The current gzip SHA-256 is
@@ -411,10 +412,12 @@ Preconditions are: separate explicit authorization for the live import; live
 database still identified as project `new-sources`, DB `tracker`, migration
 `0053`; fresh backup checksum and restore test verified; live legacy mapping
 count/hash equal the backup; staging checksums and provider counts equal this
-manifest; and application writes paused during the operation. Verify after
-import: 3,703 discoveries (HydraHD 3,624; AnimeWorld 79), 3,703 pending,
+manifest; and application writes paused during the operation. This command
+uses the same durable staging path as the later 4,759-row snapshot documented
+below. Verify after import: 4,759 discoveries (HydraHD 4,680; AnimeWorld 79),
+4,759 pending,
 unchanged legacy mapping IDs/field hash, zero new canonical mappings or movies,
-zero offers, and five restored provider states. Replay and require 3,703
+zero offers, and five restored provider states. Replay and require 4,759
 unchanged with zero inserts/updates. Live import remains pending authorization.
 
 ### Migration-startup incident follow-up
@@ -694,3 +697,99 @@ The management page calls these records **discovered titles**. Its catalogue
 sync badge is independent of subscription active/inactive state. Per-provider
 status is stored in `CatalogueDiscoveryState`; last committed page progress is
 saved after each parsed page. Failed pages do not delete existing records.
+
+## Final import preflight and continued discovery (2026-11-17)
+
+The live import remains **pending explicit authorization**. No migration or
+catalogue import was run against the live database. Read-only inspection
+confirmed Compose project `new-sources`, database `tracker`, tracker head
+`0053_catalogue_url_identity_provenance`, 3,300 scraped mappings, 50 providers,
+and zero discovery records, movies, provider content, content mappings, offers,
+offer evidence, or offer prices. The running backend uses the mounted runtime
+guard, which runs `migrate --check` before startup and never applies migrations.
+
+The expected backup
+`/Users/angeloandreaisola/Documents/database-backups/WhereTfDoIWatchIt/new-sources_tracker_20261117T143100Z.dump`
+still matches SHA-256
+`fd04b86731fdc1419f5cc78ea1cab7186d494750137e8f4b67f9e038d557703e` and was
+restored with `pg_restore --exit-on-error` into a fresh disposable PostgreSQL
+database. The clone retained the audited baseline (3,300 mappings; 50
+providers; tracker `0053`; zero discoveries and offers). Since the live counts
+still match that restore, no new backup was necessary.
+
+### Reconciliation of the 3,703-record snapshot
+
+The earlier follow-up table reported 672 new identities in each HydraHD
+partition, which conflicts with its 3,703-row export. A durable identity
+comparison between the preserved 3,031-row snapshot and the 3,703-row snapshot
+shows **672 new HydraHD identities total: 336 movies and 336 TV**. The prior
+672-per-partition values are listing observations, not new unique identities.
+All 3,031 prior identities were retained, with no duplicate identity groups;
+15 AnimeWorld RSS records had metadata changes and no new GUIDs. The earlier
+table now reflects the corrected per-partition identity counts.
+
+### Isolated HydraHD continuation
+
+The verified pre-import backup was restored into disposable database
+`wtdwi_discovery_final_20261117` on the `db-test` service. The 3,703-row
+inventory imported there (3,703 inserted, five provider states restored), and
+the live database was not used for discovery. Eight sequential HydraHD runs
+then advanced each partition from the imported page 103 / page 48 checkpoints:
+
+| Partition | Pages scanned | Dispatches | New URLs | Repeated URLs | Updated | Latest page | Navigation max |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Movies | 104–125 | 26 | 528 | 0 | 0 | 125 | 128 |
+| TV shows | 49–70 | 26 | 528 | 0 | 0 | 70 | 73 |
+
+Six runs used budget 8 (one robots request and seven listings each); two
+next-page probes used budget 2 (one robots request and one listing each). All
+52 dispatched requests succeeded with zero retries. The 44 listing pages were
+sequential with no gaps; they added 1,056 unique URLs. Every run reported zero
+duplicates and zero updates. Navigation maxima moved from 106 / 51 at the
+imported checkpoints to 128 / 73, including after the one-page probes. The
+listing route therefore exposes rolling navigation links, not a stable
+catalogue total. No terminal page or fixed total was observed; coverage stays
+partial.
+
+AnimeWorld's permitted RSS workflow ran once in the same clone: 2 dispatches,
+15 records seen and unchanged, zero new GUIDs, and the checkpoint recorded the
+feed's `Tue, 17 Nov 2026 15:20:06 GMT` build time. Its report remains partial
+because RSS is a recent-updates snapshot rather than a full archive.
+
+The latest durable inventory contains **4,759 records** (4,680 HydraHD, 79
+AnimeWorld), all pending classification. It retains all 3,703 previous
+identities and adds 1,056 new HydraHD identities (528 per partition). No
+canonical mappings or offers were created. The compressed inventory SHA-256 is
+`ce97c8a486f96b17ac2463a0ff0abb0b31be831ee5856ab46f013e6c4b910cc4`; the
+manifest SHA-256 is
+`57d2d0b23e6c552a876fe0522ea2cecd08ed0c9e40264dfd5062837eb953d56e`. Manifest
+checkpoints are movies page 125 / navigation max 128 and TV page 70 / max 73.
+An independently checksummed 3,703-record recovery snapshot is retained under
+`snapshots/20261117T1521Z-pre-hydra-continuation-3703/` beside the 3,031-row
+baseline snapshot. The current staging directory remains outside the worktree,
+mode `0700`, with data and manifest mode `0600`.
+
+The current export replayed in the isolated clone with 4,759 unchanged, zero
+inserted, and zero updated; the clone still has 3,300 scraped mappings and
+zero movies, provider content, content mappings, or offers. The live target
+still reports its original zero-discovery baseline. Live and clone mapping IDs
+and fields match under the same deterministic row serialization: ID SHA-256
+`1d6225cafcab013c77e85ecdfb6a14e530368600592353e8da75aec7ae4021a` and
+all-field SHA-256
+`1d52c51d7d0e2abf001347c4e852b19ead83329e27bba5a0099bba58a87cf163`. The
+live import command continues to require separate explicit authorization.
+
+For provider provenance, official AGCOM records identify CineBlog01-related
+`.cc` / `.ceo` domains and StreamingCommunity `streamingcommunityz` `.kitchen`,
+`.marketing`, and `.land` domains; they do not establish the configured `.run`
+or `.army` candidates. Search results for AltaDefinizione `.al` self-assert
+official status but provide no independent linkage to the configured `.ink`
+candidate or the historically cited host. These providers remain blocked with
+zero dispatches; no unverified catalogue page was fetched. KissKH remains
+untouched after HTTP 451 and no restriction was bypassed.
+
+Focused tests passed (37 tests across staging, identity, discovery, and guarded
+migration). The complete isolated backend suite passed (3,265 tests in 127.3
+seconds). No UI files changed, so frontend tests were not relevant. The staged
+import is ready for its existing guarded process; UI visibility checks are
+pending the separately authorized live import.
