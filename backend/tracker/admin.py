@@ -7,6 +7,7 @@ from django.shortcuts import render
 
 from .models import (
     ApiCallCounter,
+    CanonicalBootstrapEvidence,
     Availability,
     LanguageEntry,
     LanguageInfo,
@@ -20,6 +21,14 @@ from .models import (
     Subscription,
     WatchlistItem,
 )
+
+
+@admin.register(CanonicalBootstrapEvidence)
+class CanonicalBootstrapEvidenceAdmin(admin.ModelAdmin):
+    list_display = ("discovered_record", "movie", "source_kind", "verification_method", "verified_at")
+    list_filter = ("source_kind", "verification_method")
+    search_fields = ("discovered_record__title", "discovered_record__provider__slug", "movie__title", "movie__tmdb_id")
+    readonly_fields = ("verified_at",)
 
 
 class LanguageEntryInline(admin.TabularInline):

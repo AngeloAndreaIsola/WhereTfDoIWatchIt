@@ -446,6 +446,9 @@ class CatalogueDiscoveryState(models.Model):
     cursor = models.JSONField(default=dict, blank=True)
     report = models.JSONField(default=dict, blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
+    heartbeat_at = models.DateTimeField(null=True, blank=True)
+    lease_expires_at = models.DateTimeField(null=True, blank=True)
+    lease_owner = models.CharField(max_length=100, blank=True, default="")
     last_success_at = models.DateTimeField(null=True, blank=True)
     last_successful_checkpoint = models.DateTimeField(null=True, blank=True)
     last_error = models.TextField(blank=True, default="")
@@ -500,6 +503,28 @@ class DiscoveredCatalogueRecord(models.Model):
             ),
         ]
         indexes = [models.Index(fields=["provider", "classification_state"], name="idx_disc_catalog_class")]
+
+
+class CanonicalBootstrapEvidence(models.Model):
+    """Auditable proof for a canonical Movie bootstrapped from a discovery.
+
+    The canonical identity remains ``Movie.tmdb_id``. This row only records
+    why one existing provider-native observation was sufficient to create or
+    associate that identity; it does not assert availability.
+    """
+
+    discovered_record = models.OneToOneField(
+        DiscoveredCatalogueRecord, on_delete=models.PROTECT,
+        related_name="canonical_bootstrap_evidence",
+    )
+    movie = models.ForeignKey(Movie, on_delete=models.PROTECT, related_name="bootstrap_evidence")
+    source_kind = models.CharField(max_length=32)
+    verification_method = models.CharField(max_length=32)
+    evidence = models.JSONField(default=dict, blank=True)
+    verified_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        indexes = [models.Index(fields=["movie", "verified_at"], name="idx_bootstrap_movie_verified")]
 
 
 class KissKHPendingClassification(models.Model):

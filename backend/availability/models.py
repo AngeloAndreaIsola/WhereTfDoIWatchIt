@@ -653,6 +653,7 @@ class ContentMapping(models.Model):
     )
     confidence = models.FloatField(default=1.0)
     match_method = models.CharField(max_length=25, choices=MatchMethod.choices)
+    match_evidence = models.JSONField(default=dict, blank=True)
     revision = models.PositiveIntegerField(default=1)
     first_seen = models.DateTimeField(auto_now_add=True)
     last_verified = models.DateTimeField(null=True, blank=True)

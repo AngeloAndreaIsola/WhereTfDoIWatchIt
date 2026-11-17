@@ -9,12 +9,15 @@ from __future__ import annotations
 import hashlib
 import re
 import unicodedata
+from difflib import SequenceMatcher
 from collections import Counter, defaultdict
 
 from django.db import transaction
 
 from availability.models import ContentMapping, ProviderContent, Source
-from tracker.models import DiscoveredCatalogueRecord, Movie, ScrapedContentMapping
+from availability.models import TmdbDetailsCache
+from tracker.models import CanonicalBootstrapEvidence, DiscoveredCatalogueRecord, Movie, ScrapedContentMapping
+from django.utils import timezone
 
 
 def _normal_title(value):
@@ -74,31 +77,107 @@ def _external_tmdb_id(record):
     return value if value.isdigit() else None
 
 
-def _match(record, classified_type, year, titles_by_norm, movies_by_tmdb):
+def _trusted_external_tmdb_id(record):
+    metadata = record.original_metadata if isinstance(record.original_metadata, dict) else {}
+    trusted = metadata.get("external_ids_trusted") is True
+    return _external_tmdb_id(record) if trusted else None
+
+
+def _token_overlap(left, right):
+    left_tokens = set(_normal_title(left).split())
+    right_tokens = set(_normal_title(right).split())
+    if len(left_tokens) < 8 or len(right_tokens) < 8:
+        return 0.0
+    return len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
+
+
+def _match(record, classified_type, year, titles_by_norm, movies_by_tmdb, alternatives_by_norm,
+           bootstrap_by_record, details_by_tmdb):
     if not classified_type:
         return {"status": "UNMATCHED", "confidence": 0.0, "evidence": ["media type unresolved"], "candidates": []}
-    tmdb_id = _external_tmdb_id(record)
+    bootstrap = bootstrap_by_record.get(record.pk)
+    if bootstrap:
+        target = bootstrap.movie
+        if target.content_type == classified_type and target.year == year:
+            return {"status": "MATCH_VERIFIED", "confidence": 1.0,
+                    "evidence": ["TMDb search and details verified this discovered record",
+                                 "exact normalized title", "exact release year",
+                                 "media type agrees"], "candidates": [_movie_candidate(target)]}
+        return {"status": "POSSIBLE_REVIEW", "confidence": 0.0,
+                "evidence": ["stored bootstrap evidence conflicts with current type or year"],
+                "candidates": [_movie_candidate(target)]}
+    untrusted_tmdb_id = _external_tmdb_id(record)
+    tmdb_id = _trusted_external_tmdb_id(record)
+    if untrusted_tmdb_id and not tmdb_id:
+        return {"status": "POSSIBLE_REVIEW", "confidence": 0.0,
+                "evidence": ["source TMDb ID lacks trusted provenance"], "candidates": []}
     if tmdb_id:
         target = movies_by_tmdb.get(int(tmdb_id))
         if target and target.content_type == classified_type:
-            return {"status": "MATCH_HIGH", "confidence": 1.0, "evidence": ["source metadata contains matching TMDb ID", "media type agrees"], "candidates": [_movie_candidate(target)]}
+            return {"status": "MATCH_VERIFIED", "confidence": 1.0, "evidence": ["source metadata contains a provenance-marked trusted TMDb ID", "media type agrees"], "candidates": [_movie_candidate(target)]}
         return {"status": "POSSIBLE_REVIEW", "confidence": 0.0, "evidence": ["explicit TMDb ID is absent from canonical catalogue or has a type conflict"], "candidates": []}
 
     title = _normal_title(record.title)
-    candidates = [m for m in titles_by_norm.get(title, []) if m.content_type == classified_type]
-    if not candidates:
-        conflicting = titles_by_norm.get(title, [])
-        if conflicting:
-            return {"status": "POSSIBLE_REVIEW", "confidence": 0.0, "evidence": ["exact title exists only under another media type"], "candidates": [_movie_candidate(m) for m in conflicting]}
-        return {"status": "UNMATCHED", "confidence": 0.0, "evidence": ["no exact normalized title in canonical catalogue"], "candidates": []}
+    title_candidates = titles_by_norm.get(title, [])
+    candidates = [m for m in title_candidates if m.content_type == classified_type]
     if year is not None:
         same_year = [m for m in candidates if m.year == year]
         if len(same_year) == 1:
             return {"status": "MATCH_HIGH", "confidence": 0.99, "evidence": ["exact normalized title", "exact release year", "media type agrees"], "candidates": [_movie_candidate(same_year[0])]}
         if len(same_year) > 1:
-            candidates = same_year
-        else:
+            return {"status": "POSSIBLE_REVIEW", "confidence": 0.0,
+                    "evidence": ["multiple exact-title candidates for release year"],
+                    "candidates": [_movie_candidate(m) for m in same_year]}
+        alternatives = [m for m in alternatives_by_norm.get(title, [])
+                        if m.content_type == classified_type and m.year == year]
+        unique_alternatives = {m.pk: m for m in alternatives}
+        if len(unique_alternatives) == 1:
+            candidate = next(iter(unique_alternatives.values()))
+            return {"status": "MATCH_VERIFIED", "confidence": 0.99,
+                    "evidence": ["verified TMDb alternative title", "exact release year",
+                                 "media type agrees"],
+                    "candidates": [_movie_candidate(candidate)]}
+        if len(unique_alternatives) > 1:
+            return {"status": "POSSIBLE_REVIEW", "confidence": 0.0,
+                    "evidence": ["verified alternative title has multiple canonical candidates"],
+                    "candidates": [_movie_candidate(m) for m in unique_alternatives.values()]}
+        if candidates:
             return {"status": "POSSIBLE_REVIEW", "confidence": 0.0, "evidence": ["exact title but canonical release year conflicts"], "candidates": [_movie_candidate(m) for m in candidates]}
+        if title_candidates:
+            return {"status": "POSSIBLE_REVIEW", "confidence": 0.0,
+                    "evidence": ["exact title exists only under another media type"],
+                    "candidates": [_movie_candidate(m) for m in title_candidates]}
+        metadata = record.original_metadata if isinstance(record.original_metadata, dict) else {}
+        source_summary = metadata.get("overview") or metadata.get("synopsis") or metadata.get("description")
+        if source_summary and year is not None:
+            fuzzy = []
+            for movie in movies_by_tmdb.values():
+                if movie.content_type != classified_type or movie.year != year:
+                    continue
+                title_score = SequenceMatcher(None, title, _normal_title(movie.title)).ratio()
+                details = details_by_tmdb.get(movie.tmdb_id, {})
+                summary_score = _token_overlap(source_summary, details.get("overview"))
+                if title_score >= 0.92 and summary_score >= 0.60:
+                    fuzzy.append((movie, title_score, summary_score))
+            fuzzy.sort(key=lambda item: (item[1], item[2]), reverse=True)
+            if fuzzy and (len(fuzzy) == 1 or fuzzy[0][1] - fuzzy[1][1] >= 0.08):
+                movie, title_score, summary_score = fuzzy[0]
+                return {"status": "MATCH_HIGH", "confidence": 0.90,
+                        "evidence": ["conservative fuzzy title similarity",
+                                     f"title similarity={title_score:.3f}",
+                                     f"overview token overlap={summary_score:.3f}",
+                                     "exact release year", "media type agrees"],
+                        "candidates": [_movie_candidate(movie)]}
+        return {"status": "UNMATCHED", "confidence": 0.0,
+                "evidence": ["no exact normalized or verified alternative title in canonical catalogue"],
+                "candidates": []}
+    if not candidates:
+        if title_candidates:
+            return {"status": "POSSIBLE_REVIEW", "confidence": 0.0,
+                    "evidence": ["exact title exists only under another media type"],
+                    "candidates": [_movie_candidate(m) for m in title_candidates]}
+        return {"status": "UNMATCHED", "confidence": 0.0,
+                "evidence": ["no exact normalized title in canonical catalogue"], "candidates": []}
     if len(candidates) == 1:
         return {"status": "POSSIBLE_REVIEW", "confidence": 0.75, "evidence": ["exact normalized title", "release year unavailable"], "candidates": [_movie_candidate(candidates[0])]}
     return {"status": "POSSIBLE_REVIEW", "confidence": 0.0, "evidence": ["multiple exact-title candidates"], "candidates": [_movie_candidate(m) for m in candidates]}
@@ -141,6 +220,25 @@ def reconcile_catalogue(*, provider_slugs=None, limit=None, apply=False):
         titles_by_norm[_normal_title(movie.title)].append(movie)
         movies_by_tmdb[movie.tmdb_id] = movie
 
+    alternatives_by_norm = defaultdict(list)
+    details_by_tmdb = {}
+    for cache in TmdbDetailsCache.objects.filter(expires_at__gt=timezone.now(), is_negative=False).only(
+        "tmdb_id", "content_type", "details"
+    ).iterator(chunk_size=500):
+        movie = movies_by_tmdb.get(cache.tmdb_id)
+        details = cache.details if isinstance(cache.details, dict) else {}
+        details_by_tmdb[cache.tmdb_id] = details
+        alternative = _normal_title(details.get("original_title"))
+        display = _normal_title(details.get("title"))
+        if (movie and cache.content_type == movie.content_type and alternative
+                and alternative != display and (details.get("year") in (None, movie.year))):
+            alternatives_by_norm[alternative].append(movie)
+
+    bootstrap_by_record = {
+        evidence.discovered_record_id: evidence
+        for evidence in CanonicalBootstrapEvidence.objects.select_related("movie").all().iterator(chunk_size=500)
+    }
+
     legacy_qs = ScrapedContentMapping.objects.select_related("provider").only(
         "id", "provider_id", "provider__slug", "scraped_title", "scraped_year",
         "scraped_content_type", "scraped_url", "movie_id", "is_confirmed",
@@ -166,7 +264,8 @@ def reconcile_catalogue(*, provider_slugs=None, limit=None, apply=False):
         year, year_evidence = _extract_year(record)
         title = str(record.title or "").strip()
         extracted = bool(title)
-        match = _match(record, media_type, year, titles_by_norm, movies_by_tmdb)
+        match = _match(record, media_type, year, titles_by_norm, movies_by_tmdb,
+                       alternatives_by_norm, bootstrap_by_record, details_by_tmdb)
         legacy_candidates = []
         seen_legacy_ids = set()
         for legacy in legacy_by_url.get((record.provider.slug, record.source_url), []):
@@ -280,12 +379,16 @@ def reconcile_catalogue(*, provider_slugs=None, limit=None, apply=False):
         "by_provider": {provider: dict(values) for provider, values in sorted(provider_counters.items())},
         "duplicate_identities": {"count": duplicate_identity_groups, "title_candidate_groups": duplicate_title_groups_report},
         "false_positive_findings": false_positive_findings,
-        "false_positive_validation": "not measurable when no canonical matches are proposed",
+        "false_positive_validation": (
+            "verified mappings require provenance-marked identifiers or record-specific TMDb search/details evidence; "
+            "exact title/year proposals remain review-only"
+        ),
         "requested_metrics": {
             "movies_confidently_classified": counters["movies_confident"],
             "series_confidently_classified": counters["series_confident"],
             "ambiguous_classifications": counters["ambiguous_classification"],
-            "high_confidence_canonical_matches": counters["match_high"],
+            "verified_canonical_matches": counters["match_verified"],
+            "high_confidence_proposed_matches": counters["match_high"],
             "possible_matches_requiring_review": counters["possible_review"],
             "unmatched_records": counters["unmatched"],
             "duplicate_identity_groups": duplicate_identity_groups,
@@ -329,13 +432,23 @@ def _apply_classification(record, content_type, year, match):
     record.classification_state = "CLASSIFIED"
     record.classified_content_type = content_type
     record.save(update_fields=["classification_state", "classified_content_type", "updated_at"])
-    if match["status"] != "MATCH_HIGH":
+    if match["status"] != "MATCH_VERIFIED":
         return "provider_content_created" if created else "provider_content_exists"
 
     candidate = match["candidates"][0]
-    source = Source.objects.filter(slug=provider.slug).first()
-    if source is None:
-        return "classified_canonical_match_requires_source"
+    source, _ = Source.objects.get_or_create(
+        slug=provider.slug,
+        defaults={
+            "name": f"{provider.name} catalogue identity",
+            "type": "web",
+            "enabled": False,
+            "configuration": {
+                "identity_only": True,
+                "availability_enabled": False,
+                "catalogue_provider": provider.slug,
+            },
+        },
+    )
     existing_mapping = ContentMapping.objects.filter(
         provider=provider, provider_content_id=native_id
     ).first()
@@ -350,6 +463,9 @@ def _apply_classification(record, content_type, year, match):
         tmdb_id=candidate["tmdb_id"],
         content=content,
         confidence=match["confidence"],
-        match_method="external_id" if "TMDb ID" in " ".join(match["evidence"]) else "title_year",
+        match_method=("external_id" if "TMDb ID" in " ".join(match["evidence"])
+                      else "title_year"),
+        match_evidence={"evidence": match["evidence"], "candidate": candidate,
+                        "classification_evidence": _type_evidence(record)[2]},
     )
     return "canonical_mapping_created"

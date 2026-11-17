@@ -2,8 +2,8 @@ from unittest.mock import patch
 
 from django.test import TestCase
 
-from availability.models import ContentMapping, Offer, ProviderContent, Source
-from tracker.models import DiscoveredCatalogueRecord, Movie, Provider, ScrapedContentMapping
+from availability.models import ContentMapping, Offer, ProviderContent, Source, TmdbDetailsCache
+from tracker.models import CanonicalBootstrapEvidence, DiscoveredCatalogueRecord, Movie, Provider, ScrapedContentMapping
 from tracker.services.catalogue_reconciliation import _extract_year, reconcile_catalogue
 
 
@@ -49,6 +49,65 @@ class CatalogueReconciliationTests(TestCase):
         self.assertEqual(proposals[year_conflict.pk]["match"]["status"], "POSSIBLE_REVIEW")
         self.assertEqual(proposals[type_conflict.pk]["match"]["status"], "POSSIBLE_REVIEW")
 
+    def test_only_provenance_marked_external_identifier_is_verified(self):
+        Movie.objects.create(tmdb_id=101, title="Night Train", year=2024, content_type="movie")
+        trusted = self.record(self.hydra, "Other title", {
+            "catalogue_partition": "movies", "year": 2024,
+            "external_ids": {"tmdb": 101}, "external_ids_trusted": True,
+        })
+        untrusted = self.record(self.hydra, "Other title", {
+            "catalogue_partition": "movies", "year": 2024,
+            "external_ids": {"tmdb": 101},
+        }, url="https://provider.example/title/untrusted")
+        proposals = {row["record_id"]: row for row in reconcile_catalogue()["records"]}
+        self.assertEqual(proposals[trusted.pk]["match"]["status"], "MATCH_VERIFIED")
+        self.assertEqual(proposals[untrusted.pk]["match"]["status"], "POSSIBLE_REVIEW")
+
+    def test_verified_tmdb_alternative_title_matches_only_with_year_and_type(self):
+        movie = Movie.objects.create(tmdb_id=101, title="The Official Title", year=2024,
+                                     content_type="movie")
+        TmdbDetailsCache.objects.create(
+            tmdb_id=101, content_type="movie",
+            details={"tmdb_id": 101, "title": "The Official Title",
+                     "original_title": "Titolo Alternativo", "year": 2024,
+                     "content_type": "movie"},
+        )
+        record = self.record(self.hydra, "Titolo Alternativo",
+                             {"catalogue_partition": "movies", "year": 2024})
+        proposal = next(row for row in reconcile_catalogue()["records"]
+                        if row["record_id"] == record.pk)
+        self.assertEqual(proposal["match"]["status"], "MATCH_VERIFIED")
+        self.assertEqual(proposal["match"]["candidates"][0]["movie_id"], movie.pk)
+
+    def test_same_title_same_year_multiple_canonical_ids_require_review(self):
+        Movie.objects.create(tmdb_id=201, title="The Nest", year=2025, content_type="movie")
+        Movie.objects.create(tmdb_id=202, title="The Nest", year=2025, content_type="movie")
+        record = self.record(self.hydra, "The Nest",
+                             {"catalogue_partition": "movies", "year": 2025})
+        proposal = next(row for row in reconcile_catalogue()["records"]
+                        if row["record_id"] == record.pk)
+        self.assertEqual(proposal["match"]["status"], "POSSIBLE_REVIEW")
+        self.assertEqual(len(proposal["match"]["candidates"]), 2)
+
+    def test_fuzzy_title_requires_year_type_and_matching_overview_evidence(self):
+        movie = Movie.objects.create(tmdb_id=301, title="The Example Documentary", year=2024,
+                                     content_type="movie")
+        overview = "A careful documentary follows a small coastal community through a difficult winter season."
+        TmdbDetailsCache.objects.create(
+            tmdb_id=301, content_type="movie",
+            details={"tmdb_id": 301, "title": movie.title, "year": 2024,
+                     "content_type": "movie", "overview": overview},
+        )
+        record = self.record(self.hydra, "The Example Documentry", {
+            "catalogue_partition": "movies", "year": 2024,
+            "overview": overview,
+        })
+        proposal = next(row for row in reconcile_catalogue()["records"]
+                        if row["record_id"] == record.pk)
+        self.assertEqual(proposal["match"]["status"], "MATCH_HIGH")
+        self.assertIn("overview token overlap", " ".join(proposal["match"]["evidence"]))
+        self.assertEqual(proposal["match"]["candidates"][0]["movie_id"], movie.pk)
+
     def test_apply_preserves_provider_identity_and_url_without_creating_offers(self):
         Movie.objects.create(tmdb_id=101, title="Night Train", year=2024, content_type="movie")
         Source.objects.create(slug="hydrahd", name="HydraHD", type="web")
@@ -56,6 +115,11 @@ class CatalogueReconciliationTests(TestCase):
             self.hydra, "Night Train",
             {"catalogue_partition": "movies", "year": 2024},
             url="https://hydrahd.gd/movie/night-train", native_id="native-1",
+        )
+        CanonicalBootstrapEvidence.objects.create(
+            discovered_record=record, movie=Movie.objects.get(tmdb_id=101),
+            source_kind="tmdb_search_and_details", verification_method="exact_title_year_type",
+            evidence={"verified": True},
         )
 
         report = reconcile_catalogue(apply=True)
@@ -67,6 +131,20 @@ class CatalogueReconciliationTests(TestCase):
         self.assertEqual(content.provider_url, record.source_url)
         self.assertEqual(content.currently_available, False)
         self.assertEqual(mapping.tmdb_id, 101)
+        self.assertIn("TMDb search and details verified", mapping.match_evidence["evidence"][0])
+        self.assertFalse(Offer.objects.exists())
+
+    def test_exact_title_year_without_verified_evidence_is_not_applied_as_mapping(self):
+        Movie.objects.create(tmdb_id=102, title="Night Train", year=2024, content_type="movie")
+        Source.objects.create(slug="hydrahd", name="HydraHD", type="web")
+        record = self.record(self.hydra, "Night Train",
+                             {"catalogue_partition": "movies", "year": 2024},
+                             url="https://hydrahd.gd/movie/night-train-proposed", native_id="proposed-1")
+
+        report = reconcile_catalogue(apply=True)
+        proposal = next(row for row in report["records"] if row["record_id"] == record.pk)
+        self.assertEqual(proposal["match"]["status"], "MATCH_HIGH")
+        self.assertFalse(ContentMapping.objects.filter(provider=self.hydra).exists())
         self.assertFalse(Offer.objects.exists())
 
     def test_one_apply_failure_does_not_block_other_classified_records(self):

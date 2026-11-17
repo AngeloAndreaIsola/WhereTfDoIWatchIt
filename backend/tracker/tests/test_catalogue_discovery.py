@@ -1,7 +1,8 @@
 from unittest.mock import patch
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from django.test import TestCase
+from django.utils import timezone as django_timezone
 
 from availability.models import Offer
 from tracker.models import CatalogueDiscoveryState, DiscoveredCatalogueRecord, Movie, Provider, ScrapedContentMapping
@@ -100,6 +101,48 @@ class CatalogueDiscoveryTests(TestCase):
             second = run_discovery("hydrahd", request_budget=1, delay=0)
 
         self.assertEqual(second["page_ranges"], {"movies": [2, 2]})
+
+    def test_crashed_running_lease_recovers_and_resumes_committed_checkpoint(self):
+        provider = self.providers["hydrahd"]
+        now = django_timezone.now()
+        state = CatalogueDiscoveryState.objects.create(
+            provider=provider, status="RUNNING", mode="full", started_at=now - timedelta(hours=2),
+            heartbeat_at=now - timedelta(hours=2), lease_owner="dead-worker",
+            lease_expires_at=now - timedelta(hours=1),
+            cursor={"modes": {"historical": {"parts": {"movies": 1}, "done": []}}},
+            report={"status": "RUNNING", "mode": "historical"},
+        )
+
+        def resume(scraper, provider_slug, part, page, query=None):
+            scraper.session.get("https://fixture.invalid/page")
+            self.assertEqual(page, 2)
+            return [fixture_item(provider_slug, page=page)], True, 2, "fixture_terminal_page"
+
+        with patch("tracker.services.catalogue_discovery.DISCOVERY_LEASE_SECONDS", 60), \
+             patch("tracker.services.catalogue_discovery._parts", return_value=["movies"]), \
+             patch("tracker.services.catalogue_discovery._page", side_effect=resume), \
+             patch("requests.Session.get", return_value=object()):
+            result = run_discovery("hydrahd", mode="historical", request_budget=2, delay=0)
+
+        state.refresh_from_db()
+        self.assertEqual(result["page_ranges"], {"movies": [2, 2]})
+        self.assertEqual(state.status, "COMPLETED")
+        self.assertEqual(state.cursor["modes"]["historical"]["parts"]["movies"], 2)
+        self.assertEqual(state.lease_owner, "")
+        self.assertIsNone(state.lease_expires_at)
+        self.assertIn("recovery", state.report)
+
+    def test_recent_running_lease_is_not_reclaimed(self):
+        state = CatalogueDiscoveryState.objects.create(
+            provider=self.providers["hydrahd"], status="RUNNING", mode="full",
+            heartbeat_at=django_timezone.now(), lease_owner="active-worker",
+        )
+        with patch("tracker.services.catalogue_discovery.DISCOVERY_LEASE_SECONDS", 3600):
+            with self.assertRaisesRegex(RuntimeError, "refusing to reclaim"):
+                run_discovery("hydrahd", mode="historical", request_budget=1, delay=0)
+        state.refresh_from_db()
+        self.assertEqual(state.lease_owner, "active-worker")
+        self.assertEqual(state.status, "RUNNING")
 
     def test_hydra_partition_checkpoint_does_not_complete_other_partition(self):
         def one_page(scraper, provider_slug, part, page, query=None):

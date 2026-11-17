@@ -10,6 +10,8 @@ import re
 import time
 import hashlib
 import json
+import os
+import uuid
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
@@ -43,6 +45,7 @@ DISCOVERY_MODE_KEYS = {"full": "historical", "historical": "historical", "increm
 SCHEDULED_DISCOVERY_PROVIDERS = {"hydrahd", "animeworld"}
 DEFAULT_INCREMENTAL_OVERLAP_PAGES = 3
 MAX_INLINE_RETRY_AFTER_SECONDS = 30.0
+DISCOVERY_LEASE_SECONDS = int(os.environ.get("UNOFFICIAL_CATALOGUE_LEASE_SECONDS", "3600"))
 
 
 class _RequestBudgetReached(BaseException):
@@ -378,6 +381,7 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
     if request_budget < 1: raise ValueError("request_budget must be positive")
     if retry_limit < 0: raise ValueError("retry_limit cannot be negative")
     if overlap_pages < 1: raise ValueError("overlap_pages must be positive")
+    if DISCOVERY_LEASE_SECONDS <= 0: raise ValueError("UNOFFICIAL_CATALOGUE_LEASE_SECONDS must be positive")
     mode_key = DISCOVERY_MODE_KEYS[mode]
     if slug == "animeworld" and mode == "full":
         # Compatibility for older callers: a former `full` RSS invocation is
@@ -489,6 +493,36 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
             state = CatalogueDiscoveryState.objects.filter(provider=provider).first()
         else:
             state, _ = CatalogueDiscoveryState.objects.get_or_create(provider=provider)
+            if state.status == "RUNNING":
+                lease_reference = state.heartbeat_at or state.started_at or state.updated_at
+                lease_age = django_timezone.now() - lease_reference if lease_reference else None
+                if lease_age is not None and lease_age.total_seconds() <= DISCOVERY_LEASE_SECONDS:
+                    raise RuntimeError(
+                        f"Discovery for {slug} is marked RUNNING with a live lease "
+                        f"(owner={state.lease_owner or 'unknown'}, heartbeat={lease_reference.isoformat()}); "
+                        "refusing to reclaim it"
+                    )
+                previous_report = deepcopy(state.report or {})
+                state.status = "PARTIAL"
+                state.last_error = (
+                    f"Recovered stale RUNNING lease after "
+                    f"{int(lease_age.total_seconds()) if lease_age else 'unknown'} seconds; "
+                    "resuming from last committed checkpoint"
+                )
+                previous_report["recovery"] = {
+                    "recovered_at": django_timezone.now().isoformat(),
+                    "previous_lease_owner": state.lease_owner,
+                    "previous_heartbeat_at": state.heartbeat_at.isoformat() if state.heartbeat_at else None,
+                    "previous_last_error": state.last_error or previous_report.get("last_error", ""),
+                    "last_committed_checkpoint": deepcopy(state.cursor or {}),
+                }
+                previous_report["status"] = "PARTIAL"
+                previous_report["last_error"] = state.last_error
+                state.report = previous_report
+                state.lease_owner = ""
+                state.lease_expires_at = None
+                state.save(update_fields=["status", "last_error", "report", "lease_owner",
+                                          "lease_expires_at", "updated_at"])
         root_cursor, mode_cursors = _mode_cursors(state)
         cursor = deepcopy(mode_cursors.get(mode_key) or {})
         if mode_key == "historical" and state and state.status == "COMPLETED":
@@ -535,10 +569,17 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
         known_pages_by_part = {}
         started = django_timezone.now()
         if not dry_run:
+            lease_owner = uuid.uuid4().hex
             cursor["last_run_started_at"] = started.isoformat()
             root_cursor = _checkpoint_root(root_cursor, mode_cursors, mode_key, cursor)
-            previous_mode_reports = deepcopy((state.report or {}).get("mode_reports", {}))
+            prior_report = deepcopy(state.report or {})
+            previous_mode_reports = deepcopy(prior_report.get("mode_reports", {}))
+            if prior_report.get("recovery"):
+                report["recovery"] = prior_report["recovery"]
             state.status, state.mode, state.started_at = "RUNNING", ("full" if mode_key == "historical" else mode_key), started
+            state.heartbeat_at = started
+            state.lease_expires_at = started + timedelta(seconds=DISCOVERY_LEASE_SECONDS)
+            state.lease_owner = lease_owner
             state.last_error = ""
             state.report = {**report, "mode_reports": previous_mode_reports}
             state.cursor = root_cursor
@@ -555,7 +596,11 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
             state.cursor = root_cursor
             state.report = {**report, "mode_reports": mode_reports}
             state.last_successful_checkpoint = django_timezone.now()
-            state.save(update_fields=["cursor", "report", "last_successful_checkpoint", "updated_at"])
+            state.heartbeat_at = django_timezone.now()
+            state.lease_expires_at = state.heartbeat_at + timedelta(seconds=DISCOVERY_LEASE_SECONDS)
+            state.lease_owner = lease_owner
+            state.save(update_fields=["cursor", "report", "last_successful_checkpoint", "heartbeat_at",
+                                      "lease_expires_at", "lease_owner", "updated_at"])
 
         try:
             if mode == "targeted":
@@ -952,7 +997,11 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                     cursor.pop("cooldown_until", None)
                 root_cursor = _checkpoint_root(root_cursor, mode_cursors, mode_key, cursor)
                 state.cursor = root_cursor
-                state.save()
+                state.heartbeat_at = django_timezone.now()
+                state.lease_owner = ""
+                state.lease_expires_at = None
+                state.save(update_fields=["status", "report", "last_error", "cursor", "last_success_at",
+                                          "heartbeat_at", "lease_owner", "lease_expires_at", "updated_at"])
         report["new_unique_titles"] = report["items_inserted"]
         return {**report, "provider": slug, "requests_made": requests_made, "dry_run": dry_run, "checkpoint": cursor, "checkpoints_by_mode": deepcopy(mode_cursors), "partition": partition}
     finally:
@@ -976,6 +1025,8 @@ def discovery_status():
         result.append({
             "provider": row.provider.slug,
             "status": row.status,
+            "heartbeat_at": row.heartbeat_at,
+            "lease_expires_at": row.lease_expires_at,
             "mode": current.get("mode") or row.mode,
             "inventory_count": sum(provider_counts.values()),
             "pending_classification_count": provider_counts.get("PENDING", 0),

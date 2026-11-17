@@ -1283,3 +1283,108 @@ the final implementation and test updates: 3,290 tests. Frontend tests were not 
 because no frontend files changed. The 5,095-row dry run and migration were
 performed only in the disposable database; no unrestricted crawl or live
 write permission was used.
+
+### Canonical bootstrap and reconciliation validation (2026-11-17)
+
+The application already has one canonical title identity model: `tracker.Movie`,
+uniquely keyed by TMDb ID. Watchlist, watched-title and official availability
+rows reference it; `availability.ContentMapping` associates provider-native
+catalogue entries with its TMDb ID. The empty catalogue was not a missing
+model: this database contained 0 `Movie` rows, 0 watchlist/watched rows, 0
+official `Availability`/`Offer` rows, 0 provider-content/mapping rows, and 0
+TMDb search/details cache rows. The 3,300 legacy scraped mappings all had a
+null `movie_id`, `is_confirmed=false`, and no provider-native ID, so they were
+not canonical identity evidence. The configured TMDb credential was present;
+its value was not printed. No watchlist titles existed to use as a seed or
+validation sample.
+
+I restored a read-only dump of the branch-local 5,095-record database into the
+isolated PostgreSQL `catalogue_validation_20261117` database on the disposable
+test container. All bootstrap, classification audit, reconciliation, and
+apply writes below were confined to that clone. The database began with the
+same 5,095 discoveries and 3,300 legacy mappings and no canonical records.
+
+The new `bootstrap_canonical_catalogue` command is dry-run by default and
+requires an explicit bounded `--allow-network` for cache misses and `--apply`
+for writes. It searches by classified type and explicit source title/year,
+then verifies the returned TMDb ID, title, year, and type with the details
+endpoint. It only creates missing `Movie` rows, records one-to-one
+`CanonicalBootstrapEvidence`, and does not update existing canonical metadata.
+TMDb search and detail responses use the existing positive/negative caches;
+request budgets include retries and a minimum request interval. Replays do
+not repeat cached lookups or duplicate canonical identities. Bootstrap
+evidence is reviewable in Django admin. The TMDb IDs in this validation came
+from official TMDb search and details responses, not title-derived ID guesses
+or legacy mappings.
+
+The stratified read-only classification audit sampled 87 distinct records:
+
+| Stratum | Sampled | Correct | Incorrect | Unresolved / pending |
+|---|---:|---:|---:|---:|
+| HydraHD movies | 15 | 15 | 0 | 0 |
+| HydraHD series | 15 | 15 | 0 | 0 |
+| AnimeWorld classified RSS | 15 | 1 | 0 | 14 |
+| Missing year | 15 | 0 | 0 | 11, plus 4 title-only type candidates held for review |
+| Same-title candidate records | 12 | 6 | 0 | 6 |
+| Ambiguous AnimeWorld records | 15 | not applicable | not applicable | 10, plus 5 title-only type candidates held for review |
+| Conflicting metadata | 0 | — | — | Population count: 0 |
+
+Observed accuracy was **37/37 (100%) among records with a unique exact TMDb
+title/type result and, when present, matching year, followed by a details
+check**. This is a selective evidence denominator, not evidence that all 5,031
+classifications are correct: 41 sampled rows lacked unique title-level
+evidence, and nine yearless ambiguous entries had a unique TMDb type candidate
+but remain pending review. All 64 legacy AnimeWorld A–Z records remain
+`PENDING`; title-only evidence never becomes a canonical association. The six
+same-title groups include cases where TMDb has multiple identities; those
+remain unmatched/reviewable. No false-positive classification was observed in
+the verified sample.
+
+The audit used a fixed random seed and TMDb's cached, budgeted gateway. Across
+three bounded audit passes, 205 HTTP attempts succeeded, with no failures or
+retries; the largest pass was limited to 180 attempts and used a 0.25-second
+minimum interval. The final audit was served entirely from cache (220 cache
+hits). TMDb documents its current upper limit as roughly 40 requests/second,
+subject to change, and asks clients to respect HTTP 429; these runs stayed
+below that rate and did not receive a 429 ([TMDb rate limiting](https://developer.themoviedb.org/docs/rate-limiting),
+[TMDb errors](https://developer.themoviedb.org/docs/errors)).
+
+The clone had no watchlist sample, so I bootstrapped a representative
+discovery sample instead. TMDb API search/details evidence validated 20
+source records and identified 18 unique canonical IDs. The bootstrap replay
+made zero network requests (40 cache hits), created 18 `Movie` rows and 20
+provenance rows, and did not overwrite any existing canonical metadata.
+Reconciliation then classified 5,031 discoveries and kept 64 pending. It
+created 20 `ContentMapping` rows, each backed by record-specific TMDb evidence;
+the 5,011 remaining classified records were unmatched. A second `--apply`
+preserved all 20 existing mappings. The six duplicate-title groups remained
+separate source identities. `ProviderContent` rows are marked
+`currently_available=false`; no `Offer` row was created. The identity-only
+HydraHD `Source` row is disabled. Discovery observations do not imply current
+streaming availability.
+
+`ContentMapping.match_evidence` stores confidence evidence. Trusted explicit
+IDs and record-specific bootstrap evidence are `MATCH_VERIFIED`; exact title
+and year alone are reported as `MATCH_HIGH` proposals and are not auto-applied.
+Untrusted source-provided IDs are routed to review. Verified TMDb alternative
+titles require exact year and compatible type. Ambiguous same-title candidate
+sets remain review-only. Existing mappings are preserved so an incorrect
+association can be corrected in admin without reconciliation silently
+replacing it. Fuzzy matches are proposal-only and require compatible type,
+exact year, at least 0.92 title similarity, and at least 0.60 synopsis-token
+overlap against cached TMDb details; they are never auto-applied.
+
+Discovery recovery now records a provider-scoped owner, heartbeat, and
+configurable lease (`UNOFFICIAL_CATALOGUE_LEASE_SECONDS`, default 3,600). The
+PostgreSQL advisory lock still prevents concurrent jobs for one provider.
+Fresh heartbeats block reclamation; an expired lease is marked `PARTIAL` with
+recovery diagnostics and resumes from the last committed checkpoint. Tests
+cover a hard-crash-shaped stale `RUNNING` state, cursor resumption, and refusal
+to reclaim a fresh lease. Scheduler configuration remains disabled.
+
+Final validation: the isolated backend suite passed (3,300 tests),
+`makemigrations --check --dry-run` found no drift, and the reconciliation
+apply/replay validation left 18 canonical `Movie` rows, 20 evidence rows, 20
+canonical mappings, 5,031 classified provider-content rows, 64 pending
+classifications, and 0 offers in the isolated clone. Frontend tests were not
+needed because no UI behavior changed.
