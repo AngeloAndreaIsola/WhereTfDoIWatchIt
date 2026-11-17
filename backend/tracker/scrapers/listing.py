@@ -189,13 +189,20 @@ def items_from_listing(
                 source_url=source_url,
                 audio_languages=audio_langs,
                 subtitle_languages=sub_langs,
-                quality="1080p",
+                # Listing cards identify titles; they do not verify playable
+                # streams or resolution. Keep this as an unverified discovery.
+                quality=None,
                 availability=True,
                 raw_payload={
                     "url": source_url,
                     "title_id": title_id.group(1) if title_id else None,
                     "domain": urlparse(base_url).netloc,
                     "provenance": f"{provider_slug}_{source_label}",
+                    # A listing card proves that the title was discovered,
+                    # not that playback, territorial access, or quality was
+                    # verified. The ingestion bridge keeps this unmapped until
+                    # a reviewer confirms it, so it cannot become an offer.
+                    "unverified_discovery": True,
                 },
             )
         )

@@ -2,11 +2,53 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Optional
+from urllib.parse import urlencode, urljoin
+
+from bs4 import BeautifulSoup, Tag
 
 from tracker.scrapers.base import BaseScraper, ScrapedItem
 
 logger = logging.getLogger(__name__)
+
+#: ``Anno: 2007`` — the year label AnimeWorld prints inside a result card. The
+#: negative lookahead keeps a malformed run of digits from being truncated to
+#: its first four characters.
+ANIMEWORLD_YEAR_RE = re.compile(r"Anno\s*:\s*(\d{4})(?!\d)", re.IGNORECASE)
+#: A standalone four-digit year inside a HydraHD result anchor.
+HYDRA_YEAR_RE = re.compile(r"(?<!\d)(\d{4})(?!\d)")
+
+
+def _valid_year(value: Any) -> Optional[int]:
+    """Return *value* as a plausible release year, or ``None``.
+
+    An implausible value is unknown rather than ``0``/``None``-by-accident:
+    callers must never fill the gap with a neighbouring result's year.
+    """
+    try:
+        year = int(value)
+    except (TypeError, ValueError):
+        return None
+    return year if 1900 <= year <= 2100 else None
+
+
+def _query_url(base: str, **params: Any) -> str:
+    """Append query parameters with correct percent-encoding.
+
+    ``urlencode`` (or ``requests``' ``params=``) is the only thing that keeps a
+    search term's ``&``/``+``/spaces from changing the query structure.
+    """
+    return f"{base}?{urlencode(params)}"
+
+
+def _hydra_title_div(scope: Tag) -> Optional[Tag]:
+    """First ``div.title.detz`` inside *scope*, if any."""
+    for div in scope.find_all("div"):
+        classes = div.get("class") or []
+        if "title" in classes and "detz" in classes:
+            return div
+    return None
 
 
 def _content_type_from_url(url: Any, default: str = "movie") -> str:
@@ -81,9 +123,11 @@ class KissKHScraper(BaseScraper):
             return self._dedupe(items)
 
         for type_code, content_type in self.BROWSE_TYPES:
-            resp_data = self._fetch_api(
-                f"/api/DramaList/Search?q={query}&type={type_code}"
+            url = _query_url(
+                "https://kisskh.do/api/DramaList/Search",
+                q=query, type=type_code,
             )
+            resp_data = self.fetch_url(url)
             if not resp_data:
                 logger.warning("KissKH scraper: no response data for type=%s", type_code)
                 continue
@@ -128,9 +172,12 @@ class KissKHScraper(BaseScraper):
             except (ValueError, TypeError):
                 year_int = None
 
-            audio = entry.get("audio_languages") or entry.get("audio") or ["EN"]
-            subs = entry.get("subtitle_languages") or entry.get("subtitles") or ["EN"]
-            quality = entry.get("quality") or "1080p"
+            # Missing fields mean the provider did not report metadata.  Do
+            # not turn that absence into an English/1080p claim: ranking treats
+            # those values as evidence and would otherwise prefer this offer.
+            audio = entry.get("audio_languages") or entry.get("audio") or []
+            subs = entry.get("subtitle_languages") or entry.get("subtitles") or []
+            quality = entry.get("quality")
             url_path = entry.get("url") or f"https://kisskh.do/Drama/{entry.get('id')}"
 
             items.append(
@@ -142,7 +189,7 @@ class KissKHScraper(BaseScraper):
                     source_url=str(url_path),
                     audio_languages=audio if isinstance(audio, list) else [str(audio)],
                     subtitle_languages=subs if isinstance(subs, list) else [str(subs)],
-                    quality=str(quality),
+                    quality=str(quality) if quality else None,
                     availability=True,
                     raw_payload=entry,
                 )
@@ -159,7 +206,10 @@ class GenericURLAdapter(BaseScraper):
         self.domain = domain
 
     def _execute_run(self, query: Optional[str] = None) -> list[ScrapedItem]:
-        target_url = f"https://{self.domain}/api/search?q={query}" if query else f"https://{self.domain}"
+        target_url = (
+            _query_url(f"https://{self.domain}/api/search", q=query)
+            if query else f"https://{self.domain}"
+        )
         resp_data = self.fetch_url(target_url)
 
         if isinstance(resp_data, list):
@@ -183,9 +233,9 @@ class GenericURLAdapter(BaseScraper):
             except (ValueError, TypeError):
                 year_int = None
 
-            audio = entry.get("audio_languages") or entry.get("audio") or ["EN"]
-            subs = entry.get("subtitle_languages") or entry.get("subtitles") or ["EN"]
-            quality = entry.get("quality") or entry.get("res") or "1080p"
+            audio = entry.get("audio_languages") or entry.get("audio") or []
+            subs = entry.get("subtitle_languages") or entry.get("subtitles") or []
+            quality = entry.get("quality") or entry.get("res")
             url_path = entry.get("url") or entry.get("link") or f"https://{self.domain}/view/{entry.get('id')}"
 
             items.append(
@@ -196,7 +246,7 @@ class GenericURLAdapter(BaseScraper):
                     source_url=str(url_path),
                     audio_languages=audio if isinstance(audio, list) else [str(audio)],
                     subtitle_languages=subs if isinstance(subs, list) else [str(subs)],
-                    quality=str(quality),
+                    quality=str(quality) if quality else None,
                     availability=True,
                     raw_payload=entry,
                 )
@@ -246,7 +296,7 @@ class HydraHDScraper(BaseScraper):
 
         # Try the current domain first, fall back to the old one
         urls_to_try = [
-            f"https://{domain}/index.php?menu=search&query={query}"
+            _query_url(f"https://{domain}/index.php", menu="search", query=query)
             for domain in self.DOMAINS
         ]
 
@@ -281,9 +331,9 @@ class HydraHDScraper(BaseScraper):
             except (ValueError, TypeError):
                 year_int = None
 
-            audio = entry.get("audio") or ["EN"]
+            audio = entry.get("audio") or []
             subs = entry.get("subtitles") or []
-            quality = entry.get("res") or "2160p"
+            quality = entry.get("res")
             source_url = entry.get("link") or f"https://hydrahd.ru/watch/{entry.get('id')}"
 
             items.append(
@@ -295,7 +345,7 @@ class HydraHDScraper(BaseScraper):
                     source_url=str(source_url),
                     audio_languages=audio if isinstance(audio, list) else [str(audio)],
                     subtitle_languages=subs if isinstance(subs, list) else [str(subs)],
-                    quality=str(quality),
+                    quality=str(quality) if quality else None,
                     availability=True,
                     raw_payload=entry,
                 )
@@ -320,35 +370,91 @@ class HydraHDScraper(BaseScraper):
         default_content_type: str = "movie",
         base_url: Optional[str] = None,
     ) -> list[ScrapedItem]:
-        import re
+        r"""Pair each result's link with its own title, never a neighbour's.
+
+        The old single regex started at an ``a.hthis`` anchor and then used
+        ``[\s\S]*?`` to reach the next ``div.title.detz``. A card without a
+        title therefore consumed the *next* card's title (and vice versa), so a
+        title could be published under another result's URL. Anchors are now
+        parsed structurally and the title search stops at the next anchor.
+        """
         items: list[ScrapedItem] = []
-        pattern = re.compile(
-            r'<a class="hthis"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)</a>[\s\S]*?<div class="title detz">([^<]+)</div>',
-            re.IGNORECASE
-        )
-        for href, inner_a, title in pattern.findall(html_content):
-            year_match = re.search(r'>\s*(\d{4})\s*</span>', inner_a)
-            year = year_match.group(1) if year_match else None
-            try:
-                year_int = int(year) if year else None
-            except ValueError:
-                year_int = None
-            source_url = f"{(base_url or 'https://hydrahd.gd').rstrip('/')}{href}" if href.startswith("/") else href
+        soup = BeautifulSoup(html_content or "", "html.parser")
+        for anchor in soup.find_all("a", class_="hthis"):
+            if anchor.find_parent("a", class_="hthis"):
+                # A nested anchor belongs to the outer result, not a new one.
+                continue
+            href = str(anchor.get("href") or "").strip()
+            if not href:
+                logger.info("HydraHD scraper: result skipped reason=missing_href")
+                continue
+            title = self._result_title(anchor)
+            if not title:
+                logger.info(
+                    "HydraHD scraper: result skipped href=%s reason=missing_title",
+                    href,
+                )
+                continue
+            year_int = self._result_year(anchor)
+            source_url = urljoin(base_url or "https://hydrahd.ws/", href)
             items.append(
                 ScrapedItem(
-                    title=title.strip(),
+                    title=title,
                     provider_slug=self.provider_slug,
                     year=year_int,
-                    content_type=_content_type_from_url(source_url, default=default_content_type),
+                    content_type=_content_type_from_url(
+                        source_url, default=default_content_type
+                    ),
                     source_url=source_url,
-                    audio_languages=["EN"],
-                    subtitle_languages=[], 
-                    quality="1080p",
+                    audio_languages=[],
+                    subtitle_languages=[],
+                    quality=None,
                     availability=True,
                     raw_payload={"href": href, "title": title, "year": year_int},
                 )
             )
         return items
+
+    @staticmethod
+    def _result_title(anchor: Tag) -> str:
+        """The title belonging to *anchor*'s result card.
+
+        First the smallest ancestor that isolates exactly this result; if the
+        card has no wrapper, walk forward but never past the next ``hthis``
+        anchor. Both paths keep the title inside one result.
+        """
+        for ancestor in anchor.parents:
+            if not isinstance(ancestor, Tag):
+                break
+            classes = ancestor.get("class") or []
+            if ancestor.name == "div" and "title" in classes and "detz" in classes:
+                return ancestor.get_text(" ", strip=True)
+            if len(ancestor.find_all("a", class_="hthis")) > 1:
+                break
+            title = _hydra_title_div(ancestor)
+            if title:
+                return title.get_text(" ", strip=True)
+        for element in anchor.next_elements:
+            if not isinstance(element, Tag):
+                continue
+            classes = element.get("class") or []
+            if element.name == "a" and "hthis" in classes:
+                break
+            if element.name == "div" and "title" in classes and "detz" in classes:
+                return element.get_text(" ", strip=True)
+        return ""
+
+    @staticmethod
+    def _result_year(anchor: Tag) -> Optional[int]:
+        """Year printed inside *anchor*, or ``None`` (never a neighbour's)."""
+        spans = anchor.find_all("span")
+        for span in spans or []:
+            match = HYDRA_YEAR_RE.search(span.get_text(" ", strip=True))
+            if match:
+                return _valid_year(match.group(1))
+        match = HYDRA_YEAR_RE.search(anchor.get_text(" ", strip=True))
+        return _valid_year(match.group(1)) if match else None
+
 
 class AnimeWorldScraper(BaseScraper):
     provider_slug = "animeworld"
@@ -359,17 +465,26 @@ class AnimeWorldScraper(BaseScraper):
             items = []
             for category in ["movies", "animes"]:
                 for page in range(1, 3):
-                    url = f"https://www.animeworld.ac/{category}?page={page}"
+                    url = f"https://www.animeworld.ac/{category}?{urlencode({'page': page})}"
                     logger.info("AnimeWorld scraper: fetching %s", url)
-                    resp = self.session.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=self.timeout)
-                    if resp.status_code == 200:
-                        page_items = self.parse_html(resp.text, category=category)
-                        if not page_items:
-                            break
-                        items.extend(page_items)
+                    # Browse requests go through the shared helper so they get
+                    # the same timeout, bounded retry and error handling as the
+                    # search path. A direct ``session.get`` bypassed all three.
+                    resp_text = self.fetch_url(
+                        url, headers={"User-Agent": "Mozilla/5.0"}
+                    )
+                    if not resp_text or not isinstance(resp_text, str):
+                        logger.warning(
+                            "AnimeWorld scraper: no HTML for %s", url
+                        )
+                        continue
+                    page_items = self.parse_html(resp_text, category=category)
+                    if not page_items:
+                        break
+                    items.extend(page_items)
             return items
 
-        url = f"https://animeworld.ac/api/search?keyword={query}"
+        url = _query_url("https://animeworld.ac/api/search", keyword=query)
         resp_data = self.fetch_url(url)
         if not resp_data:
             logger.warning("AnimeWorld scraper: no response data")
@@ -396,44 +511,41 @@ class AnimeWorldScraper(BaseScraper):
         `/play/...` href, so the section is the only per-item type signal; search
         results arrive without one and keep the default movie type. An unknown
         category never becomes a series.
+
+        Titles and years used to be collected as two independent lists and
+        paired by index. One card without an ``Anno:`` label shifted every
+        later year onto the previous title. Each result is now read from its
+        own card, and a card without a year stays unknown.
         """
-        import re
         items: list[ScrapedItem] = []
         content_type = "series" if category == "animes" else "movie"
+        soup = BeautifulSoup(html_content or "", "html.parser")
 
-        # Extract anime entries using regex
-        # Pattern: <a class="name" href="play/...">Title</a>
-        name_pattern = r'<a[^>]*href="([^"]+)"[^>]*class="name"[^>]*>\s*([^<]+?)\s*</a>'
-        name_matches = re.findall(name_pattern, html_content)
-
-        # Extract years: Anno: 2007
-        year_pattern = r'Anno: (\d{4})'
-        year_matches = re.findall(year_pattern, html_content)
-
-        logger.info("AnimeWorld scraper: found %d titles, %d years", len(name_matches), len(year_matches))
-
-        # Match titles with years (they appear in same order in HTML)
-        for idx, (href, title) in enumerate(name_matches):
-            year_int = None
-            if idx < len(year_matches):
-                try:
-                    year_int = int(year_matches[idx])
-                except (ValueError, TypeError):
-                    pass
-
-            # Build full URL from relative href
-            source_url = f"https://animeworld.ac/{href}" if not href.startswith("http") else href
+        for anchor in soup.find_all("a", class_="name"):
+            href = str(anchor.get("href") or "").strip()
+            title = anchor.get_text(" ", strip=True)
+            if not href or not title:
+                logger.info(
+                    "AnimeWorld scraper: result skipped href=%s reason=missing_title_or_link",
+                    href,
+                )
+                continue
+            year_int = self._result_year(anchor)
+            source_url = urljoin("https://animeworld.ac/", href)
 
             items.append(
                 ScrapedItem(
-                    title=title.strip(),
+                    title=title,
                     provider_slug=self.provider_slug,
                     year=year_int,
                     content_type=content_type,
                     source_url=source_url,
-                    audio_languages=["JA"],  # Default for anime
-                    subtitle_languages=["EN", "IT"],  # AnimeWorld is Italian site with subs
-                    quality="1080p",
+                    # Search markup carries no playback metadata. Site locale
+                    # and genre are not evidence of an item's tracks or max
+                    # rendition, so keep every field unknown.
+                    audio_languages=[],
+                    subtitle_languages=[],
+                    quality=None,
                     availability=True,
                     raw_payload={"href": href, "title": title, "year": year_int},
                 )
@@ -441,6 +553,24 @@ class AnimeWorldScraper(BaseScraper):
 
         logger.info("AnimeWorld scraper: parsed %d items", len(items))
         return items
+
+    @staticmethod
+    def _result_year(anchor: Tag) -> Optional[int]:
+        """The ``Anno:`` year inside *anchor*'s own card, if one exists.
+
+        Walking up to the smallest ancestor that contains only this result
+        means a card without a year cannot borrow the next card's. Crossing a
+        boundary (more than one ``a.name`` in the ancestor) stops the search.
+        """
+        for ancestor in anchor.parents:
+            if not isinstance(ancestor, Tag):
+                break
+            if len(ancestor.find_all("a", class_="name")) > 1:
+                break
+            match = ANIMEWORLD_YEAR_RE.search(ancestor.get_text(" ", strip=True))
+            if match:
+                return _valid_year(match.group(1))
+        return None
 
     def parse_items(self, raw_data: Any) -> list[ScrapedItem]:
         """Legacy method kept for compatibility. New implementation uses parse_html."""

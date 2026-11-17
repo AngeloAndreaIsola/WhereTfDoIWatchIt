@@ -1,0 +1,22 @@
+{
+  "name": "wheretfdoiwatchit-extension",
+  "version": "0.1.0",
+  "description": "Minimal cross-browser extension for opt-in title metadata capture and local app handshake",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc && node scripts/package.mjs",
+    "validate:package": "node scripts/validate-package.mjs",
+    "serve:mock": "node scripts/serve-mock-streaming.mjs"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.280",
+    "@types/node": "^20.14.0",
+    "happy-dom": "^14.12.3",
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0"
+  }
+}

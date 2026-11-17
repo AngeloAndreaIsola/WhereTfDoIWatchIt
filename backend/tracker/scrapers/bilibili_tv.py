@@ -72,7 +72,7 @@ class BilibiliTVScraper(BaseScraper):
                     audio_languages=[],
                     subtitle_languages=[],
                     quality=None,
-                    availability=False,
+                    availability=True,
                     raw_payload={
                         "video_id": video_id,
                         "description": c.get("description"),
@@ -80,6 +80,7 @@ class BilibiliTVScraper(BaseScraper):
                         "upload_date": c.get("uploadDate"),
                         "duration": c.get("duration"),
                         "provenance": "user_upload_unverified",
+                        "unverified_discovery": True,
                     },
                 ))
         return items

@@ -98,13 +98,14 @@ class OKRuScraper(BaseScraper):
             audio_languages=[],
             subtitle_languages=[],
             quality=None,
-            availability=False,
+            availability=True,
             raw_payload={
                 "video_id": video_id,
                 "description": desc,
                 "thumbnail": thumb,
                 "duration_seconds": duration,
                 "provenance": "user_upload_unverified",
+                "unverified_discovery": True,
             },
         ))
         return items

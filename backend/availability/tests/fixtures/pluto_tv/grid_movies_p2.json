@@ -1,0 +1,30 @@
+{
+  "data": {
+    "carouselData": {
+      "success": true,
+      "result": {
+        "title": "All Movies",
+        "total": 3,
+        "rows": 24,
+        "skipped": 0,
+        "hasMore": false,
+        "data": [
+          {
+            "contentType": "movie",
+            "href": "/movies/64b9c64bfdd862001369a13f/",
+            "id": "64b9c64bfdd862001369a13f",
+            "thumb": "https://service-staging.cf.yimg.com/i/p/f/64b9c64bfdd862001369a13f_v1_h462_w308.jpg",
+            "tileType": "movie",
+            "orientation": "portrait",
+            "title": "Alice Upside Down",
+            "description": "A middle-schooler navigates friendship drama, first crushes and a very bad hair day.",
+            "genre": "Comedy",
+            "airDate": "2007-02-01T00:00:00.000Z",
+            "movieDuration": 5760,
+            "movieId": 106724
+          }
+        ]
+      }
+    }
+  }
+}

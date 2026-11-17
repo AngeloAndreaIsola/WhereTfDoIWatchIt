@@ -22,6 +22,48 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml logs -f backend
 
 ---
 
+## Container logs: RaiPlay catalogue checkpoint events
+
+RaiPlay walks a large catalogue in bounded batches, so a refresh may stop after
+one batch and resume on the next run. Two structured events record that
+behaviour, and both are visible in ordinary container logs — no verbose mode or
+custom handler is needed:
+
+| Event | Level | Meaning |
+| --- | --- | --- |
+| `rai_play_walk_resume after=<url> remaining=<n>` | INFO | The stored checkpoint was found in the current sitemap; the walk continues immediately after it, with `n` entries left. |
+| `rai_play_cursor_checkpoint_missing after=<url> reason=restarting` | WARNING | The stored checkpoint is no longer in the sitemap (catalogue changed or the programme disappeared). The walk restarts from the top: already-persisted work repeats, but nothing is skipped. |
+
+Inspect them from either container that can run a catalogue refresh
+(`catalogue-worker` is the usual one; `backend` shares the same configuration):
+
+```bash
+# Follow resume decisions as they happen
+docker compose logs -f catalogue-worker | grep -E 'rai_play_(walk_resume|cursor_checkpoint_missing)'
+
+# Both lanes, last 24 hours, including the level/logger prefix
+docker compose logs --since 24h backend catalogue-worker \
+  | grep -E 'rai_play_(walk_resume|cursor_checkpoint_missing)'
+
+# Context around one resume: the started/truncated/completed events
+docker compose logs --since 24h catalogue-worker | grep rai_play_
+```
+
+Each line is formatted as `asctime levelname logger message`, for example:
+
+```
+2026-10-25 18:31:53,194 INFO availability.sources.rai_play rai_play_walk_resume after=https://www.raiplay.it/programmi/foo remaining=127
+```
+
+Configuration lives in `LOGGING` (`backend/config/settings.py`): only
+`availability.sources.rai_play` is raised to INFO; the root logger and every
+other component stay at WARNING. The RaiPlay logger does not propagate, so each
+event appears exactly once. These events only occur on a *resumed* walk — a
+first run from an empty checkpoint logs `rai_play_catalogue_started` and
+`rai_play_catalogue_completed` instead.
+
+---
+
 ## Letterboxd URL import troubleshooting
 
 Endpoint: `POST /api/importers/letterboxd-url/` (frontend: **Watchlist → Import from a Letterboxd URL**).

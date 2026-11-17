@@ -1,26 +1,35 @@
-"""Cache layer: ingest Streaming Availability API results into local models.
+"""LEGACY / TRANSITIONAL write helper — no longer a read path.
 
-Strategy:
-- Check Availability.last_checked_at freshness; if stale or missing, refetch.
-- Honor 100 req/day rate limit; defer refetch when budget exhausted.
+Since Phase 3, availability persistence flows through
+``availability.services.refresh.AvailabilityRefreshService`` ->
+``OfferRepository`` -> ``availability.Offer`` (see
+``tracker.services.bulk_refresh``). This module remains only for:
+
+- ``seed_prime_fixture`` (offline fixture seeding via ``_write_result``);
+- legacy tests covering the old Region/LanguageInfo write semantics.
+
+Reads were retired with the Phase C read-path migration: the legacy
+``read_offers``/``get_cached_only``/``get_or_refresh`` methods (and their
+staleness/rate-limit helpers) had no production callers left, so they are
+gone. New code must read through ``tracker.services.availability_reads``
+(or the query services it delegates to) and write through the availability
+refresh service.
+
+Legacy write semantics kept here (``_write_result``):
 - Write Availability, LanguageInfo, LanguageEntry in one transaction per movie.
+- Season availability comes from the upstream seasons[] payload only.
 """
 from __future__ import annotations
 
-import datetime as dt
 import logging
-from dataclasses import dataclass
-from typing import Iterable, Optional
+from typing import Optional
 
 from django.db import transaction
 from django.utils import timezone
 
 from tracker.languages import normalize_language_code
 from ..models import Availability, LanguageEntry, LanguageInfo, Movie, Region
-from .offers import Offer
-from .rate_limit import RateLimitExceeded, RateLimiter
 from .streaming_api import (
-    StreamingAvailabilityClient,
     StreamingOffer,
     StreamingResult,
     resolve_season_number,
@@ -28,98 +37,8 @@ from .streaming_api import (
 
 logger = logging.getLogger(__name__)
 
-STALE_AFTER = dt.timedelta(hours=24)
-
-
-def _season_matches(raw_seasons, season: int) -> bool:
-    """True when *season* (an int) is recorded in a stored ``seasons_available``.
-
-    Stored values are ints, but JSON round-trips are tolerated defensively so a
-    legacy/string value can never break an offers read.
-    """
-    for value in raw_seasons or []:
-        try:
-            if int(value) == int(season):
-                return True
-        except (TypeError, ValueError):
-            continue
-    return False
-
-
-def langs_from_info(info: Optional[LanguageInfo]) -> tuple[list[str], list[str]]:
-    """Extract (audio, subtitle) canonical codes from a LanguageInfo row."""
-    audio: list[str] = []
-    subs: list[str] = []
-    if info:
-        for entry in info.entries.all():
-            norm = normalize_language_code(entry.language_code) or entry.language_code.upper()
-            if entry.kind == "audio" and norm not in audio:
-                audio.append(norm)
-            elif entry.kind == "subtitle" and norm not in subs:
-                subs.append(norm)
-    return audio, subs
-
-
-@dataclass
-class CacheStatus:
-    refreshed: bool
-    reason: str  # "fresh" | "stale" | "missing" | "rate_limited"
-    offers_written: int = 0
-
 
 class AvailabilityCache:
-    def __init__(
-        self,
-        client: Optional[StreamingAvailabilityClient] = None,
-        limiter: Optional[RateLimiter] = None,
-        stale_after: dt.timedelta = STALE_AFTER,
-    ):
-        self.client = client or StreamingAvailabilityClient()
-        self.limiter = limiter or RateLimiter("streaming_availability")
-        self.stale_after = stale_after
-
-    def is_stale(self, movie: Movie) -> bool:
-        latest = (
-            movie.availabilities.order_by("-last_checked_at")
-            .values_list("last_checked_at", flat=True)
-            .first()
-        )
-        if latest is None:
-            return True
-        return (timezone.now() - latest) > self.stale_after
-
-    def get_cached_only(self, movie: Movie) -> CacheStatus:
-        """Return cached Availability rows for movie without blocking on refresh.
-
-        Used by watchlist_report to avoid timing out on multiple movies.
-        Returns whatever is in cache (fresh, stale, or missing).
-        """
-        offers = self.read_offers(movie)
-        if not self.is_stale(movie):
-            return CacheStatus(refreshed=False, reason="fresh", offers_written=len(offers))
-
-        if not offers:
-            return CacheStatus(refreshed=False, reason="missing", offers_written=0)
-
-        return CacheStatus(refreshed=False, reason="stale", offers_written=len(offers))
-
-    def get_or_refresh(self, movie: Movie) -> CacheStatus:
-        """Return cached/fresh Availability rows for movie, refreshing if stale."""
-        if not self.is_stale(movie):
-            offers = self.read_offers(movie)
-            return CacheStatus(refreshed=False, reason="fresh", offers_written=len(offers))
-
-        try:
-            self.limiter.acquire()
-        except RateLimitExceeded as exc:
-            logger.warning("Rate limit hit, serving stale cache: %s", exc)
-            offers = self.read_offers(movie)
-            return CacheStatus(refreshed=False, reason="rate_limited", offers_written=len(offers))
-
-        result = self.client.get_availability(movie.tmdb_id, content_type=movie.content_type)
-        written = self._write_result(movie, result)
-        return CacheStatus(refreshed=True, reason="stale", offers_written=written)
-
     @transaction.atomic
     def _write_result(self, movie: Movie, result: StreamingResult) -> int:
         now = timezone.now()
@@ -241,92 +160,15 @@ class AvailabilityCache:
             movie=movie, region=region, season=season
         )
         info.entries.all().delete()
-        for code in offer.audio_languages:
+        for code in offer.audio_languages or []:
             norm = normalize_language_code(code)
             if norm:
                 LanguageEntry.objects.create(
                     language_info=info, kind="audio", language_code=norm
                 )
-        for code in offer.subtitle_languages:
+        for code in offer.subtitle_languages or []:
             norm = normalize_language_code(code)
             if norm:
                 LanguageEntry.objects.create(
                     language_info=info, kind="subtitle", language_code=norm
                 )
-
-    def read_offers(self, movie: Movie, season: Optional[int] = None) -> list[Offer]:
-        """Cached offers for *movie*.
-
-        ``season`` (series only) narrows the result to Availability rows that
-        recorded that season in ``seasons_available``. Scraped offers carry no
-        season information, so they are only returned for the unfiltered view.
-        """
-        rows: list[Offer] = []
-        # Show-level rows are always loaded; season rows only when a season
-        # was requested. A season row (even an empty one) is authoritative for
-        # that season; the show-level row is the fallback for seasons the
-        # refresh never wrote a row for (legacy caches, seasons without data).
-        show_infos = {
-            i.region_id: i
-            for i in LanguageInfo.objects.filter(
-                movie=movie, season__isnull=True
-            ).prefetch_related("entries")
-        }
-        season_infos: dict[int, LanguageInfo] = {}
-        if season is not None:
-            season_infos = {
-                i.region_id: i
-                for i in LanguageInfo.objects.filter(
-                    movie=movie, season=season
-                ).prefetch_related("entries")
-            }
-        for avail in movie.availabilities.select_related("region").all():
-            if season is not None and not _season_matches(avail.seasons_available, season):
-                continue
-            info = season_infos.get(avail.region_id) if season is not None else None
-            if info is None:
-                info = show_infos.get(avail.region_id)
-            audio, subs = langs_from_info(info)
-            rows.append(
-                Offer(
-                    country=avail.region.country,
-                    service=avail.region.provider,
-                    offer_type=avail.offer_type,
-                    quality=avail.quality,
-                    url=avail.url,
-                    audio_languages=audio,
-                    subtitle_languages=subs,
-                )
-            )
-
-        if season is not None:
-            # Scraper rows are show-level only: they carry no season signal, so
-            # they stay out of a season-filtered view instead of pretending to
-            # be available for that season.
-            return rows
-
-        from tracker.models import ScrapedContentMapping
-
-        scraped_mappings = ScrapedContentMapping.objects.filter(
-            movie=movie,
-            is_available=True,
-        ).select_related("provider")
-
-        for mapping in scraped_mappings:
-            payload = mapping.raw_payload or {}
-            audio = payload.get("audio_languages", []) if isinstance(payload, dict) else []
-            subs = payload.get("subtitle_languages", []) if isinstance(payload, dict) else []
-            rows.append(
-                Offer(
-                    country=payload.get("country", "") if isinstance(payload, dict) else (mapping.country_code or ""),
-                    service=mapping.provider.slug,
-                    offer_type="free",
-                    quality=mapping.provider.config.get("quality", "") if mapping.provider.config else "",
-                    url=mapping.scraped_url or "",
-                    audio_languages=[str(a).upper() for a in audio],
-                    subtitle_languages=[str(s).upper() for s in subs],
-                    is_scraped_source=True,
-                )
-            )
-
-        return rows

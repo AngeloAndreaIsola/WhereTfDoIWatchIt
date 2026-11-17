@@ -14,28 +14,37 @@ from typing import Any, Optional
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
-from rest_framework import status
+from rest_framework import serializers, status
 from rest_framework.decorators import api_view, parser_classes
 from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
+
+from tracker.services.availability_report import (
+    TitleAvailabilityState,
+    title_source_report,
+)
 
 from tracker.models import (
     Movie,
     Preference,
     Provider,
-    ScrapedContentMapping,
     Subscription,
 )
 from tracker.scrapers.base import ScrapedItem, ContentMatcher
-from tracker.scrapers import SCRAPER_REGISTRY, resolve_scraper_class
 from tracker.services.preferences import resolve_preferences
 from tracker.services.ranking import rank_offers
-from tracker.services.cache import AvailabilityCache
+from tracker.services.scraped_offers import BVOD_CATEGORIES, get_scraped_offers
 from tracker.services.streaming_api import service_display_name
-from tracker.services.offers import Offer
 from tracker.serializers import (
+    MovieSerializer,
     ProviderSerializer,
-    ScrapedContentMappingSerializer,
+)
+
+from availability.domain.enums import MatchMethod
+from availability.services.catalogue_query import ProviderCatalogueQueryService
+from tracker.services.scraper_selection import (
+    ScraperExecutionIneligible,
+    select_provider_scraper,
 )
 
 logger = logging.getLogger(__name__)
@@ -44,6 +53,21 @@ logger = logging.getLogger(__name__)
 # official streaming availability data)
 UNOFFICIAL_STALE_AFTER = dt.timedelta(hours=12)
 
+# Provider category scope of the v2 unofficial endpoints: the scraper
+# category, extended with the scraped BVOD set when ``include_bvod=true``.
+_SCRAPER_CATEGORIES = ("scraper",)
+
+# Same shape the legacy ScrapedContentMappingSerializer produced, assembled
+# from the canonical catalogue entry so the response contract is unchanged.
+_DT = serializers.DateTimeField()
+
+
+def _dt_repr(value) -> Optional[str]:
+    """DRF datetime rendering (identical to the legacy model serializer)."""
+    if value is None:
+        return None
+    return _DT.to_representation(value)
+
 
 def _is_stale_scrape(provider: Provider) -> bool:
     """Check if a provider's scraped content is stale."""
@@ -51,11 +75,6 @@ def _is_stale_scrape(provider: Provider) -> bool:
     if last is None:
         return True
     return (timezone.now() - last) > UNOFFICIAL_STALE_AFTER
-
-
-def _resolve_scraper(provider_slug: str):
-    """Dynamically resolve a scraper class from the registry."""
-    return resolve_scraper_class(provider_slug)
 
 
 @api_view(["GET"])
@@ -81,36 +100,25 @@ def unofficial_catalog(request):
     available_only = request.GET.get("available", "true").lower() != "false"
     include_bvod = request.GET.get("include_bvod", "").lower() == "true"
 
-    categories = ["scraper"]
+    categories = set(_SCRAPER_CATEGORIES)
     if include_bvod:
-        categories.extend(["bvod", "avod", "tvod", "fast"])
+        categories.update(BVOD_CATEGORIES)
 
-    qs = ScrapedContentMapping.objects.select_related("provider", "movie")
-    qs = qs.filter(provider__category__in=categories, provider__is_enabled=True)
+    # Canonical read: the same rows the legacy ScrapedContentMapping query
+    # returned (scraper/BVOD provider categories, enabled, optional slug /
+    # country / title filters, availability tri-state), served from the
+    # provider catalogue instead of the ingestion-era table.
+    entries = ProviderCatalogueQueryService().list_unofficial(
+        providers={provider_slug.strip().lower()} if provider_slug else None,
+        search=query or None,
+        country=country_code or None,
+        provider_categories=categories,
+        currently_available=True if available_only else None,
+    )
 
-    if provider_slug:
-        qs = qs.filter(provider__slug__iexact=provider_slug.strip())
-
-    if country_code:
-        # Match providers configured for the given country, or with country in config
-        qs = qs.filter(
-            provider__country_code=country_code
-        ) | qs.filter(
-            country_code=country_code
-        )
-
-    if query:
-        qs = qs.filter(scraped_title__icontains=query)
-
-    if available_only:
-        qs = qs.filter(is_available=True)
-
-    qs = qs.order_by("-updated_at")
-
-    serializer = ScrapedContentMappingSerializer(qs, many=True)
+    results = _serialize_unofficial_entries(entries)
 
     # Apply language filtering after serialization (languages are in raw_payload)
-    results = serializer.data
     if audio_lang:
         results = [
             r for r in results
@@ -121,12 +129,6 @@ def unofficial_catalog(request):
             r for r in results
             if _item_has_subtitle(r, subtitle_lang)
         ]
-
-    # Annotate with source indicator
-    for result in results:
-        provider_data = result.get("provider") or {}
-        result["source_indicator"] = provider_data.get("source_indicator") or "Scraper"
-        result["provider_category"] = provider_data.get("category") or "scraper"
 
     return Response({
         "count": len(results),
@@ -140,6 +142,66 @@ def unofficial_catalog(request):
         },
         "results": results,
     })
+
+
+def _serialize_unofficial_entries(entries) -> list[dict]:
+    """Shape canonical catalogue entries into the legacy v2 catalog contract.
+
+    Field-for-field identical to ``ScrapedContentMappingSerializer`` plus the
+    two post-serialization annotations: ``id`` is the canonical row id,
+    ``created_at``/``updated_at``/``last_scraped_at`` come from the row's
+    observation timestamps, ``is_confirmed`` is the manual-match outcome, and
+    ``raw_payload`` is reconstructed with the fields consumers filter and
+    render on (languages, country when recorded) — the adapter-specific
+    scrape payload is not carried into the canonical metadata. Nested
+    ``provider``/``movie`` are the same serializers as before, batched.
+    """
+    providers = {
+        provider.slug: provider
+        for provider in Provider.objects.filter(
+            slug__in={entry.provider for entry in entries}
+        )
+    }
+    movies = {
+        movie.tmdb_id: movie
+        for movie in Movie.objects.filter(
+            tmdb_id__in={entry.tmdb_id for entry in entries if entry.tmdb_id}
+        )
+    }
+    provider_data = {
+        slug: ProviderSerializer(provider).data
+        for slug, provider in providers.items()
+    }
+
+    results = []
+    for entry in entries:
+        pdata = provider_data.get(entry.provider) or {}
+        movie = movies.get(entry.tmdb_id) if entry.tmdb_id else None
+        raw_payload: dict[str, Any] = {
+            "audio_languages": entry.audio_languages,
+            "subtitle_languages": entry.subtitle_languages,
+        }
+        if entry.country:
+            raw_payload["country"] = entry.country
+        results.append({
+            "id": entry.content_id,
+            "provider": pdata,
+            "scraped_title": entry.title,
+            "scraped_year": entry.year,
+            "scraped_url": entry.provider_url,
+            "country_code": entry.country,
+            "movie": MovieSerializer(movie).data if movie is not None else None,
+            "is_confirmed": entry.match_method == MatchMethod.MANUAL,
+            "confidence_score": entry.confidence if entry.confidence is not None else 0.0,
+            "raw_payload": raw_payload,
+            "created_at": _dt_repr(entry.first_seen),
+            "updated_at": _dt_repr(entry.updated_at),
+            "last_scraped_at": _dt_repr(entry.last_seen),
+            "is_available": entry.currently_available,
+            "source_indicator": pdata.get("source_indicator") or "Scraper",
+            "provider_category": pdata.get("category") or "scraper",
+        })
+    return results
 
 
 def _item_has_audio(item: dict, lang_code: str) -> bool:
@@ -194,7 +256,7 @@ def unofficial_scrape(request):
     Returns matched results with TMDb IDs where available.
 
     Body:
-      - provider_slug: required (e.g. 'rai-play')
+      - provider_slug: required (e.g. 'raiplay')
       - query: optional search term
       - country: optional ISO country code
 
@@ -215,15 +277,10 @@ def unofficial_scrape(request):
             {"error": f"Provider '{provider_slug}' not found"}, status=404
         )
 
-    scraper_cls = _resolve_scraper(provider_slug)
-    if not scraper_cls:
-        from tracker.scrapers.adapters import GenericURLAdapter
-        scraper = GenericURLAdapter(
-            provider_slug=provider.slug,
-            domain=provider.domain or "example.com",
-        )
-    else:
-        scraper = scraper_cls()
+    try:
+        scraper = select_provider_scraper(provider).scraper
+    except ScraperExecutionIneligible as exc:
+        return Response(exc.payload(), status=status.HTTP_409_CONFLICT)
 
     items = scraper.run(query=query)
 
@@ -271,6 +328,67 @@ def unofficial_scrape(request):
     }, status=status.HTTP_201_CREATED)
 
 
+def _title_availability(movie_id, country=None):
+    """The classifier's verdict for one title, as plain JSON.
+
+    Both detail pages render availability from this endpoint, and an empty
+    ``offers`` list is ambiguous on its own: it looks the same whether the title
+    was checked and is genuinely unavailable, or whether nothing ever checked it.
+
+    Measured over 400 tracked titles with no scraper offers, every one was
+    ``unknown`` (not_checked / not_applicable / title_not_found) and none were
+    ``unavailable`` — so a UI that renders that empty list as "not currently
+    available" states something false.
+
+    The verdict is *presented*, not recomputed: it comes from
+    ``availability_report.title_source_report``, the same classifier the report
+    and metrics endpoints use, so this endpoint cannot disagree with them.
+    Absent data is UNKNOWN, never UNAVAILABLE.
+    """
+    if country is None:
+        country = ""
+    verdict = title_source_report([movie_id], country=str(country).upper() if country else None).get(movie_id, {})
+    state = verdict.get("state") or TitleAvailabilityState.UNKNOWN
+    return {
+        "state": state,
+        # Evidence class (``offers`` / ``title_signal`` / ``absence`` /
+        # ``none``): lets the page tell "here is an offer" apart from "a
+        # source says this is there, but we have no offer to show" — the
+        # latter must never read as a playable option.
+        "evidence": verdict.get("evidence") or "none",
+        "offer_count": verdict.get("offer_count") or 0,
+        "title_signals": verdict.get("title_signals", []),
+        "available_on": verdict.get("available_on", []),
+        "reason": _reason_value(verdict.get("reason")),
+        "resolved_sources": verdict.get("resolved_sources", []),
+        "unresolved_sources": verdict.get("unresolved_sources", []),
+        "sources": [
+            {
+                "source": row.get("source"),
+                "label": row.get("label"),
+                "status": row.get("status"),
+                "reason": _reason_value(row.get("reason")),
+                "blocked_reason": row.get("blocked_reason", ""),
+                "available": row.get("available"),
+                "checked_at": row.get("checked_at"),
+            }
+            for row in verdict.get("sources", [])
+        ],
+    }
+
+
+def _reason_value(reason):
+    """Reasons are enum members in the classifier; the API sends plain strings.
+
+    A string (not the enum name) keeps the frontend contract stable if the enum
+    is renamed, and lets an unregistered reason degrade to the slug rather than
+    disappearing.
+    """
+    if reason is None:
+        return None
+    return getattr(reason, "value", None) or str(reason)
+
+
 @api_view(["GET"])
 def unofficial_movie_offers(request, tmdb_id: int):
     """GET /api/v2/unofficial/movie/<tmdb_id>/offers/
@@ -301,6 +419,13 @@ def unofficial_movie_offers(request, tmdb_id: int):
             except (TypeError, ValueError):
                 season = None
 
+    country = (
+        request.GET.get("current_country")
+        or request.GET.get("country")
+        or resolve_preferences(user_id=1).get("current_country")
+        or ""
+    )
+
     movie_payload = {
         "tmdb_id": movie.tmdb_id,
         "title": movie.title,
@@ -313,51 +438,34 @@ def unofficial_movie_offers(request, tmdb_id: int):
             "movie": movie_payload,
             "offers": [],
             "selected_season": season,
+            "availability": _title_availability(movie.id, country=country),
         })
 
-    pref_dict = resolve_preferences(user_id=1)
-    preference = Preference(
-        user_id=1,
-        audio_languages=pref_dict["audio_languages"],
-        subtitle_languages=pref_dict["subtitle_languages"],
-        candidate_countries=pref_dict["candidate_countries"],
-        language_rule=pref_dict.get("language_rule"),
-    )
+    from tracker.services.access import build_reach, build_user_access, classify_offer
+    from tracker.services.preferences import build_preference
+
+    preference = build_preference(1)
+    preference.current_country = (country or preference.current_country).upper().strip()
 
     include_bvod = request.GET.get("include_bvod", "").lower() == "true"
-    categories = ["scraper"]
+    categories = set(_SCRAPER_CATEGORIES)
     if include_bvod:
-        categories.extend(["bvod", "avod", "tvod", "fast"])
+        categories.update(BVOD_CATEGORIES)
 
-    # Gather scraper offers for this movie
-    scraped = ScrapedContentMapping.objects.filter(
-        movie=movie,
-        is_available=True,
-        provider__category__in=categories,
-        provider__is_enabled=True,
-    ).select_related("provider").order_by("-updated_at")
+    # Scraper offers for this movie, read through the canonical catalogue
+    # (ProviderContent + ContentMapping, newest observation first) instead of
+    # the legacy ScrapedContentMapping table; ranking and presentation are
+    # unchanged.
+    offers, provider_map = get_scraped_offers(movie, provider_categories=categories)
 
-    offers = []
-    for mapping in scraped:
-        payload = mapping.raw_payload or {}
-        audio = payload.get("audio_languages", []) if isinstance(payload, dict) else []
-        subs = payload.get("subtitle_languages", []) if isinstance(payload, dict) else []
-        offers.append(Offer.from_dict({
-            "country": payload.get("country", "") if isinstance(payload, dict) else "",
-            "service": mapping.provider.slug,
-            "offer_type": "free",
-            "quality": mapping.provider.config.get("quality") if mapping.provider.config else "",
-            "url": mapping.scraped_url,
-            "audio": [str(a).upper() for a in audio],
-            "subs": [str(s).upper() for s in subs],
-            "is_scraped_source": True,
-        }))
-
-    ranked = rank_offers(offers, preference)
+    ranked = rank_offers(
+        offers, preference, current_country=preference.current_country
+    )
+    access = build_user_access(1)
+    reach = build_reach(preference, preference.current_country)
 
     # Format for frontend
     from tracker.services.presentation import present_offer
-    provider_map = {m.provider.slug: m.provider for m in scraped}
     offers_out = []
     for offer in ranked:
         presented = present_offer(offer, provider_map)
@@ -365,12 +473,25 @@ def unofficial_movie_offers(request, tmdb_id: int):
         d["service_display"] = presented.service_display
         d["source_indicator"] = presented.source_indicator
         d["country"] = presented.country
+        classified = classify_offer(
+            offer,
+            access=access,
+            preference=preference,
+            reach=reach,
+            provider_map=provider_map,
+        )
+        d["locality"] = classified.locality
+        d["is_accessible"] = classified.is_accessible
+        d["is_entitled"] = classified.is_entitled
+        d["rejection_reasons"] = classified.rejection_reasons
+        d["territorial_scope"] = classified.territorial_scope
         offers_out.append(d)
 
     return Response({
         "movie": movie_payload,
         "offers": offers_out,
         "selected_season": None,
+        "availability": _title_availability(movie.id, country=country),
     })
 
 

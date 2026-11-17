@@ -39,6 +39,9 @@ jobs:
       DJANGO_DEBUG: "1"
       TMDB_API_KEY: ""
       RAPIDAPI_KEY: ""
+      # Aggregator sources must degrade to an explicit auth error without a
+      # key, so CI proves that instead of requiring a secret.
+      WATCHMODE_API_KEY: ""
 
     steps:
       - name: Check out repository
@@ -54,11 +57,17 @@ jobs:
       - name: Install backend dependencies
         run: pip install -r requirements.txt
 
+      - name: Verify migrations match the models
+        run: python manage.py makemigrations --check --dry-run
+
       - name: Run database migrations
         run: python manage.py migrate
 
       - name: Run backend tests
-        run: python manage.py test tracker -v 2 --noinput
+        # `availability` is included deliberately: the source collectors,
+        # migrations and reconciliation suite lives there, and CI previously
+        # ran `tracker` only, so none of it was executed.
+        run: python manage.py test tracker availability -v 2 --noinput
 
   frontend:
     name: Frontend Lint, Build & Test
@@ -91,3 +100,36 @@ jobs:
 
       - name: Run frontend tests
         run: npm test
+
+  extension:
+    name: Browser Extension Build, Typecheck & Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: extension
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: extension/package-lock.json
+
+      - name: Install extension dependencies
+        run: npm ci
+
+      - name: Typecheck extension
+        run: npm run typecheck
+
+      - name: Run extension tests
+        run: npm test
+
+      - name: Build installable package
+        run: npm run build
+
+      - name: Validate packaged Manifest V3 extension
+        run: npm run validate:package

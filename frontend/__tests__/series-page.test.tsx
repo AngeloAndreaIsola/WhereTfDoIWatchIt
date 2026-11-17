@@ -70,6 +70,10 @@ const seriesBody = {
       audio_languages: ["EN"],
       subtitle_languages: ["EN"],
       ranking: { audio_rank: 0, subtitle_rank: 0, quality_rank: 0, is_language_match: true },
+      access_type: "subscription",
+      locality: "local",
+      is_entitled: true,
+      is_accessible: true,
     },
   ],
 };

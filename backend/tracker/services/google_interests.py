@@ -511,11 +511,17 @@ def import_interests(
 
     Uses the same TMDb search + ambiguity logic as the Letterboxd importer.
     """
-    from tracker.models import Movie, WatchlistItem
+    from tracker.models import Movie, RefreshPriority, WatchlistItem
+    from availability.freshness import source_configuration_snapshot
+    from availability.sources import DEFAULT_SOURCE_SLUG
+    from tracker.services.refresh_requests import request_import_refresh
     from tracker.services.tmdb import TMDbClient
 
     client = client or TMDbClient(settings.TMDB_API_KEY, timeout=3)
     result = GoogleInterestsImportResult()
+    import_freshness_configuration = source_configuration_snapshot().get(
+        DEFAULT_SOURCE_SLUG, {}
+    )
 
     # Fast in-memory cache of local movies to prevent repeated TMDb calls.
     local_movies_by_title_year: dict[tuple[str, Optional[int]], Movie] = {}
@@ -536,6 +542,7 @@ def import_interests(
         seen_rows.add(title_key)
 
         movie: Optional[Movie] = local_movies_by_title_year.get(title_key)
+        movie_created = False
 
         if movie is None and row.year is None:
             movie = local_movies_by_title_year.get((row.title.lower().strip(), None))
@@ -589,6 +596,7 @@ def import_interests(
                     "poster_path": pick.poster_path or "",
                 },
             )
+            movie_created = created
             if not created and pick.poster_path and not movie.poster_path:
                 movie.poster_path = pick.poster_path
                 movie.save(update_fields=["poster_path"])
@@ -596,13 +604,23 @@ def import_interests(
             local_movies_by_title_year[(movie.title.lower().strip(), movie.year)] = movie
 
         item_source = getattr(row, "source", None) or "google_interests"
-        watchlist_item, _ = WatchlistItem.objects.get_or_create(
+        watchlist_item, item_created = WatchlistItem.objects.get_or_create(
             movie=movie,
             source=item_source,
             defaults={"user_id": user_id},
         )
         result.resolved.append(watchlist_item)
         result.watchlist_count += 1
+
+        # Event-driven refresh (Phase B): new content / new watchlist items
+        # (or titles with no canonical availability yet) become eligible for
+        # an asynchronous availability refresh — never a synchronous fetch.
+        request_import_refresh(
+            movie,
+            priority=RefreshPriority.WATCHLIST,
+            entering=movie_created or item_created,
+            source_configuration=import_freshness_configuration,
+        )
 
     return result
 

@@ -13,6 +13,9 @@ COPY . .
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
+COPY worker-entrypoint.sh /worker-entrypoint.sh
+RUN chmod +x /worker-entrypoint.sh
+
 EXPOSE 8000
 
 ENTRYPOINT ["/entrypoint.sh"]

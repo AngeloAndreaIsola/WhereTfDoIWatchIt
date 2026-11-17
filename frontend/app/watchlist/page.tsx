@@ -8,6 +8,9 @@ import { useCurrentLocation } from "@/components/CurrentLocationProvider";
 import { VpnWatchModal } from "@/components/VpnWatchModal";
 import { WhyCantIWatchModal, ExcludedOffer } from "@/components/WhyCantIWatchModal";
 import { Pagination } from "@/components/Pagination";
+import { formatLastSeen } from "@/lib/time";
+import WatchlistRefreshButton from "@/components/WatchlistRefreshButton";
+import AvailabilityStatusPanel from "@/components/AvailabilityStatusPanel";
 import {
   addToWatchlist,
   markMovieWatched,
@@ -38,6 +41,8 @@ interface WatchlistItemRow {
     status?: string;
     status_symbol?: string;
     status_label?: string;
+    /** Queue-side state: pending | checked | failed | never_checked. */
+    refresh_state?: string;
     best_offer?: {
       country: string;
       service: string;
@@ -47,6 +52,7 @@ interface WatchlistItemRow {
     };
     explanation?: string[];
     excluded_offers?: ExcludedOffer[];
+    last_seen_at?: string | null;
   };
 }
 
@@ -63,6 +69,11 @@ const buildWatchlistQuery = (filters: FilterState, page: number): string => {
   if (filters.quality) params.set("quality", filters.quality);
   if (filters.score_min) params.set("score_min", filters.score_min);
   if (filters.sort_by) params.set("sort_by", filters.sort_by);
+  if (filters.watched && filters.watched !== "all")
+    params.set("watched", filters.watched);
+  if (filters.access) params.set("access", filters.access);
+  if (filters.duration_min) params.set("duration_min", filters.duration_min);
+  if (filters.duration_max) params.set("duration_max", filters.duration_max);
   filters.actors.forEach((a) => params.append("actor_id", `${a.id}:${a.name}`));
   if (page > 1) params.set("page", page.toString());
   return params.toString();
@@ -92,6 +103,13 @@ export default function WatchlistPage() {
       quality: sp.get("quality") || "",
       score_min: sp.get("score_min") || "",
       sort_by: sp.get("sort_by") || "",
+      watched: sp.get("watched") || "all",
+      access: sp.get("access") || "",
+      duration_min: sp.get("duration_min") || "",
+      duration_max: sp.get("duration_max") || "",
+      audio_languages: "",
+      subtitle_languages: "",
+      provider_categories: [],
     };
   };
 
@@ -166,6 +184,11 @@ export default function WatchlistPage() {
     if (filters.status) params.set("status", filters.status);
     if (filters.score_min) params.set("score_min", filters.score_min);
     if (filters.sort_by) params.set("sort_by", filters.sort_by);
+    if (filters.watched && filters.watched !== "all")
+      params.set("watched", filters.watched);
+    if (filters.access) params.set("access", filters.access);
+    if (filters.duration_min) params.set("duration_min", filters.duration_min);
+    if (filters.duration_max) params.set("duration_max", filters.duration_max);
     filters.actors.forEach((a) => params.append("actor_id", a.id.toString()));
     if (currentCountry) params.set("current_country", currentCountry);
 
@@ -330,6 +353,27 @@ export default function WatchlistPage() {
         </div>
       </section>
 
+      {/* ─── Bulk availability refresh ─────────────────────────────────────── */}
+      <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-xs dark:border-gray-700 dark:bg-gray-800">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+              Availability
+            </h2>
+            <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+              Re-check every watchlisted title against the streaming
+              catalogues now — queued in the background, so rate limits may
+              spread it over time.
+            </p>
+          </div>
+          <WatchlistRefreshButton onRefreshed={refreshWatchlistData} />
+        </div>
+        {/* Source-first breakdown. This owns no state a reload could lose: it
+            re-reads the persisted run state on mount, so a refresh survives a
+            browser reload instead of vanishing with the component. */}
+        <AvailabilityStatusPanel onCompleted={refreshWatchlistData} />
+      </section>
+
       <FilterBar
         filters={filters}
         onChange={handleSetFilters}
@@ -363,15 +407,20 @@ export default function WatchlistPage() {
 
               const isWatchable =
                 status === "watchable_here" || status === "watchable_vpn";
+              // 🔵 Checking… is transient queue state, not a verdict — the
+              // card stays undimmed until the check lands (⚫ / 🟢 / …).
+              // 🕓 Needs recheck is last-known evidence, not a negative.
+              const isDimmed =
+                !isWatchable && status !== "checking" && status !== "needs_recheck";
               const isWatched = !!(row.user_data?.is_watched ?? row.is_watched ?? movie.user_data?.is_watched);
 
               return (
                 <div
                   key={movie.id || idx}
                   className={`bg-white dark:bg-gray-900 border rounded-xl overflow-hidden shadow-sm flex flex-col transition-all ${
-                    isWatchable
-                      ? "border-gray-200 dark:border-gray-800 hover:shadow-md"
-                      : "border-gray-200 dark:border-gray-800/60 opacity-60 grayscale hover:opacity-100 hover:grayscale-0"
+                    isDimmed
+                      ? "border-gray-200 dark:border-gray-800/60 opacity-60 grayscale hover:opacity-100 hover:grayscale-0"
+                      : "border-gray-200 dark:border-gray-800 hover:shadow-md"
                   }`}
                 >
                   <Link
@@ -396,6 +445,14 @@ export default function WatchlistPage() {
                       <span className="absolute top-2 right-2 px-2 py-1 rounded-md text-xs font-bold bg-black/70 text-white backdrop-blur-sm">
                         {symbol} {label}
                       </span>
+                      {status === "needs_recheck" && (
+                        <span
+                          data-testid="last-seen"
+                          className="absolute top-9 right-2 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-black/60 text-white"
+                        >
+                          {formatLastSeen(watchRes.last_seen_at)}
+                        </span>
+                      )}
                     </div>
                   </Link>
 

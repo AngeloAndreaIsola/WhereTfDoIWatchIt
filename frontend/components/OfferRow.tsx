@@ -28,6 +28,29 @@ function qualityLabel(q: string): string {
   return map[q.toLowerCase()] ?? q.toUpperCase();
 }
 
+/** Offer types where a per-title price is meaningful to show. */
+const PRICE_OFFER_TYPES = new Set(["rent", "buy", "addon"]);
+
+/**
+ * Locale-aware currency formatting from the structured amount/currency the API
+ * sends. The amount arrives as a decimal string, so it is converted at the
+ * display boundary only — never stored or compared as a float.
+ */
+export function formatPrice(amount: string, currency: string, locale?: string): string {
+  const value = Number(amount);
+  if (!Number.isFinite(value)) return "";
+  try {
+    return new Intl.NumberFormat(locale, {
+      style: "currency",
+      currency,
+      currencyDisplay: "narrowSymbol",
+    }).format(value);
+  } catch {
+    // An unknown-but-well-formed currency code must not blank the row.
+    return `${amount} ${currency}`;
+  }
+}
+
 interface OfferRowProps {
   offer: PrimeOffer;
   tmdbId?: number;
@@ -55,15 +78,79 @@ export default function OfferRow({
 
   const watchUrl = offer.url || (tmdbId ? `/watch/${tmdbId}` : null);
 
+  // A price is only shown when a source confirmed it for the latest
+  // observation: a remembered (stale) value is never presented as fresh, and a
+  // missing price is never rendered as "free".
+  const priceApplicable = PRICE_OFFER_TYPES.has(
+    (offer.offer_type || "").toLowerCase()
+  );
+  const confirmedPrice =
+    offer.price &&
+    offer.price.amount &&
+    offer.price.currency &&
+    offer.price.is_current !== false
+      ? offer.price
+      : null;
+  const priceText = confirmedPrice
+    ? formatPrice(confirmedPrice.amount as string, confirmedPrice.currency)
+    : "";
+
+  // An offer the user cannot play with their current services is still real
+  // availability — show it, muted and labelled, rather than hiding it. This is
+  // the movie-194 fix: the offer list used to drop unowned services entirely,
+  // which made "available elsewhere" look like "nothing found".
+  const notEntitled = offer.is_entitled === false;
+  const notAccessible = offer.is_accessible === false;
+  // Why the row is muted. An unowned service is the common case; an offer the
+  // user *does* own can still be unreachable (wrong country) or unusable
+  // (language rules), and saying "not reachable" for a language block is
+  // simply wrong. Prefer the resolver's own rejection reason.
+  const mutedReason = (() => {
+    if (!notAccessible) return "";
+    if (offer.is_addon && offer.required_base_display) {
+      return `Add-on channel — requires ${offer.required_base_display}`;
+    }
+    if (notEntitled) return "Not in your subscriptions — shown for reference";
+    const reasons = (offer.rejection_reasons || []).join(" ").toLowerCase();
+    if (reasons.includes("territory information unknown")) return "Territory unknown";
+    if (reasons.includes("language")) return "Not available in your languages";
+    if (reasons.includes("reach") || reasons.includes("country") || reasons.includes("vpn")) {
+      return "Not reachable from your settings";
+    }
+    return "Not available with your current settings";
+  })();
+  const localityBadge = offer.locality
+    ? {
+        local: { text: "Local", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300" },
+        anywhere: { text: "Local", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300" },
+        vpn: { text: "VPN required", className: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300" },
+        out_of_reach: { text: "Not reachable", className: "bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300" },
+        unknown: { text: "Territory unknown", className: "bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300" },
+      }[offer.locality]
+    : null;
+
   return (
     <div
+      data-testid="offer-row"
+      data-entitled={notEntitled ? "false" : "true"}
       className={`
         rounded-xl border p-4 text-sm transition-all
-        ${isBest
+        ${notAccessible
+          ? "border-dashed border-gray-300 bg-gray-50/70 opacity-80 dark:border-gray-600 dark:bg-gray-800/40"
+          : isBest
           ? "border-green-400 bg-green-50/80 shadow-xs dark:border-green-600 dark:bg-green-900/20"
           : "border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800/50"}
       `}
     >
+      {notAccessible && (
+        <p
+          data-testid="offer-not-subscribed"
+          className="mb-2 text-xs font-semibold text-gray-500 dark:text-gray-400"
+        >
+          {mutedReason}
+        </p>
+      )}
+
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xl">{flagEmoji(offer.country)}</span>
@@ -100,7 +187,42 @@ export default function OfferRow({
               {qualityLabel(offer.quality)}
             </span>
           )}
-          {isBest && (
+          {priceApplicable && confirmedPrice && priceText && (
+            <span
+              data-testid="offer-price"
+              data-amount={confirmedPrice.amount}
+              data-currency={confirmedPrice.currency}
+              className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-800 dark:bg-slate-700 dark:text-slate-100"
+            >
+              {confirmedPrice.is_from ? `from ${priceText}` : priceText}
+            </span>
+          )}
+          {priceApplicable && !confirmedPrice && (
+            <span
+              data-testid="offer-price-missing"
+              className="rounded-md bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500 dark:bg-gray-700 dark:text-gray-400"
+            >
+              Price not currently confirmed
+            </span>
+          )}
+          {offer.is_addon && (
+            <span className="rounded-md bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
+              Add-on
+              {offer.required_base_display ? ` · needs ${offer.required_base_display}` : ""}
+            </span>
+          )}
+          {offer.access_label && !notEntitled && !offer.is_addon && (
+            <span
+              className={`rounded-md px-2 py-0.5 text-xs font-medium ${
+                notAccessible
+                  ? "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300"
+                  : "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300"
+              }`}
+            >
+              {offer.access_label}
+            </span>
+          )}
+          {isBest && !notAccessible && (
             <span className="rounded-full bg-green-600 px-2.5 py-0.5 text-xs font-bold text-white shadow-xs">
               Best Match
             </span>
@@ -110,16 +232,33 @@ export default function OfferRow({
               Language Mismatch
             </span>
           )}
-          {currentCountry && (
+          {offer.ranking?.explanation && offer.ranking.explanation.length > 0 && (
             <span
-              className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${
-                offer.country.toUpperCase() === currentCountry.toUpperCase()
-                  ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300"
-                  : "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
-              }`}
+              data-testid="ranking-explanation"
+              className="rounded-md bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300"
+              title={offer.ranking.explanation.join(" · ")}
             >
-              {offer.country.toUpperCase() === currentCountry.toUpperCase() ? "Local" : "VPN required"}
+              {offer.ranking.explanation[0]}
             </span>
+          )}
+          {localityBadge ? (
+            <span
+              className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${localityBadge.className}`}
+            >
+              {localityBadge.text}
+            </span>
+          ) : (
+            currentCountry && (
+              <span
+                className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                  offer.country.toUpperCase() === currentCountry.toUpperCase()
+                    ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300"
+                    : "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+                }`}
+              >
+                {offer.country.toUpperCase() === currentCountry.toUpperCase() ? "Local" : "VPN required"}
+              </span>
+            )
           )}
         </div>
 

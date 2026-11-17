@@ -1,4 +1,11 @@
-# Architecture Fix — Implementation Plan
+# Historical Architecture Fix — Implementation Plan
+
+> Historical planning record, not current architecture documentation. The
+> candidate work described below was completed or superseded by the canonical
+> availability/read-path work. In particular, `tmdb_matcher.py` was never an
+> implementation (it was an unused comment-only placeholder) and was removed
+> in P3. Consult `docs/AVAILABILITY_REDESIGN_REPORT.md` and the source/tests
+> for current behavior; do not execute this plan as a migration guide.
 
 Completed: Candidate 1 (enrichment scatter) — `e6e3ce8`.
 Completed: Candidate 4 (presentation seam) — `b21130e`.
@@ -97,7 +104,7 @@ UI show?":
 ### Approach
 Extract `present_offer(offer, provider_map) -> PresentedOffer` where
 `PresentedOffer` carries: `service_display`, `source_indicator`,
-`country` (with fallback). Each caller builds `provider_map` once and
+`country` (observed on the offer; provider home country is not substituted). Each caller builds `provider_map` once and
 passes it in.
 
 ### Dataclass
@@ -106,7 +113,7 @@ passes it in.
 class PresentedOffer:
     service_display: str       # provider.name or service_display_name(slug)
     source_indicator: str      # provider.source_indicator or "Official"
-    country: str               # offer.country or provider.country_code fallback
+    country: str               # observed offer country; blank stays unknown
     is_official: bool          # provider.category in {OFFICIAL, FREE}
 ```
 

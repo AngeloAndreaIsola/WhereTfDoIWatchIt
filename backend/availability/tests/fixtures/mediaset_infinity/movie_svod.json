@@ -1,0 +1,38 @@
+{
+ "data": {
+  "getMoviePage": {
+   "title": "Troppo rischio per un uomo solo",
+   "type": "movie",
+   "url": "https://mediasetinfinity.mediaset.it/movie/tropporischioperunuomosolo/troppo-rischio-per-un-uomo-solo_F000567001000101",
+   "dataSource": {
+    "__typename": "VideoItem",
+    "guid": "F000567001000101",
+    "title": "Troppo rischio per un uomo solo",
+    "url": "https://mediasetinfinity.mediaset.it/movie/tropporischioperunuomosolo/troppo-rischio-per-un-uomo-solo_F000567001000101",
+    "description": "ITALIA, 1973 | Rudy Patti è un campione di Formula 1. Un giorno viene arrestato per l'omicidio della sua fidanzata Nina, del quale non può fornire un alibi. A complicare la faccenda c'è una valigia di eroina lasciata sulla sua macchina dalla donna prima di morire. Evaso di prigione, tenta di dimostrare la propria innocenza con l'aiuto dei suoi amici. Con Giuliano Gemma, Susan Scott.",
+    "editorialType": "Movie",
+    "contentRight": "SVOD",
+    "channelRights": [
+     "InfNero_ANY",
+     "InfNero_SVOD",
+     "MediasetItalia_ANY",
+     "MediasetItalia_SVOD"
+    ],
+    "channelLabels": [
+     {
+      "id": "InfNero"
+     },
+     {
+      "id": "MediasetItalia"
+     }
+    ],
+    "expirationDate": null,
+    "audioLanguages": [
+     "ita"
+    ],
+    "subLanguages": null,
+    "duration": 6218
+   }
+  }
+ }
+}

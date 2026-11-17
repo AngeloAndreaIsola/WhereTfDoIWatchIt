@@ -1,7 +1,13 @@
 from django.urls import path, re_path
 from . import views, api_v2
+from . import extension_views
 
 urlpatterns = [
+    path("extension/handshake/init", extension_views.extension_handshake_init, name="extension-handshake-init"),
+    path("extension/handshake/exchange", extension_views.extension_handshake_exchange, name="extension-handshake-exchange"),
+    path("extension/handshake/revoke", extension_views.extension_revoke, name="extension-handshake-revoke"),
+    path("extension/authorize/<uuid:challenge_id>/", extension_views.extension_authorize, name="extension-authorize"),
+    path("extension/titles/ingest", extension_views.extension_titles_ingest, name="extension-titles-ingest"),
     path("health/", views.health, name="health"),
     path("geo/ip/", views.geo_ip, name="geo-ip"),
     path("search/", views.search, name="search"),
@@ -11,9 +17,13 @@ urlpatterns = [
     path("catalog/", views.catalog_list, name="catalog-list"),
     path("catalog/unified/", views.unified_catalog, name="catalog-unified"),
     path("movie/<int:tmdb_id>/availability/", views.movie_availability, name="movie-availability"),
+    path("movie/<int:tmdb_id>/refresh/", views.refresh_availability, name="movie-refresh"),
     path("movie/<int:tmdb_id>/language-info/", views.movie_language_info, name="movie-language-info"),
     path("providers/", views.providers_list, name="providers-list"),
+    path("providers/sync/", views.providers_sync, name="providers-sync"),
+    path("providers/packages/", views.provider_packages, name="providers-packages"),
     path("providers/<str:slug>/toggle/", views.provider_toggle, name="provider-toggle"),
+    path("providers/<str:slug>/refresh/", views.provider_refresh, name="provider-refresh"),
     path("providers/<str:slug>/", views.provider_delete, name="provider-delete"),
     path("subscriptions/", views.subscriptions_list_create, name="subscriptions-list-create"),
     path("subscriptions", views.subscriptions_list_create),
@@ -26,8 +36,43 @@ urlpatterns = [
     path("preferences/", views.preferences, name="preferences"),
     path("watchlist/", views.watchlist, name="watchlist"),
     path("watchlist/refresh/", views.watchlist_refresh, name="watchlist-refresh"),
+    path(
+        "watchlist/refresh-explicit/",
+        views.watchlist_refresh_explicit,
+        name="watchlist-refresh-explicit",
+    ),
+    path(
+        "watchlist/refresh-status/",
+        views.watchlist_refresh_status,
+        name="watchlist-refresh-status",
+    ),
     path("watchlist/report/", views.watchlist_report, name="watchlist-report"),
     path("watchlist/resolve/", views.watchlist_resolve, name="watchlist-resolve"),
+    # --- Source-first availability observability (Phase 1/2) ---
+    # The report and the persisted run records are what let a page reload
+    # reconstruct a long-running refresh instead of losing it.
+    path("availability/report/", views.availability_report, name="availability-report"),
+    path(
+        "availability/metrics/",
+        views.availability_metrics,
+        name="availability-metrics",
+    ),
+    path(
+        "availability/report/<int:tmdb_id>/",
+        views.availability_title_report,
+        name="availability-title-report",
+    ),
+    path("availability/refresh/", views.availability_refresh_start, name="availability-refresh-start"),
+    path(
+        "availability/refreshes/",
+        views.availability_refresh_list,
+        name="availability-refresh-list",
+    ),
+    path(
+        "availability/refreshes/<int:pk>/",
+        views.availability_refresh_detail,
+        name="availability-refresh-detail",
+    ),
     # --- Watchlist export (canonical round-trip CSV backup) ---
     path("export/watchlist/", views.export_watchlist, name="export-watchlist"),
     path("export/watched/", views.export_watched, name="export-watched"),
@@ -45,6 +90,8 @@ urlpatterns = [
     # --- Manual watchlist management ---
     path("watchlist/add/", views.add_to_watchlist, name="add-to-watchlist"),
     path("watchlist/remove/<int:tmdb_id>/", views.remove_from_watchlist, name="remove-from-watchlist"),
+    path("watched/", views.watched_list, name="watched-list"),
+    path("watched/report/", views.watched_report, name="watched-report"),
     path("watched/<int:tmdb_id>/", views.mark_movie_watched, name="mark-movie-watched"),
     path("unwatched/<int:tmdb_id>/", views.unmark_movie_watched, name="unmark-movie-watched"),
     # --- API v2: Unofficial sources (Phase C) ---

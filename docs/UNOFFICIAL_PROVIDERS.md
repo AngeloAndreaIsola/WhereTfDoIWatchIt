@@ -1,5 +1,12 @@
 # Unofficial Streaming Providers Implementation
 
+> **Integration status:** This document describes parser capabilities. Treat
+> listing rows as discoveries, not verified playable offers. The canonical
+> ingestion bridge withholds automatic mappings for unverified listing
+> observations, and the shared listing parser does not infer resolution. See
+> [`docs/sources/INTEGRATION_COMPATIBILITY.md`](sources/INTEGRATION_COMPATIBILITY.md)
+> for current bounds and blockers.
+
 ## Summary
 
 Implemented three new unofficial streaming provider scrapers for WhereTfDoIWatchIt:
@@ -53,7 +60,7 @@ Languages are normalized to canonical ISO 639-1 codes (IT, EN, JA, etc.) via `no
 
 ### StreamingCommunity
 - **Domains**: `streaming-community.army` (primary), `streamingcommunityz.nexus` (Cloudflare fallback)
-- **Domain Registry**: Automatic failover with health tracking, failure counting, cooldown
+- **Domain Registry**: Automatic failover with health tracking and failure counting
 - **Browse**: `/`, `/film/`, `/series/`, `/archivio/` — the legacy `/en/search` and `/en/browse/latest` paths now 404
 - **Title source**: `data-title` attribute (tiles are image-only, no anchor text)
 - **Language Detection**: `[ITA]`/`[SUB-ITA]` bracket tags and the `data-sub` attribute

@@ -15,9 +15,9 @@ from unittest.mock import MagicMock, patch
 from django.test import TestCase
 from rest_framework.test import APIClient
 
+from availability.services.legacy_ingest import ingest_scraped_mapping
 from tracker.models import Movie, Provider, ScrapedContentMapping
 from tracker.scrapers import (
-    BBCScraper,
     HydraHDScraper,
     KissKHScraper,
     NHKScraper,
@@ -269,16 +269,13 @@ class RaiPlayClassificationTests(TestCase):
 
 
 class PrioritySourceClassificationTests(TestCase):
-    def test_bbc_items_are_explicitly_movies(self):
-        scraper = BBCScraper()
-        html = """
-        <html><body><script>window.__IPLAYER_REDUX_STATE__ = {
-          "bundles": [{"entities": [{"episode": {"id": "m1", "title": {"default": "Film Title"}}}]}]
-        }</script></body></html>
-        """
-        items = scraper._parse_state(html)
-        self.assertEqual(len(items), 1)
-        self.assertEqual(items[0].content_type, "movie")
+    def test_bbc_legacy_scraper_retired_in_favor_of_canonical_source(self):
+        from availability.sources import source_registry
+        from tracker.scrapers import resolve_scraper_class
+        from tracker.services.provider_status import catalogue_source_map
+        self.assertIsNone(resolve_scraper_class("bbc_iplayer"))
+        self.assertEqual(catalogue_source_map().get("bbc_iplayer"), "bbc_iplayer")
+        self.assertIn("bbc_iplayer", source_registry.slugs())
 
     @patch.object(NHKScraper, "fetch_url")
     def test_nhk_has_no_type_signal_so_it_stays_a_movie(self, mock_fetch):
@@ -427,7 +424,7 @@ class ScrapePayloadContentTypeTests(TestCase):
             defaults={"name": "KissKH", "category": "scraper", "is_enabled": True},
         )
 
-    @patch("tracker.views.resolve_scraper_class")
+    @patch("tracker.services.scraper_selection.resolve_scraper_class")
     @patch("tracker.scrapers.base.TMDbClient.search")
     def test_scraper_run_serializes_content_type(self, mock_search, mock_resolve):
         mock_search.return_value = []
@@ -545,7 +542,7 @@ class UnofficialOffersSeasonGatingTests(TestCase):
         self.provider.save()
 
         for target in (self.series, self.movie):
-            ScrapedContentMapping.objects.create(
+            mapping = ScrapedContentMapping.objects.create(
                 provider=self.provider,
                 movie=target,
                 scraped_title=target.title,
@@ -554,6 +551,10 @@ class UnofficialOffersSeasonGatingTests(TestCase):
                 is_available=True,
                 raw_payload={"audio_languages": ["EN"], "subtitle_languages": ["EN"]},
             )
+            # The v2 offers endpoint reads the canonical catalogue, so the
+            # fixture must go through the ingestion bridge like production
+            # scraper writes do.
+            ingest_scraped_mapping(mapping)
 
     def test_no_season_returns_the_scraper_offers(self):
         response = self.client.get("/api/v2/unofficial/movie/1396/offers/")

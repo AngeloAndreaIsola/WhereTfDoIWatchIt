@@ -23,7 +23,7 @@ from tracker.services.offers import Offer
 class PresentedOffer:
     service_display: str       # provider.name or service_display_name(slug)
     source_indicator: str      # provider.source_indicator or "Official"
-    country: str               # offer.country or provider.country_code fallback
+    country: str               # observed offer country; never provider home country
     is_official: bool          # provider.category in {OFFICIAL, FREE}
 
 
@@ -49,7 +49,6 @@ def present_offer(
         service_display = prov.name
         source_indicator = prov.source_indicator
         is_official = prov.category != ProviderCategory.SCRAPER
-        country = country or (prov.country_code or "")
     else:
         # Legacy: unknown slug — fall back to the mapping table.
         service_display = service_display_name(service)

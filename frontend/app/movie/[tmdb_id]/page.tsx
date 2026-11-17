@@ -7,8 +7,11 @@ import { useRouter } from "next/navigation";
 import OfferRow from "@/components/OfferRow";
 import { useCurrentLocation } from "@/components/CurrentLocationProvider";
 import MovieEditModal from "@/components/MovieEditModal";
+import RefreshAvailabilityButton from "@/components/RefreshAvailabilityButton";
+import AvailabilityState from "@/components/AvailabilityState";
+import LastKnownOffers from "@/components/LastKnownOffers";
 import type { PrimeOffer, PrimeMovieResponse } from "@/lib/api";
-import { fetchPrimeMovieOffers, addToWatchlist, markMovieWatched, unmarkMovieWatched, removeWatchlistItem } from "@/lib/api";
+import { fetchPrimeMovieOffers, addToWatchlist, markMovieWatched, unmarkMovieWatched, removeWatchlistItem, requestAvailabilityRefresh } from "@/lib/api";
 import type { LinkTmdbResponse } from "@/lib/api";
 
 interface UnofficialOffer {
@@ -33,6 +36,11 @@ interface MovieDetailPageProps {
   params: { tmdb_id: string };
 }
 
+/** How often to re-check local availability while a refresh is queued. */
+const AVAILABILITY_POLL_INTERVAL_MS = 4000;
+/** Give up polling after this long; the queued refresh can still land later. */
+const AVAILABILITY_POLL_TIMEOUT_MS = 60000;
+
 export default function MovieDetailPage({ params }: MovieDetailPageProps) {
   const tmdbId = parseInt(params.tmdb_id, 10);
   const router = useRouter();
@@ -47,6 +55,11 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
   const [error, setError] = useState<string | null>(null);
   const [unofficialOffers, setUnofficialOffers] = useState<UnofficialOffer[] | null>(null);
   const [unofficialLoading, setUnofficialLoading] = useState(false);
+  const [pollTimedOut, setPollTimedOut] = useState(false);
+  // Manual "Refresh availability" state: in flight from click until the
+  // worker settles the request (or we give up waiting for it).
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
 
   useEffect(() => {
@@ -54,6 +67,7 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
     setLoading(true);
     setError(null);
     setData(null);
+    setPollTimedOut(false);
 
     // Fetch user preferences for exact language match highlighting
     fetch("/api/preferences/")
@@ -127,6 +141,61 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
     };
   }, [tmdbId, currentCountry]);
 
+  // The backend queues an async refresh when the detail page is opened (and
+  // again on the manual "Refresh availability" button); the worker drains it
+  // and only then are canonical offers written. While this title has no
+  // offers and the queue still holds a pending request, poll the same
+  // endpoint until offers arrive, the request settles, or we time out (a
+  // rate-limited refresh can still land later — see the queued note).
+  const waitingForRefresh = !!data && data.offers.length === 0 && !!data.refresh_pending;
+
+  // Poll whenever the queue holds a request for this title — whether it came
+  // from the page's own auto-enqueue or from an explicit click — and keep
+  // polling while a manual refresh is in flight even if a stale response
+  // still reads as settled.
+  const shouldPoll =
+    !!data && !pollTimedOut && (!!data.refresh_pending || refreshing);
+
+  useEffect(() => {
+    if (!shouldPoll) return;
+    let cancelled = false;
+    const startedAt = Date.now();
+    const id = setInterval(() => {
+      if (cancelled) return;
+      if (Date.now() - startedAt >= AVAILABILITY_POLL_TIMEOUT_MS) {
+        clearInterval(id);
+        setPollTimedOut(true);
+        if (refreshing) {
+          setRefreshing(false);
+          setRefreshError(
+            "The refresh is still queued — try again in a minute."
+          );
+        }
+        return;
+      }
+      fetchPrimeMovieOffers(tmdbId, currentCountry)
+        .then((d) => {
+          if (cancelled) return;
+          setData(d);
+          if (!d.refresh_pending && refreshing) {
+            // Manual refresh settled: re-enable the button, surfacing a
+            // worker-side failure so the user can retry.
+            setRefreshing(false);
+            if (d.refresh_status === "failed") {
+              setRefreshError(
+                "The refresh failed on the server — try again."
+              );
+            }
+          }
+        })
+        .catch(() => {});
+    }, AVAILABILITY_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [shouldPoll, refreshing, pollTimedOut, tmdbId, currentCountry]);
+
   const posterUrl = data?.movie?.poster_path
     ? `https://image.tmdb.org/t/p/w500${data.movie.poster_path}`
     : null;
@@ -163,8 +232,39 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
   );
 
   const reloadMovie = useCallback(() => {
+    setPollTimedOut(false);
     fetchPrimeMovieOffers(tmdbId, currentCountry).then((d) => setData(d)).catch(() => {});
   }, [tmdbId, currentCountry]);
+
+  // Enqueue an explicit refresh and let the poll effect above watch the
+  // queue settle; existing offers stay on screen until new ones land.
+  const handleRefreshAvailability = async () => {
+    setRefreshError(null);
+    setPollTimedOut(false);
+    setRefreshing(true);
+    try {
+      const result = await requestAvailabilityRefresh(tmdbId);
+      setData((prev) =>
+        prev
+          ? {
+              ...prev,
+              refresh_pending: result.refresh_pending,
+              refresh_status: result.refresh_status,
+            }
+          : prev
+      );
+    } catch (err) {
+      setRefreshing(false);
+      setRefreshError(
+        err instanceof Error
+          ? err.message
+          : "Failed to queue the refresh — try again."
+      );
+    }
+  };
+
+  const refreshInProgress =
+    refreshing || (!!data?.refresh_pending && !pollTimedOut);
 
   const handleAddToWatchlist = async () => {
     try {
@@ -434,53 +534,161 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
 
           {/* Offers List */}
           <section>
-            <h2 className="mb-4 text-lg font-bold text-gray-900 dark:text-gray-100">
-              Streaming Availability & Language Matches
-            </h2>
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-lg font-bold text-gray-900 dark:text-gray-100">
+                Streaming Availability & Language Matches
+              </h2>
+              <RefreshAvailabilityButton
+                inProgress={refreshInProgress}
+                error={refreshError}
+                onRefresh={handleRefreshAvailability}
+              />
+            </div>
+
+            {data.watchability && (
+              <div className="mb-4 flex items-start gap-3 rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
+                <span className="text-2xl leading-none" aria-hidden="true">
+                  {data.watchability.status_symbol || "⚪"}
+                </span>
+                <div>
+                  <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                    {data.watchability.status_label || "Availability unknown"}
+                  </p>
+                  {(data.watchability.explanation || []).length > 0 && (
+                    <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-gray-500 dark:text-gray-400">
+                      {(data.watchability.explanation || []).map((line, i) => (
+                        <li key={i}>{line}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+            )}
 
             {data.offers.length === 0 ? (
-              <div className="rounded-xl border border-gray-200 bg-white p-6 text-center text-sm text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400">
-                Not currently available on your subscribed streaming services.
-              </div>
+              waitingForRefresh && !pollTimedOut ? (
+                <div className="rounded-xl border border-dashed border-blue-300 bg-blue-50/50 p-6 text-center text-sm text-blue-700 dark:border-blue-700 dark:bg-blue-900/20 dark:text-blue-300">
+                  <span className="inline-flex items-center gap-2">
+                    <span className="h-2 w-2 animate-pulse rounded-full bg-blue-500" />
+                    Checking availability…
+                  </span>
+                  <p className="mt-2 text-xs text-blue-600/80 dark:text-blue-400/80">
+                    This title has no local availability yet — we&rsquo;re fetching it now.
+                  </p>
+                </div>
+              ) : (
+                // The empty-offers state is driven by the backend verdict, not
+                // assumed: an unchecked title must not read as "unavailable".
+                <>
+                  {(data.last_known_offers ?? []).length === 0 && (
+                    <AvailabilityState
+                      availability={data.availability}
+                      refreshing={false}
+                    />
+                  )}
+                  {data.refresh_pending && (
+                    <p className="mt-2 text-center text-xs text-gray-500 dark:text-gray-500">
+                      An availability refresh is still queued.
+                      <button
+                        type="button"
+                        onClick={reloadMovie}
+                        className="ml-1 font-semibold text-blue-600 hover:underline dark:text-blue-400"
+                      >
+                        Check again
+                      </button>
+                    </p>
+                  )}
+                </>
+              )
             ) : (
+              (() => {
+                // Lead with an offer the user can actually play. When none of
+                // the found offers is included (movie 194: Netflix/Max/Hulu,
+                // none subscribed) we do not crown one "Best Match" — we say
+                // so and list everything for reference.
+                const bestOffer = data.offers.find((o: PrimeOffer) => o.is_accessible);
+                const rest = data.offers.filter((o: PrimeOffer) => o !== bestOffer);
+                return (
+                  <div className="space-y-3">
+                    {bestOffer ? (
+                      <div className="rounded-xl border-2 border-green-400 bg-green-50 p-4 dark:border-green-600 dark:bg-green-900/20">
+                        <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-green-800 dark:text-green-300">
+                          Best Match
+                        </h3>
+                        <OfferRow
+                          offer={bestOffer}
+                          tmdbId={tmdbId}
+                          isBest={true}
+                          preferredAudio={preferences.audio_languages}
+                          preferredSubtitles={preferences.subtitle_languages}
+                          currentCountry={currentCountry}
+                        />
+                      </div>
+                    ) : (
+                      <p className="rounded-xl border border-dashed border-amber-300 bg-amber-50/60 p-3 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
+                        None of the offers found is included with your
+                        subscriptions — they are listed for reference.
+                      </p>
+                    )}
+
+                    {rest.length > 0 && (
+                      <div className="space-y-3 pt-2">
+                        <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                          {bestOffer ? "All Ranked Offers" : "All Availability"}
+                        </h3>
+                        {rest.map((offer: PrimeOffer, i: number) => (
+                          <OfferRow
+                            key={`${offer.country}-${offer.service}-${offer.quality}-${i}`}
+                            offer={offer}
+                            tmdbId={tmdbId}
+                            isBest={false}
+                            preferredAudio={preferences.audio_languages}
+                            preferredSubtitles={preferences.subtitle_languages}
+                            currentCountry={currentCountry}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()
+            )}
+            <LastKnownOffers
+              offers={data.last_known_offers}
+              tmdbId={tmdbId}
+              preferredAudio={preferences.audio_languages}
+              preferredSubtitles={preferences.subtitle_languages}
+              currentCountry={currentCountry}
+            />
+          </section>
+
+          {/* Rent / buy: canonical availability that needs an extra payment,
+              kept apart from the included offers above. */}
+          {data.purchase_offers && data.purchase_offers.length > 0 && (
+            <section>
               <div className="space-y-3">
-                {/* Best match card */}
-                <div className="rounded-xl border-2 border-green-400 bg-green-50 p-4 dark:border-green-600 dark:bg-green-900/20">
-                  <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-green-800 dark:text-green-300">
-                    Best Match
+                <div>
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                    Rent or Buy
                   </h3>
+                  <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    Available for an extra payment — not included in your subscriptions.
+                  </p>
+                </div>
+                {data.purchase_offers.map((offer: PrimeOffer, i: number) => (
                   <OfferRow
-                    offer={data.offers[0]}
+                    key={`${offer.country}-${offer.service}-${offer.quality}-purchase-${i}`}
+                    offer={offer}
                     tmdbId={tmdbId}
-                    isBest={true}
+                    isBest={false}
                     preferredAudio={preferences.audio_languages}
                     preferredSubtitles={preferences.subtitle_languages}
                     currentCountry={currentCountry}
                   />
-                </div>
-
-                {/* All ranked offers */}
-                {data.offers.length > 1 && (
-                  <div className="space-y-3 pt-2">
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                      All Ranked Offers
-                    </h3>
-                    {data.offers.slice(1).map((offer: PrimeOffer, i: number) => (
-                      <OfferRow
-                        key={`${offer.country}-${offer.service}-${offer.quality}-${i}`}
-                        offer={offer}
-                        tmdbId={tmdbId}
-                        isBest={false}
-                        preferredAudio={preferences.audio_languages}
-                        preferredSubtitles={preferences.subtitle_languages}
-                        currentCountry={currentCountry}
-                      />
-                    ))}
-                  </div>
-                )}
+                ))}
               </div>
-            )}
-          </section>
+            </section>
+          )}
 
           {/* Scraper Sources Section */}
           {unofficialLoading && (

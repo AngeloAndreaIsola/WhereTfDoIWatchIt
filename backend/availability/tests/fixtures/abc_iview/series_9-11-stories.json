@@ -1,0 +1,17 @@
+{
+ "seriesTitle": "9/11 Stories",
+ "seriesDescription": "Oral histories.",
+ "seriesThumbnail": "https://cdn.iview.abc.net.au/thumbs/i/ns/nine11_1280.jpg",
+ "episodes": [
+  {
+   "showID": "215800",
+   "seriesTitle": "9/11 Stories",
+   "title": "",
+   "channel": "abc",
+   "pubDate": "2026-09-11 20:00:00",
+   "livestream": "0",
+   "duration": "1800",
+   "rating": "PG"
+  }
+ ]
+}

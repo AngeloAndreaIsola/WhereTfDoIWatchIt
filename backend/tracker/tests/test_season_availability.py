@@ -2,25 +2,22 @@
 
 Three layers:
 - upstream payload parsing + season-number resolution (no network, no DB);
-- cache write and season-filtered read of ``Availability.seasons_available``;
-- the series detail endpoint end-to-end: ``?season=N`` in, filtered offers out.
+- the legacy ``_write_result`` helper persisting ``seasons_available``;
+- the series detail endpoint end-to-end: ``?season=N`` in, canonical
+  season-filtered offers out.
 """
-import datetime as dt
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from django.test import SimpleTestCase, TestCase
-from django.utils import timezone
 
 from tracker.models import (
     Availability,
     Movie,
     Provider,
-    ScrapedContentMapping,
     Subscription,
 )
 from tracker.services.cache import AvailabilityCache
 from tracker.services.offers import Offer
-from tracker.services.rate_limit import ApiCallCounter, RateLimiter
 from tracker.services.streaming_api import (
     StreamingAvailabilityClient,
     StreamingOffer,
@@ -28,6 +25,7 @@ from tracker.services.streaming_api import (
     StreamingSeason,
     resolve_season_number,
 )
+from tracker.tests.availability_factories import local_offer
 
 SEASONS_DATA = [
     {"season_number": 1, "name": "Season 1", "episode_count": 10, "poster_path": "/s1.jpg"},
@@ -158,7 +156,13 @@ class ResolveSeasonNumberTests(SimpleTestCase):
 
 
 class SeasonCacheTests(TestCase):
-    """``seasons_available`` write + season-filtered ``read_offers``."""
+    """``seasons_available`` write semantics of the legacy ``_write_result`` helper.
+
+    Season-filtered *reads* live on the canonical read path
+    (``SeasonEndToEndEndpointTests`` below and the availability query tests);
+    this class only guards the legacy write helper that ``seed_prime_fixture``
+    still uses.
+    """
 
     @staticmethod
     def _result(with_seasons=True):
@@ -193,16 +197,11 @@ class SeasonCacheTests(TestCase):
             content_type="series",
             seasons_data=SEASONS_DATA,
         )
-        self.upstream = MagicMock()
-        self.upstream.get_availability.return_value = self._result()
-        self.cache = AvailabilityCache(
-            client=self.upstream, limiter=RateLimiter("test_seasons")
-        )
-        ApiCallCounter.objects.filter(service="test_seasons").delete()
+        self.cache = AvailabilityCache()
 
-    def test_refresh_persists_seasons_per_region(self):
-        status = self.cache.get_or_refresh(self.series)
-        self.assertTrue(status.refreshed)
+    def test_write_persists_seasons_per_region(self):
+        written = self.cache._write_result(self.series, self._result())
+        self.assertEqual(written, 3)
 
         prime = Availability.objects.get(
             movie=self.series, region__provider="prime", region__country="US"
@@ -221,91 +220,33 @@ class SeasonCacheTests(TestCase):
         )
         self.assertEqual(hulu.seasons_available, [])
 
-    def test_read_offers_filters_by_season(self):
-        self.cache.get_or_refresh(self.series)
-
-        self.assertEqual(
-            {o.service for o in self.cache.read_offers(self.series, season=1)},
-            {"prime", "netflix"},
-        )
-        self.assertEqual(
-            {o.service for o in self.cache.read_offers(self.series, season=2)},
-            {"netflix"},
-        )
-        self.assertEqual(self.cache.read_offers(self.series, season=9), [])
-
-        # Unfiltered read is untouched by season logic.
-        self.assertEqual(
-            {o.service for o in self.cache.read_offers(self.series)},
-            {"prime", "netflix", "hulu"},
-        )
-
-    def test_season_view_excludes_scraped_offers(self):
-        provider = Provider.objects.create(
-            slug="hydra", name="Hydra", category="scraper", is_enabled=True
-        )
-        ScrapedContentMapping.objects.create(
-            provider=provider,
-            movie=self.series,
-            scraped_title="Game of Thrones",
-            scraped_year=2011,
-            scraped_url="https://hydra.example/got",
-            is_available=True,
-        )
-        self.cache.get_or_refresh(self.series)
-
-        unfiltered = {o.service for o in self.cache.read_offers(self.series)}
-        self.assertIn("hydra", unfiltered)
-
-        for season in (1, 2, 3):
-            self.assertNotIn(
-                "hydra",
-                {o.service for o in self.cache.read_offers(self.series, season=season)},
-                f"scraper row leaked into season {season} view",
-            )
-
-    def test_refresh_without_seasons_clears_stale_values(self):
-        self.cache.get_or_refresh(self.series)
+    def test_write_without_seasons_clears_stale_values(self):
+        self.cache._write_result(self.series, self._result())
         self.assertTrue(
             Availability.objects.get(
                 movie=self.series, region__provider="prime"
             ).seasons_available
         )
 
-        self.upstream.get_availability.return_value = self._result(with_seasons=False)
-        Availability.objects.update(
-            movie=self.series, last_checked_at=timezone.now() - dt.timedelta(days=2)
-        )
-        status = self.cache.get_or_refresh(self.series)
-        self.assertTrue(status.refreshed)
+        self.cache._write_result(self.series, self._result(with_seasons=False))
 
         prime = Availability.objects.get(
             movie=self.series, region__provider="prime"
         )
         self.assertEqual(prime.seasons_available, [])
 
-    def test_cached_series_answer_is_not_rewritten_when_fresh(self):
-        self.cache.get_or_refresh(self.series)
-        self.cache.get_or_refresh(self.series)
-        self.assertEqual(self.upstream.get_availability.call_count, 1)
-
 
 class SeasonDetailEndpointTests(TestCase):
     """``/api/prime/series/<id>/?season=N`` payload shape and season plumbing."""
 
     def setUp(self):
-        cache_patcher = patch("tracker.services.offer_pipeline.AvailabilityCache")
+        reads_patcher = patch("tracker.services.offer_pipeline.get_local_offers")
         enrich_patcher = patch("tracker.services.offer_pipeline.enrich_movie_from_tmdb")
-        prime_patcher = patch(
-            "tracker.services.offer_pipeline.prime_offers", return_value=[]
-        )
-        self.addCleanup(cache_patcher.stop)
+        self.addCleanup(reads_patcher.stop)
         self.addCleanup(enrich_patcher.stop)
-        self.addCleanup(prime_patcher.stop)
-        mock_cache_cls = cache_patcher.start()
+        mock_reads = reads_patcher.start()
         enrich_patcher.start()
-        prime_patcher.start()
-        self.read_offers = mock_cache_cls.return_value.read_offers
+        self.read_offers = mock_reads
 
         self.series = Movie.objects.create(
             tmdb_id=1396,
@@ -377,20 +318,11 @@ class SeasonDetailEndpointTests(TestCase):
 
 
 class SeasonEndToEndEndpointTests(TestCase):
-    """Request → pipeline → cache → ranking, with season metadata and filtering."""
-
-    def setUp(self):
-        # TMDb watch/providers gap-fill is a separate source with its own tests;
-        # keep this end-to-end run on the mocked upstream only.
-        prime_patcher = patch(
-            "tracker.services.offer_pipeline.prime_offers", return_value=[]
-        )
-        self.addCleanup(prime_patcher.stop)
-        prime_patcher.start()
+    """Request → pipeline → canonical offer reads → ranking and season filtering."""
 
     @patch("tracker.services.streaming_api.StreamingAvailabilityClient.get_availability")
     @patch("tracker.services.offer_pipeline.enrich_movie_from_tmdb")
-    def test_season_requests_share_one_upstream_call_and_filter_offers(
+    def test_season_requests_filter_canonical_offers_without_upstream_calls(
         self, mock_enrich, mock_get
     ):
         series = Movie.objects.create(
@@ -409,7 +341,17 @@ class SeasonEndToEndEndpointTests(TestCase):
         Subscription.objects.create(
             user_id=1, provider=Provider.objects.get(slug="hulu"), name="Hulu"
         )
-        mock_get.return_value = SeasonCacheTests._result()
+        # Canonical rows: Prime streams season 1, Netflix streams seasons 1-2,
+        # Hulu streams season 3 only (mirrors the upstream payload shape).
+        for service, season in (("prime", 1), ("netflix", 1), ("netflix", 2), ("hulu", 3)):
+            local_offer(
+                series,
+                country="US",
+                service=service,
+                season_number=season,
+                audio_languages=["EN"],
+                subtitle_languages=["EN"],
+            )
 
         def services_for(url):
             response = self.client.get(url)
@@ -421,16 +363,15 @@ class SeasonEndToEndEndpointTests(TestCase):
         season_two = services_for("/api/prime/series/1396/?season=2")
         season_nine = services_for("/api/prime/series/1396/?season=9")
 
-        # Show-level rows plus season-only rows are all visible unfiltered.
+        # Show-level (unfiltered) reads see every canonical series row.
         self.assertEqual(unfiltered, {"Prime Video", "Netflix", "Hulu"})
         self.assertEqual(season_one, {"Prime Video", "Netflix"})
-        # Season 2 is Netflix-only upstream: Prime and Hulu drop out.
+        # Season 2 is Netflix-only: Prime and Hulu drop out.
         self.assertEqual(season_two, {"Netflix"})
         self.assertEqual(season_nine, set())
 
-        # Every season view is served from one cached upstream response.
-        self.assertEqual(mock_get.call_count, 1)
-        mock_get.assert_called_with(1396, content_type="series")
+        # Reads never fall through to the upstream API.
+        mock_get.assert_not_called()
 
         payload = self.client.get("/api/prime/series/1396/?season=2").json()
         self.assertEqual(payload["selected_season"], 2)
@@ -439,28 +380,26 @@ class SeasonEndToEndEndpointTests(TestCase):
 
 
 class SeriesSubscriptionFilterTests(TestCase):
-    """Cached rows for a series whose services the user does not subscribe to.
+    """Canonical rows for a series whose services the user does not subscribe to.
 
-    Regression guard for the reported "not available" outcome: an empty
-    ``offers`` list must come from the subscription/provider filters, never
-    from a series-only drop. The series payload has to stay complete so the
-    page can render its empty state, and one subscribed row in the same cache
-    must still be surfaced.
+    Regression guard for the reported "not available" outcome *and* for movie
+    194: an empty ``offers`` list must come from the source never having
+    answered — never from the offer list silently discarding rows it did find.
+    Offers on unowned services stay in the list (muted, not accessible) so the
+    page can show *what* exists elsewhere, the series payload stays complete so
+    the page can render, and only the un-catalogued slug (no ``Provider`` row)
+    is dropped. One subscribed row in the same set is still surfaced *and*
+    marked accessible.
     """
 
     def setUp(self):
-        cache_patcher = patch("tracker.services.offer_pipeline.AvailabilityCache")
+        reads_patcher = patch("tracker.services.offer_pipeline.get_local_offers")
         enrich_patcher = patch("tracker.services.offer_pipeline.enrich_movie_from_tmdb")
-        prime_patcher = patch(
-            "tracker.services.offer_pipeline.prime_offers", return_value=[]
-        )
-        self.addCleanup(cache_patcher.stop)
+        self.addCleanup(reads_patcher.stop)
         self.addCleanup(enrich_patcher.stop)
-        self.addCleanup(prime_patcher.stop)
-        mock_cache_cls = cache_patcher.start()
+        mock_reads = reads_patcher.start()
         enrich_patcher.start()
-        prime_patcher.start()
-        self.read_offers = mock_cache_cls.return_value.read_offers
+        self.read_offers = mock_reads
 
         self.series = Movie.objects.create(
             tmdb_id=90001,
@@ -481,7 +420,7 @@ class SeriesSubscriptionFilterTests(TestCase):
             for country, service in (("NL", "netflix"), ("NL", "disney"), ("NL", "skyshowtime"))
         ]
 
-    def test_unsubscribed_rows_yield_empty_offers_but_full_series_payload(self):
+    def test_unsubscribed_rows_are_surfaced_muted_and_payload_stays_full(self):
         self.read_offers.return_value = self.unsubscribed
 
         response = self.client.get("/api/prime/series/90001/")
@@ -489,20 +428,36 @@ class SeriesSubscriptionFilterTests(TestCase):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.read_offers.assert_called_once_with(self.series, season=None)
-        self.assertEqual(data["offers"], [])
+        # Unowned services are still listed (muted + not accessible) so the
+        # page shows what is available elsewhere instead of a bare empty list.
+        # The un-catalogued slug (skyshowtime) has no Provider row and drops.
+        services = {offer["service"] for offer in data["offers"]}
+        self.assertEqual(services, {"Netflix", "Disney+"})
+        for offer in data["offers"]:
+            self.assertFalse(offer["is_entitled"])
+            self.assertFalse(offer["is_accessible"])
+        # The series payload stays complete regardless of the offer filter.
         self.assertIsNone(data["selected_season"])
         self.assertEqual(data["series"]["tmdb_id"], 90001)
         self.assertEqual(data["series"]["title"], "Some Series")
         self.assertEqual([row["season"] for row in data["seasons"]], [1, 2, 3])
 
-    def test_a_subscribed_prime_row_in_the_same_cache_is_still_returned(self):
+    def test_a_subscribed_prime_row_is_returned_and_accessible(self):
         self.read_offers.return_value = self.unsubscribed + [
             Offer(country="AT", service="prime", offer_type="subscription",
                   quality="hd", audio_languages=["EN"], subtitle_languages=["EN"]),
         ]
 
-        response = self.client.get("/api/prime/series/90001/")
+        response = self.client.get("/api/prime/series/90001/?current_country=AT")
 
         self.assertEqual(response.status_code, 200)
-        services = {offer["service"] for offer in response.json()["offers"]}
-        self.assertEqual(services, {"Prime Video"})
+        data = response.json()
+        services = {offer["service"] for offer in data["offers"]}
+        self.assertEqual(services, {"Netflix", "Disney+", "Prime Video"})
+        prime = next(o for o in data["offers"] if o["service"] == "Prime Video")
+        self.assertTrue(prime["is_entitled"])
+        self.assertTrue(prime["is_accessible"])
+        # Its unowned peers stay listed but must never be claimed accessible.
+        peers = [o for o in data["offers"] if o["service"] != "Prime Video"]
+        self.assertTrue(peers)
+        self.assertTrue(all(not o["is_accessible"] for o in peers))

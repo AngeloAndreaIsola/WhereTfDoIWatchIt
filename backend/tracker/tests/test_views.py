@@ -4,8 +4,12 @@ from unittest.mock import MagicMock, patch
 from django.test import TestCase
 from django.urls import reverse
 
-from tracker.models import Movie, Preference, Provider, Subscription, WatchlistItem
+from tracker.models import (
+    Movie, Preference, Provider, RefreshRequest, RefreshRequestStatus,
+    ScrapedContentMapping, Subscription, WatchlistItem,
+)
 from tracker.services.offers import Offer
+from tracker.tests.availability_factories import local_offer
 
 
 class ProvidersEndpointTests(TestCase):
@@ -283,29 +287,20 @@ class MovieAvailabilityTests(TestCase):
         resp = self.client.get("/api/movie/9999/availability/")
         self.assertEqual(resp.status_code, 404)
 
-    @patch("tracker.views.AvailabilityCache")
-    def test_returns_ranked_offers(self, mock_cache_cls):
+    def test_returns_ranked_offers(self):
         Preference.objects.create(user_id=1, audio_languages=["EN"], subtitle_languages=["EN"])
-        Movie.objects.create(tmdb_id=42, title="Cached", year=2020)
-        instance = mock_cache_cls.return_value
-        instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=2)
-        instance.read_offers.return_value = [
-            Offer(country="us", service="Netflix", offer_type="subscription", quality="4k", audio_languages=["EN"], subtitle_languages=["EN"])
-        ]
+        movie = Movie.objects.create(tmdb_id=42, title="Cached", year=2020)
+        local_offer(movie, service="netflix", quality="4k", audio_languages=["EN"], subtitle_languages=["EN"])
         resp = self.client.get("/api/movie/42/availability/")
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["movie"]["tmdb_id"], 42)
         self.assertEqual(len(resp.json()["offers"]), 1)
 
-    @patch("tracker.views.AvailabilityCache")
-    def test_respects_rate_limiter(self, mock_cache_cls):
-        from tracker.services.rate_limit import RateLimitExceeded
+    def test_missing_local_availability_is_an_empty_non_blocking_response(self):
         Movie.objects.create(tmdb_id=42, title="Cached", year=2020)
-        instance = mock_cache_cls.return_value
-        instance.get_or_refresh.side_effect = RateLimitExceeded("Rate limit reached")
         resp = self.client.get("/api/movie/42/availability/")
-        self.assertEqual(resp.status_code, 429)
-        self.assertTrue(resp.json().get("rate_limited"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["offers"], [])
 
 
 class WatchlistEndpointTests(TestCase):
@@ -329,6 +324,7 @@ class WatchlistReportEndpointTests(TestCase):
             "total_movies": 0,
             "available_movies": 0,
             "unavailable_movies": 0,
+            "needs_recheck_movies": 0,
             "countries": [],
             "services": [],
         })
@@ -341,15 +337,10 @@ class WatchlistReportEndpointTests(TestCase):
             "has_previous": False,
         })
 
-    @patch("tracker.views.AvailabilityCache")
-    def test_all_unavailable_list(self, mock_cache_cls):
+    def test_all_unavailable_list(self):
         from tracker.models import WatchlistItem
         movie = Movie.objects.create(tmdb_id=101, title="Unavailable Movie", year=2021)
         WatchlistItem.objects.create(user_id=1, movie=movie, source="manual")
-
-        instance = mock_cache_cls.return_value
-        instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=0)
-        instance.read_offers.return_value = []
 
         resp = self.client.get("/api/watchlist/report/")
         self.assertEqual(resp.status_code, 200)
@@ -362,8 +353,29 @@ class WatchlistReportEndpointTests(TestCase):
         self.assertIsNone(row["best_country"])
         self.assertIsNone(row["best_service"])
 
-    @patch("tracker.views.AvailabilityCache")
-    def test_mixed_list(self, mock_cache_cls):
+    def test_available_elsewhere_never_reads_unavailable(self):
+        """Regression (Platoon, NL): offers present ⇒ 🟠, never ⚫.
+
+        The response simultaneously reported ``available_countries`` including
+        NL (from ``rank_offers``) and ``watchability.status: "not_watchable"``
+        ⚫ — the watchlist badge contradicting its own summary and the
+        canonical verdict. ⚫ is reserved for canonical unavailability.
+        """
+        Preference.objects.create(user_id=1, candidate_countries=[])
+        movie = Movie.objects.create(tmdb_id=792, title="Platoon", year=1986)
+        WatchlistItem.objects.create(user_id=1, movie=movie, source="manual")
+        # The only local offer is a rent one, and no subscription is held.
+        local_offer(movie, country="NL", service="rakuten_tv", offer_type="rent",
+                    quality="hd", audio_languages=["EN"], subtitle_languages=["EN"])
+
+        resp = self.client.get("/api/watchlist/report/?current_country=NL")
+        self.assertEqual(resp.status_code, 200)
+        row = next(r for r in resp.json()["report"] if r["movie"]["tmdb_id"] == 792)
+        self.assertEqual(row["watchability"]["status"], "available_elsewhere")
+        self.assertEqual(row["watchability"]["status_symbol"], "🟠")
+        self.assertNotEqual(row["watchability"]["status"], "not_watchable")
+
+    def test_mixed_list(self):
         from tracker.models import WatchlistItem
         Preference.objects.create(user_id=1, candidate_countries=["US", "GB"])
         m1 = Movie.objects.create(tmdb_id=201, title="Movie One", year=2020)
@@ -371,18 +383,10 @@ class WatchlistReportEndpointTests(TestCase):
         WatchlistItem.objects.create(user_id=1, movie=m1, source="manual")
         WatchlistItem.objects.create(user_id=1, movie=m2, source="manual")
 
-        instance = mock_cache_cls.return_value
-        instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=1)
-
-        def mockread_offers(movie):
-            if movie.tmdb_id == 201:
-                return [
-                    Offer(country="us", service="Netflix", offer_type="subscription", quality="4k", audio_languages=["EN"], subtitle_languages=["EN"]),
-                    Offer(country="gb", service="Prime", offer_type="subscription", quality="hd", audio_languages=["EN"], subtitle_languages=["EN"]),
-                ]
-            return []
-
-        instance.read_offers.side_effect = mockread_offers
+        local_offer(m1, country="US", service="netflix", quality="4k",
+                    audio_languages=["EN"], subtitle_languages=["EN"])
+        local_offer(m1, country="GB", service="prime", quality="hd",
+                    audio_languages=["EN"], subtitle_languages=["EN"])
 
         resp = self.client.get("/api/watchlist/report/")
         self.assertEqual(resp.status_code, 200)
@@ -392,15 +396,14 @@ class WatchlistReportEndpointTests(TestCase):
         row1 = next(r for r in data["report"] if r["movie"]["tmdb_id"] == 201)
         self.assertEqual(row1["available_countries"], ["GB", "US"])
         self.assertEqual(row1["best_country"], "US")
-        self.assertEqual(row1["best_service"], "Netflix")
+        self.assertEqual(row1["best_service"], "netflix")
 
         row2 = next(r for r in data["report"] if r["movie"]["tmdb_id"] == 202)
         self.assertEqual(row2["available_countries"], [])
         self.assertIsNone(row2["best_country"])
         self.assertIsNone(row2["best_service"])
 
-    @patch("tracker.views.AvailabilityCache")
-    def test_summary_analytics_and_deduplication(self, mock_cache_cls):
+    def test_summary_analytics_and_deduplication(self):
         from tracker.models import WatchlistItem
         Preference.objects.create(user_id=1, candidate_countries=["US", "GB", "CA"])
         m1 = Movie.objects.create(tmdb_id=501, title="Movie A", year=2020)
@@ -410,25 +413,20 @@ class WatchlistReportEndpointTests(TestCase):
         WatchlistItem.objects.create(user_id=1, movie=m2, source="manual")
         WatchlistItem.objects.create(user_id=1, movie=m3, source="manual")
 
-        instance = mock_cache_cls.return_value
-        instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=1)
-
-        def mockread_offers(movie):
-            if movie.tmdb_id == 501:
-                return [
-                    Offer(country="us", service="Netflix", offer_type="subscription", quality="4k", audio_languages=["EN"], subtitle_languages=["EN"]),
-                    Offer(country="us", service="Netflix", offer_type="subscription", quality="hd", audio_languages=["EN"], subtitle_languages=["EN"]),
-                    Offer(country="gb", service="Prime", offer_type="subscription", quality="hd", audio_languages=["EN"], subtitle_languages=["EN"]),
-                    Offer(country="us", service="Apple", offer_type="buy", quality="hd", audio_languages=["EN"], subtitle_languages=["EN"]),
-                ]
-            if movie.tmdb_id == 502:
-                return [
-                    Offer(country="us", service="Netflix", offer_type="free", quality="hd", audio_languages=["EN"], subtitle_languages=["EN"]),
-                    Offer(country="ca", service="Apple", offer_type="rent", quality="hd", audio_languages=["EN"], subtitle_languages=["EN"]),
-                ]
-            return []
-
-        instance.read_offers.side_effect = mockread_offers
+        local_offer(m1, country="US", service="netflix", quality="4k",
+                    provider_content_id="n1",
+                    audio_languages=["EN"], subtitle_languages=["EN"])
+        local_offer(m1, country="US", service="netflix", quality="hd",
+                    provider_content_id="n2",
+                    audio_languages=["EN"], subtitle_languages=["EN"])
+        local_offer(m1, country="GB", service="prime", quality="hd",
+                    audio_languages=["EN"], subtitle_languages=["EN"])
+        local_offer(m1, country="US", service="apple", offer_type="buy",
+                    quality="hd", audio_languages=["EN"], subtitle_languages=["EN"])
+        local_offer(m2, country="US", service="netflix", offer_type="free",
+                    quality="hd", audio_languages=["EN"], subtitle_languages=["EN"])
+        local_offer(m2, country="CA", service="apple", offer_type="rent",
+                    quality="hd", audio_languages=["EN"], subtitle_languages=["EN"])
 
         resp = self.client.get("/api/watchlist/report/")
         self.assertEqual(resp.status_code, 200)
@@ -446,14 +444,14 @@ class WatchlistReportEndpointTests(TestCase):
             {"country": "GB", "count": 1},
         ])
 
+        # Services are canonical provider slugs in the read path.
         self.assertEqual(summary["services"], [
-            {"service": "Apple", "count": 2},
-            {"service": "Netflix", "count": 2},
-            {"service": "Prime", "count": 1},
+            {"service": "apple", "count": 2},
+            {"service": "netflix", "count": 2},
+            {"service": "prime", "count": 1},
         ])
 
-    @patch("tracker.views.AvailabilityCache")
-    def test_watchlist_report_actor_and_genre_filters(self, mock_cache_cls):
+    def test_watchlist_report_actor_and_genre_filters(self):
         """Actor (actor_id) and genre filters must match against Movie.cast / genre_ids.
 
         Regression guard: search-by-actor and search-by-category returned nothing
@@ -476,10 +474,6 @@ class WatchlistReportEndpointTests(TestCase):
         WatchlistItem.objects.create(user_id=1, movie=m1, source="manual")
         WatchlistItem.objects.create(user_id=1, movie=m2, source="manual")
 
-        instance = mock_cache_cls.return_value
-        instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=0)
-        instance.read_offers.return_value = []
-
         # Genre filter (by id) should keep only m1.
         resp = self.client.get("/api/watchlist/report/?genre=18")
         self.assertEqual(resp.status_code, 200)
@@ -496,17 +490,12 @@ class WatchlistReportEndpointTests(TestCase):
         resp = self.client.get("/api/watchlist/report/?actor_id=287")
         self.assertEqual([r["movie"]["tmdb_id"] for r in resp.json()["report"]], [702])
 
-    @patch("tracker.views.AvailabilityCache")
-    def test_watchlist_report_with_content_type_filter(self, mock_cache_cls):
+    def test_watchlist_report_with_content_type_filter(self):
         from tracker.models import WatchlistItem
         m1 = Movie.objects.create(tmdb_id=601, title="Movie Title", year=2020, content_type="movie")
         m2 = Movie.objects.create(tmdb_id=602, title="TV Series Title", year=2021, content_type="series")
         WatchlistItem.objects.create(user_id=1, movie=m1, source="manual")
         WatchlistItem.objects.create(user_id=1, movie=m2, source="manual")
-
-        instance = mock_cache_cls.return_value
-        instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=0)
-        instance.read_offers.return_value = []
 
         resp = self.client.get("/api/watchlist/report/?type=series")
         self.assertEqual(resp.status_code, 200)
@@ -529,22 +518,18 @@ class WatchEndpointTests(TestCase):
     def setUp(self):
         self.movie = Movie.objects.create(tmdb_id=1001, title="Test Watch Movie", year=2021)
 
-    @patch("tracker.views.AvailabilityCache")
-    def test_watch_endpoint_returns_found_and_url(self, mock_cache_cls):
+    def test_watch_endpoint_returns_found_and_url(self):
         Preference.objects.create(user_id=1, audio_languages=["EN"], subtitle_languages=["EN"])
-        instance = mock_cache_cls.return_value
-        instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=1)
-        instance.read_offers.return_value = [
-            Offer(
-                country="US",
-                service="netflix",
-                offer_type="subscription",
-                quality="hd",
-                url="https://www.netflix.com/title/123",
-                audio_languages=["EN"],
-                subtitle_languages=["EN"],
-            )
-        ]
+        local_offer(
+            self.movie,
+            country="US",
+            service="netflix",
+            offer_type="subscription",
+            quality="hd",
+            url="https://www.netflix.com/title/123",
+            audio_languages=["EN"],
+            subtitle_languages=["EN"],
+        )
         resp = self.client.get(f"/api/watch/{self.movie.tmdb_id}/")
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
@@ -553,46 +538,39 @@ class WatchEndpointTests(TestCase):
         self.assertEqual(data["movie"]["tmdb_id"], 1001)
         self.assertEqual(data["movie"]["content_type"], "movie")
 
-    @patch("tracker.views.AvailabilityCache")
-    def test_watch_endpoint_prioritizes_subscribed_providers(self, mock_cache_cls):
+    def test_watch_endpoint_prioritizes_subscribed_providers(self):
         Preference.objects.create(user_id=1, audio_languages=["EN"], subtitle_languages=["EN"])
         p_disney = Provider.objects.filter(slug="disney").first()
         if p_disney:
             Subscription.objects.create(user_id=1, provider=p_disney, name="Disney+")
 
-        instance = mock_cache_cls.return_value
-        instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=2)
-        instance.read_offers.return_value = [
-            Offer(
-                country="US",
-                service="netflix",
-                offer_type="subscription",
-                quality="4k",
-                url="https://www.netflix.com/title/123",
-                audio_languages=["EN"],
-                subtitle_languages=["EN"],
-            ),
-            Offer(
-                country="US",
-                service="disney",
-                offer_type="subscription",
-                quality="hd",
-                url="https://www.disneyplus.com/movies/456",
-                audio_languages=["EN"],
-                subtitle_languages=["EN"],
-            ),
-        ]
+        local_offer(
+            self.movie,
+            country="US",
+            service="netflix",
+            offer_type="subscription",
+            quality="4k",
+            url="https://www.netflix.com/title/123",
+            audio_languages=["EN"],
+            subtitle_languages=["EN"],
+        )
+        local_offer(
+            self.movie,
+            country="US",
+            service="disney",
+            offer_type="subscription",
+            quality="hd",
+            url="https://www.disneyplus.com/movies/456",
+            audio_languages=["EN"],
+            subtitle_languages=["EN"],
+        )
         resp = self.client.get(f"/api/watch/{self.movie.tmdb_id}/")
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
         self.assertTrue(data["found"])
         self.assertEqual(data["watch_url"], "https://www.disneyplus.com/movies/456")
 
-    @patch("tracker.views.AvailabilityCache")
-    def test_watch_endpoint_returns_found_false_when_no_valid_url(self, mock_cache_cls):
-        instance = mock_cache_cls.return_value
-        instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=0)
-        instance.read_offers.return_value = []
+    def test_watch_endpoint_returns_found_false_when_no_valid_url(self):
         resp = self.client.get(f"/api/watch/{self.movie.tmdb_id}/")
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
@@ -609,23 +587,19 @@ class WatchEndpointTests(TestCase):
         self.assertFalse(resp.json()["found"])
         self.assertEqual(resp.json()["message"], "Movie not found")
 
-    @patch("tracker.views.AvailabilityCache")
-    def test_watch_endpoint_serves_existing_series_row(self, mock_cache_cls):
-        Movie.objects.create(tmdb_id=1396, title="Breaking Bad", year=2008,
-                             content_type="series")
-        instance = mock_cache_cls.return_value
-        instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=1)
-        instance.read_offers.return_value = [
-            Offer(
-                country="US",
-                service="prime",
-                offer_type="subscription",
-                quality="hd",
-                url="https://www.primevideo.com/detail/1396",
-                audio_languages=["EN"],
-                subtitle_languages=["EN"],
-            )
-        ]
+    def test_watch_endpoint_serves_existing_series_row(self):
+        series = Movie.objects.create(tmdb_id=1396, title="Breaking Bad", year=2008,
+                                      content_type="series")
+        local_offer(
+            series,
+            country="US",
+            service="prime",
+            offer_type="subscription",
+            quality="hd",
+            url="https://www.primevideo.com/detail/1396",
+            audio_languages=["EN"],
+            subtitle_languages=["EN"],
+        )
         resp = self.client.get("/api/watch/1396/")
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
@@ -633,9 +607,8 @@ class WatchEndpointTests(TestCase):
         self.assertEqual(data["watch_url"], "https://www.primevideo.com/detail/1396")
         self.assertEqual(data["movie"]["content_type"], "series")
 
-    @patch("tracker.views.AvailabilityCache")
     @patch("tracker.services.enrichment.TMDbClient")
-    def test_watch_endpoint_resolves_series_when_id_is_not_a_movie(self, mock_tmdb, mock_cache_cls):
+    def test_watch_endpoint_resolves_series_when_id_is_not_a_movie(self, mock_tmdb):
         """An unknown id that TMDb reports as "no such movie" is retried as a series."""
         import requests
 
@@ -649,10 +622,6 @@ class WatchEndpointTests(TestCase):
             requests.HTTPError("404 Client Error", response=not_found),
             TMDbItem(tmdb_id=1396, title="Breaking Bad", year=2008, content_type="series"),
         ]
-
-        instance = mock_cache_cls.return_value
-        instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=0)
-        instance.read_offers.return_value = []
 
         resp = self.client.get("/api/watch/1396/")
         self.assertEqual(resp.status_code, 200)
@@ -861,6 +830,160 @@ class MovieDetailEndpointTests(TestCase):
         self.assertEqual(resp.json()["error"], "movie not found")
 
     @patch("tracker.services.enrichment.TMDbClient")
+    def test_pending_refresh_state_matches_watchlist_report(self, mock_tmdb_cls):
+        from tracker.services.tmdb import TMDbItem
+
+        movie = Movie.objects.create(
+            tmdb_id=776, title="Pending Film", year=2023,
+            poster_path="/poster.jpg", overview="", genres=[], genre_ids=[],
+            cast=[], tmdb_rating=7.0,
+        )
+        mock_tmdb_cls.return_value.details.return_value = TMDbItem(
+            tmdb_id=776, title="Pending Film", year=2023, content_type="movie",
+            overview="", poster_path="/poster.jpg", genres=[], genre_ids=[],
+            cast=[], seasons_data=[], rating=7.0,
+        )
+        WatchlistItem.objects.create(user_id=1, movie=movie, source="manual")
+        RefreshRequest.objects.create(
+            movie=movie, source="watchmode", country="NL",
+            status=RefreshRequestStatus.PENDING,
+        )
+
+        detail = self.client.get(f"/api/prime/movie/{movie.tmdb_id}/").json()
+        report = self.client.get("/api/watchlist/report/").json()
+        report_watchability = next(
+            row["watchability"] for row in report["report"]
+            if row["movie"]["tmdb_id"] == movie.tmdb_id
+        )
+
+        self.assertEqual(detail["watchability"]["status"], "checking")
+        self.assertEqual(
+            detail["watchability"]["status"], report_watchability["status"]
+        )
+        self.assertEqual(
+            detail["watchability"]["refresh_state"],
+            report_watchability["refresh_state"],
+        )
+
+    @patch("tracker.views.request_title_refresh")
+    @patch("tracker.services.enrichment.TMDbClient")
+    def test_country_scoped_scraped_offer_agrees_across_detail_report_and_v2(
+        self, mock_tmdb_cls, _mock_refresh
+    ):
+        from tracker.services.tmdb import TMDbItem
+        from availability.services.legacy_ingest import ingest_scraped_mapping
+
+        movie = Movie.objects.create(
+            tmdb_id=6077, title="Territorial Test", year=2021,
+            poster_path="", overview="", genres=[], genre_ids=[], cast=[],
+        )
+        mock_tmdb_cls.return_value.details.return_value = TMDbItem(
+            tmdb_id=6077, title="Territorial Test", year=2021,
+            content_type="movie", overview="", poster_path="", genres=[],
+            genre_ids=[], cast=[], seasons_data=[], rating=None,
+        )
+        provider, _ = Provider.objects.update_or_create(
+            slug="tivu_play",
+            defaults={
+                "name": "Tivù Play",
+                "category": "bvod",
+                "is_enabled": True,
+                "country_code": "IT",
+            },
+        )
+        Preference.objects.update_or_create(
+            user_id=1,
+            defaults={
+                "current_country": "NL",
+                "candidate_countries": [],
+                "vpn_enabled": False,
+                "audio_languages": ["EN"],
+                "subtitle_languages": ["EN"],
+            },
+        )
+        WatchlistItem.objects.create(user_id=1, movie=movie, source="manual")
+        local_offer(
+            movie, country="US", service="tivu_play", offer_type="free",
+            audio_languages=["EN"], subtitle_languages=["EN"],
+        )
+        mapping = ScrapedContentMapping.objects.create(
+            provider=provider,
+            movie=movie,
+            scraped_title=movie.title,
+            scraped_year=movie.year,
+            scraped_url="https://tivu.example/watch",
+            country_code="US",
+            is_available=True,
+            is_confirmed=True,
+            confidence_score=1.0,
+            raw_payload={"audio_languages": ["EN"], "subtitle_languages": ["EN"]},
+        )
+        ingest_scraped_mapping(mapping)
+
+        detail = self.client.get(
+            f"/api/prime/movie/{movie.tmdb_id}/?current_country=NL"
+        ).json()
+        report = self.client.get(
+            "/api/watchlist/report/?current_country=NL"
+        ).json()
+        report_row = next(
+            row for row in report["report"]
+            if row["movie"]["tmdb_id"] == movie.tmdb_id
+        )
+        v2 = self.client.get(
+            f"/api/v2/unofficial/movie/{movie.tmdb_id}/offers/"
+            "?include_bvod=true&current_country=NL"
+        ).json()
+
+        detail_offers = [o for o in detail["offers"] if o["country"] == "US"]
+        self.assertTrue(detail_offers)
+        [v2_offer] = v2["offers"]
+        for detail_offer in detail_offers:
+            self.assertEqual(detail_offer["territorial_scope"], "country")
+            self.assertEqual(detail_offer["locality"], "out_of_reach")
+            self.assertFalse(detail_offer["is_accessible"])
+        self.assertEqual(detail["watchability"]["status"], "available_elsewhere")
+        self.assertEqual(report_row["watchability"]["status"], "available_elsewhere")
+        self.assertEqual(v2_offer["locality"], detail_offers[0]["locality"])
+        self.assertFalse(v2_offer["is_accessible"])
+
+        Preference.objects.update_or_create(
+            user_id=1,
+            defaults={
+                "current_country": "NL",
+                "candidate_countries": ["US"],
+                "vpn_enabled": True,
+                "audio_languages": ["EN"],
+                "subtitle_languages": ["EN"],
+            },
+        )
+        detail_vpn = self.client.get(
+            f"/api/prime/movie/{movie.tmdb_id}/?current_country=NL"
+        ).json()
+        report_vpn = self.client.get(
+            "/api/watchlist/report/?current_country=NL"
+        ).json()
+        [v2_vpn_offer] = self.client.get(
+            f"/api/v2/unofficial/movie/{movie.tmdb_id}/offers/"
+            "?include_bvod=true&current_country=NL"
+        ).json()["offers"]
+        detail_vpn_offers = [
+            offer for offer in detail_vpn["offers"]
+            if offer["country"] == "US"
+        ]
+        self.assertTrue(detail_vpn_offers)
+        report_vpn_row = next(
+            row for row in report_vpn["report"]
+            if row["movie"]["tmdb_id"] == movie.tmdb_id
+        )
+        self.assertTrue(all(offer["locality"] == "vpn" for offer in detail_vpn_offers))
+        self.assertTrue(all(offer["is_accessible"] for offer in detail_vpn_offers))
+        self.assertEqual(detail_vpn["watchability"]["status"], "available_vpn")
+        self.assertEqual(report_vpn_row["watchability"]["status"], "watchable_vpn")
+        self.assertEqual(v2_vpn_offer["locality"], "vpn")
+        self.assertTrue(v2_vpn_offer["is_accessible"])
+
+    @patch("tracker.services.enrichment.TMDbClient")
     def test_returns_full_detail(self, mock_tmdb_cls):
         from tracker.services.tmdb import TMDbItem
         movie = Movie.objects.create(
@@ -918,22 +1041,19 @@ class MovieDetailEndpointTests(TestCase):
 
 
 class UnifiedCatalogEndpointTests(TestCase):
-    @patch("tracker.views.AvailabilityCache")
-    def test_unified_catalog_merges_official_and_unofficial(self, mock_cache_cls):
+    def test_unified_catalog_merges_official_and_unofficial(self):
+        from availability.services.legacy_ingest import ingest_scraped_mapping
         from tracker.models import ScrapedContentMapping
         m = Movie.objects.create(tmdb_id=101, title="Official Movie", year=2021)
         p = Provider.objects.create(slug="hydra", name="Hydra", category="scraper", is_enabled=True)
-        ScrapedContentMapping.objects.create(
+        mapping = ScrapedContentMapping.objects.create(
             provider=p,
             scraped_title="Scraper Movie",
             scraped_year=2022,
             scraped_url="https://hydra.example/movie",
             is_available=True,
         )
-
-        instance = mock_cache_cls.return_value
-        instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=0)
-        instance.read_offers.return_value = []
+        ingest_scraped_mapping(mapping)
 
         resp = self.client.get("/api/catalog/unified/")
         self.assertEqual(resp.status_code, 200)
@@ -943,23 +1063,28 @@ class UnifiedCatalogEndpointTests(TestCase):
         sources = {item["source"] for item in data["results"]}
         self.assertEqual(sources, {"official", "scraper"})
 
-    @patch("tracker.views.AvailabilityCache")
-    def test_unified_catalog_filters_by_provider(self, mock_cache_cls):
+        scraper_item = next(i for i in data["results"] if i["source"] == "scraper")
+        self.assertEqual(scraper_item["title"], "Scraper Movie")
+        self.assertEqual(scraper_item["year"], 2022)
+        self.assertIsNone(scraper_item["watchability"])
+        self.assertEqual(
+            scraper_item["unofficial_details"]["scraped_url"],
+            "https://hydra.example/movie",
+        )
+
+    def test_unified_catalog_filters_by_provider(self):
+        from availability.services.legacy_ingest import ingest_scraped_mapping
         from tracker.models import ScrapedContentMapping
         Movie.objects.create(tmdb_id=101, title="Official Movie", year=2021)
         p1 = Provider.objects.create(slug="hydra", name="Hydra", category="scraper", is_enabled=True)
         p2 = Provider.objects.create(slug="kissanime", name="KissAnime", category="scraper", is_enabled=True)
 
-        ScrapedContentMapping.objects.create(
+        ingest_scraped_mapping(ScrapedContentMapping.objects.create(
             provider=p1, scraped_title="Hydra Film", scraped_year=2021, scraped_url="https://hydra.ex", is_available=True
-        )
-        ScrapedContentMapping.objects.create(
+        ))
+        ingest_scraped_mapping(ScrapedContentMapping.objects.create(
             provider=p2, scraped_title="Kiss Film", scraped_year=2021, scraped_url="https://kiss.ex", is_available=True
-        )
-
-        instance = mock_cache_cls.return_value
-        instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=0)
-        instance.read_offers.return_value = []
+        ))
 
         resp = self.client.get("/api/catalog/unified/?providers=hydra")
         self.assertEqual(resp.status_code, 200)
@@ -967,26 +1092,12 @@ class UnifiedCatalogEndpointTests(TestCase):
         self.assertEqual(data["count"], 1)
         self.assertEqual(data["results"][0]["provider"]["slug"], "hydra")
 
-    @patch("tracker.services.filtering.AvailabilityCache")
-    def test_unified_catalog_filters_by_quality(self, mock_cache_cls):
+    def test_unified_catalog_filters_by_quality(self):
         m1 = Movie.objects.create(tmdb_id=101, title="4K Movie", year=2021)
         m2 = Movie.objects.create(tmdb_id=102, title="HD Movie", year=2021)
 
-        instance = mock_cache_cls.return_value
-        instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=1)
-
-        def mock_read_offers(movie):
-            if movie.tmdb_id == 101:
-                return [
-                    Offer(country="US", service="netflix", offer_type="subscription", quality="4k", audio_languages=["EN"], subtitle_languages=["EN"])
-                ]
-            if movie.tmdb_id == 102:
-                return [
-                    Offer(country="US", service="prime", offer_type="subscription", quality="hd", audio_languages=["EN"], subtitle_languages=["EN"])
-                ]
-            return []
-
-        instance.read_offers.side_effect = mock_read_offers
+        local_offer(m1, service="netflix", quality="4k", audio_languages=["EN"], subtitle_languages=["EN"])
+        local_offer(m2, service="prime", quality="hd", audio_languages=["EN"], subtitle_languages=["EN"])
 
         resp = self.client.get("/api/catalog/unified/?quality=4k")
         self.assertEqual(resp.status_code, 200)
@@ -994,15 +1105,10 @@ class UnifiedCatalogEndpointTests(TestCase):
         self.assertEqual(data["count"], 1)
         self.assertEqual(data["results"][0]["tmdb_id"], 101)
 
-    @patch("tracker.services.filtering.AvailabilityCache")
-    def test_unified_catalog_filters_by_score_and_sorts(self, mock_cache_cls):
+    def test_unified_catalog_filters_by_score_and_sorts(self):
         Movie.objects.create(tmdb_id=201, title="Movie Low", year=2020, tmdb_rating=5.5)
         Movie.objects.create(tmdb_id=202, title="Movie Mid", year=2022, tmdb_rating=7.5)
         Movie.objects.create(tmdb_id=203, title="Movie High", year=2021, tmdb_rating=8.9)
-
-        instance = mock_cache_cls.return_value
-        instance.get_or_refresh.return_value = MagicMock(refreshed=False, reason="fresh", offers_written=0)
-        instance.read_offers.return_value = []
 
         # Min score filter
         resp = self.client.get("/api/catalog/unified/?score_min=7.0")

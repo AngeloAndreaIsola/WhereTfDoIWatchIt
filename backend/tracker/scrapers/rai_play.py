@@ -4,6 +4,7 @@ import json
 import logging
 import re
 from typing import Optional, Any
+from urllib.parse import urlencode
 
 from tracker.scrapers.base import BaseScraper, ScrapedItem
 
@@ -30,7 +31,7 @@ GEO_BLOCK_PATTERNS = [
 
 class RaiPlayScraper(BaseScraper):
     """Scraper for RaiPlay streaming service (Italy)."""
-    provider_slug = "rai-play"
+    provider_slug = "raiplay"
     country_code = "IT"
 
     def __init__(self, timeout: Optional[int] = None):
@@ -39,7 +40,7 @@ class RaiPlayScraper(BaseScraper):
     def _execute_run(self, query: Optional[str] = None) -> list[ScrapedItem]:
         urls = [RAIPLAY_FILM_URL, RAIPLAY_SERIE_URL]
         if query:
-            urls = [f"https://www.raiplay.it/ricerca?search={query}"]
+            urls = [f"https://www.raiplay.it/ricerca?{urlencode({'search': query})}"]
 
         items: list[ScrapedItem] = []
         seen_weblinks: set[str] = set()

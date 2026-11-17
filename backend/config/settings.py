@@ -7,15 +7,45 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-insecure-secret")
-DEBUG = os.environ.get("DJANGO_DEBUG", "1") == "1"
+_DEV_SECRET_KEY = "dev-insecure-secret"
+
+
+def validate_security_settings(*, secret_key: str, debug: bool) -> None:
+    """Reject an accidental production process with a public placeholder key."""
+    if not debug and secret_key in ("", _DEV_SECRET_KEY, "change-me-in-production"):
+        raise RuntimeError(
+            "DJANGO_SECRET_KEY must be set to a non-placeholder value when DJANGO_DEBUG=0"
+        )
+
+
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", _DEV_SECRET_KEY)
+DEBUG = os.environ.get("DJANGO_DEBUG", "0") == "1"
+
+# A missing key is acceptable only for an explicitly local debug process.  A
+# deployment that accidentally omits its environment file must fail at startup
+# rather than serve sessions, CSRF tokens, and signed values with a public key.
+validate_security_settings(secret_key=SECRET_KEY, debug=DEBUG)
 
 ALLOWED_HOSTS = [
     host.strip()
     for host in os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1,backend").split(",")
     if host.strip()
 ]
+EXTENSION_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get("EXTENSION_ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
+]
 USE_X_FORWARDED_HOST = True
+
+# Internal frontend proxy configuration for containerized local Compose deployments.
+# In docker-compose, Next.js rewrites forward /api requests from the 'frontend' container.
+INTERNAL_FRONTEND_PROXY_HOST = os.environ.get("INTERNAL_FRONTEND_PROXY_HOST", "frontend")
+INTERNAL_FRONTEND_PROXY_IPS = [
+    ip.strip()
+    for ip in os.environ.get("INTERNAL_FRONTEND_PROXY_IPS", "").split(",")
+    if ip.strip()
+]
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -27,6 +57,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "django.contrib.postgres",
     "tracker",
+    "availability",
 ]
 
 MIDDLEWARE = [
@@ -127,9 +158,62 @@ REST_FRAMEWORK = {
 
 APPEND_SLASH = False
 
+# Container log visibility.
+#
+# Django's stock logging config puts a RequireDebugTrue filter on the console
+# handler. Deployments run with DJANGO_DEBUG=0, so every application record was
+# dropped: the handler still counted as "found", which also suppressed Python's
+# last-resort WARNING output. Operational events such as RaiPlay's
+# ``rai_play_walk_resume`` therefore never appeared in ``docker compose logs``
+# and could only be captured by attaching a private handler.
+#
+# One explicit config covers every container because the backend, title worker
+# and catalogue worker are all Django processes importing this module. Unrelated
+# components keep the WARNING default; only the RaiPlay source logger is raised
+# to INFO. ``propagate: False`` on that logger keeps each event to a single line
+# rather than emitting it again through the root handler.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "container": {
+            "format": "%(asctime)s %(levelname)s %(name)s %(message)s",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "container",
+        },
+    },
+    "loggers": {
+        # Django installs its own INFO default for this logger before applying
+        # the dict below; state WARNING explicitly so framework chatter stays
+        # out of ordinary logs. Errors still reach the root console handler.
+        "django": {
+            "handlers": [],
+            "level": "WARNING",
+            "propagate": True,
+        },
+        "availability.sources.rai_play": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": "WARNING",
+    },
+}
+
 # External API keys (set via env or docker-compose env_file).
 TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "")
 RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "")
+# Watchmode aggregator API key. Read from the environment like the other
+# provider keys and never hard-coded; an empty value makes the source raise
+# an explicit auth error rather than silently report no availability.
+WATCHMODE_API_KEY = os.environ.get("WATCHMODE_API_KEY", "")
 
 # Hardcoded default preferences (v0): server-side source of truth until the
 # frontend preferences UI is enabled. These are returned by
@@ -142,10 +226,18 @@ DEFAULT_PREFERENCE = {
     "accept_any_subtitle": False,
 }
 
-# When True, cache misses for /api/prime/movie/<id>/ trigger a live Streaming
-# Availability API call. When False, only cached rows are returned.
-PRIME_LIVE_FETCH = os.environ.get("PRIME_LIVE_FETCH", "true").lower() == "true"
-
 # The provider the Prime Video endpoints filter on. This is the stable
 # Streaming Availability *service id* ("prime"), not the display name.
 DEFAULT_PREFERENCE_PROVIDER = os.environ.get("DEFAULT_PREFERENCE_PROVIDER", "prime")
+
+# RaiPlay operational bounds (worker/cron default: None = must be explicitly configured)
+RAIPLAY_MAX_CONTENTS = (
+    int(os.environ["RAIPLAY_MAX_CONTENTS"])
+    if os.environ.get("RAIPLAY_MAX_CONTENTS")
+    else None
+)
+RAIPLAY_MAX_HTTP_REQUESTS = (
+    int(os.environ["RAIPLAY_MAX_HTTP_REQUESTS"])
+    if os.environ.get("RAIPLAY_MAX_HTTP_REQUESTS")
+    else None
+)

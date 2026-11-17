@@ -1,0 +1,240 @@
+{
+ "content": [
+  {
+   "lineups": [
+    {
+     "items": [
+      {
+       "callToActionTitle": "Watch",
+       "closedCaptionAvailable": true,
+       "completionTime": 6310000,
+       "description": "In the 1980s Beirut, Mason Skiles is a former U.S. diplomat who is called back into service to save a colleague from the group that is possibly responsible for his own family's death. Meanwhile, a CIA field agent who is working undercover at the American embassy is tasked with keeping Mason alive and ensuring that the mission is a success. Starring Jon Hamm, Rosamund Pike.",
+       "episodeNumber": 1,
+       "formattedIdMedia": "996277",
+       "idMedia": 996277,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_beirut_thumbnail_v01.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "infoTitle": "2018",
+       "isPlaybackStatusSupported": true,
+       "mediaType": "Episode",
+       "metadata": {
+        "availabilityDate": "2026-09-25",
+        "copyright": "",
+        "country": "Canada",
+        "credits": [
+         {
+          "peoples": "Brad Anderson",
+          "title": "Director(s)"
+         },
+         {
+          "peoples": "Jon Hamm, Jay Potter, Rosamund Pike",
+          "title": "Actor(s)"
+         }
+        ],
+        "duration": 6570,
+        "media": {
+         "availabilityDate": "2026-09-25",
+         "copyright": "",
+         "country": "Canada",
+         "credits": [
+          {
+           "peoples": "Brad Anderson",
+           "title": "Director(s)"
+          },
+          {
+           "peoples": "Jon Hamm, Jay Potter, Rosamund Pike",
+           "title": "Actor(s)"
+          }
+         ],
+         "duration": 6570,
+         "productionYear": 2018,
+         "rating": "18+"
+        },
+        "productionYear": 2018,
+        "rating": "18+"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:member",
+        "tier": "Member"
+       },
+       "tier": "Member",
+       "title": "1. Beirut",
+       "type": "Media",
+       "uniqueIdentifier": "EPISODE2425277645",
+       "url": "beirut/s01e01",
+       "videoDescriptionAvailable": false
+      }
+     ],
+     "permission": {
+      "catalog": "Gem",
+      "requiredScope": "gem:member",
+      "tier": "Member"
+     },
+     "seasonNumber": 1,
+     "selectedTrailerUrl": "beirut/s01b01",
+     "tier": "Member",
+     "title": "Season 1",
+     "url": "beirut/s01"
+    }
+   ]
+  },
+  {
+   "lineups": [
+    {
+     "items": [
+      {
+       "callToActionTitle": "Trailer",
+       "closedCaptionAvailable": true,
+       "completionTime": 136000,
+       "description": "Caught in the crossfires of civil war, CIA operatives must send a former U.S. diplomat to negotiate for the life of a friend he left behind.",
+       "episodeNumber": 1,
+       "formattedIdMedia": "996793",
+       "idMedia": 996793,
+       "images": {
+        "card": {
+         "size": "Normal",
+         "url": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_beirutt01_thumbnail_v01.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+        }
+       },
+       "infoTitle": "",
+       "isPlaybackStatusSupported": false,
+       "links": {
+        "action": "Exit"
+       },
+       "mediaType": "Trailer",
+       "metadata": {
+        "availabilityDate": "2026-09-24",
+        "copyright": "",
+        "country": "Canada",
+        "credits": [
+         {
+          "peoples": "Brad Anderson",
+          "title": "Director(s)"
+         },
+         {
+          "peoples": "Jon Hamm, Jay Potter, Rosamund Pike",
+          "title": "Actor(s)"
+         }
+        ],
+        "duration": 146,
+        "media": {
+         "availabilityDate": "2026-09-24",
+         "copyright": "",
+         "country": "Canada",
+         "credits": [
+          {
+           "peoples": "Brad Anderson",
+           "title": "Director(s)"
+          },
+          {
+           "peoples": "Jon Hamm, Jay Potter, Rosamund Pike",
+           "title": "Actor(s)"
+          }
+         ],
+         "duration": 146,
+         "rating": "18+"
+        },
+        "rating": "18+"
+       },
+       "permission": {
+        "catalog": "Gem",
+        "requiredScope": "gem:standard",
+        "tier": "Standard"
+       },
+       "tier": "Standard",
+       "title": "Trailer",
+       "type": "Trailer",
+       "uniqueIdentifier": "EPISODE2425278857",
+       "url": "beirut/s01b01",
+       "videoDescriptionAvailable": true
+      }
+     ],
+     "permission": {
+      "catalog": "Gem",
+      "requiredScope": "gem:standard",
+      "tier": "Standard"
+     },
+     "seasonNumber": 1,
+     "selectedTrailerUrl": "beirut/s01b01",
+     "tier": "Standard",
+     "title": "Season 1",
+     "url": "beirut/s01"
+    }
+   ],
+   "seasonTitle": "Extras",
+   "title": "Extras"
+  }
+ ],
+ "contentType": "Standalone",
+ "description": "In the 1980s Beirut, Mason Skiles is a former U.S. diplomat who is called back into service to save a colleague from the group that is possibly responsible for his own family's death. Meanwhile, a CIA field agent who is working undercover at the American embassy is tasked with keeping Mason alive and ensuring that the mission is a success. Starring Jon Hamm, Rosamund Pike.",
+ "hasOnlyATrailer": false,
+ "images": {
+  "background": {
+   "size": "Normal",
+   "url": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_beirut_ott_background_v01.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75"
+  },
+  "logo": {
+   "size": "Bigger",
+   "url": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_beirut_ott_logo_v01.png?impolicy=ott&im=Resize=(_Size_)&quality=75"
+  }
+ },
+ "requestedType": "Show",
+ "selectedUrl": "beirut/s01e01",
+ "structuredMetadata": {
+  "@context": "http://schema.org",
+  "@type": "Movie",
+  "abstract": "In the 1980s Beirut, Mason Skiles is a former U.S. diplomat who is called back into service to save a colleague from the group that is possibly responsible for his own family's death. Meanwhile, a CIA field agent who is working undercover at the American embassy is tasked with keeping Mason alive and ensuring that the mission is a success. Starring Jon Hamm, Rosamund Pike.",
+  "actor": [
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Jon Hamm"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Jay Potter"
+   },
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Rosamund Pike"
+   }
+  ],
+  "author": [],
+  "contentRating": "18+",
+  "countryOfOrigin": {
+   "@context": "http://schema.org",
+   "@type": "Country",
+   "name": "Canada"
+  },
+  "dateCreated": "2018-01-01T00:00:00",
+  "datePublished": "2026-09-25T13:00:00Z",
+  "director": [
+   {
+    "@context": "http://schema.org",
+    "@type": "Person",
+    "name": "Brad Anderson"
+   }
+  ],
+  "duration": "PT1H49M",
+  "genre": [
+   "Action et aventure"
+  ],
+  "image": "https://images.gem.cbc.ca/v1/synps-cbc/episode/perso/cbc_beirut_ott_background_v01.jpg?impolicy=ott&im=Resize=(_Size_)&quality=75",
+  "inLanguage": "en-CA",
+  "name": "Beirut",
+  "producer": [],
+  "trailer": {
+   "@context": "http://schema.org",
+   "@type": "VideoObject"
+  },
+  "url": "https://gem.cbc.ca/beirut"
+ },
+ "title": "Beirut"
+}

@@ -1,15 +1,14 @@
-"""Seed unofficial scraping providers (RaiPlay, BBC, NHK) and create regions."""
+"""Seed imported scraper providers."""
 from __future__ import annotations
 
 from django.core.management.base import BaseCommand
 from tracker.models import Provider, ProviderCategory
 
 # Unofficial / priority scraper sources per docs/PLAN.md Phase A/B.
-# NOTE: bbc_iplayer, rai-play and nhk are seeded as Free Streaming Providers by
-# the migrations (0011 / 0014 / 0018) — they are public broadcasters, not scrapers.
-# This command only seeds the small imported scraper sources (KissKH, HydraHD,
-# AnimeWorld, StreamingCommunity, CineBlog01, AltaDefinizione) when missing;
-# it will not downgrade a Free provider back to scraper.
+# NOTE: bbc_iplayer, raiplay and nhk_world are seeded as Free Streaming
+# Providers by the migrations (0011 / 0014 / 0018) — they are public
+# broadcasters, not scrapers. This command only seeds unofficial imported
+# scraper providers when missing; it will not downgrade a Free provider.
 UNOFFICIAL_PROVIDERS = [
     {"slug": "kisskh", "name": "KissKH", "country": "", "domain": "kisskh.co", "url": "https://kisskh.co"},
     {"slug": "hydrahd", "name": "HydraHD", "country": "", "domain": "hydrahd.org", "url": "https://hydrahd.org"},
@@ -21,7 +20,7 @@ UNOFFICIAL_PROVIDERS = [
 
 
 class Command(BaseCommand):
-    help = "Seed unofficial scraping providers (RaiPlay, BBC, NHK)."
+    help = "Seed imported unofficial scraper providers."
 
     def handle(self, *args, **options):
         created_prov = 0
@@ -42,11 +41,13 @@ class Command(BaseCommand):
                 created_prov += 1
                 self.stdout.write(self.style.SUCCESS(f"Created provider: {info['name']}"))
             else:
-                # Ensure category is SCRAPER even if the provider already existed.
                 if provider.category != ProviderCategory.SCRAPER:
-                    provider.category = ProviderCategory.SCRAPER
-                    provider.save(update_fields=["category"])
-                    self.stdout.write(self.style.WARNING(f"Updated {info['name']} to SCRAPER category"))
+                    self.stdout.write(
+                        self.style.WARNING(
+                            f"Skipped {info['name']}: existing category "
+                            f"{provider.category} is preserved"
+                        )
+                    )
 
         self.stdout.write(
             self.style.SUCCESS(f"Done. Providers created: {created_prov}")
