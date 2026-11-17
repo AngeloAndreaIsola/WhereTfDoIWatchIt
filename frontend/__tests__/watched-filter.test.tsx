@@ -143,6 +143,22 @@ describe("Watched filter", () => {
       ]);
     });
 
+    it("can hide the watched selector for a page that is already watched-only", () => {
+      render(
+        React.createElement(FilterBar, {
+          filters: { ...BASE_FILTERS },
+          onChange: vi.fn(),
+          showWatchedFilter: false,
+        })
+      );
+
+      expect(screen.queryByLabelText("Watched status")).toBeNull();
+      // Hiding one filter must not disable the rest of the bar.
+      expect(
+        screen.getByRole("button", { name: "Apply filters" })
+      ).toBeInTheDocument();
+    });
+
     it("emits watched / unwatched when selected", async () => {
       const user = userEvent.setup();
 
