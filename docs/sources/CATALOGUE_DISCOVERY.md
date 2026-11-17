@@ -1041,3 +1041,69 @@ label these separately as “Pending classification” and “active mappings”
 20 focused ProviderGrid and subscriptions tests passed after that label change.
 No availability offers were created. The inventory is live and still pending
 classification; catalogue coverage remains partial.
+
+## Resumable discovery operations (2026-11-17)
+
+Discovery now has independent `historical` and `incremental` cursors. The
+legacy CLI mode `full` remains an alias for historical backfill. Historical
+runs resume after their last committed page and keep a per-page checkpoint;
+incremental runs rescan a configurable overlap window (default three pages)
+and store page fingerprints and identities separately. Completing the latest
+window does not change historical progress or claim catalogue completeness.
+AnimeWorld remains an incremental RSS snapshot only and reports
+`official_rss_snapshot_not_full_archive`; it does not claim historical RSS
+coverage.
+
+The existing `refresh_worker` catalogue lane can invoke the lightweight
+scheduler using `UNOFFICIAL_CATALOGUE_DISCOVERY_SCHEDULES`. The variable is
+empty by default, so recurring discovery is disabled. When explicitly
+configured, each provider and mode can be enabled independently with separate
+intervals, request budgets, delays, retry limits and overlap sizes. The
+scheduler honors stored cooldowns, uses the existing provider-scoped run lock,
+and isolates a provider/mode failure from other scheduled runs. Long
+`Retry-After` values persist a cooldown instead of keeping a worker sleeping.
+No worker schedule was enabled as part of this change.
+
+### Bounded live runs
+
+The live baseline before these runs was 4,903 pending discoveries, 3,300
+legacy scraped mappings, zero canonical movies, zero `ProviderContent`, zero
+`ContentMapping`, and zero offers. No migration was run. Using the existing
+guarded discovery command against the running backend, the following
+sequential requests were made:
+
+| Provider/mode | Pages visited | Requests dispatched | Inserted | Updated | Existing identities (unchanged) | Result |
+|---|---|---:|---:|---:|---:|---|
+| HydraHD historical, movies | 129–132 | 5 | 96 | 0 | 0 | PARTIAL; no gaps or terminal evidence |
+| HydraHD historical, TV | 74–77 | 5 | 96 | 0 | 0 | PARTIAL; no gaps or terminal evidence |
+| HydraHD incremental, movies | 1–2 | 3 | 0 | 48 | 48 (0) | Two-page overlap complete |
+| HydraHD incremental, TV | 1–2 | 3 | 0 | 48 | 48 (0) | Two-page overlap complete |
+| AnimeWorld RSS incremental | snapshot 1 | 2 | 0 | 0 | 15 (15) | PARTIAL RSS snapshot |
+
+Request counts include the one `robots.txt` check for each run. The 96
+incremental updates reflect differences between currently listed records and
+their stored discovery metadata; no new identities resulted from refresh.
+The feed replay was idempotent. The live inventory is now **5,095 pending
+records**: 5,016 HydraHD and 79 AnimeWorld. The historical HydraHD cursor is
+Movies 132 and TV 77; the separate incremental cursor has a completed
+two-page window for both partitions. AnimeWorld's incremental RSS checkpoint
+is snapshot page 1. All provider states remain `PARTIAL`; HydraHD navigation
+maxima moved to 135 (movies) and 80 (TV), which is not terminal evidence.
+
+Read-only post-run checks found the original **3,300 scraped mappings** still
+present, zero canonical movies, zero `ProviderContent`, zero
+`ContentMapping`, and zero offers. All 5,095 discovery rows are still pending
+classification. `/api/providers/` exposes the separate discovery count,
+pending count, mode checkpoints, last sync, and coverage/error state; the
+provider cards keep pending records distinct from active mappings and
+availability. The public API view showed HydraHD at 5,016 pending and
+AnimeWorld at 79 pending. No TMDb association or availability offer was
+created.
+
+The scheduler and independent cursor behavior are covered by focused tests for
+resumption, interruption, overlap, changing page contents, replay, lock
+contention, cooldown, and provider failure isolation. The full isolated
+backend suite passed (3,279 tests); the frontend suite passed (305 tests in 37
+files). `makemigrations --check --dry-run` reported no model changes. The
+catalogue remains partial because HydraHD has no verified fixed total or
+terminal-page signal. No provider crawl is scheduled automatically.

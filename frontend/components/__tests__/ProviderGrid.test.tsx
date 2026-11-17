@@ -70,16 +70,22 @@ describe("ProviderGrid Component", () => {
         inventory_count: 12,
         pending_classification_count: 12,
         last_successful_sync: new Date(Date.now() - 60_000).toISOString(),
-        last_scanned_pages: { movies: 8, "tv-shows": 3 },
+        historical_checkpoint: { movies: 8 },
+        incremental_checkpoint: { movies: 2 },
         coverage_status: "PARTIAL",
         error: "HTTP 451",
+        new_discoveries_last_run: 4,
+        duplicate_identities_last_run: 3,
+        failed_pages_last_run: [{ partition: "movies", page: 9 }],
       },
     };
     render(<ProviderGrid providers={[provider]} onToggle={vi.fn()} />);
 
     expect(screen.getByText("0 active mappings")).toBeInTheDocument();
     expect(screen.getByText("Pending classification 12 · 12 discovered")).toBeInTheDocument();
-    expect(screen.getByText("Checkpoint movies 8 · tv-shows 3")).toBeInTheDocument();
+    expect(screen.getByText("Historical movies 8")).toBeInTheDocument();
+    expect(screen.getByText("Incremental movies 2")).toBeInTheDocument();
+    expect(screen.getByText("Last run +4 · 3 repeated identities · 1 failed pages")).toBeInTheDocument();
     expect(screen.getByText("Coverage partial")).toBeInTheDocument();
     expect(screen.getByText("HTTP 451")).toBeInTheDocument();
   });

@@ -10,7 +10,8 @@ import re
 import time
 import hashlib
 import json
-from datetime import datetime, timezone
+from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlsplit, urlunsplit
 from urllib.robotparser import RobotFileParser
@@ -18,6 +19,8 @@ from urllib.robotparser import RobotFileParser
 import requests
 
 from django.utils import timezone as django_timezone
+from django.db import transaction
+from django.db.models import Count
 
 from tracker.models import CatalogueDiscoveryState, DiscoveredCatalogueRecord, KissKHPendingClassification, Provider
 from tracker.scrapers import resolve_scraper_class
@@ -36,6 +39,10 @@ PROVENANCE_BLOCKED = {
     "altadefinizione": "PROVENANCE_UNVERIFIED: current .ink candidate is not linked to the provider; the cited AGCOM host is distinct",
     "streamingcommunity": "PROVENANCE_UNVERIFIED: current .army candidate has no corroborated provider-domain linkage",
 }
+DISCOVERY_MODE_KEYS = {"full": "historical", "historical": "historical", "incremental": "incremental", "targeted": "targeted"}
+SCHEDULED_DISCOVERY_PROVIDERS = {"hydrahd", "animeworld"}
+DEFAULT_INCREMENTAL_OVERLAP_PAGES = 3
+MAX_INLINE_RETRY_AFTER_SECONDS = 30.0
 
 
 class _RequestBudgetReached(BaseException):
@@ -132,6 +139,7 @@ def _same_persisted_observation(mapping, item):
     )
 
 
+@transaction.atomic
 def _persist_unclassified_observation(*, provider, item, partition):
     """Persist provider evidence without projecting an inferred media type."""
     payload = item.raw_payload if isinstance(item.raw_payload, dict) else {}
@@ -197,6 +205,41 @@ def _persist_unclassified_observation(*, provider, item, partition):
         update_fields.append("provider_native_id")
     prior.save(update_fields=update_fields)
     return "updated"
+
+
+def _mode_cursors(state):
+    """Return the root cursor and mode cursors, migrating legacy state in memory.
+
+    Before separate modes existed, ``cursor`` itself held the historical walk.
+    Preserve that cursor under the mode the provider last used; the caller
+    writes the versioned structure only when it commits discovery progress.
+    """
+    root = deepcopy(state.cursor or {}) if state else {}
+    modes = root.get("modes")
+    if isinstance(modes, dict):
+        return root, modes
+    legacy = {key: value for key, value in root.items() if key != "modes"}
+    modes = {}
+    if legacy:
+        prior_mode = getattr(state, "mode", "full")
+        mode_key = "incremental" if prior_mode == "incremental" else "historical"
+        modes[mode_key] = legacy
+    root["modes"] = modes
+    return root, modes
+
+
+def _checkpoint_root(root, modes, mode_key, cursor):
+    modes[mode_key] = cursor
+    root["modes"] = modes
+    # Keep the legacy top-level view aligned with historical progress for
+    # existing API clients and operational scripts.
+    if mode_key == "historical":
+        for key in ("done", "parts", "fingerprints", "navigation_max", "reported_totals", "total_pages"):
+            if key in cursor:
+                root[key] = deepcopy(cursor[key])
+            else:
+                root.pop(key, None)
+    return root
 
 
 def _parts(slug):
@@ -306,11 +349,23 @@ def _page(scraper, slug, part, page, query=None):
     return None, False, None, "unsupported_provider"
 
 
-def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, retry_limit=1, dry_run=False, targeted_query=None, partition=None):
+def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, retry_limit=1, dry_run=False, targeted_query=None, partition=None, overlap_pages=DEFAULT_INCREMENTAL_OVERLAP_PAGES):
     slug = (provider_slug or "").lower()
     if slug not in PROVIDERS: raise ValueError(f"Unsupported provider: {slug}")
+    if mode not in DISCOVERY_MODE_KEYS: raise ValueError(f"Unsupported discovery mode: {mode}")
     if request_budget < 1: raise ValueError("request_budget must be positive")
     if retry_limit < 0: raise ValueError("retry_limit cannot be negative")
+    if overlap_pages < 1: raise ValueError("overlap_pages must be positive")
+    mode_key = DISCOVERY_MODE_KEYS[mode]
+    if slug == "animeworld" and mode == "full":
+        # Compatibility for older callers: a former `full` RSS invocation is
+        # now explicitly an incremental snapshot and remains PARTIAL.
+        mode = "incremental"
+        mode_key = "incremental"
+    if slug == "animeworld" and mode_key == "historical":
+        raise ValueError("AnimeWorld exposes a recent RSS snapshot only; use incremental mode")
+    if mode_key == "incremental" and slug != "animeworld" and slug != "hydrahd":
+        raise ValueError(f"Incremental discovery is not enabled for {slug}")
     lock_name = f"unofficial-catalogue:{slug}"
     if not try_source_lock(lock_name):
         raise RuntimeError(f"A discovery run is already active for {slug}")
@@ -356,6 +411,10 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                     if attempt >= retry_limit:
                         raise _HttpFailure(status, retry_after)
                     wait = _retry_after_seconds(retry_after)
+                    if wait is not None and wait > MAX_INLINE_RETRY_AFTER_SECONDS:
+                        # Defer long cooldowns to the next scheduled tick rather
+                        # than holding a worker process asleep for minutes.
+                        raise _HttpFailure(status, retry_after)
                     if wait is None: wait = delay * (2 ** attempt)
                     if wait: time.sleep(wait)
                     continue
@@ -408,18 +467,37 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
             state = CatalogueDiscoveryState.objects.filter(provider=provider).first()
         else:
             state, _ = CatalogueDiscoveryState.objects.get_or_create(provider=provider)
-        cursor = dict(state.cursor or {}) if mode == "full" and state else {}
-        if mode == "full" and state and state.status == "COMPLETED":
-            cursor = {}  # an explicit full run after completion is a fresh reconciliation
+        root_cursor, mode_cursors = _mode_cursors(state)
+        cursor = deepcopy(mode_cursors.get(mode_key) or {})
+        if mode_key == "historical" and state and state.status == "COMPLETED":
+            cursor = {}  # an explicit historical run after completion is a fresh reconciliation
         if slug == "hydrahd" and cursor.get("total_pages"):
             # Earlier runs treated the largest visible next-page link as a
             # stable total. Preserve it as navigation evidence, not a total.
             cursor.setdefault("navigation_max", {}).update(cursor.pop("total_pages"))
+        if mode_key == "incremental" and slug == "hydrahd" and cursor.get("window_complete"):
+            windows_completed = int(cursor.get("windows_completed", 0))
+            last_started = cursor.get("last_run_started_at")
+            page_fingerprints = cursor.get("page_fingerprints", {})
+            page_identities = cursor.get("page_identities", {})
+            cursor = {
+                "parts": {}, "done": [], "window_complete": False,
+                "windows_completed": windows_completed,
+                "last_run_started_at": last_started,
+                "page_fingerprints": page_fingerprints,
+                "page_identities": page_identities,
+            }
+        baseline_page_identities = deepcopy(cursor.get("page_identities", {}))
         report = {
-            "status": "RUNNING", "mode": mode, "pages_discovered": 0,
+            "status": "RUNNING", "mode": mode_key, "pages_discovered": 0,
             "pages_scanned": 0, "pages_remaining": None, "items_seen": 0,
             "items_unique": 0, "items_inserted": 0, "items_updated": 0,
             "items_unchanged": 0, "duplicates_skipped": 0, "errors": 0,
+            "duplicate_identities": 0, "new_unique_titles": 0,
+            "failed_pages": [], "navigation_anomalies": [],
+            "page_gaps": [], "terminal_page_evidence": [],
+            "pagination_shifts": [], "items_shifted_between_pages": 0,
+            "pages_by_partition": {}, "page_ranges": {},
             "items_pending_classification": 0, "pending_inserted": 0,
             "pending_updated": 0, "pending_unchanged": 0,
             "pagination_total_changes": [],
@@ -429,15 +507,33 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
             "last_successful_checkpoint": None, "last_success_at": None,
             "last_error": "",
         }
+        if mode_key == "incremental" and slug == "hydrahd":
+            report["overlap_pages"] = overlap_pages
         known_pages_by_part = {}
         started = django_timezone.now()
         if not dry_run:
-            state.status, state.mode, state.started_at = "RUNNING", mode, started
+            cursor["last_run_started_at"] = started.isoformat()
+            root_cursor = _checkpoint_root(root_cursor, mode_cursors, mode_key, cursor)
+            previous_mode_reports = deepcopy((state.report or {}).get("mode_reports", {}))
+            state.status, state.mode, state.started_at = "RUNNING", ("full" if mode_key == "historical" else mode_key), started
             state.last_error = ""
-            state.report = report
+            state.report = {**report, "mode_reports": previous_mode_reports}
+            state.cursor = root_cursor
             state.save()
         completed_parts = set(cursor.get("done", []))
         seen_native_partitions = {}
+        active_page = None
+
+        def save_cursor_checkpoint():
+            nonlocal root_cursor
+            root_cursor = _checkpoint_root(root_cursor, mode_cursors, mode_key, cursor)
+            mode_reports = deepcopy((state.report or {}).get("mode_reports", {}))
+            mode_reports[mode_key] = deepcopy(report)
+            state.cursor = root_cursor
+            state.report = {**report, "mode_reports": mode_reports}
+            state.last_successful_checkpoint = django_timezone.now()
+            state.save(update_fields=["cursor", "report", "last_successful_checkpoint", "updated_at"])
+
         try:
             if mode == "targeted":
                 # Existing provider search adapters are real search routes for
@@ -483,6 +579,7 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                 if part in completed_parts: continue
                 page = 1 if slug == "animeworld" else int((cursor.get("parts") or {}).get(part, 0)) + 1
                 while requests_made < request_budget:
+                    active_page = (part, page)
                     try:
                         rows, terminal, total_pages, evidence = _page(scraper, slug, part, page, targeted_query)
                     except _RequestBudgetReached:
@@ -494,6 +591,7 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                             report["errors"] += 1
                             report["status"] = "PARTIAL"
                             report["last_error"] = f"{part}: HTTP 404 is not verified as a terminal page"
+                            report["failed_pages"].append({"partition": part, "page": page, "status": exc.status})
                             break
                         if exc.status == 404 and page > 1:
                             rows, terminal = [], True
@@ -503,11 +601,18 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                             report["errors"] += 1
                             report["status"] = "BLOCKED" if exc.status in (403, 429) else "FAILED"
                             report["last_error"] = f"HTTP {exc.status}"
+                            report["failed_pages"].append({"partition": part, "page": page, "status": exc.status})
+                            if exc.retry_after is not None:
+                                report["retry_after"] = exc.retry_after
+                                retry_seconds = _retry_after_seconds(exc.retry_after)
+                                if retry_seconds is not None:
+                                    report["cooldown_until"] = (django_timezone.now() + timedelta(seconds=retry_seconds)).isoformat()
                             raise RuntimeError(report["last_error"]) from exc
                     if rows is None:
                         report["errors"] += 1
                         report["status"] = "BLOCKED"
                         report["last_error"] = evidence
+                        report["failed_pages"].append({"partition": part, "page": page, "evidence": evidence})
                         raise RuntimeError(evidence)
                     pending_rows = list(getattr(rows, "pending", []))
                     response_total = getattr(rows, "total_count", None)
@@ -523,6 +628,12 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                     observed_count = len(rows) + len(pending_rows)
                     report["pages_scanned"] += 1
                     report["items_seen"] += observed_count
+                    visited_pages = report["pages_by_partition"].setdefault(part, [])
+                    if visited_pages and page != visited_pages[-1] + 1:
+                        report["page_gaps"].append({"partition": part, "after": visited_pages[-1], "before": page})
+                    visited_pages.append(page)
+                    prior_range = report["page_ranges"].get(part)
+                    report["page_ranges"][part] = [page, page] if prior_range is None else [min(prior_range[0], page), max(prior_range[1], page)]
                     if total_pages is not None:
                         known_pages_by_part[part] = total_pages
                         cursor.setdefault("total_pages", {})[part] = total_pages
@@ -531,6 +642,8 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                         if nav_match:
                             navigation_max = int(nav_match.group(1))
                             report.setdefault("navigation_max_observed", {})[part] = navigation_max
+                            if navigation_max < page + 1:
+                                report["navigation_anomalies"].append({"partition": part, "page": page, "navigation_max": navigation_max, "evidence": "no_forward_page_link"})
                             if observed_count:
                                 cursor.setdefault("navigation_max", {})[part] = navigation_max
                         if observed_count == 0:
@@ -552,6 +665,27 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                         fingerprint_ids,
                         separators=(",", ":"),
                     ).encode("utf-8")).hexdigest()
+                    if mode_key == "incremental" and slug == "hydrahd":
+                        page_key = str(page)
+                        page_fingerprints = cursor.setdefault("page_fingerprints", {}).setdefault(part, {})
+                        prior_page_fingerprint = page_fingerprints.get(page_key)
+                        identity_values = [
+                            normalize_catalogue_url(slug, item.source_url) or str((item.raw_payload or {}).get("id") or item.title)
+                            for item in rows
+                        ]
+                        prior_page_identities = cursor.setdefault("page_identities", {}).setdefault(part, {})
+                        for other_page, other_ids in baseline_page_identities.get(part, {}).items():
+                            if other_page == page_key:
+                                continue
+                            shifted = set(identity_values) & set(other_ids)
+                            if shifted:
+                                report["items_shifted_between_pages"] += len(shifted)
+                                if len(report.setdefault("pagination_shifts", [])) < 50:
+                                    report["pagination_shifts"].append({"partition": part, "from_page": int(other_page), "to_page": page, "items": len(shifted)})
+                        if prior_page_fingerprint and prior_page_fingerprint != fingerprint:
+                            report["pagination_shifts"].append({"partition": part, "page": page, "evidence": "same_page_fingerprint_changed"})
+                        page_fingerprints[page_key] = fingerprint
+                        prior_page_identities[page_key] = identity_values
                     previous_fingerprint = (cursor.get("fingerprints") or {}).get(part)
                     if observed_count and not terminal and previous_fingerprint == fingerprint:
                         report["duplicates_skipped"] += observed_count
@@ -648,6 +782,8 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                                     provider=provider, item=item, partition=part
                                 )
                                 report[f"items_{outcome}"] += 1
+                                if outcome != "inserted":
+                                    report["duplicate_identities"] += 1
                                 report["items_pending_classification"] += 1
                                 continue
                             prior = None
@@ -685,17 +821,18 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                             "feed_last_build_date": getattr(scraper, "feed_last_build_date", None),
                             "records_observed": observed_count,
                         }
-                        state.cursor, state.report = cursor, report
-                        state.last_successful_checkpoint = django_timezone.now()
-                        state.save(update_fields=["cursor", "report", "last_successful_checkpoint", "updated_at"])
+                        cursor.setdefault("snapshots", {})[part]["last_synced_at"] = django_timezone.now().isoformat()
+                        save_cursor_checkpoint()
                     if not dry_run and not pagination_is_partial:
                         cursor.setdefault("parts", {})[part] = page
                         cursor.setdefault("fingerprints", {})[part] = fingerprint
-                        if terminal: completed_parts.add(part)
+                        if terminal:
+                            report["terminal_page_evidence"].append({"partition": part, "page": page, "evidence": evidence})
+                        if terminal and mode_key == "historical": completed_parts.add(part)
+                        if mode_key == "incremental" and slug == "hydrahd" and page >= overlap_pages:
+                            completed_parts.add(part)
                         cursor["done"] = sorted(completed_parts)
-                        state.cursor, state.report = cursor, report
-                        state.last_successful_checkpoint = django_timezone.now()
-                        state.save(update_fields=["cursor", "report", "last_successful_checkpoint", "updated_at"])
+                        save_cursor_checkpoint()
                     if pagination_is_partial:
                         report["status"] = "PARTIAL"
                         if total_changed:
@@ -706,9 +843,7 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                                 cursor.setdefault("parts", {})[part] = 0
                                 cursor.setdefault("fingerprints", {}).pop(part, None)
                                 cursor["done"] = sorted(completed_parts - {part})
-                                state.cursor, state.report = cursor, report
-                                state.last_successful_checkpoint = django_timezone.now()
-                                state.save(update_fields=["cursor", "report", "last_successful_checkpoint", "updated_at"])
+                                save_cursor_checkpoint()
                         else:
                             report["last_error"] = f"{part}: {evidence}"
                         break
@@ -717,6 +852,8 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                         report["last_error"] = "official RSS is a recent-updates snapshot, not a full archive"
                         break
                     if terminal:
+                        break
+                    if mode_key == "incremental" and slug == "hydrahd" and page >= overlap_pages:
                         break
                     page += 1
                     if delay: time.sleep(delay)
@@ -727,20 +864,29 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                 provider=provider, status="PENDING"
             ).count() if slug == "kisskh" else 0
             report["unresolved_classifications"] = unresolved_count
-            if all(part in completed_parts for part in all_parts) and not unresolved_count:
+            if mode_key == "historical" and all(part in completed_parts for part in all_parts) and not unresolved_count:
                 report["status"] = "COMPLETED"
-            elif all(part in completed_parts for part in all_parts):
+            elif mode_key == "historical" and all(part in completed_parts for part in all_parts):
                 report["status"] = "PARTIAL"
                 report["last_error"] = "unresolved_title_classifications_remain"
             elif report["status"] == "RUNNING":
                 report["status"] = "PARTIAL"
+            if mode_key == "incremental" and slug == "hydrahd":
+                cursor["window_complete"] = all(part in completed_parts for part in all_parts)
+                report["window_complete"] = cursor["window_complete"]
+                if cursor["window_complete"]:
+                    cursor["windows_completed"] = int(cursor.get("windows_completed", 0)) + 1
+                    cursor["last_window_completed_at"] = django_timezone.now().isoformat()
+                    save_cursor_checkpoint()
+                report["status"] = "PARTIAL"  # a bounded overlap is not historical completeness
             known_page_counts = {**(cursor.get("total_pages") or {}), **known_pages_by_part}
             if all(part in known_page_counts for part in all_parts):
                 report["pages_remaining"] = sum(
                     max(0, int(known_page_counts[part]) - int((cursor.get("parts") or {}).get(part, 0)))
                     for part in all_parts if part not in completed_parts
                 )
-            if report["status"] == "COMPLETED":
+            report["new_unique_titles"] = report["items_inserted"]
+            if report["pages_scanned"] and report["errors"] == 0:
                 report["last_success_at"] = django_timezone.now().isoformat()
             report["last_successful_checkpoint"] = (
                 state.last_successful_checkpoint.isoformat()
@@ -753,6 +899,8 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
             if report["status"] != "BLOCKED": report["status"] = "FAILED"
             if not report.get("last_error"):
                 report["last_error"] = f"Catalogue page failed ({type(exc).__name__}); checkpoint retained"
+            if active_page and not any(x.get("partition") == active_page[0] and x.get("page") == active_page[1] for x in report["failed_pages"]):
+                report["failed_pages"].append({"partition": active_page[0], "page": active_page[1], "error": report["last_error"]})
             report["requests_dispatched"] = requests_made
             raise CatalogueDiscoveryError({
                 **report,
@@ -764,11 +912,22 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
         finally:
             if not dry_run:
                 state.status = report["status"]
-                state.report = report
+                mode_reports = deepcopy((state.report or {}).get("mode_reports", {}))
+                report["new_unique_titles"] = report["items_inserted"]
+                mode_reports[mode_key] = deepcopy(report)
+                state.report = {**report, "mode_reports": mode_reports}
                 state.last_error = report.get("last_error", "")
-                if report["status"] == "COMPLETED": state.last_success_at = django_timezone.now()
+                if report.get("last_success_at"):
+                    state.last_success_at = django_timezone.now()
+                if report.get("cooldown_until"):
+                    cursor["cooldown_until"] = report["cooldown_until"]
+                elif report.get("pages_scanned"):
+                    cursor.pop("cooldown_until", None)
+                root_cursor = _checkpoint_root(root_cursor, mode_cursors, mode_key, cursor)
+                state.cursor = root_cursor
                 state.save()
-        return {**report, "provider": slug, "requests_made": requests_made, "dry_run": dry_run, "checkpoint": cursor, "partition": partition}
+        report["new_unique_titles"] = report["items_inserted"]
+        return {**report, "provider": slug, "requests_made": requests_made, "dry_run": dry_run, "checkpoint": cursor, "checkpoints_by_mode": deepcopy(mode_cursors), "partition": partition}
     finally:
         try:
             scraper.session.get = original_get
@@ -778,10 +937,28 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
 
 
 def discovery_status():
-    return [
-        {"provider": row.provider.slug, "status": row.status, "mode": row.mode, **(row.report or {})}
-        for row in CatalogueDiscoveryState.objects.select_related("provider").order_by("provider__slug")
-    ]
+    counts = {}
+    for item in DiscoveredCatalogueRecord.objects.values("provider_id", "classification_state").annotate(total=Count("id")):
+        counts.setdefault(item["provider_id"], {})[item["classification_state"]] = item["total"]
+    result = []
+    for row in CatalogueDiscoveryState.objects.select_related("provider").order_by("provider__slug"):
+        cursor = row.cursor or {}
+        modes = cursor.get("modes", {}) if isinstance(cursor, dict) else {}
+        provider_counts = counts.get(row.provider_id, {})
+        current = row.report or {}
+        result.append({
+            "provider": row.provider.slug,
+            "status": row.status,
+            "mode": current.get("mode") or row.mode,
+            "inventory_count": sum(provider_counts.values()),
+            "pending_classification_count": provider_counts.get("PENDING", 0),
+            "last_success_at": row.last_success_at,
+            "historical_checkpoint": (modes.get("historical") or {}).get("parts", cursor.get("parts", {})),
+            "incremental_checkpoint": (modes.get("incremental") or {}).get("parts", {}),
+            "mode_reports": current.get("mode_reports", {}),
+            **{key: value for key, value in current.items() if key != "mode_reports"},
+        })
+    return result
 
 
 def _retry_after_seconds(value):

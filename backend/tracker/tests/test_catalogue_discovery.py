@@ -1,4 +1,5 @@
 from unittest.mock import patch
+from datetime import datetime, timezone
 
 from django.test import TestCase
 
@@ -33,9 +34,11 @@ class CatalogueDiscoveryTests(TestCase):
                     return [fixture_item(provider_slug, part=part)], True, 1, "fixture_terminal_page"
 
                 with patch("tracker.services.catalogue_discovery.PROVENANCE_BLOCKED", {}), patch("tracker.services.catalogue_discovery._page", side_effect=page), patch("requests.Session.get", return_value=object()):
-                    result = run_discovery(slug, request_budget=10, delay=0)
-                self.assertEqual(result["status"], "COMPLETED")
-                self.assertEqual(result["pages_scanned"], len(result["checkpoint"]["done"]))
+                    mode = "incremental" if slug == "animeworld" else "historical"
+                    result = run_discovery(slug, mode=mode, request_budget=10, delay=0)
+                self.assertEqual(result["status"], "PARTIAL" if slug == "animeworld" else "COMPLETED")
+                if slug != "animeworld":
+                    self.assertEqual(result["pages_scanned"], len(result["checkpoint"]["done"]))
                 if slug == "kisskh":
                     mappings = ScrapedContentMapping.objects.filter(provider=self.providers[slug])
                     self.assertEqual(mappings.count(), result["pages_scanned"])
@@ -48,7 +51,10 @@ class CatalogueDiscoveryTests(TestCase):
                     self.assertTrue(all(record.classified_content_type is None for record in records))
                     self.assertFalse(ScrapedContentMapping.objects.filter(provider=self.providers[slug]).exists())
                     self.assertFalse(Offer.objects.filter(provider=self.providers[slug]).exists())
-                self.assertEqual(CatalogueDiscoveryState.objects.get(provider=self.providers[slug]).status, "COMPLETED")
+                self.assertEqual(
+                    CatalogueDiscoveryState.objects.get(provider=self.providers[slug]).status,
+                    "PARTIAL" if slug == "animeworld" else "COMPLETED",
+                )
 
     def test_budget_exhaustion_is_partial_and_resume_uses_committed_checkpoint(self):
         slug = "hydrahd"
@@ -152,6 +158,124 @@ class CatalogueDiscoveryTests(TestCase):
         self.assertEqual(result["pages_scanned"], 1)
         self.assertEqual(result["items_seen"], 0)
         self.assertFalse(DiscoveredCatalogueRecord.objects.filter(provider=self.providers["hydrahd"]).exists())
+
+    def test_incremental_checkpoint_does_not_reset_historical_progress(self):
+        state = CatalogueDiscoveryState.objects.create(
+            provider=self.providers["hydrahd"], status="PARTIAL", mode="full",
+            cursor={"done": [], "parts": {"movies": 128, "tv-shows": 73}, "navigation_max": {"movies": 131, "tv-shows": 76}},
+        )
+
+        def page(scraper, provider_slug, part, page, query=None):
+            scraper.session.get("https://fixture.invalid/page")
+            return [fixture_item(provider_slug, part=part, page=page)], False, None, f"pagination_links_navigation_max={page + 3}"
+
+        with patch("tracker.services.catalogue_discovery._parts", return_value=["movies"]), \
+             patch("tracker.services.catalogue_discovery._page", side_effect=page), \
+             patch("requests.Session.get", return_value=object()):
+            result = run_discovery("hydrahd", mode="incremental", overlap_pages=2, request_budget=2, delay=0)
+
+        state.refresh_from_db()
+        self.assertEqual(result["page_ranges"], {"movies": [1, 2]})
+        self.assertTrue(result["window_complete"])
+        self.assertEqual(state.cursor["modes"]["historical"]["parts"], {"movies": 128, "tv-shows": 73})
+        self.assertEqual(state.cursor["modes"]["incremental"]["parts"], {"movies": 2})
+        self.assertEqual(state.cursor["parts"], {"movies": 128, "tv-shows": 73})
+
+    def test_incremental_run_resumes_after_budget_interruption(self):
+        def page(scraper, provider_slug, part, page, query=None):
+            scraper.session.get("https://fixture.invalid/page")
+            return [fixture_item(provider_slug, part=part, page=page)], False, None, f"pagination_links_navigation_max={page + 3}"
+
+        with patch("tracker.services.catalogue_discovery._parts", return_value=["movies"]), \
+             patch("tracker.services.catalogue_discovery._page", side_effect=page), \
+             patch("requests.Session.get", return_value=object()):
+            first = run_discovery("hydrahd", mode="incremental", overlap_pages=2, request_budget=1, delay=0)
+            second = run_discovery("hydrahd", mode="incremental", overlap_pages=2, request_budget=1, delay=0)
+
+        self.assertEqual(first["page_ranges"], {"movies": [1, 1]})
+        self.assertFalse(first.get("window_complete", False))
+        self.assertEqual(second["page_ranges"], {"movies": [2, 2]})
+        self.assertTrue(second["window_complete"])
+        self.assertEqual(DiscoveredCatalogueRecord.objects.filter(provider=self.providers["hydrahd"]).count(), 2)
+
+    def test_incremental_overlap_detects_shifting_pages_and_deduplicates(self):
+        page_contents = {1: ["a"], 2: ["b"]}
+
+        def page(scraper, provider_slug, part, page, query=None):
+            scraper.session.get("https://fixture.invalid/page")
+            key = page_contents[page][0]
+            item = fixture_item(provider_slug, part=part, page=page)
+            item.title = f"Title {key}"
+            item.source_url = f"https://hydrahd.example/{key}"
+            item.raw_payload = {"id": key, "listing_page": page}
+            return [item], False, None, f"pagination_links_navigation_max={page + 3}"
+
+        with patch("tracker.services.catalogue_discovery._parts", return_value=["movies"]), \
+             patch("tracker.services.catalogue_discovery._page", side_effect=page), \
+             patch("requests.Session.get", return_value=object()):
+            first = run_discovery("hydrahd", mode="incremental", overlap_pages=2, request_budget=2, delay=0)
+            page_contents = {1: ["b"], 2: ["a"]}
+            second = run_discovery("hydrahd", mode="incremental", overlap_pages=2, request_budget=2, delay=0)
+
+        self.assertEqual(first["items_inserted"], 2)
+        self.assertEqual(second["items_inserted"], 0)
+        self.assertEqual(second["duplicate_identities"], 2)
+        self.assertEqual(second["items_updated"], 2)
+        self.assertEqual(second["items_shifted_between_pages"], 2)
+        self.assertEqual(DiscoveredCatalogueRecord.objects.filter(provider=self.providers["hydrahd"]).count(), 2)
+
+    def test_animeworld_incremental_rss_replay_stays_partial_and_idempotent(self):
+        item = fixture_item("animeworld")
+
+        def rss_page(scraper, provider_slug, part, page, query=None):
+            scraper.session.get("https://fixture.invalid/rss")
+            scraper.feed_last_build_date = "Tue, 17 Nov 2026 15:20:06 GMT"
+            return [item], False, None, "official_rss_snapshot_not_full_archive"
+
+        with patch("tracker.services.catalogue_discovery._page", side_effect=rss_page), \
+             patch("requests.Session.get", return_value=object()):
+            first = run_discovery("animeworld", mode="incremental", request_budget=2, delay=0)
+            second = run_discovery("animeworld", mode="incremental", request_budget=2, delay=0)
+
+        state = CatalogueDiscoveryState.objects.get(provider=self.providers["animeworld"])
+        self.assertEqual(first["items_inserted"], 1)
+        self.assertEqual(second["items_unchanged"], 1)
+        self.assertEqual(second["status"], "PARTIAL")
+        self.assertEqual(state.cursor["modes"]["incremental"]["parts"], {"rss-animes": 1})
+
+    def test_provider_lock_rejects_concurrent_mode_without_dispatch_or_state_change(self):
+        with patch("tracker.services.catalogue_discovery.try_source_lock", return_value=False), \
+             patch("tracker.services.catalogue_discovery._page") as page:
+            with self.assertRaisesRegex(RuntimeError, "already active"):
+                run_discovery("hydrahd", mode="incremental")
+        page.assert_not_called()
+        self.assertFalse(CatalogueDiscoveryState.objects.filter(provider=self.providers["hydrahd"]).exists())
+
+    def test_retry_after_becomes_a_persisted_cooldown_instead_of_long_worker_sleep(self):
+        class Response:
+            def __init__(self, status_code, *, text="", headers=None):
+                self.status_code = status_code
+                self.text = text
+                self.headers = headers or {}
+
+            def json(self):
+                raise ValueError("not JSON")
+
+        responses = [
+            Response(200, text="User-agent: *\nAllow: /\n"),
+            Response(429, headers={"Retry-After": "120"}),
+        ]
+        with patch("requests.Session.get", side_effect=responses) as get, \
+             patch("tracker.services.catalogue_discovery.time.sleep") as sleep:
+            with self.assertRaises(CatalogueDiscoveryError) as raised:
+                run_discovery("hydrahd", mode="historical", request_budget=3, delay=1, retry_limit=1)
+
+        state = CatalogueDiscoveryState.objects.get(provider=self.providers["hydrahd"])
+        self.assertEqual(get.call_count, 2)
+        sleep.assert_not_called()
+        self.assertEqual(raised.exception.report["failed_pages"], [{"partition": "movies", "page": 1, "status": 429}])
+        self.assertEqual(state.cursor["modes"]["historical"]["cooldown_until"], raised.exception.report["cooldown_until"])
+        self.assertGreater(datetime.fromisoformat(state.cursor["modes"]["historical"]["cooldown_until"]), datetime.now(timezone.utc))
 
     def test_replaying_a_page_reports_persisted_items_as_unchanged(self):
         slug = "kisskh"

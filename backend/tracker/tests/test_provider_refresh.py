@@ -216,9 +216,15 @@ class ProviderListCardFieldTests(TestCase):
             "inventory_count": 2,
             "pending_classification_count": 1,
             "last_successful_sync": checked_at.isoformat().replace("+00:00", "Z"),
-            "last_scanned_pages": {"movies": 128, "tv-shows": 73},
+            "last_success_at": None,
+            "historical_checkpoint": {"movies": 128, "tv-shows": 73},
+            "incremental_checkpoint": {},
             "coverage_status": "BLOCKED",
             "error": "HTTP 451",
+            "new_discoveries_last_run": 0,
+            "duplicate_identities_last_run": 0,
+            "failed_pages_last_run": [],
+            "mode_reports": {},
         })
 
     def test_plain_provider_reports_never_run_and_active_offer_count(self):

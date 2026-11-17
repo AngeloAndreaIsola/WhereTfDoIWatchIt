@@ -13,13 +13,14 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("--status", action="store_true", help="Print durable per-provider discovery reports.")
         parser.add_argument("--provider", choices=sorted(PROVIDERS))
-        parser.add_argument("--mode", choices=("full", "incremental", "targeted"), default="full")
+        parser.add_argument("--mode", choices=("historical", "full", "incremental", "targeted"), default="historical")
         parser.add_argument("--request-budget", type=int, default=20)
         parser.add_argument("--delay", type=float, default=1.0, help="Seconds between page requests.")
         parser.add_argument("--retry-limit", type=int, default=1, help="Retries per transient request (bounded).")
         parser.add_argument("--dry-run", action="store_true", help="Observe pages without database writes or state changes.")
         parser.add_argument("--query", help="Targeted provider search term (partial endpoint results only).")
         parser.add_argument("--partition", help="Resume only one provider partition (HydraHD: movies or tv-shows).")
+        parser.add_argument("--overlap-pages", type=int, default=3, help="Newest pages revisited by incremental HydraHD runs.")
 
     def handle(self, *args, **options):
         if options["status"]:
@@ -35,7 +36,7 @@ class Command(BaseCommand):
                 request_budget=options["request_budget"], delay=options["delay"],
                 retry_limit=options["retry_limit"],
                 dry_run=options["dry_run"], targeted_query=options["query"],
-                partition=options["partition"],
+                partition=options["partition"], overlap_pages=options["overlap_pages"],
             )
         except CatalogueDiscoveryError as exc:
             raise CommandError(json.dumps({"error": str(exc), **exc.report}, default=str)) from exc

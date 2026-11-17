@@ -39,9 +39,13 @@ export interface ProviderItem {
     inventory_count?: number;
     pending_classification_count?: number;
     last_successful_sync?: string | null;
-    last_scanned_pages?: Record<string, number>;
+    historical_checkpoint?: Record<string, number>;
+    incremental_checkpoint?: Record<string, number>;
     coverage_status?: string;
     error?: string;
+    new_discoveries_last_run?: number;
+    duplicate_identities_last_run?: number;
+    failed_pages_last_run?: Array<{ partition?: string; page?: number; status?: number; evidence?: string }>;
   };
   /** Site host used to fetch this card's favicon. Absent for catalogue providers, which use the brand badges. */
   favicon_domain?: string;
@@ -266,14 +270,30 @@ export default function ProviderGrid({
                       ` · ${provider.catalogue_discovery.inventory_count} discovered`}
                   </span>
                 )}
-                {provider.catalogue_discovery?.last_scanned_pages &&
-                  Object.keys(provider.catalogue_discovery.last_scanned_pages).length > 0 && (
+                {provider.catalogue_discovery?.historical_checkpoint &&
+                  Object.keys(provider.catalogue_discovery.historical_checkpoint).length > 0 && (
                     <span className="text-[10px] text-gray-400 dark:text-gray-500">
-                      Checkpoint {Object.entries(provider.catalogue_discovery.last_scanned_pages)
+                      Historical {Object.entries(provider.catalogue_discovery.historical_checkpoint)
                         .map(([partition, page]) => `${partition} ${page}`)
                         .join(" · ")}
                     </span>
                   )}
+                {provider.catalogue_discovery?.incremental_checkpoint &&
+                  Object.keys(provider.catalogue_discovery.incremental_checkpoint).length > 0 && (
+                    <span className="text-[10px] text-gray-400 dark:text-gray-500">
+                      Incremental {Object.entries(provider.catalogue_discovery.incremental_checkpoint)
+                        .map(([partition, page]) => `${partition} ${page}`)
+                        .join(" · ")}
+                    </span>
+                  )}
+                {(provider.catalogue_discovery?.new_discoveries_last_run != null ||
+                  provider.catalogue_discovery?.duplicate_identities_last_run != null) && (
+                  <span className="text-[10px] text-gray-400 dark:text-gray-500">
+                    Last run +{provider.catalogue_discovery.new_discoveries_last_run ?? 0}
+                    {` · ${provider.catalogue_discovery.duplicate_identities_last_run ?? 0} repeated identities`}
+                    {` · ${provider.catalogue_discovery.failed_pages_last_run?.length ?? 0} failed pages`}
+                  </span>
+                )}
                 {provider.catalogue_discovery?.last_successful_sync && (
                   <span className="text-[10px] text-gray-400 dark:text-gray-500">
                     Last successful checkpoint {formatRelativeTime(provider.catalogue_discovery.last_successful_sync)}

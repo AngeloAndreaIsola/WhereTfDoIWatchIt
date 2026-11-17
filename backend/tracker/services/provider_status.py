@@ -277,9 +277,15 @@ def provider_card_status(providers) -> dict[int, dict]:
             "inventory_count": sum(counts.values()),
             "pending_classification_count": counts.get("PENDING", 0),
             "last_successful_sync": discovery.last_successful_checkpoint if discovery else None,
-            "last_scanned_pages": (cursor.get("parts", {}) if isinstance(cursor, dict) else {}),
+            "historical_checkpoint": ((cursor.get("modes", {}).get("historical") or {}).get("parts", cursor.get("parts", {})) if isinstance(cursor, dict) else {}),
+            "incremental_checkpoint": ((cursor.get("modes", {}).get("incremental") or {}).get("parts", {}) if isinstance(cursor, dict) else {}),
             "coverage_status": discovery.status if discovery else "UNKNOWN",
+            "last_success_at": discovery.last_success_at if discovery else None,
             "error": (discovery.last_error or report.get("last_error", "")) if discovery else "",
+            "new_discoveries_last_run": report.get("new_unique_titles", report.get("items_inserted", 0)),
+            "duplicate_identities_last_run": report.get("duplicate_identities", 0),
+            "failed_pages_last_run": report.get("failed_pages", []),
+            "mode_reports": report.get("mode_reports", {}),
         }
 
     status: dict[int, dict] = {}

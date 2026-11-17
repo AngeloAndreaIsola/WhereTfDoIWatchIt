@@ -70,6 +70,7 @@ from ...services.refresh_lifecycle import (
     reconcile_stale_runs,
 )
 from ...services.refresh_requests import process_refresh_queue
+from ...services.catalogue_discovery_scheduler import process_due_discovery_schedules
 
 logger = logging.getLogger(__name__)
 
@@ -206,6 +207,13 @@ class Command(BaseCommand):
                 )
                 if catalogue:
                     self.stdout.write(json.dumps({"catalogue": catalogue}))
+                if runs_catalogue:
+                    try:
+                        discovery_schedule = process_due_discovery_schedules()
+                        if discovery_schedule["status"] != "DISABLED" or discovery_schedule.get("skipped"):
+                            self.stdout.write(json.dumps({"unofficial_discovery": discovery_schedule}))
+                    except Exception:  # malformed schedule config must not stop the existing refresh worker
+                        logger.exception("unofficial_discovery_schedule_tick_failed")
 
                 # Finalise from persisted state, never from `summary`: a
                 # finalise that trusted the worker's own tally would report
