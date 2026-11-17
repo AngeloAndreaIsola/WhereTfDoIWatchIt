@@ -67,6 +67,36 @@ class CatalogueDiscoveryTests(TestCase):
         self.assertEqual(second["pages_scanned"], 1)
         self.assertEqual(DiscoveredCatalogueRecord.objects.filter(provider=self.providers[slug]).count(), 2)
 
+    def test_hydra_partition_checkpoint_does_not_complete_other_partition(self):
+        def one_page(scraper, provider_slug, part, page, query=None):
+            scraper.session.get("https://fixture.invalid/page")
+            return [fixture_item(provider_slug, part=part)], True, 1, "fixture_terminal_page"
+
+        with patch("tracker.services.catalogue_discovery._page", side_effect=one_page), \
+             patch("requests.Session.get", return_value=object()):
+            result = run_discovery("hydrahd", partition="movies", request_budget=2, delay=0)
+        state = CatalogueDiscoveryState.objects.get(provider=self.providers["hydrahd"])
+        self.assertEqual(result["status"], "PARTIAL")
+        self.assertEqual(state.cursor["parts"], {"movies": 1})
+        self.assertEqual(state.cursor["done"], ["movies"])
+
+    def test_hydra_navigation_window_changes_are_not_reported_as_total_or_completion(self):
+        def rolling_pages(scraper, provider_slug, part, page, query=None):
+            scraper.session.get("https://fixture.invalid/page")
+            item = fixture_item(provider_slug, part=part, page=page)
+            return [item], False, None, f"pagination_links_navigation_max={page + 3}"
+
+        with patch("tracker.services.catalogue_discovery._page", side_effect=rolling_pages), \
+             patch("requests.Session.get", return_value=object()):
+            result = run_discovery("hydrahd", partition="movies", request_budget=3, delay=0)
+        state = CatalogueDiscoveryState.objects.get(provider=self.providers["hydrahd"])
+        self.assertEqual(result["pages_scanned"], 3)
+        self.assertEqual(result["status"], "PARTIAL")
+        self.assertIsNone(result["pages_remaining"])
+        self.assertEqual(result["navigation_max_observed"], {"movies": 6})
+        self.assertEqual(state.cursor["parts"]["movies"], 3)
+        self.assertEqual(state.cursor["navigation_max"]["movies"], 6)
+
     def test_replaying_a_page_reports_persisted_items_as_unchanged(self):
         slug = "kisskh"
 

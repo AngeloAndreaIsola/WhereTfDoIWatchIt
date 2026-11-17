@@ -46,9 +46,9 @@ class CatalogueURLIdentityTests(SimpleTestCase):
         scraper = FakeHydra()
         rows, terminal, pages, evidence = _page(scraper, "hydrahd", "movies", 1)
         self.assertEqual(scraper.url, "https://hydrahd.gd/movies/date/1")
-        self.assertEqual(pages, 7)
+        self.assertIsNone(pages)
         self.assertFalse(terminal)
-        self.assertEqual(evidence, "partition_pagination_links")
+        self.assertEqual(evidence, "pagination_links_navigation_max=7")
         self.assertEqual(rows[0].raw_payload["catalogue_partition"], "movies")
 
     def test_animeworld_rss_parses_guid_without_promoting_classification(self):
@@ -99,6 +99,18 @@ class PendingCataloguePersistenceTests(TestCase):
         self.assertEqual(row.provider_native_id, "native-1")
         self.assertEqual(row.source_urls_seen, ["https://hydrahd.gd/movie/a?utm=x", "https://hydrahd.gd/movie/b?fbclid=y"])
 
+    def test_overlapping_page_observation_is_retained_without_a_second_record(self):
+        first = self.item("Overlap", "https://hydrahd.gd/movie/a", guid="same")
+        first.raw_payload["listing_page"] = 10
+        second = self.item("Overlap", "https://hydrahd.gd/movie/a", guid="same")
+        second.raw_payload["listing_page"] = 11
+        _persist_unclassified_observation(provider=self.provider, item=first, partition="movies")
+        outcome = _persist_unclassified_observation(provider=self.provider, item=second, partition="movies")
+        self.assertEqual(outcome, "updated")
+        row = DiscoveredCatalogueRecord.objects.get(provider=self.provider)
+        self.assertEqual(DiscoveredCatalogueRecord.objects.filter(provider=self.provider).count(), 1)
+        self.assertEqual([o["page"] for o in row.original_metadata["listing_observations"]], [10, 11])
+
     def test_unverified_candidate_provenance_blocks_before_any_request(self):
         candidate = Provider.objects.create(slug="cineblog01", name="CineBlog01")
         with patch("tracker.services.catalogue_discovery.try_source_lock", return_value=True), \
@@ -109,3 +121,23 @@ class PendingCataloguePersistenceTests(TestCase):
         self.assertEqual(result["requests_made"], 0)
         resolver.assert_called_once_with("cineblog01")
         self.assertFalse(DiscoveredCatalogueRecord.objects.filter(provider=candidate).exists())
+
+    def test_animeworld_rss_snapshot_adds_new_guid_and_replays_existing_guid(self):
+        from tracker.scrapers.adapters import AnimeWorldScraper
+        provider, _ = Provider.objects.get_or_create(slug="animeworld", defaults={"name": "AnimeWorld"})
+        parser = AnimeWorldScraper()
+        feed_a = '''<rss xmlns:anime="https://www.animeworld.ac/"><channel>
+        <item><guid>g1</guid><title>One</title><anime:name>One</anime:name><anime:link>https://www.animeworld.ac/play/one</anime:link><anime:type>anime</anime:type></item>
+        </channel></rss>'''
+        initial = parser.parse_rss(feed_a)[0]
+        self.assertEqual(_persist_unclassified_observation(provider=provider, item=initial, partition="rss-animes"), "inserted")
+        feed_b = '''<rss xmlns:anime="https://www.animeworld.ac/"><channel>
+        <item><guid>g1</guid><title>One Updated</title><anime:name>One</anime:name><anime:link>https://www.animeworld.ac/play/one</anime:link><anime:type>anime</anime:type></item>
+        <item><guid>g2</guid><title>Two</title><anime:name>Two</anime:name><anime:link>https://www.animeworld.ac/play/two</anime:link><anime:type>anime</anime:type></item>
+        </channel></rss>'''
+        current = parser.parse_rss(feed_b)
+        outcomes = [_persist_unclassified_observation(provider=provider, item=item, partition="rss-animes") for item in current]
+        replay = [_persist_unclassified_observation(provider=provider, item=item, partition="rss-animes") for item in current]
+        self.assertEqual(outcomes, ["updated", "inserted"])
+        self.assertEqual(replay, ["unchanged", "unchanged"])
+        self.assertEqual(DiscoveredCatalogueRecord.objects.filter(provider=provider).count(), 2)

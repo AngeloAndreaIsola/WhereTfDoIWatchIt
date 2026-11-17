@@ -591,7 +591,8 @@ class AnimeWorldScraper(BaseScraper):
                 raw_payload={
                     "guid": (guid.text or "").strip() if guid is not None else "",
                     "pubDate": value("pubDate"), "anime_type": media_type,
-                    "original_title": value("name"), "source_kind": "official_rss",
+                    "original_title": value("name"), "feed_title": value("title"),
+                    "source_kind": "official_rss",
                     "provenance_state": "VERIFIED", "access_policy_state": "PERMITTED",
                 },
             ))

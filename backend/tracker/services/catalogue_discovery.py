@@ -148,6 +148,16 @@ def _persist_unclassified_observation(*, provider, item, partition):
         "catalogue_partition": partition,
         "listing_content_type_hint": item.content_type,
     })
+    observation_history = []
+    if prior is not None and isinstance(prior.original_metadata, dict):
+        observation_history = list(prior.original_metadata.get("listing_observations") or [])
+    page_number = payload.get("listing_page")
+    if page_number is not None:
+        observation = {"partition": partition, "page": int(page_number), "source_url": item.source_url}
+        if observation not in observation_history:
+            observation_history.append(observation)
+    if observation_history:
+        metadata["listing_observations"] = observation_history
     provenance = payload.get("provenance_state", "SELF_ASSERTED" if provider.slug == "hydrahd" else "PROVENANCE_UNVERIFIED")
     access = payload.get("access_policy_state", "PERMITTED" if provider.slug == "hydrahd" else "UNKNOWN")
     if prior is None:
@@ -247,14 +257,14 @@ def _page(scraper, slug, part, page, query=None):
         for anchor in soup.find_all("a", href=True):
             match = re.search(rf"/{re.escape(part)}/date/(\d+)(?:/|$|[?#])", anchor["href"], re.I)
             if match: soup_links.append(int(match.group(1)))
-        pages = max([int(v) for v in soup_links]) if soup_links else None
+        navigation_max = max(soup_links) if soup_links else None
         if not items and page == 1:
             return None, False, None, "unexpected_or_empty_listing_html"
-        terminal = page >= pages if pages is not None else not items
-        evidence = "partition_pagination_links" if pages is not None else "empty_page_terminal" if terminal else "sequential_route_unbounded"
+        terminal = not items
+        evidence = f"pagination_links_navigation_max={navigation_max}" if navigation_max is not None else "empty_page_terminal" if terminal else "sequential_route_unbounded"
         for item in items:
             item.raw_payload = {**(item.raw_payload or {}), "provenance_state": "SELF_ASSERTED", "access_policy_state": "PERMITTED", "catalogue_partition": part, "listing_page": page}
-        return items, terminal, pages, evidence
+        return items, terminal, None, evidence
     if slug == "animeworld":
         if part != "rss-animes" or page > 1: return None, False, None, "official_rss_is_single_snapshot"
         raw = scraper.fetch_url("https://www.animeworld.ac/rss/animes", headers={"Accept": "application/rss+xml, application/xml"})
@@ -296,7 +306,7 @@ def _page(scraper, slug, part, page, query=None):
     return None, False, None, "unsupported_provider"
 
 
-def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, retry_limit=1, dry_run=False, targeted_query=None):
+def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, retry_limit=1, dry_run=False, targeted_query=None, partition=None):
     slug = (provider_slug or "").lower()
     if slug not in PROVIDERS: raise ValueError(f"Unsupported provider: {slug}")
     if request_budget < 1: raise ValueError("request_budget must be positive")
@@ -388,7 +398,12 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
             except ValueError:
                 return response.text
         scraper.fetch_url = fetch_discovery_url
-        parts = _parts(slug)
+        all_parts = _parts(slug)
+        if partition is not None and partition not in all_parts:
+            raise ValueError(f"Unsupported {slug} partition: {partition}")
+        if partition is not None and mode == "targeted":
+            raise ValueError("--partition is only available in full or incremental mode")
+        parts = [partition] if partition is not None else all_parts
         if dry_run:
             state = CatalogueDiscoveryState.objects.filter(provider=provider).first()
         else:
@@ -396,6 +411,10 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
         cursor = dict(state.cursor or {}) if mode == "full" and state else {}
         if mode == "full" and state and state.status == "COMPLETED":
             cursor = {}  # an explicit full run after completion is a fresh reconciliation
+        if slug == "hydrahd" and cursor.get("total_pages"):
+            # Earlier runs treated the largest visible next-page link as a
+            # stable total. Preserve it as navigation evidence, not a total.
+            cursor.setdefault("navigation_max", {}).update(cursor.pop("total_pages"))
         report = {
             "status": "RUNNING", "mode": mode, "pages_discovered": 0,
             "pages_scanned": 0, "pages_remaining": None, "items_seen": 0,
@@ -472,7 +491,9 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                         break
                     except _HttpFailure as exc:
                         if exc.status == 404 and page > 1:
-                            rows, terminal, total_pages, evidence = [], True, page - 1, "http_404_terminal_page"
+                            rows, terminal = [], True
+                            total_pages = None if slug == "hydrahd" else page - 1
+                            evidence = "http_404_terminal_page"
                         else:
                             report["errors"] += 1
                             report["status"] = "BLOCKED" if exc.status in (403, 429) else "FAILED"
@@ -500,6 +521,12 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                     if total_pages is not None:
                         known_pages_by_part[part] = total_pages
                         cursor.setdefault("total_pages", {})[part] = total_pages
+                    if slug == "hydrahd":
+                        nav_match = re.search(r"navigation_max=(\d+)", evidence)
+                        if nav_match:
+                            navigation_max = int(nav_match.group(1))
+                            cursor.setdefault("navigation_max", {})[part] = navigation_max
+                            report.setdefault("navigation_max_observed", {})[part] = navigation_max
                     report["pages_discovered"] = max(report["pages_discovered"], total_pages or page)
                     fingerprint_ids = [
                         str((item.raw_payload or {}).get("id") or (item.raw_payload or {}).get("title_id") or item.source_url)
@@ -684,18 +711,18 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                 provider=provider, status="PENDING"
             ).count() if slug == "kisskh" else 0
             report["unresolved_classifications"] = unresolved_count
-            if len(completed_parts) == len(parts) and not unresolved_count:
+            if all(part in completed_parts for part in all_parts) and not unresolved_count:
                 report["status"] = "COMPLETED"
-            elif len(completed_parts) == len(parts):
+            elif all(part in completed_parts for part in all_parts):
                 report["status"] = "PARTIAL"
                 report["last_error"] = "unresolved_title_classifications_remain"
             elif report["status"] == "RUNNING":
                 report["status"] = "PARTIAL"
             known_page_counts = {**(cursor.get("total_pages") or {}), **known_pages_by_part}
-            if all(part in known_page_counts for part in parts):
+            if all(part in known_page_counts for part in all_parts):
                 report["pages_remaining"] = sum(
                     max(0, int(known_page_counts[part]) - int((cursor.get("parts") or {}).get(part, 0)))
-                    for part in parts if part not in completed_parts
+                    for part in all_parts if part not in completed_parts
                 )
             if report["status"] == "COMPLETED":
                 report["last_success_at"] = django_timezone.now().isoformat()
@@ -725,7 +752,7 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                 state.last_error = report.get("last_error", "")
                 if report["status"] == "COMPLETED": state.last_success_at = django_timezone.now()
                 state.save()
-        return {**report, "provider": slug, "requests_made": requests_made, "dry_run": dry_run, "checkpoint": cursor}
+        return {**report, "provider": slug, "requests_made": requests_made, "dry_run": dry_run, "checkpoint": cursor, "partition": partition}
     finally:
         try:
             scraper.session.get = original_get

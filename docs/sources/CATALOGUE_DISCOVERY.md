@@ -17,24 +17,36 @@ scraping. See the official [terms](https://www.animeworld.ac/termini) and
 
 ## Current results (2026-11-17)
 
-| Provider | Pages scanned | Unique URLs/IDs | Records persisted in this task | Total pages | Coverage | Status |
+| Provider | Pages scanned | Unique URLs/IDs in staging | Rows persisted in durable staging | Total pages | Coverage | Status |
 |---|---:|---:|---:|---|---|---|
-| AnimeWorld | 1 RSS snapshot per run; 3 runs | 15 GUIDs / 15 URLs | 15 new (79 total in scratch; 64 legacy A–Z observations restricted) | Not exposed by RSS | Recent updates only; archive coverage unknown | `CATALOGUE_DISCOVERY_PARTIAL` |
-| HydraHD | 60 movie pages (3–62), 20 TV pages (1–20); 80 distinct committed pages | 1,920 new URLs (1,968 total including the earlier 48) | 1,920 new | Movie listing reported 65 pages at page 62; TV total not established | Sequential partial traversal; 3 movie pages remained by last reported navigation, plus TV continuation unknown | `CATALOGUE_DISCOVERY_PARTIAL` |
+| AnimeWorld | 1 RSS snapshot per run; 3 prior runs | 79 URLs; 15 RSS GUIDs | 79 (64 legacy A–Z rows marked restricted) | Not exposed by RSS | Recent updates only; archive coverage unknown | `CATALOGUE_DISCOVERY_PARTIAL` |
+| HydraHD | Movies 1–89; TV 1–34 (123 partition pages represented) | 2,952 unique URLs; no native IDs | 2,952 | No stable total; navigation windows ended at 92 (movie page 89) and 37 (TV page 34) | Sequential through checkpoints; no terminal page or completeness proof | `CATALOGUE_DISCOVERY_PARTIAL` |
 | CineBlog01 | 0 | 0 | 0 | Unknown | No listing request authorized by provenance | `CATALOGUE_DISCOVERY_BLOCKED` |
 | AltaDefinizione | 0 | 0 | 0 | Unknown | No listing request authorized by provenance | `CATALOGUE_DISCOVERY_BLOCKED` |
 | StreamingCommunity | 0 | 0 | 0 | Unknown | No listing request authorized by provenance | `CATALOGUE_DISCOVERY_BLOCKED` |
 | KissKH | 0 in this task | 0 | 0 | Unknown | Preserved prior state; HTTP 451 remains a hard stop | `CATALOGUE_DISCOVERY_PARTIAL` |
 
-“Records persisted in this task” is the number newly stored in the disposable
-database during this follow-up. It excludes pre-existing observations in that
-scratch database and excludes all records in the Compose database. The scratch
-counts at inspection were AnimeWorld 79 total (15 official RSS GUID records and
-64 pre-existing URL-keyed A–Z observations), HydraHD 1,968 total (1,920 added
-here and 48 pre-existing), and zero for each other provider. All 2,047 rows are
-pending classification. No source mappings or playback offers were created.
-The Compose database was not queried, migrated, or modified; its verified backup
-was preserved.
+**Overall verdict: `CATALOGUE_STAGING_PARTIAL`.** The inventory is durably
+exported and import/replay verified. Hydra traversal remains open because its
+page links do not expose stable totals or a terminal boundary. The available
+backup cannot validate integration against the current Compose database.
+
+The original disposable PostgreSQL container stopped after the first export;
+its `tmpfs` database no longer survives container restart. The durable staging
+export preserves all 2,047 records and both checkpoints before that happened.
+After importing the export into a fresh database migrated through `0053`,
+bounded Hydra continuation added 984 records. The final staging dataset has
+3,031 rows: 79 AnimeWorld and 2,952 HydraHD. All remain pending classification,
+with zero canonical mappings and zero offers. The Compose database was not
+queried, migrated, or modified.
+
+The checksummed export is in the ignored local path
+`.catalogue-staging/catalogue-inventory-v1.jsonl.gz`, with its manifest beside
+it. The gzip SHA-256 is
+`0c38ce93f7257c513a4d6760d4cc0d7a55718ca1ded9397db2a9b34ba17dfe02`; the file
+contains 3,031 rows (2,952 HydraHD and 79 AnimeWorld). The manifest includes
+per-provider counts and the latest resumable checkpoints. Files are mode `0600`
+and are excluded from Git.
 
 ### AnimeWorld
 
@@ -50,6 +62,9 @@ requests (one robots check and one RSS GET); the first successful run inserted
 third replay reported 15 unchanged. The feed GUIDs are stored as provider-native
 IDs. The feed's anime/movie hint remains raw metadata and classification stays
 pending. RSS is the only AnimeWorld source used in this follow-up.
+A focused snapshot test simulates an updated existing GUID plus a new GUID,
+then replays both: one update, one insert, and two unchanged observations. No
+new live RSS request was made during this follow-up.
 
 ### HydraHD
 
@@ -60,18 +75,35 @@ not independent operator proof. The observed robots metadata permitted ordinary
 reference use. The sitemap returned HTTP 403 in the earlier investigation and
 was not retried. No fallback host was used during this traversal.
 
-The bounded runs added 1,920 unique URL identities across 60 movie pages and 20
-TV pages. Each parsed page yielded 24 records. The earlier 48 observations were
-kept; this task did not replace them. No provider-native IDs were present, so
-URL identity is used without manufacturing IDs. The movie navigation exposed a
-65-page maximum when page 62 was last read; counts grew during traversal, so
-catalogue totals and final remaining pages are not stable. No empty terminal
-page was reached. The route remains resumable from the latest committed page.
-The run dispatch total was 92 requests across bounded invocations, including
-robots checks; the final run checkpoint was movie page 62 and TV page 20. Two
-replays of movie page 35 were detected before persistence and skipped. The
-repeats prevented duplicate writes; they are not evidence that either partition
-reached its terminal page.
+The initial staged inventory contained 1,968 HydraHD records: 48 earlier
+observations from movie pages 1–2, 1,440 rows from the prior sequential movie
+pages 3–62, and 480 from TV pages 1–20. The 48 earlier rows do not retain a
+per-row page number, so their page attribution comes from the recorded prior
+two-page run. The current continuation persisted movies 63–89 and TV 21–34,
+adding 984 records. Every fetched page yielded 24 rows. Captured page metadata
+has no gaps across 3–89 and 1–34, and the prior checkpoint covers movie pages
+1–2. No provider-native IDs were present; URL identity is used without
+manufacturing IDs.
+
+The page links expose a rolling navigation window rather than a stable total:
+the largest linked page was 65 at movie page 62, 76 at page 73, 83 at page 80,
+88 at page 85, and 92 at page 89. TV navigation similarly showed page 30 at TV
+page 27 and page 37 at page 34. These values are not catalogue totals. Pages
+were followed sequentially from each checkpoint. The 47 continuation dispatches
+included 6 robots checks and 41 listing requests; all returned usable pages.
+No empty or HTTP 404 terminal page was observed. The prior 92 dispatches,
+including robots checks and two page-35 checkpoint replays, are recorded in the
+first-phase report. No same-page URL overlap was found in the continuation
+(`items_updated=0`, `duplicates_skipped=0`); all 984 fetched rows were new URLs.
+The deduplicated staging data contains 2,952 HydraHD URLs. No total number of
+pages or complete-catalogue claim is justified; the latest checkpoints are
+movie page 89 and TV page 34.
+
+Release-year labels trend older on later movie pages, but the pages expose no
+reliable per-item listing timestamps for strict date-order validation. URL
+deduplication and sequential page labels show no observed overlap; date-ordered
+pagination can still shift when new entries arrive, so a long traversal is not
+a frozen snapshot and may omit records that move across page boundaries.
 
 ### Provenance blockers
 
@@ -114,10 +146,53 @@ The disposable database was migrated explicitly through `0053` using the
 `backend-test` service with `manage.py migrate`; the normal backend entrypoint
 and Compose database were not used for migration. The RSS and date-listing
 commands used explicit request budgets. Persisted rows were queried after
-ingestion. Focused tests passed (43 tests), the complete isolated backend suite
-passed (3,258 tests in 128.7 seconds), and `makemigrations --check --dry-run`
-reported no drift. The first full-suite retry overlapped its disposable test
-database teardown and failed; the single isolated rerun completed successfully.
+ingestion. Focused tests passed (28 tests) across staging, checkpoint, URL
+identity, RSS snapshot, overlap and rolling-navigation behavior. The complete
+isolated backend suite passed (3,264 tests in 136.8 seconds).
+`makemigrations --check --dry-run` reported no drift.
+
+### Durable staging import and database rollout gate
+
+The original `db-test` service uses `tmpfs`; it stopped after export and its
+database no longer survives restart. The export remained available in the
+ignored workspace staging directory. A separate empty database was migrated
+through `0053`, then imported the final 3,031-row staging file. Import result:
+3,031 inserted, two checkpoints restored. A second import produced 3,031
+unchanged, zero inserted, and zero updated. The target retained 3,031 pending
+records, zero `ScrapedContentMapping` rows, and zero `Offer` rows. Staging tests
+also verify discovery timestamps, original URLs and metadata, checksum failure,
+and checkpoint replay.
+
+The available SQL backup
+[`tracker_backup_20260926_140128.sql`](../../backups/tracker_backup_20260926_140128.sql)
+has SHA-256 `693f7b40976b71cf7e19a4d01d69f9e5b8209f94083db5efac2b9cfa33a6d2a0`.
+It restored successfully into an isolated database. It is not a valid substitute
+for the stated post-incident live backup: its migration history ends at the
+different `0033_fix_preference_json_fields` lineage, while the current branch
+has a different `0033_merge_duplicate_providers`, and applied migration
+`0013_merge_20260830_1219` is missing its `0011_availability_price_info_and_more`
+dependency. A direct migration attempt failed with
+`InconsistentMigrationHistory` before applying any migrations. The restored
+clone contains zero `ScrapedContentMapping` rows and 4 `Movie` rows, not the
+3,300-row baseline described for Compose. I did not fake or edit the migration
+history. Mapping IDs and field hashes therefore cannot be compared against the
+live baseline from this file.
+
+**Persistent rollout readiness: blocked on a current, verified migration-0049
+backup.** The explicit rollout plan is:
+
+1. Produce a fresh restricted backup from the Compose database at `0049`; verify
+   its checksum and record the mapping count and ordered ID/field hashes.
+2. Restore that backup to an isolated PostgreSQL clone. Confirm the migration
+   ledger is consistent with this branch before running any migration.
+3. Apply `0050`–`0053` explicitly in the clone. Compare mapping IDs, row count,
+   and hashes of all pre-existing mapping fields; investigate any difference.
+4. Import the staged inventory twice. Require first-pass counts to match the
+   manifest, second-pass `unchanged` count to equal 3,031, and zero mapping,
+   TMDb association, or offer changes.
+5. Restore the backup into a second clone to verify rollback. Only after these
+   checks should a separate rollout be proposed and authorized. No live
+   migration or import was run here.
 
 ### Why earlier probes returned no listings
 
