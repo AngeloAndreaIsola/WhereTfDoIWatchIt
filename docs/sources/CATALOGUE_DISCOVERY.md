@@ -324,6 +324,132 @@ and guarded migration modules). The complete isolated backend suite passed
 drift, both restored clones passed `migrate --check` at `0053`, and
 `git diff --check` passed.
 
+### Continued discovery and import preflight (`55571ca` follow-up)
+
+Before collection, both expected artifacts matched their checksums and the
+live Compose counts matched the verified backup: 3,300 legacy mappings, 50
+providers, 0 discoveries, and tracker migration `0053`. The mapping field hash
+remained `a4dc1f57b43fa66cbeb48107af072154f2694637d23e4b6c0a1a34d67ec88079`,
+the ordered ID hash remained
+`6307580580df5823adc49e2b91631216e90268b7d22c2cdad9982a4e7548a09a`, and
+provider and migration hashes still match the backup restore. No new backup
+was needed.
+
+Four bounded Hydra invocations used a request budget of 8 each, zero retries,
+and one-second delay. Each used 1 robots check plus 7 listing fetches. Pages
+were resumed from the imported cursors, not sampled out of order:
+
+| Provider/partition | Sequential pages in this follow-up | Listing records observed | New identities persisted | Duplicates | Requests | Latest checkpoint / navigation window |
+|---|---:|---:|---:|---:|---:|---|
+| HydraHD movies | 90–103 (two batches) | 672 | 672 | 0 | 16 | page 103; navigation max 106 |
+| HydraHD TV | 35–48 (two batches) | 672 | 672 | 0 | 16 | page 48; navigation max 51 |
+| AnimeWorld RSS | 1 snapshot | 15 | 0 new GUIDs; 15 metadata updates | 0 | 2 | RSS build `Tue, 17 Nov 2026 14:53:12 GMT` |
+
+Hydra totals are not exposed. Its navigation maxima are rolling links, not
+catalogue totals: movie navigation moved from 99 at page 96 to 106 at page
+103; TV navigation moved from 44 at page 41 to 51 at page 48. Pages were
+traversed sequentially with no observed repeated pages or duplicate URL
+identities, but no terminal page was reached. Coverage remains partial and
+pagination can shift while the site changes. The four Hydra batches dispatched
+32 HTTP requests (28 listing pages and 4 robots checks); RSS dispatched 2 (1
+feed and 1 robots check). No retries occurred.
+
+The RSS snapshot retained the same 15 nonempty GUIDs and no new GUIDs. The
+baseline had one additional URL-identified AnimeWorld record without a GUID;
+that record was retained. All 15 observed GUID records changed only
+`original_metadata.feed_title`. The other 64 AnimeWorld records remain earlier
+A–Z observations marked restricted; no A–Z request was made. The RSS is a
+recent-updates snapshot, not historical archive coverage.
+
+The three other provider discovery commands returned `BLOCKED` before HTTP
+dispatch, each with `requests_made=0`. Current candidate domains remain
+unverified: CineBlog01 `.run` is not linked to the historical AGCOM domains;
+AltaDefinizione `.ink` is not linked to the provider and its cited historical
+AGCOM host is distinct; StreamingCommunity `.army` has no corroborated link.
+Recent official AGCOM material names other StreamingCommunity domains
+(`.kitchen`, `.marketing`, `.land`) and does not establish `.army` provenance
+([AGCOM order](https://www.agcom.it/sites/default/files/provvedimenti/determina/2026/DDA_14822%20e%20DDA_14827_determina_24_26_dda.pdf)).
+No candidate catalogue page was fetched or ingested. KissKH was not requested;
+its HTTP 451 remains a hard stop and was not bypassed.
+
+The durable export is now **3,703 records**: 3,624 HydraHD and 79 AnimeWorld.
+The 3,031-record source artifact was retained as
+`catalogue-inventory-v1-baseline-3031.jsonl.gz` with its original manifest.
+The current gzip SHA-256 is
+`c2a38c523fb2884b2a3b5e261d261a32b3ef47143ab5e5505d9286b6e9e3cd28`; the
+manifest SHA-256 is
+`9316864a87ff2265ff82fc4e0f9b78d84ee6d2f623ac8e70f83a866c3b08516f`. A
+record-by-record identity comparison found zero missing baseline identities,
+672 new HydraHD URL identities, and 15 changed AnimeWorld metadata records.
+There are 3,703 unique provider-scoped identity URLs and no duplicate identity
+groups. All 3,703 discoveries remain pending classification. The directory is
+outside Git worktrees and database volumes, mode `0700`; artifacts are mode
+`0600`.
+
+The current backup was restored a second time into isolated database
+`wtdwi_final_import_verify`. Importing the new export inserted 3,703 records
+and restored five provider states (the two discovery checkpoints and three
+provenance-blocked states); replay inserted/updated zero and reported 3,703
+unchanged. The clone retained 3,300 legacy mappings with matching ID and field
+hashes, zero movies, zero `ProviderContent`, zero `ContentMapping`, and zero
+offers. The importer's single transaction makes interruption safe: a failed
+transaction rolls back and the complete command can be replayed idempotently.
+
+The exact live-import command is prepared but **not run**. It now imports all
+3,703 current staged records, including subsequent discoveries:
+
+```sh
+STAGING_DIR=/Users/angeloandreaisola/Documents/catalogue-staging/WhereTfDoIWatchIt
+docker compose run --rm --no-deps --entrypoint python \
+  -v "$STAGING_DIR:/app/stage:ro" backend \
+  manage.py import_catalogue_inventory \
+  --data /app/stage/catalogue-inventory-v1.jsonl.gz \
+  --manifest /app/stage/catalogue-inventory-v1.manifest.json
+```
+
+Preconditions are: separate explicit authorization for the live import; live
+database still identified as project `new-sources`, DB `tracker`, migration
+`0053`; fresh backup checksum and restore test verified; live legacy mapping
+count/hash equal the backup; staging checksums and provider counts equal this
+manifest; and application writes paused during the operation. Verify after
+import: 3,703 discoveries (HydraHD 3,624; AnimeWorld 79), 3,703 pending,
+unchanged legacy mapping IDs/field hash, zero new canonical mappings or movies,
+zero offers, and five restored provider states. Replay and require 3,703
+unchanged with zero inserts/updates. Live import remains pending authorization.
+
+### Migration-startup incident follow-up
+
+The backend container that applied `0050`–`0053` was created from image
+`sha256:80079c2d…` on 2026-11-16 07:03 UTC. Its baked `/entrypoint.sh` contained
+`python manage.py migrate`; Compose selected that image entrypoint with command
+`python manage.py runserver`. The source safeguard was committed later at
+`7d283d2` (2026-11-17 11:19 UTC), but the running container was not rebuilt.
+Its logs show the migrations applied at 13:41:19–13:41:20 UTC. No
+`--profile ops` guarded migration invocation or explicit target confirmation
+appears in the available shell history. The migration service was not used.
+The Docker event buffer did not retain the initiating start command; the
+available history shows `docker builder prune -af` at 13:41 UTC but does not
+establish that as the restart cause. Intentional authorization cannot be
+verified from the available evidence.
+
+To fail closed on stale images, `docker-compose.yml` now invokes
+`/bin/sh /runtime-guard-entrypoint.sh` and bind-mounts the checked-out
+`backend/entrypoint.sh` read-only at that path. A stale image lacking the
+mounted runtime path cannot start; when mounted, the host script runs
+`migrate --check`, never `migrate`. A regression test verifies the Compose
+override and mount. The backend was recreated with the updated Compose
+configuration, using `BACKEND_PORT=8000` because the root Compose project owns
+port 8002. Initial attempts failed closed on the occupied port and then the
+source script's missing executable bit; Compose now invokes it through `/bin/sh`.
+The current container is running with the read-only host guard mounted. Its
+startup completed without applying migrations; the live DB remains at `0053`
+with 3,300 mappings and zero discovery/offer rows. No live migration or import
+was performed.
+After this repair, focused tests passed (37/37) and the full isolated backend
+suite passed (3,265 tests in 128.4 seconds). The restored clone passed
+`migrate --check`; `makemigrations --check --dry-run` and `git diff --check`
+also passed.
+
 ### Why earlier probes returned no listings
 
 The earlier probe reports did not retain exact HTTP statuses for several

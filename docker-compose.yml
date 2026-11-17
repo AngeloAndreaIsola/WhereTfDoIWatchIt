@@ -16,6 +16,12 @@ services:
 
   backend:
     build: ./backend
+    # Mount and select the runtime guard from the checked-out source so a
+    # container recreated from a stale image cannot run its baked entrypoint.
+    # If the host script is unavailable, startup fails closed.
+    entrypoint: ["/bin/sh", "/runtime-guard-entrypoint.sh"]
+    volumes:
+      - ./backend/entrypoint.sh:/runtime-guard-entrypoint.sh:ro
     command: gunicorn config.wsgi:application --bind 0.0.0.0:8000 --timeout 120 --workers 3 --threads 2
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
@@ -42,7 +48,7 @@ services:
     ports:
       # v1 has no authentication boundary; local Compose must never publish
       # refresh/admin mutations to the LAN by default.
-      - "127.0.0.1:8002:8000"
+      - "127.0.0.1:${BACKEND_PORT:-8002}:8000"
     depends_on:
       db:
         condition: service_healthy

@@ -31,6 +31,7 @@ services:
     volumes:
       - ./scripts:/app/scripts:ro
       - ./docker-compose.test.yml:/app/docker-compose.test.yml:ro
+      - ./docker-compose.yml:/app/docker-compose.yml:ro
     depends_on:
       db-test:
         condition: service_healthy

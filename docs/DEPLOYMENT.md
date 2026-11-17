@@ -99,6 +99,29 @@ both `--app-label tracker --target 0050` (or the intended app and target).
 The command refuses a mismatch or missing confirmation. Do not use a routine
 backend `run` command to apply migrations.
 
+The backend service selects the runtime guard from the checked-out Compose
+configuration and bind-mounts it read-only. This also protects against an old
+image whose baked entrypoint may predate the guard. When updating an existing
+stack, recreate the backend from the current Compose configuration; `docker
+compose restart backend` only restarts the old container configuration and
+does not apply a new entrypoint or mount:
+
+```bash
+docker compose up -d --build --force-recreate backend
+docker inspect "$(docker compose ps -q backend)" \
+  --format '{{json .Config.Entrypoint}} {{range .Mounts}}{{.Destination}} {{.RW}} {{end}}'
+```
+
+Confirm the entrypoint invokes `/bin/sh /runtime-guard-entrypoint.sh`, mounted
+read-only from `backend/entrypoint.sh`, before reopening application writes. A
+missing guard mount must leave the backend stopped. Do not run `manage.py migrate`
+through `exec`, `run`, or the runtime entrypoint; use only the separately
+confirmed migration service above.
+
+The backend host port defaults to 8002 and can be changed with `BACKEND_PORT`
+when another local Compose project owns that port; it remains bound to
+`127.0.0.1`.
+
 ### One-off legacy scraper backfill (first deploy after the read-path migration)
 Databases that predate the canonical read path store scraper rows only in `tracker.ScrapedContentMapping`. Project them once so the unified catalogue serves them:
 

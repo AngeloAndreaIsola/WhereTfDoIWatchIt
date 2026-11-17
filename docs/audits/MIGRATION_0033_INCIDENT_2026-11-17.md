@@ -87,6 +87,66 @@ passed (3,264 tests in 125.0 seconds), and `makemigrations --check --dry-run`
 reported no model drift. Both the fresh-backup clone and the `0049` backup clone
 passed migration checks through `0053`.
 
+## Startup migration root cause and fail-closed repair (`55571ca` follow-up)
+
+The migration process was the backend container's baked entrypoint, not the
+guarded `migrate` service. The live container was created on 2026-11-16 07:04
+UTC from image `sha256:80079c2d16711916099e35d4fdc51bf135fe0f64122d1a603a406cf6aa2ba7a0`
+(image created 07:03 UTC). Its inspected `/entrypoint.sh` was 95 bytes, SHA-256
+`30d969eb485f437055b6db372336523ac4167399575cdf04d74ba5f8b08ee2ee`, and ran
+`python manage.py migrate` before `collectstatic` and the service command.
+Compose configured the backend command as `python manage.py runserver`, with
+the image entrypoint left in place. The dev Compose overlay also bind-mounted
+the current `backend/` tree at `/app`, so the stale image's old startup script
+ran the current checked-out Django migration code. At 13:41:19–13:41:20 UTC
+that path applied `0050`–`0053`.
+
+The read-only startup guard had been committed in `7d283d2` at 2026-11-17
+12:19 local time (11:19 UTC), after the running image was built. The source
+entrypoint in that commit ran `migrate --check`, but a later start of the
+existing container continued to use its stale image and bypassed that source
+change. No `--profile ops` migration-service invocation or exact target
+confirmation was found in the available shell history. The Docker event buffer
+no longer retained the start event's initiating command. Local history records
+`docker builder prune -af` at 13:41 UTC but no `docker compose ... migrate`
+operation in that window. Therefore the startup mechanism and stale image are
+confirmed; the exact command that started the container and whether a human
+intended the schema update cannot be established from available records.
+
+The Compose backend definition now invokes
+`/bin/sh /runtime-guard-entrypoint.sh` and bind-mounts the checked-out
+`backend/entrypoint.sh` there read-only. That host script only runs
+`migrate --check`, `collectstatic`, and the configured service command. A
+stale image cannot silently fall back to its old baked migration entrypoint:
+the Compose override selects the host-mounted script, and a missing
+mount/path fails startup. Regression coverage verifies the Compose entrypoint
+and mount. The test Compose service mounts the configuration read-only for
+this check.
+
+The live backend was recreated with the updated Compose files and current
+read-only entrypoint guard. The first recreate attempt failed closed because
+port 8002 is owned by the root Compose project; the next attempt also failed
+closed because the checked-out script did not have its executable bit set.
+Invoking the mounted script through `/bin/sh` and setting the `new-sources`
+host port to 8000 resolved both issues without stopping the other project.
+Inspection confirms `entrypoint=["/bin/sh", "/runtime-guard-entrypoint.sh"]`
+and a read-only mount from this worktree's `backend/entrypoint.sh`. The backend
+is running. Startup passed its read-only migration check; migration ledger
+timestamps and database counts remain unchanged. No live migration or
+inventory import was performed. The service was briefly unavailable during
+recreation.
+
+The live database still matches the verified backup: 3,300 mappings; mapping
+ID and field hashes, provider-row hash, and migration-history hash remain
+unchanged. The current inventory has since grown to 3,703 records (3,624
+HydraHD and 79 AnimeWorld); its current gzip SHA-256 is
+`c2a38c523fb2884b2a3b5e261d261a32b3ef47143ab5e5505d9286b6e9e3cd28`. It was
+imported and replayed only in disposable restored clones. Focused guard and
+catalogue tests passed after the Compose fail-closed change (37/37), and the
+complete isolated suite passed (3,265 tests in 128.4 seconds).
+`migrate --check`, `makemigrations --check --dry-run`, and `git diff --check`
+passed.
+
 ## Current Compose database and backup
 
 The inspected Compose target is project `new-sources`, service `db`, image

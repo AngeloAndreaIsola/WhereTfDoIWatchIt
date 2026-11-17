@@ -67,6 +67,21 @@ class RuntimeEntrypointSafetyTests(SimpleTestCase):
         ):
             self.assertIn(required, content)
 
+    def test_compose_backend_uses_host_mounted_runtime_guard(self):
+        from pathlib import Path
+
+        config = Path("/app/docker-compose.yml")
+        content = config.read_text(encoding="utf-8")
+        self.assertIn(
+            'entrypoint: ["/bin/sh", "/runtime-guard-entrypoint.sh"]', content
+        )
+        self.assertIn(
+            "./backend/entrypoint.sh:/runtime-guard-entrypoint.sh:ro", content
+        )
+        # Compose's backend must not fall back to an image-only entrypoint:
+        # old images contained a startup script that ran `migrate` directly.
+        self.assertNotIn('entrypoint: ["/entrypoint.sh"]', content)
+
     def test_backend_test_service_uses_a_separate_ephemeral_database(self):
         from pathlib import Path
 
