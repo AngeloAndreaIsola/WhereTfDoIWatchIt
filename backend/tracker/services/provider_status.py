@@ -63,6 +63,7 @@ from ..models import (
     CatalogueRefreshRequest,
     CatalogueRefreshStatus,
     CatalogueDiscoveryState,
+    DiscoveredCatalogueRecord,
     Provider,
     ProviderCategory,
     RefreshRun,
@@ -256,6 +257,30 @@ def provider_card_status(providers) -> dict[int, dict]:
         row.provider_id: row
         for row in CatalogueDiscoveryState.objects.filter(provider_id__in=provider_ids)
     }
+    discovered_counts: dict[int, dict[str, int]] = {}
+    for row in (
+        DiscoveredCatalogueRecord.objects.filter(provider_id__in=provider_ids)
+        .values("provider_id", "classification_state")
+        .annotate(n=Count("id"))
+    ):
+        counts = discovered_counts.setdefault(row["provider_id"], {})
+        counts[row["classification_state"]] = row["n"]
+
+    def discovery_summary(provider_id: int) -> dict:
+        discovery = discovery_rows.get(provider_id)
+        counts = discovered_counts.get(provider_id, {})
+        if discovery is None and not counts:
+            return {}
+        cursor = discovery.cursor if discovery else {}
+        report = discovery.report if discovery else {}
+        return {
+            "inventory_count": sum(counts.values()),
+            "pending_classification_count": counts.get("PENDING", 0),
+            "last_successful_sync": discovery.last_successful_checkpoint if discovery else None,
+            "last_scanned_pages": (cursor.get("parts", {}) if isinstance(cursor, dict) else {}),
+            "coverage_status": discovery.status if discovery else "UNKNOWN",
+            "error": (discovery.last_error or report.get("last_error", "")) if discovery else "",
+        }
 
     status: dict[int, dict] = {}
     for provider in providers:
@@ -274,6 +299,7 @@ def provider_card_status(providers) -> dict[int, dict]:
                 or source_slug in pending_sources,
                 "catalogue_sync_status": discovery.status if discovery else "IDLE",
                 "catalogue_sync_report": discovery.report if discovery else {},
+                "catalogue_discovery": discovery_summary(provider.id),
             }
         elif kind == SCRAPER:
             discovery = discovery_rows.get(provider.id)
@@ -289,6 +315,7 @@ def provider_card_status(providers) -> dict[int, dict]:
                 "refreshing": False,
                 "catalogue_sync_status": discovery.status if discovery else "IDLE",
                 "catalogue_sync_report": discovery.report if discovery else {},
+                "catalogue_discovery": discovery_summary(provider.id),
             }
         else:
             status[provider.id] = {
@@ -300,5 +327,6 @@ def provider_card_status(providers) -> dict[int, dict]:
                 "refreshing": False,
                 "catalogue_sync_status": "IDLE",
                 "catalogue_sync_report": {},
+                "catalogue_discovery": discovery_summary(provider.id),
             }
     return status

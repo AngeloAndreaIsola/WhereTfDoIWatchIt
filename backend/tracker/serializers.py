@@ -97,6 +97,7 @@ class ProviderSerializer(serializers.ModelSerializer):
     refreshing = serializers.SerializerMethodField()
     catalogue_sync_status = serializers.SerializerMethodField()
     catalogue_sync_report = serializers.SerializerMethodField()
+    catalogue_discovery = serializers.SerializerMethodField()
     #: Add-on relationship: the channel's base platform (slug + display name)
     #: and whether this row is an add-on at all. A channel and its platform are
     #: separately selectable, so the UI needs both to group and to explain.
@@ -130,6 +131,7 @@ class ProviderSerializer(serializers.ModelSerializer):
             "refreshing",
             "catalogue_sync_status",
             "catalogue_sync_report",
+            "catalogue_discovery",
             "is_addon",
             "parent",
             "parent_name",
@@ -177,6 +179,9 @@ class ProviderSerializer(serializers.ModelSerializer):
 
     def get_catalogue_sync_report(self, obj: Provider):
         return self._card_status(obj).get("catalogue_sync_report", {})
+
+    def get_catalogue_discovery(self, obj: Provider):
+        return self._card_status(obj).get("catalogue_discovery", {})
 
     def get_source_indicator(self, obj: Provider) -> str:
         return obj.source_indicator

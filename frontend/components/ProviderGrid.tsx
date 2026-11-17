@@ -34,6 +34,15 @@ export interface ProviderItem {
   refreshing?: boolean;
   catalogue_sync_status?: string;
   catalogue_sync_report?: { pages_scanned?: number; pages_remaining?: number | null; items_unique?: number; last_error?: string };
+  /** Pending discovery observations, separate from canonical availability. */
+  catalogue_discovery?: {
+    inventory_count?: number;
+    pending_classification_count?: number;
+    last_successful_sync?: string | null;
+    last_scanned_pages?: Record<string, number>;
+    coverage_status?: string;
+    error?: string;
+  };
   /** Site host used to fetch this card's favicon. Absent for catalogue providers, which use the brand badges. */
   favicon_domain?: string;
   /** True when this service is an add-on channel sold through a base platform. */
@@ -246,6 +255,38 @@ export default function ProviderGrid({
                       ` · ${provider.catalogue_sync_report.pages_scanned} pages scanned`}
                     {provider.catalogue_sync_report?.pages_remaining != null &&
                       ` · ${provider.catalogue_sync_report.pages_remaining} remaining`}
+                  </span>
+                )}
+                {provider.catalogue_discovery &&
+                  (provider.catalogue_discovery.inventory_count != null ||
+                    provider.catalogue_discovery.coverage_status) && (
+                  <span className="text-[10px] text-amber-700 dark:text-amber-400" role="status">
+                    Pending classification {provider.catalogue_discovery.pending_classification_count ?? 0}
+                    {provider.catalogue_discovery.inventory_count != null &&
+                      ` · ${provider.catalogue_discovery.inventory_count} discovered`}
+                  </span>
+                )}
+                {provider.catalogue_discovery?.last_scanned_pages &&
+                  Object.keys(provider.catalogue_discovery.last_scanned_pages).length > 0 && (
+                    <span className="text-[10px] text-gray-400 dark:text-gray-500">
+                      Checkpoint {Object.entries(provider.catalogue_discovery.last_scanned_pages)
+                        .map(([partition, page]) => `${partition} ${page}`)
+                        .join(" · ")}
+                    </span>
+                  )}
+                {provider.catalogue_discovery?.last_successful_sync && (
+                  <span className="text-[10px] text-gray-400 dark:text-gray-500">
+                    Last successful checkpoint {formatRelativeTime(provider.catalogue_discovery.last_successful_sync)}
+                  </span>
+                )}
+                {provider.catalogue_discovery?.coverage_status && (
+                  <span className="text-[10px] text-gray-400 dark:text-gray-500">
+                    Coverage {provider.catalogue_discovery.coverage_status.toLowerCase()}
+                  </span>
+                )}
+                {provider.catalogue_discovery?.error && (
+                  <span className="text-[10px] font-medium text-amber-700 dark:text-amber-400" role="status">
+                    {provider.catalogue_discovery.error}
                   </span>
                 )}
 

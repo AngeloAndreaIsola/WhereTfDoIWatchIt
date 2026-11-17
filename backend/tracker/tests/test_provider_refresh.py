@@ -38,6 +38,8 @@ from availability.sources import DEFAULT_SOURCE_SLUG
 from tracker.models import (
     CatalogueRefreshRequest,
     CatalogueRefreshStatus,
+    CatalogueDiscoveryState,
+    DiscoveredCatalogueRecord,
     Movie,
     Provider,
     RefreshRun,
@@ -181,6 +183,43 @@ class ProviderListCardFieldTests(TestCase):
         self.assertEqual(card["available_items"], 1)
         self.assertFalse(card["refreshing"])
         self.assertEqual(card["last_run"], provider.last_scraped_at.isoformat().replace("+00:00", "Z"))
+
+    def test_provider_card_exposes_pending_discovery_without_counting_it_as_availability(self):
+        provider = Provider.objects.get(slug="kisskh")
+        checked_at = timezone.now() - timedelta(hours=2)
+        CatalogueDiscoveryState.objects.create(
+            provider=provider,
+            status="BLOCKED",
+            cursor={"parts": {"movies": 128, "tv-shows": 73}},
+            last_successful_checkpoint=checked_at,
+            last_error="HTTP 451",
+        )
+        DiscoveredCatalogueRecord.objects.create(
+            provider=provider,
+            title="Pending title",
+            source_url="https://kisskh.example/title/1",
+            identity_url="https://kisskh.example/title/1",
+            classification_state="PENDING",
+        )
+        DiscoveredCatalogueRecord.objects.create(
+            provider=provider,
+            title="Classified title",
+            source_url="https://kisskh.example/title/2",
+            identity_url="https://kisskh.example/title/2",
+            classification_state="CLASSIFIED",
+        )
+
+        card = self._card(self.client.get("/api/providers/").json(), "kisskh")
+
+        self.assertEqual(card["available_items"], 0)
+        self.assertEqual(card["catalogue_discovery"], {
+            "inventory_count": 2,
+            "pending_classification_count": 1,
+            "last_successful_sync": checked_at.isoformat().replace("+00:00", "Z"),
+            "last_scanned_pages": {"movies": 128, "tv-shows": 73},
+            "coverage_status": "BLOCKED",
+            "error": "HTTP 451",
+        })
 
     def test_plain_provider_reports_never_run_and_active_offer_count(self):
         movie = Movie.objects.create(tmdb_id=11, title="Plained", year=2019)

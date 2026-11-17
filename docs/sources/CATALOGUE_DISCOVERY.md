@@ -926,3 +926,64 @@ checkpoint preservation. The complete isolated backend suite passed (3,267
 tests). No frontend files changed. The live database was only read. AnimeWorld
 RSS state and the prior KissKH and provider-provenance restrictions remain
 unchanged.
+
+## Provider inventory visibility and provenance follow-up (2026-11-17)
+
+### Read-only rollout preflight
+
+The external durable inventory remains at 4,903 pending records: 4,824 HydraHD
+and 79 AnimeWorld. Its gzip SHA-256 remains
+`17d0cdc6dfb62eebfcdf2b57a16c702ac8eb2cc81fbfdaf41f5472361f683764`; the
+manifest SHA-256 remains
+`ab35047139e9874f06bb2b178703a5ce02ae7b883f9416d39a0af1063b088c8e`. The
+pre-import backup is still present at
+`/Users/angeloandreaisola/Documents/database-backups/WhereTfDoIWatchIt/new-sources_tracker_20261117T143100Z.dump`
+with SHA-256
+`fd04b86731fdc1419f5cc78ea1cab7186d494750137e8f4b67f9e038d557703e`; its
+custom archive header and table of contents were readable in the isolated
+`db-test` container. This exact backup had already passed a full disposable
+restore test in the previous rollout audit.
+
+Read-only checks again identified Compose project `new-sources`, database
+`tracker`, tracker migration `0053_catalogue_url_identity_provenance`, and
+3,300 existing `ScrapedContentMapping` rows. Discovery records, canonical
+movies, `ProviderContent`, `ContentMapping`, and offers all remain at zero.
+No import, migration, or other live write was performed. The live import still
+requires separate explicit authorization.
+
+### Provider-management cards
+
+The existing `/api/providers/` response and subscriptions provider cards now
+include batched discovery state separately from canonical availability:
+inventory total, pending-classification count, last committed checkpoint
+timestamp, scanned page by partition, coverage status, and the current
+discovery error/restriction. Pending discoveries do not increase the
+available-title count and do not create canonical content or offers. The
+pending-count card treatment is labeled separately from availability.
+
+This is a presentation and API check against isolated fixtures. The live
+inventory remains empty pending authorization, so live card counts cannot yet
+be verified. Focused backend provider-card tests passed (17); the ProviderGrid
+component tests passed (11). The complete isolated backend suite passed
+(3,267 tests in 129.2 seconds); the frontend suite passed (275 tests across 33
+files).
+
+### Other-provider source provenance
+
+No suitable current source was established for ingestion:
+
+- **CineBlog01:** AGCOM's 2026 record describes a redirect from `.ceo` to
+  `.cc`; it does not validate the configured `.run` candidate or establish a
+  permitted metadata interface. [AGCOM 47/26/DDA](https://www.agcom.it/sites/default/files/provvedimenti/determina/2026/DDA_14849_determina_47_26_dda.pdf).
+- **AltaDefinizione:** AGCOM's 2018 decision orders blocking access to the
+  historical `.ink` host. It is not evidence that a present-day alternate
+  domain is the same operator or offers a permitted feed. [AGCOM 145/18/DCA](https://www.agcom.it/provvedimenti/determina-145-18-dca).
+- **StreamingCommunity:** AGCOM records describe a domain-change portal used
+  to reach a site subject to blocking orders. They do not verify the `.army`
+  candidate; no alternate domain was used to work around access restrictions.
+  [AGCOM proceeding 1513/DDA/GDS](https://www.agcom.it/sites/default/files/migration/comunicazione/Comunicazione%2030-09-2021%201633447127913.pdf).
+
+No candidate catalogue page was fetched and no records were added for these
+providers. Their discovery states remain `BLOCKED` with zero dispatches. No
+new AnimeWorld RSS item was fetched in this follow-up; its permitted RSS
+checkpoint remains resumable. KissKH remains paused at HTTP 451.

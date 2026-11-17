@@ -62,6 +62,28 @@ const refreshableProviders: ProviderItem[] = [
 ];
 
 describe("ProviderGrid Component", () => {
+  it("shows pending discovery separately from available titles", () => {
+    const provider = {
+      ...refreshableProviders[1],
+      available_items: 0,
+      catalogue_discovery: {
+        inventory_count: 12,
+        pending_classification_count: 12,
+        last_successful_sync: new Date(Date.now() - 60_000).toISOString(),
+        last_scanned_pages: { movies: 8, "tv-shows": 3 },
+        coverage_status: "PARTIAL",
+        error: "HTTP 451",
+      },
+    };
+    render(<ProviderGrid providers={[provider]} onToggle={vi.fn()} />);
+
+    expect(screen.getByText("0 discovered titles")).toBeInTheDocument();
+    expect(screen.getByText("Pending classification 12 · 12 discovered")).toBeInTheDocument();
+    expect(screen.getByText("Checkpoint movies 8 · tv-shows 3")).toBeInTheDocument();
+    expect(screen.getByText("Coverage partial")).toBeInTheDocument();
+    expect(screen.getByText("HTTP 451")).toBeInTheDocument();
+  });
+
   it("renders major providers grid with active/inactive states", () => {
     render(<ProviderGrid providers={mockProviders} onToggle={vi.fn()} />);
 
