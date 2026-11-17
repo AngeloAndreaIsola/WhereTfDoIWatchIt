@@ -473,6 +473,10 @@ class DiscoveredCatalogueRecord(models.Model):
     provider_native_id = models.CharField(max_length=255, blank=True, default="")
     title = models.CharField(max_length=255)
     source_url = models.URLField(max_length=500)
+    identity_url = models.URLField(max_length=500, blank=True, default="")
+    source_urls_seen = models.JSONField(default=list, blank=True)
+    provenance_state = models.CharField(max_length=24, default="PROVENANCE_UNVERIFIED")
+    access_policy_state = models.CharField(max_length=16, default="UNKNOWN")
     discovered_at = models.DateTimeField(auto_now_add=True)
     original_metadata = models.JSONField(default=dict, blank=True)
     classification_state = models.CharField(max_length=12, choices=CLASSIFICATION_CHOICES, default="PENDING")
@@ -488,9 +492,9 @@ class DiscoveredCatalogueRecord(models.Model):
                 name="uniq_discovered_provider_native_id",
             ),
             models.UniqueConstraint(
-                fields=["provider", "source_url"],
-                condition=models.Q(provider_native_id=""),
-                name="uniq_discovered_provider_source_url",
+                fields=["provider", "identity_url"],
+                condition=models.Q(("provider_native_id", ""), models.Q(("identity_url", ""), _negated=True)),
+                name="uniq_discovered_provider_identity_url",
             ),
         ]
         indexes = [models.Index(fields=["provider", "classification_state"], name="idx_disc_catalog_class")]

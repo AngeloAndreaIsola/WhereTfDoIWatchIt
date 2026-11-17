@@ -32,7 +32,7 @@ class CatalogueDiscoveryTests(TestCase):
                     _scraper.session.get("https://fixture.invalid/page")
                     return [fixture_item(provider_slug, part=part)], True, 1, "fixture_terminal_page"
 
-                with patch("tracker.services.catalogue_discovery._page", side_effect=page), patch("requests.Session.get", return_value=object()):
+                with patch("tracker.services.catalogue_discovery.PROVENANCE_BLOCKED", {}), patch("tracker.services.catalogue_discovery._page", side_effect=page), patch("requests.Session.get", return_value=object()):
                     result = run_discovery(slug, request_budget=10, delay=0)
                 self.assertEqual(result["status"], "COMPLETED")
                 self.assertEqual(result["pages_scanned"], len(result["checkpoint"]["done"]))
@@ -51,13 +51,14 @@ class CatalogueDiscoveryTests(TestCase):
                 self.assertEqual(CatalogueDiscoveryState.objects.get(provider=self.providers[slug]).status, "COMPLETED")
 
     def test_budget_exhaustion_is_partial_and_resume_uses_committed_checkpoint(self):
-        slug = "animeworld"
+        slug = "hydrahd"
 
         def pages(_scraper, provider_slug, part, page, query=None):
             _scraper.session.get("https://fixture.invalid/page")
             return [fixture_item(provider_slug, page)], page == 2, 2, "fixture_terminal_page"
 
-        with patch("tracker.services.catalogue_discovery._page", side_effect=pages), patch("requests.Session.get", return_value=object()):
+        with patch("tracker.services.catalogue_discovery._parts", return_value=["movies"]), \
+             patch("tracker.services.catalogue_discovery._page", side_effect=pages), patch("requests.Session.get", return_value=object()):
             first = run_discovery(slug, request_budget=1, delay=0)
             self.assertEqual(first["status"], "PARTIAL")
             self.assertEqual(first["pages_remaining"], 1)
@@ -73,7 +74,8 @@ class CatalogueDiscoveryTests(TestCase):
             _scraper.session.get("https://fixture.invalid/page")
             return [fixture_item(provider_slug, part=part)], True, 1, "fixture_terminal_page"
 
-        with patch("tracker.services.catalogue_discovery._page", side_effect=one_page), \
+        with patch("tracker.services.catalogue_discovery.PROVENANCE_BLOCKED", {}), \
+             patch("tracker.services.catalogue_discovery._page", side_effect=one_page), \
              patch("tracker.services.catalogue_discovery._parts", return_value=["2"]), \
              patch("requests.Session.get", return_value=object()):
             first = run_discovery(slug, request_budget=2, delay=0)
@@ -97,7 +99,8 @@ class CatalogueDiscoveryTests(TestCase):
             )
             return [item], True, 1, "fixture_terminal_page"
 
-        with patch("tracker.services.catalogue_discovery._page", side_effect=one_page), \
+        with patch("tracker.services.catalogue_discovery.PROVENANCE_BLOCKED", {}), \
+             patch("tracker.services.catalogue_discovery._page", side_effect=one_page), \
              patch("tracker.services.catalogue_discovery._parts", return_value=["/"]), \
              patch("requests.Session.get", return_value=object()):
             first = run_discovery(slug, request_budget=2, delay=0)
@@ -128,7 +131,8 @@ class CatalogueDiscoveryTests(TestCase):
             )
             return [item], True, 1, "fixture_terminal_page"
 
-        with patch("tracker.services.catalogue_discovery._page", side_effect=two_partitions), \
+        with patch("tracker.services.catalogue_discovery.PROVENANCE_BLOCKED", {}), \
+             patch("tracker.services.catalogue_discovery._page", side_effect=two_partitions), \
              patch("tracker.services.catalogue_discovery._parts", return_value=["film", "series"]), \
              patch("requests.Session.get", return_value=object()):
             result = run_discovery(slug, request_budget=3, delay=0)
@@ -136,7 +140,8 @@ class CatalogueDiscoveryTests(TestCase):
         records = DiscoveredCatalogueRecord.objects.filter(provider=self.providers[slug])
         self.assertEqual(records.count(), 1)
         self.assertEqual(records.get().provider_native_id, "7")
-        self.assertEqual(records.get().source_url, "https://sc.example/titles/7-series")
+        self.assertEqual(records.get().source_url, "https://sc.example/titles/7-film")
+        self.assertEqual(records.get().source_urls_seen, ["https://sc.example/titles/7-film", "https://sc.example/titles/7-series"])
         self.assertEqual(records.get().classification_state, "PENDING")
         self.assertEqual(result["duplicate_native_ids_across_partitions"], 1)
         self.assertEqual(result["items_inserted"], 1)

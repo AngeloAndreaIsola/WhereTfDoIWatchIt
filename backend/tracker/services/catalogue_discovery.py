@@ -27,9 +27,15 @@ from tracker.scrapers.streamingcommunity import BROWSE_PATHS as SC_PATHS
 from tracker.scrapers.altadefinizione import BROWSE_PATHS as AD_PATHS
 from tracker.services.scraped_mapping import persist_scraped_item, provider_content_id_for_item
 from tracker.services.bulk_refresh import try_source_lock, release_source_lock
+from tracker.services.catalogue_identity import normalize_catalogue_url
 
 
 PROVIDERS = {"animeworld", "kisskh", "hydrahd", "cineblog01", "streamingcommunity", "altadefinizione"}
+PROVENANCE_BLOCKED = {
+    "cineblog01": "PROVENANCE_UNVERIFIED: current .run candidate is not linked to the historical AGCOM domains",
+    "altadefinizione": "PROVENANCE_UNVERIFIED: current .ink candidate is not linked to the provider; the cited AGCOM host is distinct",
+    "streamingcommunity": "PROVENANCE_UNVERIFIED: current .army candidate has no corroborated provider-domain linkage",
+}
 
 
 class _RequestBudgetReached(BaseException):
@@ -128,43 +134,48 @@ def _same_persisted_observation(mapping, item):
 
 def _persist_unclassified_observation(*, provider, item, partition):
     """Persist provider evidence without projecting an inferred media type."""
-    native_id = provider_content_id_for_item(item)
-    identity = {"provider": provider}
-    identity["provider_native_id" if native_id else "source_url"] = native_id or item.source_url
-    prior = DiscoveredCatalogueRecord.objects.filter(**identity).first()
-    if prior is None and native_id:
-        # Promote an earlier URL-keyed observation when a later listing adds
-        # the provider ID, rather than retaining two records for one title.
-        prior = DiscoveredCatalogueRecord.objects.filter(
-            provider=provider,
-            provider_native_id="",
-            source_url=item.source_url,
-        ).first()
-    metadata = dict(item.raw_payload) if isinstance(item.raw_payload, dict) else {}
+    payload = item.raw_payload if isinstance(item.raw_payload, dict) else {}
+    native_id = str(payload.get("guid") or provider_content_id_for_item(item) or "").strip()
+    identity_url = normalize_catalogue_url(provider.slug, item.source_url)
+    prior = DiscoveredCatalogueRecord.objects.filter(provider=provider, provider_native_id=native_id).first() if native_id else None
+    by_url = DiscoveredCatalogueRecord.objects.filter(provider=provider, identity_url=identity_url).first() if identity_url else None
+    if prior is None and (by_url is None or not by_url.provider_native_id or not native_id):
+        prior = by_url
+    metadata = dict(payload)
+    metadata["observed_source_url"] = item.source_url
     metadata.update({
         "unverified_discovery": True,
         "catalogue_partition": partition,
         "listing_content_type_hint": item.content_type,
     })
-    values = {
-        "title": item.title,
-        "source_url": item.source_url,
-        "original_metadata": metadata,
-    }
+    provenance = payload.get("provenance_state", "SELF_ASSERTED" if provider.slug == "hydrahd" else "PROVENANCE_UNVERIFIED")
+    access = payload.get("access_policy_state", "PERMITTED" if provider.slug == "hydrahd" else "UNKNOWN")
     if prior is None:
+        metadata["source_urls_seen"] = [item.source_url]
         DiscoveredCatalogueRecord.objects.create(
             provider=provider,
             provider_native_id=native_id,
+            source_url=item.source_url,
+            identity_url=identity_url,
+            source_urls_seen=[item.source_url],
+            provenance_state=provenance,
+            access_policy_state=access,
             classification_state="PENDING",
             classified_content_type=None,
-            discovery_verification_state="OBSERVED",
-            **values,
+            discovery_verification_state="VERIFIED" if provenance == "VERIFIED" else "OBSERVED",
+            title=item.title,
+            original_metadata=metadata,
         )
         return "inserted"
+    seen_urls = list(dict.fromkeys((prior.source_urls_seen or []) + [item.source_url]))
+    metadata["source_urls_seen"] = seen_urls
+    values = {"title": item.title, "original_metadata": metadata, "identity_url": identity_url,
+              "source_urls_seen": seen_urls, "provenance_state": provenance, "access_policy_state": access}
     unchanged = (
         prior.title == item.title
-        and prior.source_url == item.source_url
+        and prior.identity_url == identity_url
         and prior.original_metadata == metadata
+        and prior.source_urls_seen == seen_urls
     )
     if unchanged:
         return "unchanged"
@@ -181,7 +192,7 @@ def _persist_unclassified_observation(*, provider, item, partition):
 def _parts(slug):
     if slug == "kisskh": return [v[0] for v in KissKHScraper.BROWSE_TYPES]
     if slug == "hydrahd": return ["movies", "tv-shows"]
-    if slug == "animeworld": return ["az-list"]
+    if slug == "animeworld": return ["rss-animes"]
     if slug == "cineblog01": return [v[0] for v in BROWSE_SECTIONS]
     if slug == "streamingcommunity": return [p for p, _ in SC_PATHS]
     return [p for p, _ in AD_PATHS]
@@ -226,35 +237,30 @@ def _page(scraper, slug, part, page, query=None):
         ), terminal, page_total, "api_clamped_terminal_page" if clamped_to_terminal else "api_total_count"
     if slug == "hydrahd":
         kind = "series" if part == "tv-shows" else "movie"
-        last = None
-        for domain in scraper.DOMAINS:
-            raw = scraper.fetch_url(f"https://{domain}/{part}/date/{page}", headers=scraper.HEADERS)
-            if isinstance(raw, str):
-                last = raw
-                break
+        domain = "hydrahd.gd"
+        last = scraper.fetch_url(f"https://{domain}/{part}/date/{page}", headers=scraper.HEADERS)
         if last is None: return None, False, None, "unavailable_or_blocked"
         items = scraper.parse_html(last, default_content_type=kind, base_url=f"https://{domain}")
-        soup_links = re.findall(r'(?:[?&]page=|/page/)(\d+)', last, re.I)
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(last, "html.parser")
+        soup_links = []
+        for anchor in soup.find_all("a", href=True):
+            match = re.search(rf"/{re.escape(part)}/date/(\d+)(?:/|$|[?#])", anchor["href"], re.I)
+            if match: soup_links.append(int(match.group(1)))
         pages = max([int(v) for v in soup_links]) if soup_links else None
         if not items and page == 1:
             return None, False, None, "unexpected_or_empty_listing_html"
         terminal = page >= pages if pages is not None else not items
-        return items, terminal, pages, "pagination_links_or_empty_page"
-    if slug == "animeworld":
-        raw = scraper.fetch_url(f"https://www.animeworld.ac/az-list?page={page}", headers={"User-Agent": "Mozilla/5.0"})
-        if not isinstance(raw, str): return None, False, None, "unavailable_or_blocked"
-        items = scraper.parse_html(raw, category=None)
-        if not items and page == 1:
-            return None, False, None, "unexpected_or_empty_archive_html"
-        page_links = [int(v) for v in re.findall(r"/az-list\?page=(\d+)", raw, re.I)]
-        pages = max(page_links) if page_links else None
-        # The A-Z archive owns type identity; do not infer every entry as a series.
+        evidence = "partition_pagination_links" if pages is not None else "empty_page_terminal" if terminal else "sequential_route_unbounded"
         for item in items:
-            if item.content_type not in ("movie", "series"):
-                item.content_type = "movie"
-            item.raw_payload.update({"unverified_discovery": True, "provenance": "animeworld_az_list"})
-        terminal = page >= pages if pages is not None else not items
-        return items, terminal, pages, "archive_pagination_or_empty_page"
+            item.raw_payload = {**(item.raw_payload or {}), "provenance_state": "SELF_ASSERTED", "access_policy_state": "PERMITTED", "catalogue_partition": part, "listing_page": page}
+        return items, terminal, pages, evidence
+    if slug == "animeworld":
+        if part != "rss-animes" or page > 1: return None, False, None, "official_rss_is_single_snapshot"
+        raw = scraper.fetch_url("https://www.animeworld.ac/rss/animes", headers={"Accept": "application/rss+xml, application/xml"})
+        if not isinstance(raw, str): return None, False, None, "unavailable_or_blocked"
+        items = scraper.parse_rss(raw)
+        return items, False, None, "official_rss_snapshot_not_full_archive"
     if slug == "cineblog01":
         section = next((x for x in BROWSE_SECTIONS if x[0] == part), None)
         if not section: return None, False, None, "unknown_section"
@@ -301,6 +307,18 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
     try:
         provider = Provider.objects.get(slug=slug)
         scraper = resolve_scraper_class(slug)()
+        if slug in PROVENANCE_BLOCKED:
+            report = {
+                "status": "BLOCKED", "mode": mode, "pages_scanned": 0,
+                "items_seen": 0, "items_unique": 0, "items_inserted": 0,
+                "items_pending_classification": 0, "requests_made": 0,
+                "last_error": PROVENANCE_BLOCKED[slug],
+            }
+            if not dry_run:
+                state, _ = CatalogueDiscoveryState.objects.get_or_create(provider=provider)
+                state.status, state.mode, state.report, state.last_error = "BLOCKED", mode, report, report["last_error"]
+                state.save()
+            return {**report, "provider": slug, "dry_run": dry_run}
         # Count every dispatch, including domain fallback, and retry only
         # transient network/5xx/429 failures with an explicit bounded limit.
         requests_made = 0
@@ -444,7 +462,7 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                 return {**report, "provider": slug, "requests_made": requests_made, "dry_run": dry_run, "query": targeted_query}
             for part in parts:
                 if part in completed_parts: continue
-                page = int((cursor.get("parts") or {}).get(part, 0)) + 1
+                page = 1 if slug == "animeworld" else int((cursor.get("parts") or {}).get(part, 0)) + 1
                 while requests_made < request_budget:
                     try:
                         rows, terminal, total_pages, evidence = _page(scraper, slug, part, page, targeted_query)
@@ -477,6 +495,12 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                             "partition": part, "previous": int(old_total), "current": int(response_total),
                         })
                     observed_count = len(rows) + len(pending_rows)
+                    report["pages_scanned"] += 1
+                    report["items_seen"] += observed_count
+                    if total_pages is not None:
+                        known_pages_by_part[part] = total_pages
+                        cursor.setdefault("total_pages", {})[part] = total_pages
+                    report["pages_discovered"] = max(report["pages_discovered"], total_pages or page)
                     fingerprint_ids = [
                         str((item.raw_payload or {}).get("id") or (item.raw_payload or {}).get("title_id") or item.source_url)
                         for item in rows
@@ -487,17 +511,13 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                     ).encode("utf-8")).hexdigest()
                     previous_fingerprint = (cursor.get("fingerprints") or {}).get(part)
                     if observed_count and not terminal and previous_fingerprint == fingerprint:
+                        report["duplicates_skipped"] += observed_count
                         report["status"] = "PARTIAL"
                         report["last_error"] = f"{part}: repeated non-terminal page detected"
                         break
-                    report["pages_scanned"] += 1
-                    if total_pages is not None:
-                        known_pages_by_part[part] = total_pages
                     totals = getattr(scraper, "catalogue_totals", {})
                     if all(value in totals for value in parts):
                         report["known_site_total"] = sum(totals[value] for value in parts)
-                    report["pages_discovered"] = max(report["pages_discovered"], total_pages or page)
-                    report["items_seen"] += observed_count
                     page_seen = set()
                     for observed in pending_rows:
                         native_id = str(observed.get("id") or "").strip()
@@ -615,7 +635,16 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                             if prior is None: report["items_inserted"] += 1
                             elif _same_persisted_observation(prior, item): report["items_unchanged"] += 1
                             else: report["items_updated"] += 1
-                    pagination_is_partial = evidence in {"pagination_not_demonstrated", "pagination_follow_not_verified"} or total_changed
+                    pagination_is_partial = evidence in {"pagination_not_demonstrated", "pagination_follow_not_verified", "official_rss_snapshot_not_full_archive"} or total_changed
+                    if slug == "animeworld" and evidence == "official_rss_snapshot_not_full_archive" and not dry_run:
+                        cursor.setdefault("parts", {})[part] = 1
+                        cursor.setdefault("snapshots", {})[part] = {
+                            "feed_last_build_date": getattr(scraper, "feed_last_build_date", None),
+                            "records_observed": observed_count,
+                        }
+                        state.cursor, state.report = cursor, report
+                        state.last_successful_checkpoint = django_timezone.now()
+                        state.save(update_fields=["cursor", "report", "last_successful_checkpoint", "updated_at"])
                     if not dry_run and not pagination_is_partial:
                         cursor.setdefault("parts", {})[part] = page
                         cursor.setdefault("fingerprints", {})[part] = fingerprint
@@ -640,6 +669,10 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                         else:
                             report["last_error"] = f"{part}: {evidence}"
                         break
+                    if slug == "animeworld":
+                        report["status"] = "PARTIAL"
+                        report["last_error"] = "official RSS is a recent-updates snapshot, not a full archive"
+                        break
                     if terminal:
                         break
                     page += 1
@@ -658,9 +691,10 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                 report["last_error"] = "unresolved_title_classifications_remain"
             elif report["status"] == "RUNNING":
                 report["status"] = "PARTIAL"
-            if all(part in known_pages_by_part for part in parts):
+            known_page_counts = {**(cursor.get("total_pages") or {}), **known_pages_by_part}
+            if all(part in known_page_counts for part in parts):
                 report["pages_remaining"] = sum(
-                    max(0, known_pages_by_part[part] - int((cursor.get("parts") or {}).get(part, 0)))
+                    max(0, int(known_page_counts[part]) - int((cursor.get("parts") or {}).get(part, 0)))
                     for part in parts if part not in completed_parts
                 )
             if report["status"] == "COMPLETED":

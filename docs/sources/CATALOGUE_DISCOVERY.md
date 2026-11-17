@@ -1,86 +1,123 @@
 # Unofficial catalogue discovery operations
 
-The six unofficial provider implementations now have an explicit, bounded
-management command. It writes observations through `persist_scraped_item()`
-and the existing legacy ingestion bridge. Every catalogue observation carries
-`unverified_discovery`; discovery creates no `Offer` and does not produce an
-automatic TMDb association.
+The command `discover_unofficial_catalogue` now persists raw listing observations
+in `DiscoveredCatalogueRecord`. These records remain pending classification and
+do not create canonical mappings, TMDb associations, or playback offers. Migration
+`0053` adds conservative URL identity, original URL history, provenance state,
+and access-policy state. The Compose database remains at migration `0049`; all
+counts below are from the disposable `docker-compose.test.yml` PostgreSQL
+instance migrated through `0053`.
 
-```sh
-# Inspect durable state and counts
-python manage.py discover_unofficial_catalogue --status
+Requests are sequential, bounded, robots-checked, and checkpointed. The budget
+counts each HTTP dispatch, including `robots.txt`. Hydra runs used one-second
+delays and zero retries. AnimeWorld uses only its first-party RSS snapshot.
+The A–Z archive is not requested because AnimeWorld's published terms prohibit
+scraping. See the official [terms](https://www.animeworld.ac/termini) and
+[RSS changelog entry](https://www.animeworld.ac/changelogs).
 
-# Inspect requests and parsed items without database writes
-python manage.py discover_unofficial_catalogue --provider animeworld \
-  --mode full --request-budget 3 --retry-limit 1 --delay 1 --dry-run
+## Current results (2026-11-17)
 
-# Start a bounded full traversal; repeat the command to resume a PARTIAL run
-python manage.py discover_unofficial_catalogue --provider kisskh \
-  --mode full --request-budget 25 --retry-limit 1 --delay 1
+| Provider | Pages scanned | Unique URLs/IDs | Records persisted in this task | Total pages | Coverage | Status |
+|---|---:|---:|---:|---|---|---|
+| AnimeWorld | 1 RSS snapshot per run; 3 runs | 15 GUIDs / 15 URLs | 15 new (79 total in scratch; 64 legacy A–Z observations restricted) | Not exposed by RSS | Recent updates only; archive coverage unknown | `CATALOGUE_DISCOVERY_PARTIAL` |
+| HydraHD | 60 movie pages (3–62), 20 TV pages (1–20); 80 distinct committed pages | 1,920 new URLs (1,968 total including the earlier 48) | 1,920 new | Movie listing reported 65 pages at page 62; TV total not established | Sequential partial traversal; 3 movie pages remained by last reported navigation, plus TV continuation unknown | `CATALOGUE_DISCOVERY_PARTIAL` |
+| CineBlog01 | 0 | 0 | 0 | Unknown | No listing request authorized by provenance | `CATALOGUE_DISCOVERY_BLOCKED` |
+| AltaDefinizione | 0 | 0 | 0 | Unknown | No listing request authorized by provenance | `CATALOGUE_DISCOVERY_BLOCKED` |
+| StreamingCommunity | 0 | 0 | 0 | Unknown | No listing request authorized by provenance | `CATALOGUE_DISCOVERY_BLOCKED` |
+| KissKH | 0 in this task | 0 | 0 | Unknown | Preserved prior state; HTTP 451 remains a hard stop | `CATALOGUE_DISCOVERY_PARTIAL` |
 
-# Check recent pages for additions/updates; no historical pages are revisited
-python manage.py discover_unofficial_catalogue --provider hydrahd \
-  --mode incremental --request-budget 8 --delay 1
+“Records persisted in this task” is the number newly stored in the disposable
+database during this follow-up. It excludes pre-existing observations in that
+scratch database and excludes all records in the Compose database. The scratch
+counts at inspection were AnimeWorld 79 total (15 official RSS GUID records and
+64 pre-existing URL-keyed A–Z observations), HydraHD 1,968 total (1,920 added
+here and 48 pre-existing), and zero for each other provider. All 2,047 rows are
+pending classification. No source mappings or playback offers were created.
+The Compose database was not queried, migrated, or modified; its verified backup
+was preserved.
 
-# Provider search is reported PARTIAL because it is not a catalogue walk
-python manage.py discover_unofficial_catalogue --provider animeworld \
-  --mode targeted --query "Frieren" --request-budget 3
-```
+### AnimeWorld
 
-There is no scheduled job. Full discovery runs only when explicitly invoked.
-`Ctrl-C` stops after the current page batch and leaves the last committed
-cursor available for resume. The provider scoped lock uses the existing
-PostgreSQL advisory-lock convention. The request budget counts HTTP dispatches
-including robots checks and domain fallback. Requests run sequentially
-(concurrency 1) so page order and checkpoints are deterministic. Bounded
-retries honor `Retry-After`; robots directives and crawl delay are checked for
-each origin before catalogue requests.
+The public A–Z route returned listing HTML in earlier work, but its terms say
+scraping is prohibited due to server load. No further A–Z request was made and
+those 64 prior observations are marked `RESTRICTED`; they are not counted as
+current permitted coverage. The site changelog describes `/rss/animes` as an
+official RSS feed. A bounded GET returned HTTP 200 XML with a `lastBuildDate`
+and 15 current items. There is no total or continuation, so each run reads one
+snapshot and remains partial. Three command invocations each dispatched two
+requests (one robots check and one RSS GET); the first successful run inserted
+15 records, the next run updated metadata during initial normalization, and the
+third replay reported 15 unchanged. The feed GUIDs are stored as provider-native
+IDs. The feed's anime/movie hint remains raw metadata and classification stays
+pending. RSS is the only AnimeWorld source used in this follow-up.
 
-## Current source investigation (2026-11-17)
+### HydraHD
 
-The five remaining source investigations found two usable, bounded catalogue
-sources and three that remain blocked because their current domains cannot be
-verified as permitted provider aliases. No alternate domain was tried after a
-restriction or legal-block signal. A separate raw-observation table was added
-in migration `0052`; records stay `PENDING` and `OBSERVED`, with the listing's
-content-type hint retained only as original metadata. These rows do not enter
-`ScrapedContentMapping`, the canonical catalogue, TMDb matching, or `Offer`.
+The working listing host is `hydrahd.gd`, with `/movies/date/N` and
+`/tv-shows/date/N` routes. The source status page at [hydrahd.info](https://hydrahd.info/)
+self-identifies `.gd` as the primary domain; this is self-asserted provenance,
+not independent operator proof. The observed robots metadata permitted ordinary
+reference use. The sitemap returned HTTP 403 in the earlier investigation and
+was not retried. No fallback host was used during this traversal.
 
-| Provider | Current result | Source and reason | Bounded ingestion evidence in disposable PostgreSQL |
-|---|---|---|---|
-| AnimeWorld | `CATALOGUE_DISCOVERY_WORKING` | [`/az-list?page=1`](https://www.animeworld.ac/az-list?page=1) returned branded A–Z HTML. [`robots.txt`](https://www.animeworld.ac/robots.txt) allows this path and disallows `/api`, so discovery uses only the public HTML archive. The prior probe used `/movies` and `/animes`, which are stale for catalogue discovery; search API calls are robots-disallowed. | 2 distinct sequential pages; 3 page scans including a page-1 replay; 147 parsed rows over those scans; 64 unique source URLs persisted; 0 native IDs available; 64 pending classification; 0 mapped rows/offers. Page 1 replay: 39 unchanged, 0 inserted. Page 2: 25 inserted and 14 unchanged. 8 discovery-command dispatches across the failed first attempt, initial ingest, replay and resume; 3 direct diagnostic GETs (robots, listing, sitemap). The archive reported a page-link maximum of 3 on page 2; 1 page remains. Total catalogue size unknown; coverage partial. |
-| HydraHD | `CATALOGUE_DISCOVERY_WORKING` | `https://hydrahd.gd/movies/date/N` returned branded listing HTML. The configured `.ru` domain was disabled/stubbed in earlier probing; `.gd` is listed as primary on a status page that identifies itself as official. Its robots content signal says `search=yes`, `ai-train=no`, `use=reference`; only two listing pages were requested. | 2 sequential pages; 48 listing rows persisted as 48 unique source URLs; 0 native IDs available; 48 pending classification; 0 mapped rows/offers. 4 discovery-command dispatches and 4 direct diagnostic GETs, including an HTTP 403 on `/sitemap.xml`. No stable total or terminal page was observed; remaining pages and coverage unknown. |
-| CineBlog01 | `CATALOGUE_DISCOVERY_BLOCKED` | Existing `.run` listing returned HTTP 200, but no independent source established that it is a permitted provider alias. [AGCOM 47/26/DDA](https://www.agcom.it/sites/default/files/provvedimenti/determina/2026/DDA_14849_determina_47_26_dda.pdf) names `cineblog001.cc` and `cb01new.ceo`; it says `.cc` redirects from a site previously ordered disabled. `.run` is not named there, and no relationship to the blocked alias was verified. No catalogue page was parsed or persisted. |
-| AltaDefinizione | `CATALOGUE_DISCOVERY_BLOCKED` | Existing `altadefinizionex.ink` home listing returned HTTP 200, but its provider relationship and permission are unverified. [AGCOM 145/18/DCA](https://www.agcom.it/provvedimenti/determina-145-18-dca) orders access disabling for the distinct host `altadefinizione.ink`; it does not name `altadefinizionex.ink`, so no equivalence is asserted and no records were ingested. |
-| StreamingCommunity | `CATALOGUE_DISCOVERY_BLOCKED` | Existing `.army` home returned HTTP 200 and branded tiles, but no authoritative source verifies the host as a permitted provider alias; a current independent domain review also says no verified official domain can be established ([November 2026 review](https://www.soluzionecomputer.it/streamingcommunity-indirizzo-attuale-funzionamento-rischi-legali-e-alternative/)). The `.nexus` fallback was not contacted. Existing aliases remain unverified and are not used to get around a 403/challenge. No catalogue records were persisted. |
-| KissKH | `CATALOGUE_DISCOVERY_PARTIAL` | Prior bounded API probes parsed listing JSON, but the homepage returned HTTP 451 and discovery stopped. No KissKH request was made in this follow-up. | 0 KissKH records in the current disposable database. The earlier 60-row KissKH sample belongs to a separate historical scratch run and is not counted here. |
+The bounded runs added 1,920 unique URL identities across 60 movie pages and 20
+TV pages. Each parsed page yielded 24 records. The earlier 48 observations were
+kept; this task did not replace them. No provider-native IDs were present, so
+URL identity is used without manufacturing IDs. The movie navigation exposed a
+65-page maximum when page 62 was last read; counts grew during traversal, so
+catalogue totals and final remaining pages are not stable. No empty terminal
+page was reached. The route remains resumable from the latest committed page.
+The run dispatch total was 92 requests across bounded invocations, including
+robots checks; the final run checkpoint was movie page 62 and TV page 20. Two
+replays of movie page 35 were detected before persistence and skipped. The
+repeats prevented duplicate writes; they are not evidence that either partition
+reached its terminal page.
 
-Direct diagnostic GETs (robots, the current configured listing path, and the
-two sitemap checks) were limited to the five configured primary hosts. Each
-discovery command used the configured `WTDW catalogue discovery` user agent,
-sequential requests, zero retries, and a two-dispatch budget. Ingestion was
-run only for AnimeWorld and HydraHD. Their isolated database was migrated from
-empty through `0052` (including the required `0051` baseline); it contained 112
-discovered records, all 112 pending classification and observed from listings,
-with zero `ScrapedContentMapping` and zero `Offer` rows. The Compose database
-was not migrated or queried for these counts.
+### Provenance blockers
 
-The persisted counts were queried after the runs: AnimeWorld 64, HydraHD 48,
-all 112 still pending classification, 0 native IDs present in these samples,
-0 mappings, and 0 offers. Focused discovery/provider/parser tests passed (49);
-the isolated backend suite passed all 3,250 tests; `makemigrations --check
---dry-run` reported no drift. One initial AnimeWorld command reached the page
-but exposed a persistence-call bug before writing; after fixing it, the page
-was ingested, replayed idempotently, and resumed successfully.
+The candidate home pages for CineBlog01 `.run`, AltaDefinizione `.ink`, and
+StreamingCommunity `.army` had previously returned HTTP 200, but branding alone
+does not establish that these domains belong to the providers. The command now
+returns `BLOCKED` with zero requests for these providers until provenance is
+verified. No candidate catalogue records were ingested.
 
-The previous implementation wrote every parsed item through
-`persist_scraped_item()`, which assigns a fallback movie type and calls the
-legacy canonical-ingestion bridge. That made it unsuitable for mixed or
-uncertain listing categories. The new `DiscoveredCatalogueRecord` stores
-provider, native ID when present, title, source URL, timestamp, original
-listing metadata, classification state, and discovery verification state.
-Native IDs deduplicate across partitions; source URLs are the fallback
-identity. Classification hints from browse sections remain metadata only.
+- **CineBlog01:** AGCOM order [47/26/DDA](https://www.agcom.it/sites/default/files/provvedimenti/determina/2026/DDA_14849_determina_47_26_dda.pdf)
+  references `cineblog001.cc` and `cb01new.ceo`; it does not link the current
+  `.run` candidate. Status: `PROVENANCE_UNVERIFIED`.
+- **AltaDefinizione:** AGCOM [145/18/DCA](https://www.agcom.it/provvedimenti/determina-145-18-dca)
+  concerns the distinct `altadefinizione.ink` host; it does not establish the
+  candidate `.ink` domain's provider relationship. Status: `PROVENANCE_UNVERIFIED`.
+- **StreamingCommunity:** `.army` has no independently corroborated current
+  domain linkage. Existing `.nexus` access restrictions remain relevant; no
+  alternative domain was used to get around them. Status: `PROVENANCE_UNVERIFIED`.
+- **KissKH:** HTTP 451 remains an access restriction. No request was made in
+  this follow-up and no attempt to circumvent the restriction was made.
+
+### Identity and classification
+
+`identity_url` removes only common tracking keys (`utm_*`, `fbclid`, `gclid`,
+`dclid`, `mc_cid`, and `mc_eid`), drops fragments and default ports, and retains
+scheme, path, trailing slash, and every other query parameter. Host aliases are
+provider-scoped and opt-in; the verified alias map is currently empty. Original
+`source_url` is retained and variants are recorded in `source_urls_seen`. Names
+are never an identity key. Existing observations were backfilled in migration
+`0053`; URLs that collided after safe normalization were merged by URL identity
+while preserving their original URL variants.
+
+All discovered rows remain pending classification. Listing hints are preserved
+as metadata, but no canonical movie/series mappings, TMDb matches, or offers
+were created. Language extraction and playback verification are out of scope.
+
+### Validation
+
+The disposable database was migrated explicitly through `0053` using the
+`backend-test` service with `manage.py migrate`; the normal backend entrypoint
+and Compose database were not used for migration. The RSS and date-listing
+commands used explicit request budgets. Persisted rows were queried after
+ingestion. Focused tests passed (43 tests), the complete isolated backend suite
+passed (3,258 tests in 128.7 seconds), and `makemigrations --check --dry-run`
+reported no drift. The first full-suite retry overlapped its disposable test
+database teardown and failed; the single isolated rerun completed successfully.
 
 ### Why earlier probes returned no listings
 

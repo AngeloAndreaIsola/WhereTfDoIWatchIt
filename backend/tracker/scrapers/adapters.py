@@ -563,6 +563,40 @@ class HydraHDScraper(BaseScraper):
 class AnimeWorldScraper(BaseScraper):
     provider_slug = "animeworld"
 
+    def parse_rss(self, xml_content: str) -> list[ScrapedItem]:
+        """Parse AnimeWorld's first-party, intentionally published RSS feed."""
+        import xml.etree.ElementTree as ET
+
+        try:
+            root = ET.fromstring(xml_content or "")
+        except ET.ParseError:
+            return []
+        self.feed_last_build_date = next((n.text.strip() for n in root.iter() if n.tag.rsplit("}", 1)[-1] == "lastBuildDate" and n.text), None)
+        items = []
+        for node in root.findall(".//item"):
+            values = {child.tag.rsplit("}", 1)[-1]: child for child in list(node)}
+            def value(name):
+                child = values.get(name)
+                return (child.text or "").strip() if child is not None else ""
+            title = value("name") or value("title")
+            url = value("link")
+            if not title or not url:
+                continue
+            guid = values.get("guid")
+            media_type = value("type").lower()
+            items.append(ScrapedItem(
+                title=title, provider_slug=self.provider_slug,
+                content_type="series" if media_type == "anime" else "movie",
+                source_url=urljoin("https://www.animeworld.ac/", url),
+                raw_payload={
+                    "guid": (guid.text or "").strip() if guid is not None else "",
+                    "pubDate": value("pubDate"), "anime_type": media_type,
+                    "original_title": value("name"), "source_kind": "official_rss",
+                    "provenance_state": "VERIFIED", "access_policy_state": "PERMITTED",
+                },
+            ))
+        return items
+
     def _execute_run(self, query: Optional[str] = None) -> list[ScrapedItem]:
         if not query:
             logger.info("AnimeWorld scraper: no query provided, scraping movies and animes...")
