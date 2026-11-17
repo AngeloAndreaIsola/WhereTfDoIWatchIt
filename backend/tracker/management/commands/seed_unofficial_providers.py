@@ -11,8 +11,8 @@ from tracker.models import Provider, ProviderCategory
 # scraper providers when missing; it will not downgrade a Free provider.
 UNOFFICIAL_PROVIDERS = [
     {"slug": "kisskh", "name": "KissKH", "country": "", "domain": "kisskh.co", "url": "https://kisskh.co"},
-    {"slug": "hydrahd", "name": "HydraHD", "country": "", "domain": "hydrahd.org", "url": "https://hydrahd.org"},
-    {"slug": "animeworld", "name": "AnimeWorld", "country": "", "domain": "animeworld.to", "url": "https://animeworld.to"},
+    {"slug": "hydrahd", "name": "HydraHD", "country": "", "domain": "hydrahd.gd", "url": "https://hydrahd.gd"},
+    {"slug": "animeworld", "name": "AnimeWorld", "country": "", "domain": "www.animeworld.ac", "url": "https://www.animeworld.ac"},
     {"slug": "streamingcommunity", "name": "StreamingCommunity", "country": "IT", "domain": "streaming-community.army", "url": "https://streaming-community.army"},
     {"slug": "cineblog01", "name": "CineBlog01", "country": "IT", "domain": "cineblog001.run", "url": "https://cineblog001.run"},
     {"slug": "altadefinizione", "name": "AltaDefinizione", "country": "IT", "domain": "altadefinizionex.ink", "url": "https://altadefinizionex.ink"},
@@ -46,6 +46,23 @@ class Command(BaseCommand):
                         self.style.WARNING(
                             f"Skipped {info['name']}: existing category "
                             f"{provider.category} is preserved"
+                        )
+                    )
+                    continue
+                changed = []
+                if provider.domain != info["domain"]:
+                    provider.domain = info["domain"]
+                    changed.append("domain")
+                config = dict(provider.config or {})
+                if config.get("home_url") != info["url"]:
+                    config["home_url"] = info["url"]
+                    provider.config = config
+                    changed.append("config")
+                if changed:
+                    provider.save(update_fields=changed)
+                    self.stdout.write(
+                        self.style.SUCCESS(
+                            f"Updated {info['name']} source domain: {', '.join(changed)}"
                         )
                     )
 

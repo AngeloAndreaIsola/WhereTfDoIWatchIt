@@ -458,6 +458,44 @@ class CatalogueDiscoveryState(models.Model):
         return f"{self.provider.slug}: {self.status} ({self.mode})"
 
 
+class DiscoveredCatalogueRecord(models.Model):
+    """Raw provider listing observation, independent of movie/series mapping.
+
+    Discovery stores the source's evidence first. A later classification pass
+    may set ``classified_content_type`` and promote the record into canonical
+    catalogue structures.
+    """
+    CLASSIFICATION_CHOICES = [("PENDING", "Pending"), ("CLASSIFIED", "Classified")]
+    VERIFICATION_CHOICES = [("OBSERVED", "Observed in provider listing"), ("VERIFIED", "Verified")]
+    CONTENT_TYPE_CHOICES = [("movie", "Movie"), ("series", "Series")]
+
+    provider = models.ForeignKey(Provider, on_delete=models.CASCADE, related_name="discovered_catalogue_records")
+    provider_native_id = models.CharField(max_length=255, blank=True, default="")
+    title = models.CharField(max_length=255)
+    source_url = models.URLField(max_length=500)
+    discovered_at = models.DateTimeField(auto_now_add=True)
+    original_metadata = models.JSONField(default=dict, blank=True)
+    classification_state = models.CharField(max_length=12, choices=CLASSIFICATION_CHOICES, default="PENDING")
+    classified_content_type = models.CharField(max_length=12, choices=CONTENT_TYPE_CHOICES, null=True, blank=True)
+    discovery_verification_state = models.CharField(max_length=12, choices=VERIFICATION_CHOICES, default="OBSERVED")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["provider", "provider_native_id"],
+                condition=~models.Q(provider_native_id=""),
+                name="uniq_discovered_provider_native_id",
+            ),
+            models.UniqueConstraint(
+                fields=["provider", "source_url"],
+                condition=models.Q(provider_native_id=""),
+                name="uniq_discovered_provider_source_url",
+            ),
+        ]
+        indexes = [models.Index(fields=["provider", "classification_state"], name="idx_disc_catalog_class")]
+
+
 class KissKHPendingClassification(models.Model):
     """A real KissKH listing record whose movie/series type is unverified.
 

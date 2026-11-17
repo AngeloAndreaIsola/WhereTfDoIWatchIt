@@ -635,7 +635,7 @@ class AnimeWorldScraper(BaseScraper):
                 )
                 continue
             year_int = self._result_year(anchor)
-            source_url = urljoin("https://animeworld.ac/", href)
+            source_url = urljoin("https://www.animeworld.ac/", href)
 
             items.append(
                 ScrapedItem(
@@ -694,7 +694,7 @@ class AnimeWorldScraper(BaseScraper):
 
             audio = entry.get("dub") or []
             subs = entry.get("sub") or []
-            source_url = entry.get("link") or f"https://animeworld.ac/play/{entry.get('id')}"
+            source_url = entry.get("link") or f"https://www.animeworld.ac/play/{entry.get('id')}"
 
             items.append(
                 ScrapedItem(

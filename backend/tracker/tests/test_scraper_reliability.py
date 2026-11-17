@@ -93,7 +93,7 @@ class AnimeWorldPairingTests(SimpleTestCase):
         """
         items = self.scraper.parse_html(html)
         self.assertEqual([(i.title, i.year, i.source_url) for i in items], [
-            ("Kept", 2018, "https://animeworld.ac/play/kept"),
+            ("Kept", 2018, "https://www.animeworld.ac/play/kept"),
         ])
 
     def test_duplicate_titles_keep_their_own_years(self):
@@ -105,8 +105,8 @@ class AnimeWorldPairingTests(SimpleTestCase):
         self.assertEqual(
             [(i.title, i.year, i.source_url) for i in items],
             [
-                ("Same Name", 1999, "https://animeworld.ac/play/old"),
-                ("Same Name", 2024, "https://animeworld.ac/play/new"),
+                ("Same Name", 1999, "https://www.animeworld.ac/play/old"),
+                ("Same Name", 2024, "https://www.animeworld.ac/play/new"),
             ],
         )
 
@@ -118,7 +118,7 @@ class AnimeWorldPairingTests(SimpleTestCase):
         items = self.scraper.parse_html(html, category="animes")
         self.assertEqual([i.title for i in items], ["Città Incantata", "葬送のフリーレン"])
         self.assertEqual(items[0].source_url, "https://cdn.example/play/x")
-        self.assertEqual(items[1].source_url, "https://animeworld.ac/play/frieren")
+        self.assertEqual(items[1].source_url, "https://www.animeworld.ac/play/frieren")
         self.assertEqual([i.content_type for i in items], ["series", "series"])
 
 
@@ -327,8 +327,8 @@ class DocumentedRealMarkupTests(SimpleTestCase):
         self.assertEqual(
             [(i.title, i.year, i.source_url) for i in items],
             [
-                ("Naruto", 2002, "https://animeworld.ac/play/naruto-1"),
-                ("Naruto Shippuden", 2007, "https://animeworld.ac/play/naruto-shippuden"),
+                ("Naruto", 2002, "https://www.animeworld.ac/play/naruto-1"),
+                ("Naruto Shippuden", 2007, "https://www.animeworld.ac/play/naruto-shippuden"),
             ],
         )
 

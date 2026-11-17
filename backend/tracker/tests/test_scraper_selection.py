@@ -78,6 +78,14 @@ class ScraperSelectionUnitTests(TestCase):
         Provider.objects.create(
             slug="streamingcommunity", name="Existing source", category="bvod"
         )
+        hydra, _ = Provider.objects.get_or_create(
+            slug="hydrahd",
+            defaults={"name": "HydraHD", "category": "scraper"},
+        )
+        hydra.category = "scraper"
+        hydra.domain = "hydrahd.org"
+        hydra.config = {"home_url": "https://hydrahd.org", "keep": True}
+        hydra.save()
 
         call_command("seed_unofficial_providers", stdout=StringIO())
         call_command("seed_unofficial_providers", stdout=StringIO())
@@ -91,6 +99,9 @@ class ScraperSelectionUnitTests(TestCase):
         self.assertEqual(
             Provider.objects.get(slug="streamingcommunity").category, "bvod"
         )
+        hydra = Provider.objects.get(slug="hydrahd")
+        self.assertEqual(hydra.domain, "hydrahd.gd")
+        self.assertEqual(hydra.config, {"home_url": "https://hydrahd.gd", "keep": True})
 
     def test_retired_bbc_scraper_raises_canonical_catalogue_ineligible(self):
         provider = Provider.objects.get(slug="bbc_iplayer")

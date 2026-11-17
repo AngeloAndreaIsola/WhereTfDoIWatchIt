@@ -19,7 +19,7 @@ import requests
 
 from django.utils import timezone as django_timezone
 
-from tracker.models import CatalogueDiscoveryState, KissKHPendingClassification, Provider
+from tracker.models import CatalogueDiscoveryState, DiscoveredCatalogueRecord, KissKHPendingClassification, Provider
 from tracker.scrapers import resolve_scraper_class
 from tracker.scrapers.adapters import KissKHScraper
 from tracker.scrapers.cineblog01 import BROWSE_SECTIONS
@@ -124,6 +124,58 @@ def _same_persisted_observation(mapping, item):
         and mapping.raw_payload == expected_payload
         and mapping.is_available == item.availability
     )
+
+
+def _persist_unclassified_observation(*, provider, item, partition):
+    """Persist provider evidence without projecting an inferred media type."""
+    native_id = provider_content_id_for_item(item)
+    identity = {"provider": provider}
+    identity["provider_native_id" if native_id else "source_url"] = native_id or item.source_url
+    prior = DiscoveredCatalogueRecord.objects.filter(**identity).first()
+    if prior is None and native_id:
+        # Promote an earlier URL-keyed observation when a later listing adds
+        # the provider ID, rather than retaining two records for one title.
+        prior = DiscoveredCatalogueRecord.objects.filter(
+            provider=provider,
+            provider_native_id="",
+            source_url=item.source_url,
+        ).first()
+    metadata = dict(item.raw_payload) if isinstance(item.raw_payload, dict) else {}
+    metadata.update({
+        "unverified_discovery": True,
+        "catalogue_partition": partition,
+        "listing_content_type_hint": item.content_type,
+    })
+    values = {
+        "title": item.title,
+        "source_url": item.source_url,
+        "original_metadata": metadata,
+    }
+    if prior is None:
+        DiscoveredCatalogueRecord.objects.create(
+            provider=provider,
+            provider_native_id=native_id,
+            classification_state="PENDING",
+            classified_content_type=None,
+            discovery_verification_state="OBSERVED",
+            **values,
+        )
+        return "inserted"
+    unchanged = (
+        prior.title == item.title
+        and prior.source_url == item.source_url
+        and prior.original_metadata == metadata
+    )
+    if unchanged:
+        return "unchanged"
+    for field, value in values.items():
+        setattr(prior, field, value)
+    update_fields = [*values.keys(), "updated_at"]
+    if native_id and prior.provider_native_id != native_id:
+        prior.provider_native_id = native_id
+        update_fields.append("provider_native_id")
+    prior.save(update_fields=update_fields)
+    return "updated"
 
 
 def _parts(slug):
@@ -341,7 +393,6 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
             "last_error": "",
         }
         known_pages_by_part = {}
-        scanned_by_part = {}
         started = django_timezone.now()
         if not dry_run:
             state.status, state.mode, state.started_at = "RUNNING", mode, started
@@ -365,6 +416,13 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                     report["items_unique"] += 1
                     item.raw_payload = {**(item.raw_payload or {}), "unverified_discovery": True}
                     if not dry_run:
+                        if slug != "kisskh":
+                            outcome = _persist_unclassified_observation(
+                                provider=provider, item=item, partition="targeted_search"
+                            )
+                            report[f"items_{outcome}"] += 1
+                            report["items_pending_classification"] += 1
+                            continue
                         from tracker.models import ScrapedContentMapping
                         native_id = provider_content_id_for_item(item)
                         prior = ScrapedContentMapping.objects.filter(
@@ -433,7 +491,6 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                         report["last_error"] = f"{part}: repeated non-terminal page detected"
                         break
                     report["pages_scanned"] += 1
-                    scanned_by_part[part] = scanned_by_part.get(part, 0) + 1
                     if total_pages is not None:
                         known_pages_by_part[part] = total_pages
                     totals = getattr(scraper, "catalogue_totals", {})
@@ -523,6 +580,13 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                         if slug == "kisskh":
                             item.raw_payload["catalogue_partition"] = part
                         if not dry_run:
+                            if slug != "kisskh":
+                                outcome = _persist_unclassified_observation(
+                                    provider=provider, item=item, partition=part
+                                )
+                                report[f"items_{outcome}"] += 1
+                                report["items_pending_classification"] += 1
+                                continue
                             prior = None
                             if native_id:
                                 prior = ScrapedContentMapping.objects.filter(
@@ -596,7 +660,7 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                 report["status"] = "PARTIAL"
             if all(part in known_pages_by_part for part in parts):
                 report["pages_remaining"] = sum(
-                    max(0, known_pages_by_part[part] - scanned_by_part.get(part, 0))
+                    max(0, known_pages_by_part[part] - int((cursor.get("parts") or {}).get(part, 0)))
                     for part in parts if part not in completed_parts
                 )
             if report["status"] == "COMPLETED":
@@ -610,7 +674,8 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
             report["last_error"] = "Stopped by operator; committed page checkpoint retained"
         except Exception as exc:
             if report["status"] != "BLOCKED": report["status"] = "FAILED"
-            if not report.get("last_error"): report["last_error"] = "Catalogue page failed; checkpoint retained"
+            if not report.get("last_error"):
+                report["last_error"] = f"Catalogue page failed ({type(exc).__name__}); checkpoint retained"
             report["requests_dispatched"] = requests_made
             raise CatalogueDiscoveryError({
                 **report,

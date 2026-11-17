@@ -36,7 +36,73 @@ including robots checks and domain fallback. Requests run sequentially
 retries honor `Retry-After`; robots directives and crawl delay are checked for
 each origin before catalogue requests.
 
-## Measured state (2026-11-17)
+## Current source investigation (2026-11-17)
+
+The five remaining source investigations found two usable, bounded catalogue
+sources and three that remain blocked because their current domains cannot be
+verified as permitted provider aliases. No alternate domain was tried after a
+restriction or legal-block signal. A separate raw-observation table was added
+in migration `0052`; records stay `PENDING` and `OBSERVED`, with the listing's
+content-type hint retained only as original metadata. These rows do not enter
+`ScrapedContentMapping`, the canonical catalogue, TMDb matching, or `Offer`.
+
+| Provider | Current result | Source and reason | Bounded ingestion evidence in disposable PostgreSQL |
+|---|---|---|---|
+| AnimeWorld | `CATALOGUE_DISCOVERY_WORKING` | [`/az-list?page=1`](https://www.animeworld.ac/az-list?page=1) returned branded A–Z HTML. [`robots.txt`](https://www.animeworld.ac/robots.txt) allows this path and disallows `/api`, so discovery uses only the public HTML archive. The prior probe used `/movies` and `/animes`, which are stale for catalogue discovery; search API calls are robots-disallowed. | 2 distinct sequential pages; 3 page scans including a page-1 replay; 147 parsed rows over those scans; 64 unique source URLs persisted; 0 native IDs available; 64 pending classification; 0 mapped rows/offers. Page 1 replay: 39 unchanged, 0 inserted. Page 2: 25 inserted and 14 unchanged. 8 discovery-command dispatches across the failed first attempt, initial ingest, replay and resume; 3 direct diagnostic GETs (robots, listing, sitemap). The archive reported a page-link maximum of 3 on page 2; 1 page remains. Total catalogue size unknown; coverage partial. |
+| HydraHD | `CATALOGUE_DISCOVERY_WORKING` | `https://hydrahd.gd/movies/date/N` returned branded listing HTML. The configured `.ru` domain was disabled/stubbed in earlier probing; `.gd` is listed as primary on a status page that identifies itself as official. Its robots content signal says `search=yes`, `ai-train=no`, `use=reference`; only two listing pages were requested. | 2 sequential pages; 48 listing rows persisted as 48 unique source URLs; 0 native IDs available; 48 pending classification; 0 mapped rows/offers. 4 discovery-command dispatches and 4 direct diagnostic GETs, including an HTTP 403 on `/sitemap.xml`. No stable total or terminal page was observed; remaining pages and coverage unknown. |
+| CineBlog01 | `CATALOGUE_DISCOVERY_BLOCKED` | Existing `.run` listing returned HTTP 200, but no independent source established that it is a permitted provider alias. [AGCOM 47/26/DDA](https://www.agcom.it/sites/default/files/provvedimenti/determina/2026/DDA_14849_determina_47_26_dda.pdf) names `cineblog001.cc` and `cb01new.ceo`; it says `.cc` redirects from a site previously ordered disabled. `.run` is not named there, and no relationship to the blocked alias was verified. No catalogue page was parsed or persisted. |
+| AltaDefinizione | `CATALOGUE_DISCOVERY_BLOCKED` | Existing `altadefinizionex.ink` home listing returned HTTP 200, but its provider relationship and permission are unverified. [AGCOM 145/18/DCA](https://www.agcom.it/provvedimenti/determina-145-18-dca) orders access disabling for the distinct host `altadefinizione.ink`; it does not name `altadefinizionex.ink`, so no equivalence is asserted and no records were ingested. |
+| StreamingCommunity | `CATALOGUE_DISCOVERY_BLOCKED` | Existing `.army` home returned HTTP 200 and branded tiles, but no authoritative source verifies the host as a permitted provider alias; a current independent domain review also says no verified official domain can be established ([November 2026 review](https://www.soluzionecomputer.it/streamingcommunity-indirizzo-attuale-funzionamento-rischi-legali-e-alternative/)). The `.nexus` fallback was not contacted. Existing aliases remain unverified and are not used to get around a 403/challenge. No catalogue records were persisted. |
+| KissKH | `CATALOGUE_DISCOVERY_PARTIAL` | Prior bounded API probes parsed listing JSON, but the homepage returned HTTP 451 and discovery stopped. No KissKH request was made in this follow-up. | 0 KissKH records in the current disposable database. The earlier 60-row KissKH sample belongs to a separate historical scratch run and is not counted here. |
+
+Direct diagnostic GETs (robots, the current configured listing path, and the
+two sitemap checks) were limited to the five configured primary hosts. Each
+discovery command used the configured `WTDW catalogue discovery` user agent,
+sequential requests, zero retries, and a two-dispatch budget. Ingestion was
+run only for AnimeWorld and HydraHD. Their isolated database was migrated from
+empty through `0052` (including the required `0051` baseline); it contained 112
+discovered records, all 112 pending classification and observed from listings,
+with zero `ScrapedContentMapping` and zero `Offer` rows. The Compose database
+was not migrated or queried for these counts.
+
+The persisted counts were queried after the runs: AnimeWorld 64, HydraHD 48,
+all 112 still pending classification, 0 native IDs present in these samples,
+0 mappings, and 0 offers. Focused discovery/provider/parser tests passed (49);
+the isolated backend suite passed all 3,250 tests; `makemigrations --check
+--dry-run` reported no drift. One initial AnimeWorld command reached the page
+but exposed a persistence-call bug before writing; after fixing it, the page
+was ingested, replayed idempotently, and resumed successfully.
+
+The previous implementation wrote every parsed item through
+`persist_scraped_item()`, which assigns a fallback movie type and calls the
+legacy canonical-ingestion bridge. That made it unsuitable for mixed or
+uncertain listing categories. The new `DiscoveredCatalogueRecord` stores
+provider, native ID when present, title, source URL, timestamp, original
+listing metadata, classification state, and discovery verification state.
+Native IDs deduplicate across partitions; source URLs are the fallback
+identity. Classification hints from browse sections remain metadata only.
+
+### Why earlier probes returned no listings
+
+The earlier probe reports did not retain exact HTTP statuses for several
+raised fetch errors, so those historical failures cannot be assigned to DNS,
+TLS, HTTP blocking, or parser errors after the fact. Current bounded probes
+clarify the source-specific causes: AnimeWorld's old category URLs had drifted
+to `/az-list`; HydraHD's old `.ru` host is marked disabled, while the current
+`.gd` date pages parse 24 records per page; CineBlog01's old `.tires` target
+differs from the current configured `.run` host, which responds but is not
+verified as a permitted alias; AltaDefinizione's current `.ink` home responds
+but its relationship to the provider is not established; StreamingCommunity's
+previous `.nexus` request received HTTP 403, while the configured `.army` host
+responds but its ownership is unverified. In the same live checks, parser
+errors were not observed on the two ingested sources. No anti-bot, robots, or
+access restriction was bypassed.
+
+The older KissKH measurements below are historical and remain separate from
+this follow-up. KissKH still has its own pending-classification path and the
+homepage/API restriction evidence recorded below.
+
+## Historical measured state (2026-11-17)
 
 The initial probes against all six providers found no parsed listing pages.
 This follow-up validated KissKH only. Its ingestion and checkpoint evidence
@@ -235,12 +301,12 @@ runtime migrations were run during validation.
 
 | Provider | Strategy | Completion evidence / current limit |
 |---|---|---|
-| AnimeWorld | `/az-list?page=N`, card-local parser | Traversal logic is fixture-tested. The live domain probe did not return a listing, so page links, classification and terminal behavior remain unverified. |
+| AnimeWorld | `/az-list?page=N`, card-local parser | Page 1 and page 2 were traversed sequentially; page-link maximum was 3 on page 2, leaving 1 reported page. Only 64 distinct source URLs were persisted after deduplication; the third page and terminal behavior are not verified. |
 | KissKH | Undocumented API `type` partitions 1/2/3 and `pageSize=20` | Bounded probes verified first/middle/last page numbering, short final pages and beyond-last clamping for all partitions; no intermediate pages were traversed. Title-level explicit detail type is required because partition and episode count are not reliable classification evidence. The public homepage returned HTTP 451, so ingestion stopped. The provider remains PARTIAL. |
-| HydraHD | `movies/date/N` and `tv-shows/date/N` | Separate cursor logic is fixture-tested. Live fallback did not produce listing HTML; pagination and terminal behavior remain unverified. |
-| CineBlog01 | `/film/` and `/serie-tv/`, `/page/N/` | Archive traversal logic is fixture-tested. Live fallback did not produce a listing; pagination links and terminal behavior remain unverified. |
-| StreamingCommunity | Existing root, film, series, archive listing paths | Live response was HTTP 403. No workaround or additional path guessing was attempted; public pagination is unverified. |
-| AltaDefinizione | Existing root, film, series, archive listing paths | Live fallback did not produce a listing. Public pagination is unverified; the command does not invent `/page/N/` endpoints. |
+| HydraHD | `movies/date/N` and `tv-shows/date/N` | Pages 1–2 of the movie partition were traversed sequentially; 48 unique source URLs were persisted. No total, terminal page, or series partition completion is verified. |
+| CineBlog01 | `/film/` and `/serie-tv/`, `/page/N/` | Current configured listing returned HTTP 200, but `.run`'s permitted provider affiliation is unverified. AGCOM named `.cc` and `cb01new.ceo`, not `.run`; no relationship was established and no listing parser or ingestion run was made. |
+| StreamingCommunity | Existing root, film, series, archive listing paths | Current configured root returned HTTP 200 branded HTML, but alias ownership is unverified. The fallback domain was not contacted and no records were ingested. |
+| AltaDefinizione | Existing root, film, series, archive listing paths | Current configured root returned HTTP 200 branded HTML, but the domain's provider affiliation and relation to an AGCOM-blocked domain family are unverified. No records were ingested. |
 
 `coverage_percent` stays `UNKNOWN` unless the fetched population and a reliable
 provider total are known to be comparable. `items_unique` describes observed
@@ -252,8 +318,8 @@ ID later becomes available. The new partial unique constraints preserve both
 identity forms without rewriting existing scraped records.
 
 No full-traversal request estimate, run time, or peak-memory figure is
-available: the live traversal was deliberately not started. One command
-invocation dispatches at most its configured budget (20 by default), plus no
+available: only small sequential batches were run, with no complete traversal.
+One command invocation dispatches at most its configured budget (20 by default), plus no
 hidden retries beyond `--retry-limit`; repeated invocations resume full mode.
 
 The management page calls these records **discovered titles**. Its catalogue
