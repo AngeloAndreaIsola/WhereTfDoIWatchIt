@@ -25,7 +25,9 @@ class Movie(models.Model):
         ("series", "Series"),
     ]
 
-    tmdb_id = models.IntegerField(unique=True, db_index=True)
+    # TMDb allocates movie and TV identifiers in separate namespaces.  The
+    # canonical identity must therefore include content_type.
+    tmdb_id = models.IntegerField(db_index=True)
     title = models.CharField(max_length=255)
     year = models.IntegerField(null=True, blank=True)
     content_type = models.CharField(
@@ -43,6 +45,14 @@ class Movie(models.Model):
     seasons_data = models.JSONField(default=list, blank=True)
     runtime_minutes = models.IntegerField(null=True, blank=True)
     tmdb_rating = models.FloatField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tmdb_id", "content_type"],
+                name="uniq_movie_tmdb_content_type",
+            )
+        ]
 
     def __str__(self):
         return f"{self.title} ({self.year})" if self.year else self.title
@@ -508,7 +518,7 @@ class DiscoveredCatalogueRecord(models.Model):
 class CanonicalBootstrapEvidence(models.Model):
     """Auditable proof for a canonical Movie bootstrapped from a discovery.
 
-    The canonical identity remains ``Movie.tmdb_id``. This row only records
+    The canonical identity is ``(Movie.tmdb_id, Movie.content_type)``. This row only records
     why one existing provider-native observation was sufficient to create or
     associate that identity; it does not assert availability.
     """

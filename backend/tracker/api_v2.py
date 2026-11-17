@@ -163,7 +163,7 @@ def _serialize_unofficial_entries(entries) -> list[dict]:
         )
     }
     movies = {
-        movie.tmdb_id: movie
+        (movie.tmdb_id, movie.content_type): movie
         for movie in Movie.objects.filter(
             tmdb_id__in={entry.tmdb_id for entry in entries if entry.tmdb_id}
         )
@@ -176,7 +176,7 @@ def _serialize_unofficial_entries(entries) -> list[dict]:
     results = []
     for entry in entries:
         pdata = provider_data.get(entry.provider) or {}
-        movie = movies.get(entry.tmdb_id) if entry.tmdb_id else None
+        movie = movies.get((entry.tmdb_id, entry.content_type)) if entry.tmdb_id else None
         raw_payload: dict[str, Any] = {
             "audio_languages": entry.audio_languages,
             "subtitle_languages": entry.subtitle_languages,
@@ -403,7 +403,7 @@ def unofficial_movie_offers(request, tmdb_id: int):
     """
     try:
         movie = Movie.objects.get(tmdb_id=tmdb_id)
-    except Movie.DoesNotExist:
+    except (Movie.DoesNotExist, Movie.MultipleObjectsReturned):
         return Response({"error": "movie not tracked yet"}, status=404)
 
     # Scraper rows carry no season signal (same Phase 3 rule as the prime

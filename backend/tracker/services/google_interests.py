@@ -590,6 +590,7 @@ def import_interests(
 
             movie, created = Movie.objects.get_or_create(
                 tmdb_id=pick.tmdb_id,
+            content_type=pick.content_type or "movie",
                 defaults={
                     "title": pick.title,
                     "year": pick.year,

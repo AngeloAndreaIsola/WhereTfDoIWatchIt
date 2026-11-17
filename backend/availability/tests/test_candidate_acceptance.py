@@ -3,7 +3,7 @@
 Covers:
 - Verified new mapping acceptance.
 - Wrong ID/type verification failure.
-- Existing tracker.Movie content_type conflict (HTTP 409 MOVIE_TYPE_CONFLICT).
+- Separate movie/TV namespaces for overlapping numeric TMDb IDs.
 - Already mapped same target (idempotency, no duplicate audit records).
 - Different existing manual mapping (HTTP 409 CORRECTION_AUTHORIZATION_REQUIRED with impact manifest).
 - Concurrent acceptance / optimistic concurrency revision check.
@@ -187,28 +187,18 @@ class CandidateAcceptanceUnitTests(TestCase):
         self.assertIsNotNone(details)
         self.assertEqual(details["id"], 693134)
 
-    def test_safe_enrich_or_create_movie_type_conflict(self):
-        # Create Movie with type "series"
-        Movie.objects.create(tmdb_id=693134, title="Dune TV", content_type="series")
-
-        mock_gateway = MagicMock()
-        mock_gateway.get_details.return_value = {
-            "tmdb_id": 693134,
-            "title": "Dune: Part Two",
-            "content_type": ContentType.MOVIE,
-        }
-
-        service = CandidateAcceptanceService(gateway=mock_gateway)
-        with self.assertRaises(CandidateAcceptanceError) as exc_info:
-            service.accept(
-                provider_content_id=self.content.id,
-                tmdb_id=693134,
-                reason="Verified movie",
-                expected_revision=None,
-                has_expected_revision=True,
-            )
-        self.assertEqual(exc_info.exception.code, "MOVIE_TYPE_CONFLICT")
-        self.assertEqual(exc_info.exception.status_code, 409)
+    def test_safe_enrichment_keeps_overlapping_media_identifiers_separate(self):
+        from availability.services.candidate_acceptance import safe_enrich_or_create_movie
+        series = Movie.objects.create(tmdb_id=693134, title="Dune TV", content_type="series")
+        movie = safe_enrich_or_create_movie(tmdb_id=693134, verified_type="movie",
+            details={"title": "Dune: Part Two", "year": 2024})
+        self.assertNotEqual(movie.pk, series.pk)
+        self.assertEqual(movie.content_type, "movie")
+        series.refresh_from_db()
+        self.assertEqual(series.title, "Dune TV")
+        self.assertEqual(safe_enrich_or_create_movie(tmdb_id=693134, verified_type="movie",
+            details={"title": "Keep curated metadata"}).pk, movie.pk)
+        self.assertEqual(Movie.objects.filter(tmdb_id=693134).count(), 2)
 
     def test_verified_new_mapping_acceptance_success(self):
         mock_gateway = MagicMock()

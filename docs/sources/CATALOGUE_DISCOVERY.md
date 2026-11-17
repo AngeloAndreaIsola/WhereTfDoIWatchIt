@@ -1388,3 +1388,260 @@ apply/replay validation left 18 canonical `Movie` rows, 20 evidence rows, 20
 canonical mappings, 5,031 classified provider-content rows, 64 pending
 classifications, and 0 offers in the isolated clone. Frontend tests were not
 needed because no UI behavior changed.
+
+### Canonical scale validation (2026-11-17, branch `new-sources`)
+
+Verdict: **`CANONICAL_RECONCILIATION_PARTIAL`**. Two explicitly selected batches
+of 250 evaluated **500 distinct records** and established **388 verified
+associations / 388 unique canonical identities** on disposable PostgreSQL.
+These are fresh-clone totals, not an addition to the earlier 20-record pilot.
+The application database received **no migrations, cache, bootstrap or
+reconciliation writes** during this work.
+
+The [machine-readable audit](../audits/canonical_scale_20261117.json) includes
+both manifests, per-batch metrics, all 388 record-specific evidence snapshots,
+112 pending outcomes, sampled checks, negative candidates and preservation
+hashes. Dumps, cache fixtures and resumable checkpoints are retained locally
+under the git-ignored `.catalogue-staging/canonical-scale/`; they are not
+published with the report. Credentials are absent from the report.
+
+#### Integrity audit and changes
+
+`Movie` previously enforced global uniqueness of `tmdb_id`, although TMDb
+movie and TV IDs occupy separate namespaces. Migration `0056` replaces this
+with uniqueness on **`(tmdb_id, content_type)`**. All canonical creation paths
+now select both fields. Typed detail/catalogue reads select the matching
+namespace; legacy numeric-only reads and mutations fail closed if both exist.
+Watchlist selection deduplicates the full pair. Tests demonstrate that movie
+and series ID 42 coexist, neither overwrites the other, and same-type duplicate
+inserts fail at the database constraint. The existing foreign keys retain
+canonical row IDs. TMDb search and details caches already had media type in
+their database keys; reconciliation's in-memory indexes now do too.
+
+Provider-native IDs retain their original values and provider scope. Discovery
+uniqueness, URL identity and `ProviderContent`'s slot-aware identity remain
+intact. `ContentMapping` deliberately reserves `(provider, provider_content_id)`;
+if an existing mapping disagrees on media type or TMDb ID, reconciliation
+reports `existing_canonical_mapping_conflict` and preserves it. Separate
+same-title releases are never merged merely because their titles agree.
+
+The audit also closed these unsafe paths:
+
+- Cached original-title/year matches and trusted-ID-only proposals could be
+  promoted without record-specific details verification. Both are now
+  proposal-only until bootstrap proof exists.
+- Bootstrap proof was insufficiently tied to the current observation. Apply
+  and replay now check source title/year/type, provider/native identity and
+  original URLs, and reject conflicting trusted IDs. Apply locks and rechecks
+  the source row; changed observations require another review.
+- ASCII-only normalization could erase non-Latin titles. Normalization now
+  preserves Unicode letters and digits, and empty normalized titles cannot
+  verify a match.
+- Resume previously advanced a moving query window. Checkpoints now freeze at
+  most 250 selected IDs and source fingerprints, bind to the database and
+  selection/apply scope, and atomically journal completed outcomes. A changed
+  source or scope fails closed. New observations enter a new batch.
+- API failure counters omitted failed retry attempts or double-counted final
+  failures. Each dispatched failure is now counted once; exception logs omit
+  request URLs and credentials.
+
+Exact title/year search results remain proposals until a separate TMDb details
+response verifies identifier, title (display or original), year and endpoint
+media type. Multiple exact IDs, competing source releases, and truncated
+search pages stay pending. Existing canonical metadata and operator mappings
+are preserved. No new canonical model, playback probe, language enrichment or
+offer creation was introduced.
+
+#### Bounded results and accuracy checks
+
+The first batch contains 100 HydraHD movies, 71 HydraHD series, all 15
+AnimeWorld RSS records without years and all 64 previously ambiguous AnimeWorld
+records. All six same-title/year groups are included. The second contains 150
+additional HydraHD movies and 100 series, using a separate fixed seed and no
+records from the first batch. Every record initially lacked an association in
+the fresh live restore.
+
+| Metric | Batch 1 | Batch 2 | Total |
+|---|---:|---:|---:|
+| Records evaluated | 250 | 250 | 500 |
+| Single exact candidates proposed, including held releases | 158 | 237 | 395 |
+| Verified TMDb identifiers | 152 | 236 | 388 |
+| Canonical records created | 152 | 236 | 388 |
+| Canonical associations applied | 152 | 236 | 388 |
+| Ambiguous, including unresolved source types | 82 | 10 | 92 |
+| Unmatched, including missing years | 16 | 4 | 20 |
+| Rejected candidate observations | 154 | 135 | 289 |
+| Conflicting details | 0 | 0 | 0 |
+| Bootstrap HTTP attempts | 317 | 486 | 803 |
+| Bootstrap cache hits on initial proposal passes | 6 | 0 | 6 |
+
+Rejected candidates count per-record candidate observations, not unique TMDb
+IDs. Pending outcomes and title-only proposals are not successes. Within the
+500-record selection, 112 remain unassociated. Across the complete inventory,
+**4,707 / 5,095 remain without verified associations**: 4,595 were outside the
+batch selections. Coverage is **9.81% evaluated and 7.62% associated**. A full
+**read-only** inventory pass finds 388 verified, 7 review candidates, 4,636
+unmatched and 64 unresolved classifications; it can classify 5,031 records.
+Only the 500 selected records were eligible for isolated apply, producing 436
+classified provider-content identities. No unrestricted reconciliation apply
+was performed.
+
+A fixed-seed sample assessed 50 proposed associations: 25 movies and 25 series
+across the two batches. A separately implemented, budgeted query omitted the
+year filter and checked the returned ID/year/type: **49/50 confirmed**. `Blue`
+(1968), movie 169869, was absent from the capped broad-title results. Manual
+inspection of its original search/details, source URL containing 1968, director
+Silvio Narizzano and cast found no contradiction. It is reported as one
+inconclusive secondary search, not a successful independent search check.
+All sampled source URLs/title/year and cached overview/cast metadata were also
+inspected. No classification error or automatic-association contradiction was
+observed. These checks share the TMDb authority and do not establish independent
+provider-detail ground truth or a catalogue-wide false-positive rate.
+
+Concrete negatives held or excluded:
+
+- `The Nest` (2025): TMDb movies 1446729 and 1547367, plus separate provider
+  releases; both discoveries remain ambiguous.
+- `Bad Apples` (2026): movies 1198654 and 1642114 remain ambiguous.
+- `Perfect Strangers` (2003), movie 41258: other same-title releases from 1945,
+  2015, 2016, 2017 and 2025 cannot replace the verified 2003 identity.
+- `Sacrifice` (2021): series 137948 remains separate from movie 631583 even
+  though title and year overlap.
+- `Are We There Yet?` (2010): series 36473 is distinct from movie 434212 with
+  the same title/year and movie 11637 from 2005.
+- `Drag Race Spain` / `Drag Race España` remains a held alternative-title
+  proposal; title translation alone does not establish record-specific proof.
+
+AnimeWorld matching stops at this boundary: 64 records lack verified types and
+15 RSS records lack explicit years. No source detail fetch or title-derived
+year inference was used. The second bounded batch was justified by 152 verified
+first-batch outcomes, no observed contradictions, and about two requests per
+verified association. No third batch or unrestricted loop was started.
+
+#### Resource usage, caching and replay
+
+Budgets were 350 requests for batch 1 and 490 for batch 2, including retries,
+with 0.3 seconds minimum spacing and at most two transient retries. Bootstrap
+stops immediately on 401/403/429 and leaves the interrupted record resumable;
+operators must wait for service recovery before resuming. No failure, retry or
+restriction was observed. The two sample checks used a further **54 requests**
+under separate 45-request ceilings, for **857 total HTTP attempts**.
+
+Bootstrap cost was **1.606 requests per evaluated record**, or **2.070 per
+verified association**. Including sample validation, cost was **1.714 per
+evaluated record**, or **2.209 per verified association**. No monetary API cost
+was measured. Local read-only reconciliation of the two 250-record selections
+took 0.386 seconds, 12 SQL queries and zero API requests on the warmed clone:
+0.773 ms and 0.024 queries per record. This excludes bootstrap network latency
+and writes and is not a production latency guarantee.
+
+Both bootstrap applies were cache-only: **809 cache hits, zero HTTP requests**.
+Fresh no-checkpoint bootstrap replays reused all 388 record-specific proofs,
+created no canonical rows and made zero HTTP requests; the remaining unresolved
+searches used 33 cache hits. Including the original proposal and validation
+passes, the main experiment recorded **849 cache hits** (49.77% of cache hits
+plus HTTP dispatches). This aggregate includes replay savings; the cold proposal
+passes themselves had only six cache hits. Fresh-restore rehearsal hits are
+excluded from these totals.
+
+The existing reusable cache holds 469 searches (two negative) and 388 details.
+Positive searches, ambiguous candidate sets and details expire after 30 days;
+negative lookups expire after seven days. Reconciliation itself never searches
+TMDb. Bootstrap uses trusted source IDs directly for details when present,
+then reuses record-specific verified evidence or the existing search/details
+caches before bounded network access. The restored source inventory contains
+no usable trusted external IDs, so none were guessed from titles. Expired
+negative/ambiguous evidence may be refreshed in another explicitly bounded
+batch. A complete checkpoint does not reselect missing-year records forever;
+changed/new discoveries need a new reviewed manifest.
+
+Apply and replay preserved hashes of all discovery identities/original URLs,
+all 3,300 legacy rows and all discovery checkpoint state. Reconciliation replay
+also preserved complete row hashes for `Movie`, bootstrap evidence,
+`ProviderContent`, `ContentMapping` and discoveries, including timestamps. The
+final primary clone contains 388 canonical rows, 388 evidence rows, 388 mappings,
+436 provider-content rows and **zero offers**.
+
+#### Fresh restore and limited live procedure
+
+A second fresh read-only dump of the application database again contained
+5,095 discoveries, 3,300 legacy mappings, zero canonical records, zero canonical
+mappings and zero offers. Its identity/legacy/checkpoint hashes matched the
+initial restore. Applying pending migrations and reviewed caches on a second
+disposable database reproduced the first 250-record manifest and its 152
+associations without HTTP requests. Reconciliation replay preserved all audited
+row hashes. The live database remained unchanged.
+
+The reproducible clone-only driver is
+[`scripts/canonical_scale_validation.py`](../../scripts/canonical_scale_validation.py).
+It checks the actual PostgreSQL database and expected host and refuses database
+names outside `canonical_*`. `plan` freezes deterministic manifests;
+`bootstrap` is cache-only/dry-run unless flags explicitly allow network/writes;
+`sample`, `reconcile` and `audit` save reviewable JSON. For example, with clone
+credentials supplied through the existing environment:
+
+```sh
+python scripts/canonical_scale_validation.py --database canonical_scale --host canonical-scale-db --output /evidence --batch 1 plan
+python scripts/canonical_scale_validation.py --database canonical_scale --host canonical-scale-db --output /evidence --batch 1 --allow-network --request-budget 350 bootstrap
+# Inspect proposals and sample checks before clone apply.
+python scripts/canonical_scale_validation.py --database canonical_scale --host canonical-scale-db --output /evidence --batch 1 --apply bootstrap
+python scripts/canonical_scale_validation.py --database canonical_scale --host canonical-scale-db --output /evidence --batch 1 --apply reconcile
+```
+
+**The following live steps require separate explicit authorization; none were
+executed.** The initial live allowance should cover at most 25 specifically
+reviewed record IDs, a finite API budget and the exact target host/database.
+
+1. Take a fresh read-only backup and audit actual counts, source snapshots,
+   native IDs, URLs, existing canonical/mapping rows, offers and discovery
+   checkpoints. Compare every approved record with the committed evidence.
+   Rehearse on a new restore if source identity or baseline counts changed.
+2. Apply required migrations through the existing guarded migration service,
+   confirming the actual host/database. Do not enable worker schedules.
+3. Use a reviewed JSON list of at most 25 IDs. Cache transfer, if authorized,
+   must use the composite search/details keys and original expiry times,
+   without cloning cache primary keys or overwriting newer live metadata.
+   Otherwise permit a separate proposal pass with at most 50 HTTP attempts.
+4. Review each proposal against the approved source snapshot and type/year/ID
+   evidence. The apply pass must omit `--allow-network`; a cache miss stops
+   with `CACHE_MISS` and remains resumable. Use a distinct apply checkpoint.
+5. Reconcile only those same IDs. Recheck identity/legacy/checkpoint hashes,
+   exact mapping targets, pending records and zero offers. Repeat that same
+   bounded selection to prove no-op replay before authorizing another batch.
+   Stop on any unexpected mapping, source change, restriction or count change.
+
+The management-command invocation can be constructed without shell expansion
+of credentials or IDs, after loading and validating the approved JSON list:
+
+```python
+flags = [flag for pk in approved_ids for flag in ("--record-id", str(pk))]
+assert 0 < len(set(approved_ids)) == len(approved_ids) <= 25
+# Authorized proposal only; review its JSON before the next calls.
+call_command("bootstrap_canonical_catalogue", *flags, "--limit", "25",
+             "--allow-network", "--request-budget", "50", "--interval", "0.3")
+# After review; fresh cache only, no network. Use a checkpoint unique to this manifest.
+call_command("bootstrap_canonical_catalogue", *flags, "--limit", "25",
+             "--apply", "--checkpoint-file", "/approved/batch-001-apply.json")
+call_command("reconcile_unofficial_catalogue", *flags, "--apply")
+```
+
+Both bootstrap and reconciliation CLI applies are capped at 250 records;
+reconciliation apply now requires explicit IDs or a bounded limit. Preserve
+checkpoints and cache fixtures when pausing. A complete bootstrap checkpoint
+correctly evaluates zero further records; use the same IDs without that
+checkpoint for an independent no-op evidence replay. Never delete mappings
+or replace operator decisions as an automatic rollback.
+
+HydraHD historical checkpoints remain **movies page 132 / TV page 77**.
+AnimeWorld RSS and historical/incremental discovery remain independent of
+reconciliation. No restricted/unverified provider was retried. Schedules remain
+disabled; newly collected records can enter the next explicit manifest without
+schema changes.
+
+Validation: **3,319 full isolated backend tests**, focused identity/bootstrap/
+reconciliation checks, budget/cache/retry and restriction tests, source-mutation
+checks, interruption between search/details, crash after commit before
+checkpoint, fixed-selection resume, ambiguous/remake/media-collision negatives,
+no-op replay, two fresh restores, and migration drift checks passed. Migration
+`0056` remains unapplied on live. The limited rollout is prepared, but live
+canonical writes and further catalogue expansion still require separate scopes.

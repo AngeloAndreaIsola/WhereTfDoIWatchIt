@@ -150,7 +150,7 @@ class Command(BaseCommand):
             if pc.content_type != m.content_type:
                 reasons.append("content_type")
             local_titles = set(
-                Movie.objects.filter(tmdb_id=m.tmdb_id).values_list("title", flat=True)
+                Movie.objects.filter(tmdb_id=m.tmdb_id, content_type=m.content_type).values_list("title", flat=True)
             )
             if local_titles and pc.title.strip().lower() not in {
                 t.strip().lower() for t in local_titles

@@ -174,8 +174,7 @@ class ContentMatcher:
         # type is treated as "not found" and falls through to the TMDb search for
         # the declared type.
         exact_qs = Movie.objects.filter(title__iexact=item.title, year=item.year)
-        if item.content_type == "series":
-            exact_qs = exact_qs.filter(content_type="series")
+        exact_qs = exact_qs.filter(content_type=item.content_type)
         exact_movie = exact_qs.first()
         if exact_movie:
             self._upsert_mapping(provider, item, movie=exact_movie, confidence=1.0)
@@ -234,6 +233,7 @@ class ContentMatcher:
         ):
             matched_movie_obj, _ = Movie.objects.get_or_create(
                 tmdb_id=best_movie.tmdb_id,
+                content_type=best_movie.content_type or "movie",
                 defaults={
                     "title": best_movie.title,
                     "year": best_movie.year,

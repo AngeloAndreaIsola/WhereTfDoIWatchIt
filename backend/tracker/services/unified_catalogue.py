@@ -150,11 +150,11 @@ def unofficial_catalogue_items(
         entries = [
             entry
             for entry in entries
-            if (movie := movies.get(entry.tmdb_id)) is not None
+            if (movie := movies.get((entry.tmdb_id, entry.content_type))) is not None
             and cast_matches_actors(movie.cast, actor_ids, actor_names)
         ]
     return [
-        _as_api_item(entry, movies.get(entry.tmdb_id))
+        _as_api_item(entry, movies.get((entry.tmdb_id, entry.content_type)))
         for entry in entries
     ]
 
@@ -165,7 +165,7 @@ def _digit(value) -> Optional[int]:
     return int(value)
 
 
-def _movies_by_tmdb_id(tmdb_ids) -> dict[int, Movie]:
+def _movies_by_tmdb_id(tmdb_ids) -> dict[tuple[int, str], Movie]:
     """Batch ``Movie`` lookup for resolved entries (one query, at most)."""
     wanted = {tmdb_id for tmdb_id in tmdb_ids if tmdb_id}
     if not wanted:
@@ -173,7 +173,7 @@ def _movies_by_tmdb_id(tmdb_ids) -> dict[int, Movie]:
     movies = Movie.objects.filter(tmdb_id__in=wanted).only(
         "tmdb_id", "title", "year", "poster_path", "content_type", "cast"
     )
-    return {movie.tmdb_id: movie for movie in movies}
+    return {(movie.tmdb_id, movie.content_type): movie for movie in movies}
 
 
 def _as_api_item(entry, movie: Optional[Movie] = None) -> dict:

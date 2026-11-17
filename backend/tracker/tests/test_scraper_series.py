@@ -372,8 +372,7 @@ class ContentMatcherContentTypeTests(TestCase):
 
     @patch("tracker.scrapers.base.TMDbClient.search")
     def test_existing_row_content_type_is_never_flipped(self, mock_search):
-        # A legacy row typed "movie" for an id TMDb now returns as a series:
-        # get_or_create must not rewrite it.
+        # Movie and TV can legitimately share a numeric TMDb ID.
         row = Movie.objects.create(
             tmdb_id=90209, title="Dune", year=2021, content_type="movie"
         )
@@ -385,7 +384,8 @@ class ContentMatcherContentTypeTests(TestCase):
         movie, _, _, _ = matcher.match_item(series_item())
 
         row.refresh_from_db()
-        self.assertEqual(movie.id, row.id)
+        self.assertNotEqual(movie.id, row.id)
+        self.assertEqual(movie.content_type, "series")
         self.assertEqual(row.content_type, "movie")
 
     @patch("tracker.scrapers.base.TMDbClient.search")

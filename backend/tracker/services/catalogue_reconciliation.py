@@ -23,7 +23,7 @@ from django.utils import timezone
 def _normal_title(value):
     value = unicodedata.normalize("NFKD", str(value or "")).casefold()
     value = "".join(ch for ch in value if not unicodedata.combining(ch))
-    return " ".join(re.findall(r"[a-z0-9]+", value))
+    return " ".join(re.findall(r"[^\W_]+", value, flags=re.UNICODE))
 
 
 def _type_evidence(record):
@@ -98,7 +98,17 @@ def _match(record, classified_type, year, titles_by_norm, movies_by_tmdb, altern
     bootstrap = bootstrap_by_record.get(record.pk)
     if bootstrap:
         target = bootstrap.movie
-        if target.content_type == classified_type and target.year == year:
+        if (target.content_type == classified_type and target.year == year
+                and bootstrap.evidence.get("source_title") == record.title
+                and bootstrap.evidence.get("source_year") == year
+                and bootstrap.evidence.get("content_type") == classified_type
+                and bootstrap.evidence.get("provider_native_id") == record.provider_native_id
+                and bootstrap.evidence.get("source_url") == record.source_url
+                and bootstrap.evidence.get("provider") == record.provider.slug
+                and bootstrap.evidence.get("identity_url") == record.identity_url
+                and bootstrap.evidence.get("tmdb_id") == target.tmdb_id
+                and (not _trusted_external_tmdb_id(record)
+                     or int(_trusted_external_tmdb_id(record)) == target.tmdb_id)):
             return {"status": "MATCH_VERIFIED", "confidence": 1.0,
                     "evidence": ["TMDb search and details verified this discovered record",
                                  "exact normalized title", "exact release year",
@@ -112,9 +122,9 @@ def _match(record, classified_type, year, titles_by_norm, movies_by_tmdb, altern
         return {"status": "POSSIBLE_REVIEW", "confidence": 0.0,
                 "evidence": ["source TMDb ID lacks trusted provenance"], "candidates": []}
     if tmdb_id:
-        target = movies_by_tmdb.get(int(tmdb_id))
-        if target and target.content_type == classified_type:
-            return {"status": "MATCH_VERIFIED", "confidence": 1.0, "evidence": ["source metadata contains a provenance-marked trusted TMDb ID", "media type agrees"], "candidates": [_movie_candidate(target)]}
+        target = movies_by_tmdb.get((int(tmdb_id), classified_type))
+        if target:
+            return {"status": "MATCH_HIGH", "confidence": 1.0, "evidence": ["source metadata contains a provenance-marked trusted TMDb ID; bootstrap details verification required", "media type agrees"], "candidates": [_movie_candidate(target)]}
         return {"status": "POSSIBLE_REVIEW", "confidence": 0.0, "evidence": ["explicit TMDb ID is absent from canonical catalogue or has a type conflict"], "candidates": []}
 
     title = _normal_title(record.title)
@@ -133,7 +143,7 @@ def _match(record, classified_type, year, titles_by_norm, movies_by_tmdb, altern
         unique_alternatives = {m.pk: m for m in alternatives}
         if len(unique_alternatives) == 1:
             candidate = next(iter(unique_alternatives.values()))
-            return {"status": "MATCH_VERIFIED", "confidence": 0.99,
+            return {"status": "MATCH_HIGH", "confidence": 0.99,
                     "evidence": ["verified TMDb alternative title", "exact release year",
                                  "media type agrees"],
                     "candidates": [_movie_candidate(candidate)]}
@@ -155,7 +165,7 @@ def _match(record, classified_type, year, titles_by_norm, movies_by_tmdb, altern
                 if movie.content_type != classified_type or movie.year != year:
                     continue
                 title_score = SequenceMatcher(None, title, _normal_title(movie.title)).ratio()
-                details = details_by_tmdb.get(movie.tmdb_id, {})
+                details = details_by_tmdb.get((movie.tmdb_id, movie.content_type), {})
                 summary_score = _token_overlap(source_summary, details.get("overview"))
                 if title_score >= 0.92 and summary_score >= 0.60:
                     fuzzy.append((movie, title_score, summary_score))
@@ -196,7 +206,7 @@ def _provider_content_id(record):
     return f"url:{digest}"
 
 
-def reconcile_catalogue(*, provider_slugs=None, limit=None, apply=False):
+def reconcile_catalogue(*, provider_slugs=None, record_ids=None, limit=None, apply=False):
     """Return per-record proposals; apply only high-confidence classifications.
 
     Application creates provider catalogue identity rows for confidently
@@ -210,6 +220,8 @@ def reconcile_catalogue(*, provider_slugs=None, limit=None, apply=False):
     qs = DiscoveredCatalogueRecord.objects.select_related("provider").order_by("provider__slug", "pk")
     if provider_slugs:
         qs = qs.filter(provider__slug__in=provider_slugs)
+    if record_ids is not None:
+        qs = qs.filter(pk__in=record_ids)
     if limit is not None:
         qs = qs[:max(0, int(limit))]
 
@@ -218,16 +230,16 @@ def reconcile_catalogue(*, provider_slugs=None, limit=None, apply=False):
     movies_by_tmdb = {}
     for movie in movies:
         titles_by_norm[_normal_title(movie.title)].append(movie)
-        movies_by_tmdb[movie.tmdb_id] = movie
+        movies_by_tmdb[(movie.tmdb_id, movie.content_type)] = movie
 
     alternatives_by_norm = defaultdict(list)
     details_by_tmdb = {}
     for cache in TmdbDetailsCache.objects.filter(expires_at__gt=timezone.now(), is_negative=False).only(
         "tmdb_id", "content_type", "details"
     ).iterator(chunk_size=500):
-        movie = movies_by_tmdb.get(cache.tmdb_id)
+        movie = movies_by_tmdb.get((cache.tmdb_id, cache.content_type))
         details = cache.details if isinstance(cache.details, dict) else {}
-        details_by_tmdb[cache.tmdb_id] = details
+        details_by_tmdb[(cache.tmdb_id, cache.content_type)] = details
         alternative = _normal_title(details.get("original_title"))
         display = _normal_title(details.get("title"))
         if (movie and cache.content_type == movie.content_type and alternative
@@ -380,7 +392,7 @@ def reconcile_catalogue(*, provider_slugs=None, limit=None, apply=False):
         "duplicate_identities": {"count": duplicate_identity_groups, "title_candidate_groups": duplicate_title_groups_report},
         "false_positive_findings": false_positive_findings,
         "false_positive_validation": (
-            "verified mappings require provenance-marked identifiers or record-specific TMDb search/details evidence; "
+            "verified mappings require record-specific TMDb identifier/details evidence; "
             "exact title/year proposals remain review-only"
         ),
         "requested_metrics": {
@@ -402,6 +414,10 @@ def reconcile_catalogue(*, provider_slugs=None, limit=None, apply=False):
 @transaction.atomic
 def _apply_classification(record, content_type, year, match):
     """Persist one safely classified source identity, without offer creation."""
+    locked = DiscoveredCatalogueRecord.objects.select_for_update().get(pk=record.pk)
+    if any(getattr(locked, field) != getattr(record, field) for field in (
+            "title", "provider_id", "provider_native_id", "source_url", "identity_url", "original_metadata")):
+        raise ValueError("Discovery changed after proposal; re-evaluate before applying")
     provider = record.provider
     native_id = _provider_content_id(record)
     metadata = dict(record.original_metadata) if isinstance(record.original_metadata, dict) else {}
@@ -429,9 +445,10 @@ def _apply_classification(record, content_type, year, match):
             "currently_available": False,
         },
     )
-    record.classification_state = "CLASSIFIED"
-    record.classified_content_type = content_type
-    record.save(update_fields=["classification_state", "classified_content_type", "updated_at"])
+    if record.classification_state != "CLASSIFIED" or record.classified_content_type != content_type:
+        record.classification_state = "CLASSIFIED"
+        record.classified_content_type = content_type
+        record.save(update_fields=["classification_state", "classified_content_type", "updated_at"])
     if match["status"] != "MATCH_VERIFIED":
         return "provider_content_created" if created else "provider_content_exists"
 
@@ -454,6 +471,9 @@ def _apply_classification(record, content_type, year, match):
     ).first()
     if existing_mapping:
         # Reconciliation never replaces an existing operator/provider mapping.
+        if (existing_mapping.content_type != content_type
+                or existing_mapping.tmdb_id != candidate["tmdb_id"]):
+            return "existing_canonical_mapping_conflict"
         return "existing_canonical_mapping_preserved"
     ContentMapping.objects.create(
         provider=provider,

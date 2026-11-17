@@ -83,23 +83,10 @@ def safe_enrich_or_create_movie(
 ) -> Movie:
     """Safe local tracker.Movie creation or enrichment without flipping content_type.
 
-    Raises CandidateAcceptanceError(MOVIE_TYPE_CONFLICT) if an existing Movie has
-    a conflicting content_type.
+    Movie and TV IDs use distinct namespaces; enrichment always selects both.
     """
-    existing = Movie.objects.filter(tmdb_id=tmdb_id).first()
+    existing = Movie.objects.filter(tmdb_id=tmdb_id, content_type=verified_type).first()
     if existing:
-        if existing.content_type != verified_type:
-            raise CandidateAcceptanceError(
-                f"Existing Movie (id={existing.id}, tmdb_id={tmdb_id}) has content_type "
-                f"'{existing.content_type}', conflicting with verified '{verified_type}'",
-                code="MOVIE_TYPE_CONFLICT",
-                status_code=409,
-                extra={
-                    "tmdb_id": tmdb_id,
-                    "existing_content_type": existing.content_type,
-                    "verified_content_type": verified_type,
-                },
-            )
         # Enrich without overwriting user state or downgrading quality fields
         update_fields = []
         if not existing.title and details.get("title"):

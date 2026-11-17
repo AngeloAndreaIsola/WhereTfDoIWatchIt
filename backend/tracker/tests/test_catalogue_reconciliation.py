@@ -49,8 +49,9 @@ class CatalogueReconciliationTests(TestCase):
         self.assertEqual(proposals[year_conflict.pk]["match"]["status"], "POSSIBLE_REVIEW")
         self.assertEqual(proposals[type_conflict.pk]["match"]["status"], "POSSIBLE_REVIEW")
 
-    def test_only_provenance_marked_external_identifier_is_verified(self):
+    def test_trusted_identifier_still_requires_record_specific_bootstrap(self):
         Movie.objects.create(tmdb_id=101, title="Night Train", year=2024, content_type="movie")
+        Movie.objects.create(tmdb_id=101, title="Different Series", year=2024, content_type="series")
         trusted = self.record(self.hydra, "Other title", {
             "catalogue_partition": "movies", "year": 2024,
             "external_ids": {"tmdb": 101}, "external_ids_trusted": True,
@@ -60,8 +61,23 @@ class CatalogueReconciliationTests(TestCase):
             "external_ids": {"tmdb": 101},
         }, url="https://provider.example/title/untrusted")
         proposals = {row["record_id"]: row for row in reconcile_catalogue()["records"]}
-        self.assertEqual(proposals[trusted.pk]["match"]["status"], "MATCH_VERIFIED")
+        self.assertEqual(proposals[trusted.pk]["match"]["status"], "MATCH_HIGH")
         self.assertEqual(proposals[untrusted.pk]["match"]["status"], "POSSIBLE_REVIEW")
+
+    def test_external_id_lookup_is_scoped_to_media_type(self):
+        movie = Movie.objects.create(tmdb_id=404, title="The Film", year=2024, content_type="movie")
+        series = Movie.objects.create(tmdb_id=404, title="The Series", year=2024, content_type="series")
+        film_record = self.record(self.hydra, "Film listing", {
+            "catalogue_partition": "movies", "year": 2024,
+            "external_ids": {"tmdb": 404}, "external_ids_trusted": True,
+        })
+        series_record = self.record(self.hydra, "Series listing", {
+            "catalogue_partition": "tv-shows", "year": 2024,
+            "external_ids": {"tmdb": 404}, "external_ids_trusted": True,
+        }, url="https://provider.example/title/series")
+        proposals = {row["record_id"]: row for row in reconcile_catalogue()["records"]}
+        self.assertEqual(proposals[film_record.pk]["match"]["candidates"][0]["movie_id"], movie.pk)
+        self.assertEqual(proposals[series_record.pk]["match"]["candidates"][0]["movie_id"], series.pk)
 
     def test_verified_tmdb_alternative_title_matches_only_with_year_and_type(self):
         movie = Movie.objects.create(tmdb_id=101, title="The Official Title", year=2024,
@@ -76,7 +92,7 @@ class CatalogueReconciliationTests(TestCase):
                              {"catalogue_partition": "movies", "year": 2024})
         proposal = next(row for row in reconcile_catalogue()["records"]
                         if row["record_id"] == record.pk)
-        self.assertEqual(proposal["match"]["status"], "MATCH_VERIFIED")
+        self.assertEqual(proposal["match"]["status"], "MATCH_HIGH")
         self.assertEqual(proposal["match"]["candidates"][0]["movie_id"], movie.pk)
 
     def test_same_title_same_year_multiple_canonical_ids_require_review(self):
@@ -119,7 +135,9 @@ class CatalogueReconciliationTests(TestCase):
         CanonicalBootstrapEvidence.objects.create(
             discovered_record=record, movie=Movie.objects.get(tmdb_id=101),
             source_kind="tmdb_search_and_details", verification_method="exact_title_year_type",
-            evidence={"verified": True},
+            evidence={"source_title": record.title, "source_year": 2024, "content_type": "movie",
+                      "provider_native_id": record.provider_native_id, "source_url": record.source_url,
+                      "tmdb_id": 101, "provider": record.provider.slug, "identity_url": record.identity_url},
         )
 
         report = reconcile_catalogue(apply=True)
@@ -173,3 +191,19 @@ class CatalogueReconciliationTests(TestCase):
         self.assertEqual(proposal["match"]["status"], "UNMATCHED")
         self.assertEqual(proposal["legacy_mapping_candidates"][0]["identity_status"], "SAME_SOURCE_URL")
         self.assertEqual(report["legacy_mapping_overlaps"]["discovered_records_with_exact_source_url_match"], 1)
+
+    def test_reconciliation_cli_requires_a_bounded_apply_selection(self):
+        from django.core.management import call_command
+        from django.core.management.base import CommandError
+        from io import StringIO
+        for args in [('--apply',), ('--apply', '--limit', '251')]:
+            with self.assertRaises(CommandError):
+                call_command('reconcile_unofficial_catalogue', *args, stdout=StringIO())
+
+    def test_source_mutation_between_proposal_and_apply_is_rejected(self):
+        from tracker.services.catalogue_reconciliation import _apply_classification
+        record = self.record(self.hydra, 'Original release', {'catalogue_partition': 'movies', 'year': 2020})
+        DiscoveredCatalogueRecord.objects.filter(pk=record.pk).update(title='Different release')
+        with self.assertRaises(ValueError):
+            _apply_classification(record, 'movie', 2020, {'status': 'UNMATCHED'})
+        self.assertFalse(ProviderContent.objects.exists())
