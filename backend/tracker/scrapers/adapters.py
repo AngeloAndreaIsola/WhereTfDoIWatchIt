@@ -28,6 +28,21 @@ def _content_type_from_url(url: Any, default: str = "movie") -> str:
 class KissKHScraper(BaseScraper):
     provider_slug = "kisskh"
 
+    # Both hosts serve the same API; keep a fallback so a domain move does not
+    # silently zero out the scraper.
+    API_BASES = ("https://kisskh.do", "https://kisskh.co")
+    # The API defaults to 10 rows per page. `pageSize` is accepted and lets a
+    # single request return hundreds of titles instead of ten.
+    PAGE_SIZE = 200
+    PAGES_PER_TYPE = 3
+
+    def _fetch_api(self, path: str):
+        for base in self.API_BASES:
+            data = self.fetch_url(f"{base}{path}")
+            if data:
+                return data
+        return None
+
     # KissKH's API `type` parameter is the site's own structured content flag and
     # the only reliable signal it exposes (payload rows carry no per-item type):
     # 2 = films, 1 = drama series, 3 = anime series. `type=0` (mixed) is avoided
@@ -45,13 +60,13 @@ class KissKHScraper(BaseScraper):
         if not query:
             logger.info("KissKH scraper: no query provided, scraping recently added...")
             for type_code, content_type in self.BROWSE_TYPES:
-                for page in range(1, 3):
-                    url = (
-                        f"https://kisskh.do/api/DramaList/List?page={page}"
-                        f"&type={type_code}&sub=0&country=0&status=0&order=1"
+                for page in range(1, self.PAGES_PER_TYPE + 1):
+                    path = (
+                        f"/api/DramaList/List?page={page}&type={type_code}"
+                        f"&sub=0&country=0&status=0&order=1&pageSize={self.PAGE_SIZE}"
                     )
-                    logger.info("KissKH scraper: fetching %s", url)
-                    resp_data = self.fetch_url(url)
+                    logger.info("KissKH scraper: fetching %s", path)
+                    resp_data = self._fetch_api(path)
                     if not resp_data or not isinstance(resp_data, dict):
                         break
                     data = resp_data.get("data")
@@ -61,11 +76,14 @@ class KissKHScraper(BaseScraper):
                     if not page_items:
                         break
                     items.extend(page_items)
+                    if len(data) < self.PAGE_SIZE:
+                        break  # Last page for this type
             return self._dedupe(items)
 
         for type_code, content_type in self.BROWSE_TYPES:
-            url = f"https://kisskh.do/api/DramaList/Search?q={query}&type={type_code}"
-            resp_data = self.fetch_url(url)
+            resp_data = self._fetch_api(
+                f"/api/DramaList/Search?q={query}&type={type_code}"
+            )
             if not resp_data:
                 logger.warning("KissKH scraper: no response data for type=%s", type_code)
                 continue
@@ -189,11 +207,17 @@ class GenericURLAdapter(BaseScraper):
 class HydraHDScraper(BaseScraper):
     provider_slug = "hydrahd"
 
+    # hydrahd.ws now redirects to hydrahd.gd; list the canonical host first and
+    # keep the old one as a fallback. hydrahd.ru serves a stub page, so it is
+    # deliberately excluded.
+    DOMAINS = ("hydrahd.gd", "hydrahd.ws")
+    PAGES_PER_CATEGORY = 10
+
     HEADERS = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://hydrahd.ws/",
+        "Referer": "https://hydrahd.gd/",
     }
 
     def _execute_run(self, query: Optional[str] = None) -> list[ScrapedItem]:
@@ -204,24 +228,26 @@ class HydraHDScraper(BaseScraper):
                 # The browse category only acts as the fallback signal; the item URL
                 # itself is authoritative for classification.
                 default_content_type = "series" if category == "tv-shows" else "movie"
-                for page in range(1, 2):  # Scrape first page per category
-                    for domain in ["hydrahd.ws", "hydrahd.ru"]:
+                for page in range(1, self.PAGES_PER_CATEGORY + 1):
+                    for domain in self.DOMAINS:
                         url = f"https://{domain}/{category}/date/{page}"
                         logger.info("HydraHD scraper: fetching %s", url)
                         resp_data = self.fetch_url(url, headers=self.HEADERS)
                         if resp_data and isinstance(resp_data, str):
                             page_items = self.parse_html(
-                                resp_data, default_content_type=default_content_type
+                                resp_data,
+                                default_content_type=default_content_type,
+                                base_url=f"https://{domain}",
                             )
                             if page_items:
                                 items.extend(page_items)
-                                break  # Break domain loop
-            return items
+                                break  # This domain worked for this page
+            return self._dedupe(items)
 
-        # Try the current domain first, fall back to old domain
+        # Try the current domain first, fall back to the old one
         urls_to_try = [
-            f"https://hydrahd.ws/index.php?menu=search&query={query}",
-            f"https://hydrahd.ru/index.php?menu=search&query={query}",
+            f"https://{domain}/index.php?menu=search&query={query}"
+            for domain in self.DOMAINS
         ]
 
         for url in urls_to_try:
@@ -276,9 +302,23 @@ class HydraHDScraper(BaseScraper):
             )
         return items
 
+    @staticmethod
+    def _dedupe(items: list[ScrapedItem]) -> list[ScrapedItem]:
+        """Drop titles repeated across browse pages."""
+        seen: set[str] = set()
+        deduped: list[ScrapedItem] = []
+        for item in items:
+            if item.source_url in seen:
+                continue
+            seen.add(item.source_url)
+            deduped.append(item)
+        return deduped
 
     def parse_html(
-        self, html_content: str, default_content_type: str = "movie"
+        self,
+        html_content: str,
+        default_content_type: str = "movie",
+        base_url: Optional[str] = None,
     ) -> list[ScrapedItem]:
         import re
         items: list[ScrapedItem] = []
@@ -293,7 +333,7 @@ class HydraHDScraper(BaseScraper):
                 year_int = int(year) if year else None
             except ValueError:
                 year_int = None
-            source_url = f"https://hydrahd.ws{href}" if href.startswith("/") else href
+            source_url = f"{(base_url or 'https://hydrahd.gd').rstrip('/')}{href}" if href.startswith("/") else href
             items.append(
                 ScrapedItem(
                     title=title.strip(),

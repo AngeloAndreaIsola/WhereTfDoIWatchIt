@@ -64,6 +64,9 @@ UNOFFICIAL_PROVIDERS = [
     {"slug": "kisskh", "name": "KissKH", "domain": "kisskh.co"},
     {"slug": "hydrahd", "name": "HydraHD", "domain": "hydrahd.org"},
     {"slug": "animeworld", "name": "AnimeWorld", "domain": "animeworld.to"},
+    {"slug": "streamingcommunity", "name": "StreamingCommunity", "domain": "streaming-community.army"},
+    {"slug": "cineblog01", "name": "CineBlog01", "domain": "cineblog001.run"},
+    {"slug": "altadefinizione", "name": "AltaDefinizione", "domain": "altadefinizionex.ink"},
 ]
 
 LEGACY_SCRAPERS = [

@@ -8,11 +8,15 @@ from tracker.models import Provider, ProviderCategory
 # NOTE: bbc_iplayer, rai-play and nhk are seeded as Free Streaming Providers by
 # the migrations (0011 / 0014 / 0018) — they are public broadcasters, not scrapers.
 # This command only seeds the small imported scraper sources (KissKH, HydraHD,
-# AnimeWorld) when missing; it will not downgrade a Free provider back to scraper.
+# AnimeWorld, StreamingCommunity, CineBlog01, AltaDefinizione) when missing;
+# it will not downgrade a Free provider back to scraper.
 UNOFFICIAL_PROVIDERS = [
     {"slug": "kisskh", "name": "KissKH", "country": "", "domain": "kisskh.co", "url": "https://kisskh.co"},
     {"slug": "hydrahd", "name": "HydraHD", "country": "", "domain": "hydrahd.org", "url": "https://hydrahd.org"},
     {"slug": "animeworld", "name": "AnimeWorld", "country": "", "domain": "animeworld.to", "url": "https://animeworld.to"},
+    {"slug": "streamingcommunity", "name": "StreamingCommunity", "country": "IT", "domain": "streaming-community.army", "url": "https://streaming-community.army"},
+    {"slug": "cineblog01", "name": "CineBlog01", "country": "IT", "domain": "cineblog001.run", "url": "https://cineblog001.run"},
+    {"slug": "altadefinizione", "name": "AltaDefinizione", "country": "IT", "domain": "altadefinizionex.ink", "url": "https://altadefinizionex.ink"},
 ]
 
 

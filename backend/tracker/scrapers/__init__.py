@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 from tracker.scrapers.base import BaseScraper, ScrapedItem, ContentMatcher
+from tracker.scrapers.altadefinizione import AltaDefinizioneScraper
 from tracker.scrapers.bbc import BBCScraper
+from tracker.scrapers.bilibili_tv import BilibiliTVScraper
+from tracker.scrapers.cineblog01 import CineBlog01Scraper
 from tracker.scrapers.nhk import NHKScraper
+from tracker.scrapers.ok_ru import OKRuScraper
 from tracker.scrapers.rai_play import RaiPlayScraper
+from tracker.scrapers.streamingcommunity import StreamingCommunityScraper
 from tracker.scrapers.adapters import (
     AnimeWorldScraper,
     GenericURLAdapter,
@@ -18,8 +23,15 @@ from tracker.scrapers.adapters import (
 SCRAPER_REGISTRY = {
     "bbc_iplayer": "tracker.scrapers.bbc.BBCScraper",
     "bbc": "tracker.scrapers.bbc.BBCScraper",
+    "bilibili_tv": "tracker.scrapers.bilibili_tv.BilibiliTVScraper",
+    "bilibili": "tracker.scrapers.bilibili_tv.BilibiliTVScraper",
     "nhk_world": "tracker.scrapers.nhk.NHKScraper",
     "nhk": "tracker.scrapers.nhk.NHKScraper",
+    "ok_ru": "tracker.scrapers.ok_ru.OKRuScraper",
+    "okru": "tracker.scrapers.ok_ru.OKRuScraper",
+    "streamingcommunity": "tracker.scrapers.streamingcommunity.StreamingCommunityScraper",
+    "cineblog01": "tracker.scrapers.cineblog01.CineBlog01Scraper",
+    "altadefinizione": "tracker.scrapers.altadefinizione.AltaDefinizioneScraper",
     "rai-play": "tracker.scrapers.rai_play.RaiPlayScraper",
     "raiplay": "tracker.scrapers.rai_play.RaiPlayScraper",
     "kisskh": "tracker.scrapers.adapters.KissKHScraper",
@@ -40,6 +52,9 @@ __all__ = [
     "HydraHDScraper",
     "AnimeWorldScraper",
     "GenericURLAdapter",
+    "StreamingCommunityScraper",
+    "CineBlog01Scraper",
+    "AltaDefinizioneScraper",
 ]
 
 

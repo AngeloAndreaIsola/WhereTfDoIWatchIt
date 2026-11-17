@@ -15,6 +15,12 @@ from tracker.services.tmdb import TMDbClient, TMDbMovie
 
 logger = logging.getLogger(__name__)
 
+# Several providers WAF-block the default `python-requests` user agent.
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
 QUALITY_MAPPINGS = {
     "2160p": "4K",
     "4k": "4K",
@@ -90,9 +96,12 @@ class BaseScraper:
 
     def fetch_url(self, url: str, headers: Optional[dict] = None) -> Optional[dict | str]:
         """Fetch URL with retries, timeout, and error handling."""
+        request_headers = {"User-Agent": DEFAULT_USER_AGENT}
+        if headers:
+            request_headers.update(headers)
         for attempt in range(1 + self.max_retries):
             try:
-                resp = self.session.get(url, timeout=self.timeout, headers=headers)
+                resp = self.session.get(url, timeout=self.timeout, headers=request_headers)
                 resp.raise_for_status()
                 try:
                     return resp.json()
