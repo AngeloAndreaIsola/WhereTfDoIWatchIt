@@ -75,7 +75,7 @@ class PendingCataloguePersistenceTests(TestCase):
         first = self.item("One", "https://hydrahd.gd/movie/a?utm_campaign=x")
         second = self.item("One", "https://hydrahd.gd/movie/a?fbclid=abc")
         self.assertEqual(_persist_unclassified_observation(provider=self.provider, item=first, partition="movies"), "inserted")
-        self.assertEqual(_persist_unclassified_observation(provider=self.provider, item=second, partition="movies"), "updated")
+        self.assertEqual(_persist_unclassified_observation(provider=self.provider, item=second, partition="movies"), "source_metadata_updated")
         row = DiscoveredCatalogueRecord.objects.get(provider=self.provider)
         self.assertEqual(row.source_url, first.source_url)
         self.assertEqual(row.source_urls_seen, [first.source_url, second.source_url])
@@ -106,7 +106,7 @@ class PendingCataloguePersistenceTests(TestCase):
         second.raw_payload["listing_page"] = 11
         _persist_unclassified_observation(provider=self.provider, item=first, partition="movies")
         outcome = _persist_unclassified_observation(provider=self.provider, item=second, partition="movies")
-        self.assertEqual(outcome, "updated")
+        self.assertEqual(outcome, "source_metadata_updated")
         row = DiscoveredCatalogueRecord.objects.get(provider=self.provider)
         self.assertEqual(DiscoveredCatalogueRecord.objects.filter(provider=self.provider).count(), 1)
         self.assertEqual([o["page"] for o in row.original_metadata["listing_observations"]], [10, 11])

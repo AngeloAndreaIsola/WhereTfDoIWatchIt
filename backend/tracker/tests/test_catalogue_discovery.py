@@ -73,6 +73,34 @@ class CatalogueDiscoveryTests(TestCase):
         self.assertEqual(second["pages_scanned"], 1)
         self.assertEqual(DiscoveredCatalogueRecord.objects.filter(provider=self.providers[slug]).count(), 2)
 
+    def test_operator_interrupt_keeps_last_committed_checkpoint_for_restart(self):
+        def interrupted_page(scraper, provider_slug, part, page, query=None):
+            scraper.session.get("https://fixture.invalid/page")
+            if page == 2:
+                raise KeyboardInterrupt()
+            return [fixture_item(provider_slug, page=page)], False, None, "fixture_page"
+
+        with patch("tracker.services.catalogue_discovery._parts", return_value=["movies"]), \
+             patch("tracker.services.catalogue_discovery._page", side_effect=interrupted_page), \
+             patch("requests.Session.get", return_value=object()):
+            first = run_discovery("hydrahd", request_budget=3, delay=0)
+
+        self.assertEqual(first["status"], "PARTIAL")
+        self.assertEqual(first["checkpoint"]["parts"]["movies"], 1)
+        self.assertEqual(CatalogueDiscoveryState.objects.get(provider=self.providers["hydrahd"]).status, "PARTIAL")
+
+        def resumed_page(scraper, provider_slug, part, page, query=None):
+            scraper.session.get("https://fixture.invalid/page")
+            self.assertEqual(page, 2)
+            return [fixture_item(provider_slug, page=page)], False, None, "fixture_page"
+
+        with patch("tracker.services.catalogue_discovery._parts", return_value=["movies"]), \
+             patch("tracker.services.catalogue_discovery._page", side_effect=resumed_page), \
+             patch("requests.Session.get", return_value=object()):
+            second = run_discovery("hydrahd", request_budget=1, delay=0)
+
+        self.assertEqual(second["page_ranges"], {"movies": [2, 2]})
+
     def test_hydra_partition_checkpoint_does_not_complete_other_partition(self):
         def one_page(scraper, provider_slug, part, page, query=None):
             scraper.session.get("https://fixture.invalid/page")
@@ -220,7 +248,8 @@ class CatalogueDiscoveryTests(TestCase):
         self.assertEqual(first["items_inserted"], 2)
         self.assertEqual(second["items_inserted"], 0)
         self.assertEqual(second["duplicate_identities"], 2)
-        self.assertEqual(second["items_updated"], 2)
+        self.assertEqual(second["items_updated"], 0)
+        self.assertEqual(second["items_source_metadata_updated"], 2)
         self.assertEqual(second["items_shifted_between_pages"], 2)
         self.assertEqual(DiscoveredCatalogueRecord.objects.filter(provider=self.providers["hydrahd"]).count(), 2)
 
@@ -297,6 +326,51 @@ class CatalogueDiscoveryTests(TestCase):
         self.assertEqual(first["items_inserted"], 1)
         self.assertEqual(replay["items_unchanged"], 1)
         self.assertEqual(ScrapedContentMapping.objects.filter(provider=self.providers[slug]).count(), 1)
+
+    def test_page_serialization_changes_are_not_reported_as_semantic_updates(self):
+        provider = self.providers["hydrahd"]
+        item = fixture_item("hydrahd", part="movies", page=1)
+        item.raw_payload = {"href": "/movie/alpha", "year": 2020, "listing_page": 1}
+        first = _persist_unclassified_observation(provider=provider, item=item, partition="movies")
+        record = DiscoveredCatalogueRecord.objects.get(provider=provider)
+        old_last_seen = record.last_seen_at
+        old_updated = record.updated_at
+        item.raw_payload = {"href": "/movie/alpha", "year": 2020, "listing_page": 2}
+        second = _persist_unclassified_observation(provider=provider, item=item, partition="movies")
+        record.refresh_from_db()
+        self.assertEqual(first, "inserted")
+        self.assertEqual(second, "source_metadata_updated")
+        self.assertEqual(record.last_seen_at >= old_last_seen, True)
+        self.assertGreaterEqual(record.updated_at, old_updated)
+        self.assertEqual(record.title, item.title)
+
+    def test_exact_replay_advances_last_seen_without_changing_updated_at(self):
+        provider = self.providers["hydrahd"]
+        item = fixture_item("hydrahd", part="movies", page=1)
+        _persist_unclassified_observation(provider=provider, item=item, partition="movies")
+        record = DiscoveredCatalogueRecord.objects.get(provider=provider)
+        previous_updated = record.updated_at
+        outcome = _persist_unclassified_observation(provider=provider, item=item, partition="movies")
+        record.refresh_from_db()
+        self.assertEqual(outcome, "unchanged")
+        self.assertEqual(record.updated_at, previous_updated)
+
+    def test_title_metadata_changes_are_reported_as_semantic_updates(self):
+        provider = self.providers["hydrahd"]
+        item = fixture_item("hydrahd", part="movies", page=1)
+        _persist_unclassified_observation(provider=provider, item=item, partition="movies")
+        item.title = "Changed semantic title"
+        outcome = _persist_unclassified_observation(provider=provider, item=item, partition="movies")
+        self.assertEqual(outcome, "updated")
+
+    def test_provenance_and_access_metadata_changes_are_not_content_updates(self):
+        provider = self.providers["hydrahd"]
+        item = fixture_item("hydrahd", part="movies", page=1)
+        item.raw_payload = {"year": 2020, "provenance_state": "PROVENANCE_UNVERIFIED", "access_policy_state": "UNKNOWN"}
+        _persist_unclassified_observation(provider=provider, item=item, partition="movies")
+        item.raw_payload = {"year": 2020, "provenance_state": "SELF_ASSERTED", "access_policy_state": "PERMITTED"}
+        outcome = _persist_unclassified_observation(provider=provider, item=item, partition="movies")
+        self.assertEqual(outcome, "source_metadata_updated")
 
     def test_unclassified_native_records_are_idempotent_and_do_not_project(self):
         slug = "streamingcommunity"

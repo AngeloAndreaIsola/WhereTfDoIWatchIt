@@ -1107,3 +1107,179 @@ backend suite passed (3,279 tests); the frontend suite passed (305 tests in 37
 files). `makemigrations --check --dry-run` reported no model changes. The
 catalogue remains partial because HydraHD has no verified fixed total or
 terminal-page signal. No provider crawl is scheduled automatically.
+
+## Reconciliation readiness follow-up (2026-11-17)
+
+### Reconciliation implementation and isolated dry run
+
+Added `reconcile_unofficial_catalogue`, a read-only-by-default proposal
+command. Classification requires source-specific evidence: HydraHD's
+`movies`/`tv-shows` partition, or an explicit `anime_type` in the first-party
+AnimeWorld RSS snapshot. The 64 legacy AnimeWorld A–Z rows remain ambiguous;
+their parser's `listing_content_type_hint` is not treated as proof. Titles are
+retained as observed, years are accepted only from an explicit metadata field,
+and contradictory type hints block classification. The command reports the
+evidence and confidence per record. It proposes canonical matches only for a
+type-compatible exact title+year match or an explicit matching TMDb identifier;
+missing-year title matches and type/year conflicts require review. No TMDb
+search was made. Provider-native IDs, URL-derived identities, and original
+URLs are retained. Same-title collisions are reported without merging.
+
+`--apply` is an explicit second step: it can persist confident classifications
+as `ProviderContent` and create only high-confidence canonical mappings when a
+matching `Source` row exists. It does not create `Offer` rows. The command was
+not run with `--apply` against either the live database or the isolated copy.
+Migration `0054` adds `last_seen_at`, separate from `updated_at`; it was
+applied only to the disposable reconciliation copy during validation.
+For pre-migration rows, `last_seen_at` is initialized from `updated_at`, the
+closest persisted observation timestamp available; it is not a reconstructed
+per-request history.
+
+The representative run used a full read-only dry run of the actual 5,095-row
+live inventory after a read-only dump was restored into the disposable
+`reconciliation_sample` database. No live write or public detail-page request
+was made. Results:
+
+| Metric | Result |
+|---|---:|
+| Records evaluated | 5,095 |
+| Titles extracted | 5,095 |
+| Explicit years extracted | 5,016; 79 missing (AnimeWorld RSS records) |
+| Confident movies | 3,169 (HydraHD 3,168; AnimeWorld RSS 1) |
+| Confident series | 1,862 (HydraHD 1,848; AnimeWorld RSS 14) |
+| Ambiguous classification | 64 (all restricted legacy AnimeWorld A–Z rows) |
+| High-confidence canonical matches | 0 |
+| Possible canonical matches for review | 0 |
+| Classified records unmatched to canonical titles | 5,031 |
+| Duplicate provider identity collisions | 0 (also database-constrained) |
+| Same-title candidate groups | 6; retained separately for review |
+| Detected evidence conflicts / false-positive findings | 0 |
+| Offers created | 0 |
+
+The dry run also compared discoveries to the 3,300 legacy
+`ScrapedContentMapping` rows as source evidence, without using them as canonical
+matches. All 3,300 legacy rows have `movie_id=NULL`, `is_confirmed=false`, and
+no provider-native ID. The report found 456 discovered records with an exact
+legacy source-URL match, 481 with exact title/year/type evidence, and 25
+title-only or conflicting candidates requiring review. These cross-table
+overlaps remain distinct source observations; no rows were merged. HydraHD's
+480 legacy mappings substantially overlap the current catalogue; AnimeWorld's
+174 legacy mappings produce 16 discovered-record title-only/review candidates
+and no exact source-URL matches. The review candidates split 9 HydraHD and 16
+AnimeWorld records. Legacy overlap counts do not increase canonical-match
+confidence.
+
+There are no canonical `Movie` rows in the current database, so the run cannot
+measure false-positive rates for canonical matches. The six same-title groups
+are not asserted to be duplicate content; none were merged. Matching will
+become measurable after canonical titles or trusted external identifiers are
+present. No detail-page enrichment was needed to classify the permitted
+HydraHD partitions or the 15 RSS records. The 64 ambiguous rows are restricted
+observations and were not fetched for enrichment.
+
+Example command (defaults to dry run):
+
+```sh
+python manage.py reconcile_unofficial_catalogue --provider hydrahd --provider animeworld --summary-only
+```
+
+### Analysis of the 96 incremental HydraHD updates
+
+Compared the pre-refresh 4,903-row durable inventory with the isolated copy of
+the current 5,095-row database, keyed by provider identity. Of 4,903 shared
+records, exactly 96 had different stored observations; all 96 were HydraHD.
+For those records, title, year, source URL, identity URL, media-type hint, and
+canonical classification were unchanged. The differences were source-page
+metadata only:
+
+- 96 acquired `listing_observations` and `source_urls_seen`.
+- 48 acquired `listing_page` and `observed_source_url`.
+- 48 acquired explicit HydraHD provenance/access-policy metadata.
+- 0 title/year/media-type changes, parser serialization-only changes, or
+  changes to the original source URL were found.
+
+The separate 96 new historical rows from that run were not counted as updates.
+Discovery persistence now reports semantic changes as `items_updated`, exact
+semantic replays as `items_unchanged`, and source-page-only metadata changes in
+`items_source_metadata_updated`. Source-page-only changes also count as
+semantically unchanged. Exact replays advance `last_seen_at` without changing
+`updated_at`; metadata updates still change `updated_at` as a row-mutation
+timestamp. Focused tests cover page movement, URL tracking variants, native-ID
+promotion, and exact replay.
+
+### Scheduler validation and conservative recommendation
+
+The scheduler remains disabled unless
+`UNOFFICIAL_CATALOGUE_DISCOVERY_SCHEDULES` is explicitly configured. Existing
+code and isolated tests verify independent historical/incremental cursors and
+due times, per-mode request budgets, provider-scoped PostgreSQL advisory locks,
+checkpoint resume, bounded per-dispatch requests, worker failure isolation,
+and persisted cooldowns for long `Retry-After` values. Lock release is in a
+`finally` block and PostgreSQL releases a session lock if its connection dies.
+Each successful page is committed before the next request; interruption keeps
+the last committed checkpoint. Migration writes remain separate behind the
+guarded migration entrypoint. Scheduler reports and errors are logged by the
+catalogue worker. No schedule was enabled.
+
+The worker has no custom SIGTERM handler. A graceful interrupt during a
+collector marks the run partial and retains its committed checkpoint. A hard
+process stop releases the database lock when its connection closes; the last
+committed checkpoint remains resumable, although state can remain marked
+`RUNNING` until the next scheduled attempt. Keep initial schedules sparse so
+operators can inspect diagnostics before increasing cadence.
+
+Recommended starting point after separate authorization (budgets include
+robots and other HTTP dispatches):
+
+```json
+{
+  "enabled": true,
+  "providers": {
+    "hydrahd": {
+      "enabled": true,
+      "historical": {"enabled": true, "interval_seconds": 86400, "request_budget": 5, "delay_seconds": 2, "retry_limit": 0},
+      "incremental": {"enabled": true, "interval_seconds": 43200, "request_budget": 8, "delay_seconds": 2, "retry_limit": 0, "overlap_pages": 3}
+    },
+    "animeworld": {
+      "enabled": true,
+      "incremental": {"enabled": true, "interval_seconds": 86400, "request_budget": 2, "delay_seconds": 2, "retry_limit": 0}
+    }
+  }
+}
+```
+
+Hydra historical uses a small daily budget while it remains open-ended;
+incremental refresh revisits a three-page overlap twice daily. AnimeWorld reads
+only its first-party RSS snapshot once daily. These settings are a proposal,
+not active configuration. Provider runs share a lock across modes, so a
+historical run cannot overlap an incremental run for the same provider.
+
+### Remaining provider feasibility
+
+| Provider | Status | Blocker | Evidence that would permit resuming |
+|---|---|---|---|
+| CineBlog01 | `PROVENANCE_UNVERIFIED` | Candidate `.run` is not linked to historical domains in the cited AGCOM records; search results surfaced changing third-party “new address” claims, which do not establish attribution. | A first-party, independently corroborated redirect/domain statement plus a permitted catalogue feed/API or explicit collection permission. |
+| AltaDefinizione | `PROVENANCE_UNVERIFIED` | Existing AGCOM evidence concerns other hostnames, not the candidate `.ink`; no attributable permitted feed/API found. | Independent provider-domain linkage and a permitted catalogue metadata source or explicit permission. |
+| StreamingCommunity | `PROVENANCE_UNVERIFIED` | Candidate `.army` lacks independent linkage; public third-party code/wiki references do not establish operator ownership or permission. | An independently verified provider domain and a documented permitted metadata endpoint/feed. |
+| KissKH | Access restricted (`451` remains a hard stop) | Search indexing exposes title metadata on `kisskh.do`, but no first-party feed/API permission or reliable independent domain attribution was found; changing community links are insufficient. No request was retried. | A provider-published public catalogue API/feed with use terms, or written permission identifying the exact hostname and allowed request pattern. |
+
+Web searches did not identify a reliably attributable, permitted catalogue
+metadata source for these four providers. Search results for KissKH included
+a publicly indexed detail page ([example](https://kisskh.do/Drama/Revamp--The-Undead-Story?id=11278)),
+but did not surface collection terms or establish that another host is an
+authorized alias. AGCOM's [2023 decision on CineBlog01](https://www.agcom.it/sites/default/files/migration/determina/Determina%20435-DDA-23.pdf)
+records historical domain changes; it does not link the current `.run`
+candidate. These search results do not justify trying alternate hosts. No
+HTTP 403/451 was retried and no unverified host was fetched.
+
+### Integration and validation
+
+The management UI already separates discovery counts, pending
+classification, canonical mappings, and verified offers; no UI change was
+needed. No language extraction, playback offer, or automated availability
+association was added. Focused backend tests and migration drift checks passed
+before the complete suite. The complete isolated backend suite passed after
+the final implementation and test updates: 3,290 tests. Frontend tests were not run
+because no frontend files changed. The 5,095-row dry run and migration were
+performed only in the disposable database; no unrestricted crawl or live
+write permission was used.

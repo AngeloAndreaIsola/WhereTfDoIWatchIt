@@ -482,6 +482,8 @@ class DiscoveredCatalogueRecord(models.Model):
     classification_state = models.CharField(max_length=12, choices=CLASSIFICATION_CHOICES, default="PENDING")
     classified_content_type = models.CharField(max_length=12, choices=CONTENT_TYPE_CHOICES, null=True, blank=True)
     discovery_verification_state = models.CharField(max_length=12, choices=VERIFICATION_CHOICES, default="OBSERVED")
+    # Observation freshness is distinct from metadata/content mutation time.
+    last_seen_at = models.DateTimeField(default=timezone.now, db_index=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:

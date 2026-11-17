@@ -139,6 +139,18 @@ def _same_persisted_observation(mapping, item):
     )
 
 
+_SEMANTIC_METADATA_KEYS = {
+    "year", "release_year", "original_title", "feed_title", "anime_type",
+    "source_media_type", "external_ids", "tmdb_id", "listing_content_type_hint",
+}
+
+
+def _semantic_metadata(metadata):
+    if not isinstance(metadata, dict):
+        return {}
+    return {key: metadata[key] for key in _SEMANTIC_METADATA_KEYS if key in metadata}
+
+
 @transaction.atomic
 def _persist_unclassified_observation(*, provider, item, partition):
     """Persist provider evidence without projecting an inferred media type."""
@@ -194,17 +206,27 @@ def _persist_unclassified_observation(*, provider, item, partition):
         and prior.identity_url == identity_url
         and prior.original_metadata == metadata
         and prior.source_urls_seen == seen_urls
+        and prior.provenance_state == provenance
+        and prior.access_policy_state == access
+        and (not native_id or prior.provider_native_id == native_id)
     )
     if unchanged:
+        DiscoveredCatalogueRecord.objects.filter(pk=prior.pk).update(last_seen_at=django_timezone.now())
         return "unchanged"
+    semantic_changed = (
+        prior.title != item.title
+        or (bool(native_id) and prior.provider_native_id != native_id)
+        or _semantic_metadata(prior.original_metadata) != _semantic_metadata(metadata)
+    )
     for field, value in values.items():
         setattr(prior, field, value)
-    update_fields = [*values.keys(), "updated_at"]
+    prior.last_seen_at = django_timezone.now()
+    update_fields = [*values.keys(), "last_seen_at", "updated_at"]
     if native_id and prior.provider_native_id != native_id:
         prior.provider_native_id = native_id
         update_fields.append("provider_native_id")
     prior.save(update_fields=update_fields)
-    return "updated"
+    return "updated" if semantic_changed else "source_metadata_updated"
 
 
 def _mode_cursors(state):
@@ -492,7 +514,8 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
             "status": "RUNNING", "mode": mode_key, "pages_discovered": 0,
             "pages_scanned": 0, "pages_remaining": None, "items_seen": 0,
             "items_unique": 0, "items_inserted": 0, "items_updated": 0,
-            "items_unchanged": 0, "duplicates_skipped": 0, "errors": 0,
+            "items_unchanged": 0, "items_source_metadata_updated": 0,
+            "duplicates_skipped": 0, "errors": 0,
             "duplicate_identities": 0, "new_unique_titles": 0,
             "failed_pages": [], "navigation_anomalies": [],
             "page_gaps": [], "terminal_page_evidence": [],
@@ -781,7 +804,11 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                                 outcome = _persist_unclassified_observation(
                                     provider=provider, item=item, partition=part
                                 )
-                                report[f"items_{outcome}"] += 1
+                                if outcome == "source_metadata_updated":
+                                    report["items_source_metadata_updated"] += 1
+                                    report["items_unchanged"] += 1
+                                else:
+                                    report[f"items_{outcome}"] += 1
                                 if outcome != "inserted":
                                     report["duplicate_identities"] += 1
                                 report["items_pending_classification"] += 1
