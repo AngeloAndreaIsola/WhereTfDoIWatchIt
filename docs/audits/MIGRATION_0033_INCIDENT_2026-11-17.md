@@ -16,7 +16,7 @@ The current post-migration custom-format backup is stored outside the
 repository at:
 
 ```text
-/tmp/codex-db-audit-7617f73/new-sources-tracker-postmigration.dump
+/Users/angeloandreaisola/Documents/WhereTfDoIWatchIt-DBBackups/new-sources-tracker-postmigration-7617f73.dump
 ```
 
 It is mode `0600` and approximately 1.2 MB. `pg_restore --list` succeeded. It
