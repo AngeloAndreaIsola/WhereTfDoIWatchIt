@@ -5,7 +5,7 @@ from django.test import TestCase
 from availability.models import Offer
 from tracker.models import CatalogueDiscoveryState, DiscoveredCatalogueRecord, Movie, Provider, ScrapedContentMapping
 from tracker.scrapers.base import ScrapedItem
-from tracker.services.catalogue_discovery import CatalogueDiscoveryError, CataloguePageRows, PROVIDERS, _persist_unclassified_observation, run_discovery
+from tracker.services.catalogue_discovery import CatalogueDiscoveryError, CataloguePageRows, PROVIDERS, _HttpFailure, _persist_unclassified_observation, run_discovery
 from tracker.services.scraped_mapping import persist_scraped_item
 
 
@@ -96,6 +96,62 @@ class CatalogueDiscoveryTests(TestCase):
         self.assertEqual(result["navigation_max_observed"], {"movies": 6})
         self.assertEqual(state.cursor["parts"]["movies"], 3)
         self.assertEqual(state.cursor["navigation_max"]["movies"], 6)
+
+    def test_hydra_http_404_does_not_complete_partition_or_advance_checkpoint(self):
+        state = CatalogueDiscoveryState.objects.create(
+            provider=self.providers["hydrahd"],
+            status="PARTIAL",
+            mode="full",
+            cursor={"done": [], "parts": {"movies": 125}, "navigation_max": {"movies": 128}},
+        )
+        with patch("tracker.services.catalogue_discovery._parts", return_value=["movies"]), \
+             patch("tracker.services.catalogue_discovery._page", side_effect=_HttpFailure(404)), \
+             patch("requests.Session.get", return_value=object()):
+            result = run_discovery(
+                "hydrahd", partition="movies", request_budget=2, delay=0,
+            )
+
+        state.refresh_from_db()
+        self.assertEqual(result["status"], "PARTIAL")
+        self.assertEqual(result["errors"], 1)
+        self.assertIn("HTTP 404 is not verified as a terminal page", result["last_error"])
+        self.assertEqual(result["checkpoint"]["parts"], {"movies": 125})
+        self.assertEqual(state.cursor["parts"], {"movies": 125})
+        self.assertEqual(state.cursor["done"], [])
+        self.assertEqual(state.status, "PARTIAL")
+        self.assertFalse(DiscoveredCatalogueRecord.objects.filter(provider=self.providers["hydrahd"]).exists())
+
+    def test_hydra_empty_listing_is_a_terminal_candidate_not_completion(self):
+        state = CatalogueDiscoveryState.objects.create(
+            provider=self.providers["hydrahd"],
+            status="PARTIAL",
+            mode="full",
+            cursor={"done": [], "parts": {"movies": 125}, "navigation_max": {"movies": 128}},
+        )
+
+        def empty_page(scraper, provider_slug, part, page, query=None):
+            scraper.session.get("https://fixture.invalid/page")
+            return [], True, None, "empty_page_terminal"
+
+        with patch("tracker.services.catalogue_discovery._parts", return_value=["movies"]), \
+             patch("tracker.services.catalogue_discovery._page", side_effect=empty_page), \
+             patch("requests.Session.get", return_value=object()):
+            result = run_discovery(
+                "hydrahd", partition="movies", request_budget=2, delay=0,
+            )
+
+        state.refresh_from_db()
+        self.assertEqual(result["status"], "PARTIAL")
+        self.assertEqual(result["terminal_page_candidate"], {
+            "partition": "movies", "page": 126, "evidence": "empty_page_terminal",
+        })
+        self.assertEqual(result["checkpoint"]["parts"], {"movies": 125})
+        self.assertEqual(state.cursor["parts"], {"movies": 125})
+        self.assertEqual(state.cursor["done"], [])
+        self.assertEqual(state.status, "PARTIAL")
+        self.assertEqual(result["pages_scanned"], 1)
+        self.assertEqual(result["items_seen"], 0)
+        self.assertFalse(DiscoveredCatalogueRecord.objects.filter(provider=self.providers["hydrahd"]).exists())
 
     def test_replaying_a_page_reports_persisted_items_as_unchanged(self):
         slug = "kisskh"

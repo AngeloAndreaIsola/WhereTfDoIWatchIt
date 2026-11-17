@@ -490,6 +490,11 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                         report["last_error"] = "request budget exhausted before the next HTTP dispatch"
                         break
                     except _HttpFailure as exc:
+                        if slug == "hydrahd" and exc.status == 404 and page > 1:
+                            report["errors"] += 1
+                            report["status"] = "PARTIAL"
+                            report["last_error"] = f"{part}: HTTP 404 is not verified as a terminal page"
+                            break
                         if exc.status == 404 and page > 1:
                             rows, terminal = [], True
                             total_pages = None if slug == "hydrahd" else page - 1
@@ -525,8 +530,19 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                         nav_match = re.search(r"navigation_max=(\d+)", evidence)
                         if nav_match:
                             navigation_max = int(nav_match.group(1))
-                            cursor.setdefault("navigation_max", {})[part] = navigation_max
                             report.setdefault("navigation_max_observed", {})[part] = navigation_max
+                            if observed_count:
+                                cursor.setdefault("navigation_max", {})[part] = navigation_max
+                        if observed_count == 0:
+                            report["status"] = "PARTIAL"
+                            report["pages_discovered"] = max(report["pages_discovered"], page)
+                            report["last_error"] = f"{part}: empty listing is not verified as a terminal page"
+                            report["terminal_page_candidate"] = {
+                                "partition": part,
+                                "page": page,
+                                "evidence": evidence,
+                            }
+                            break
                     report["pages_discovered"] = max(report["pages_discovered"], total_pages or page)
                     fingerprint_ids = [
                         str((item.raw_payload or {}).get("id") or (item.raw_payload or {}).get("title_id") or item.source_url)

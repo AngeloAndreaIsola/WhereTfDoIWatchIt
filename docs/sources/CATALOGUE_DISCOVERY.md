@@ -412,12 +412,13 @@ Preconditions are: separate explicit authorization for the live import; live
 database still identified as project `new-sources`, DB `tracker`, migration
 `0053`; fresh backup checksum and restore test verified; live legacy mapping
 count/hash equal the backup; staging checksums and provider counts equal this
-manifest; and application writes paused during the operation. This command
-uses the same durable staging path as the later 4,759-row snapshot documented
-below. Verify after import: 4,759 discoveries (HydraHD 4,680; AnimeWorld 79),
-4,759 pending,
+manifest; and application writes paused during the operation. At the time of
+this note the command pointed to a 4,759-row inventory; the current 4,903-row
+inventory is documented in the final pagination follow-up below. For the
+current file, verify after import: 4,903 discoveries (HydraHD 4,824;
+AnimeWorld 79), 4,903 pending,
 unchanged legacy mapping IDs/field hash, zero new canonical mappings or movies,
-zero offers, and five restored provider states. Replay and require 4,759
+zero offers, and five restored provider states. Replay and require 4,903
 unchanged with zero inserts/updates. Live import remains pending authorization.
 
 ### Migration-startup incident follow-up
@@ -769,10 +770,12 @@ An independently checksummed 3,703-record recovery snapshot is retained under
 baseline snapshot. The current staging directory remains outside the worktree,
 mode `0700`, with data and manifest mode `0600`.
 
-The current export replayed in the isolated clone with 4,759 unchanged, zero
-inserted, and zero updated; the clone still has 3,300 scraped mappings and
-zero movies, provider content, content mappings, or offers. The live target
-still reports its original zero-discovery baseline. Live and clone mapping IDs
+The 4,759-row export at the time of this note replayed in the isolated clone
+with 4,759 unchanged, zero inserted, and zero updated; the clone still had
+3,300 scraped mappings and zero movies, provider content, content mappings,
+or offers. The later 4,903-row export and its checksums are in the final
+pagination follow-up below. The live target still reports its original
+zero-discovery baseline. Live and clone mapping IDs
 and fields match under the same deterministic row serialization: ID SHA-256
 `1d6225cafcab013c77e85ecdfb6a14e530368600592353e8da75aec7ae4021a` and
 all-field SHA-256
@@ -793,3 +796,133 @@ migration). The complete isolated backend suite passed (3,265 tests in 127.3
 seconds). No UI files changed, so frontend tests were not relevant. The staged
 import is ready for its existing guarded process; UI visibility checks are
 pending the separately authorized live import.
+
+## HydraHD pagination and quality investigation (2026-11-17)
+
+### Pagination evidence
+
+HydraHD's `robots.txt` allows `/` for the generic user agent and declares
+`Content-Signal: search=yes, ai-train=no, use=reference`. Inspection stayed on
+the existing `hydrahd.gd` listing and its linked title pages. Fetching listing
+routes returns HTML with a self-canonical URL, 24 `a.hthis` title links, and
+literal pagination anchors in the response body. This is a real HTML listing
+route with a sequential `Next` link; the observed anchors are not an
+interpretation of a numeric total. The source is a sliding window: page 125
+links to 122–128 and its `Next` target is 126; page 126 links to 123–129 and
+`Next` is 127. TV page 70 links to 67–73 and `Next` is 71; page 71 links to
+68–74 and `Next` is 72. The active page is rendered without a link.
+
+No sampled HTML exposed a last-page link, fixed page total, or catalogue
+total. The former `navigation_max` value is the largest visible window link.
+On later pages it was current page +3 (for example, 125→128 and 126→129);
+the first two pages showed the initial range through page 7. It is not a total
+and must not drive completion. No finite archive bound was observed. The route
+is also not a parser hallucination: the target links,
+canonical URLs, and content were present in the returned HTML. Client-side
+code may still update the page, but the sampled pagination itself was already
+present in the response body.
+
+No terminal condition was observed. The discovery service now keeps HydraHD
+`PARTIAL` at the previous committed page when a later page returns HTTP 404,
+and reports a successful empty listing as an unverified terminal candidate
+without advancing the checkpoint. Neither a fetch failure nor a parser-empty
+response can mark HydraHD complete.
+
+The response fingerprint below is SHA-256 of the fetched HTML body. All
+responses were HTTP 200 with the matching canonical URL and 24 distinct title
+URLs. First/last rows preserve returned listing order and show only source
+release years; no exact movie/show publication date was exposed on these
+listing cards.
+
+| Partition / page | First → last listing title (year) | `Next` target | HTML body SHA-256 |
+|---|---|---:|---|
+| Movies 1 | Kalocsa (2026) → National Theatre at Home: The Little Big Things (2024) | 2 | `47473f6c974273868fca4372c18b6472a92befea73cab694c6e56b506d3a11fc` |
+| Movies 2 | Janelle James: How Romantic (2026) → Heartland (2026) | 3 | `3bf44feac2f944688d2169ca200b57d67356e6327016814bc12f09c0b2c37cfc` |
+| Movies 124 | Cursed Waters (2026) → Supertramp: In Performance (2006) | 125 | `32ad8c7c15e799c74497275c5b76626ce284187fe4f30951f9dde9148e47da8a` |
+| Movies 125 | Legends of Flight (2010) → A Doctor to Die For: The Sarah Harris Story (2026) | 126 | `0ba47a2fbddcf3e326bf1ba68bcb9ea28e3a480137bdba7c1aba62cceaa69dd1` |
+| Movies 126 | Bad Kitties (2013) → The Devil’s Trap (2024) | 127 | `1b789df051968b691019f4a542b6fd2e3f9bf5afb5ba08f919b7ba1b3283185e` |
+| TV 1 | Home and Away (1988) → WWE Raw (1993) | 2 | `c7fced7d5d89bb98dbc9b656f59b2866157f9572e364ba4c06c093ec8ed624c9` |
+| TV 2 | Harlan Coben’s Final Twist (2026) → 60 Minutes (1968) | 3 | `a2a0591504af1bf81c8b3130a9208a135378a45c09b86d6f4722d7799aa2d458` |
+| TV 70 | Carrie (2026) → A Tale of Two Cities (2026) | 71 | `8cfabd711c762f7acf94bff65b374d0cb54a6bfbeb4d0742abe101559052f469` |
+| TV 71 | Outside (2026) → GeGeGe no Kitaro (2018) | 72 | `6261ac10493fe81d5ba7fcc2d8902d04d1e7316b116988d19275430d6e62730a` |
+
+Adjacent sampled pages had no URL overlap. Movie source IDs decreased in
+listing order across pages 1–2 and 124–126; that ordering follows source ID,
+not the displayed release year. TV links also differed between the adjacent
+samples, but TV URLs expose no comparable numeric ID order. This is evidence
+of sequential page content, not proof that the site cannot reorder or insert
+records while a long traversal is in progress.
+
+### Stratified detail-page sample
+
+The audit sampled 24 staged records, four at spread positions from each of
+movies pages 3, 62, and 125 and TV pages 1, 35, and 70. Results:
+
+| Check | Passed | Sample |
+|---|---:|---:|
+| Detail URL returned HTTP 200 without redirect | 24/24 (100%) | 12 movies, 12 TV |
+| Canonical detail URL equals staged source URL | 24/24 (100%) | 12 movies, 12 TV |
+| Detail heading matches staged title | 24/24 (100%) | 12 movies, 12 TV |
+| URL path matches expected partition (`/movie/` or `/watchseries/`) | 24/24 (100%) | 12 movies, 12 TV |
+| Distinct canonical detail URLs | 24/24 (100%) | 12 movies, 12 TV |
+| Exact release date stored for the sampled record | 0/24 (0%) | Inventory carries a year only |
+
+The detail pages labelled movie dates as `Year` and show dates as `Year
+Started`; episode air dates on a series page are not the series release date.
+The full staged HydraHD inventory has 4,824 unique provider-scoped URLs,
+4,824 nonblank titles, 4,824 years, and no wrong-partition path. The sample
+does not establish title accuracy or URL validity for every record.
+
+There are three normalized title/year collision groups in each partition
+(six records per partition). Examples include `The Nest` (2025), `Junk`
+(2024), and `Bad Apples` (2026) among movies; and `Drag Race Spain` (2021),
+`Who Killed Our Daughter?` (2025), and `Temptation Island` (2019) among TV.
+These have distinct source URLs and are retained as separate identities; the
+available metadata cannot determine whether each pair is a duplicate release,
+regional edition, or distinct catalogue entry. Zero staged URLs were recorded
+on multiple page numbers.
+
+### Bounded continuation and current staging
+
+Following the actual `Next` links from movie 125 and TV 70 reached pages 126
+and 71, each with 24 distinct rows and a further sequential `Next` link. The
+existing checkpointed discovery command then ran one bounded batch per
+partition, budget 4, zero retries, one-second delay: three listing pages plus
+one robots request each. It scanned movies 126–128 and TV 71–73, inserting 72
+new URLs per partition, with zero repeated URLs, updates, or errors. The latest
+checkpoints are movies page 128 / navigation maximum 131 and TV page 73 / max
+76. Both remain `PARTIAL`; neither has terminal-page evidence.
+
+The stored movie page metadata is contiguous for pages 3–128, 24 records each;
+its 48 legacy observations without a page number match all 48 URLs currently
+shown on pages 1–2. TV page metadata is contiguous for pages 1–73, 24 each.
+Thus the staged records cover the observed pages 1–128 and 1–73 without a
+recorded gap or same-URL page overlap. This does not rule out records being
+skipped if the provider changes ordering between page requests, and no claim
+of complete catalogue coverage is made.
+
+The durable export now contains **4,903 pending records**: 4,824 HydraHD
+(3,072 movies, 1,752 TV) and 79 AnimeWorld. It retains all 4,759 previous
+identities with no changes to their saved URLs or metadata, and adds 144 new
+HydraHD identities. The compressed file SHA-256 is
+`17d0cdc6dfb62eebfcdf2b57a16c702ac8eb2cc81fbfdaf41f5472361f683764`; manifest
+SHA-256 is
+`ab35047139e9874f06bb2b178703a5ce02ae7b883f9416d39a0af1063b088c8e`. A
+checksummed 4,759-record recovery snapshot is retained in
+`snapshots/20261117T1541Z-pre-discovery-4759/`.
+
+Replay of this 4,903-record export in the disposable restore clone returned
+4,903 unchanged, zero inserted, zero updated, and restored all five provider
+states. The live database still has migration `0053`, 3,300 scraped mappings,
+and zero discovery rows or offers. The backup SHA-256 remains
+`fd04b86731fdc1419f5cc78ea1cab7186d494750137e8f4b67f9e038d557703e`; it has
+already been restore-tested. The current staged inventory is ready for the
+existing guarded import, but the live import remains pending explicit
+authorization. No application UI check is possible until that import is
+authorized and completed.
+
+Focused discovery tests passed (18 tests), including HTTP 404 and empty-page
+checkpoint preservation. The complete isolated backend suite passed (3,267
+tests). No frontend files changed. The live database was only read. AnimeWorld
+RSS state and the prior KissKH and provider-provenance restrictions remain
+unchanged.
