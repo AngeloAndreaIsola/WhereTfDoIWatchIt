@@ -38,29 +38,105 @@ each origin before catalogue requests.
 
 ## Measured state (2026-11-17)
 
-The live discovery probes used the existing command in dry-run mode and a
-separate migrated scratch database. No titles were persisted and no checkpoint
-was created. The prior counts are the pre-probe provider counts; after counts
-are unchanged. The live backend's current post-migration counts match these
-values. These probes did not establish catalogue completeness.
+The initial probes against all six providers found no parsed listing pages.
+This follow-up validated KissKH only. Its ingestion and checkpoint evidence
+below came from an isolated PostgreSQL database migrated through `0050`; the
+existing Compose database remained unchanged. Counts in the table are legacy
+mapping counts in the existing Compose database, not the isolated KissKH
+sample. No provider is verified complete.
 
 | Provider | Before | After | Tested domain | Listing result | Pages | Site total / coverage | HTTP dispatch evidence | Errors | Checkpoint / status |
 |---|---:|---:|---|---|---:|---|---|---:|---|
-| KissKH | 1,800 | 1,800 | `kisskh.co` | Unexpected API response shape; no parsed listing | 0 | Unknown / unknown | Budget 2 was exhausted before a page; second probe budget 4, exact dispatch count not returned on error | 1 API response error | None; BLOCKED pending valid API response |
+| KissKH | 1,800 | 1,800 | `kisskh.do` (`kisskh.co` fallback) | HTTP 200 JSON listing parsed and persisted in scratch | 3 pages (type 2 of 80) | API `totalCount`: type 2=1,595, type 1=6,899, type 3=2,552; coverage unknown | 16 command dispatches plus 11 bounded metadata/policy GETs; 0 HTTP failures | 0 | Scratch checkpoint at type 2 page 3; PARTIAL |
 | HydraHD | 480 | 480 | `hydrahd.ru` | Domain fallback did not produce a listing | 0 | Unknown / unknown | Budget 2 exhausted before a page; second probe budget 4, exact dispatch count not returned on error | 1 fetch error | None; BLOCKED pending accessible listing |
 | AnimeWorld | 174 | 174 | `animeworld.ac` | Listing unavailable or blocked | 0 | 6,879 is a stale 2026-11-17 report, not revalidated; coverage unknown | Probe budgets 2 and 4; exact dispatch counts not returned on raised errors | 1 fetch error | None; BLOCKED pending accessible listing |
 | StreamingCommunity | 143 | 143 | `streamingcommunityz.nexus` | HTTP 403; stopped without challenge workarounds | 0 | Unknown / unknown | Probe budget 4; exact dispatch count not returned on raised error | 1 HTTP 403 | None; BLOCKED by access response |
 | CineBlog01 | 182 | 182 | `cineblog001.tires` | Domain fallback did not produce a listing | 0 | Unknown / unknown | Probe budget 4; exact dispatch count not returned on raised error | 1 fetch error | None; BLOCKED pending accessible listing |
 | AltaDefinizione | 110 | 110 | `altadefinizionex.fit` | Domain fallback did not produce a listing | 0 | Unknown / unknown | Probe budget 4; exact dispatch count not returned on raised error | 1 fetch error | None; BLOCKED pending accessible listing |
 
-The first two probes reported `requests_made=2`; at the time of later probes,
-the command raised on page errors before returning its counter. Those historical
-dispatch counts remain unknown rather than inferred from their budgets. Failed
-runs now include the exact dispatched count and checkpoint in their structured
-error report. No provider had a parsed page, duplicate sample, classification
-sample, terminal-page signal, or resumable live checkpoint. Fixture tests
-exercise persistence, duplicate handling, movie/series identity,
-interruption/resumption and checkpoint writes, but do not replace live evidence.
+For the other five providers, earlier raised errors did not return exact
+dispatch counts; those remain unknown rather than inferred from budgets. Their
+status remains as reported above. The KissKH count includes a bounded targeted
+search probe that returned 104 results; its 103 newly inserted rows were
+removed from the disposable database because that query was broader than the
+desired sample. The final isolated database contains only records from three
+bounded full-list pages.
+
+### KissKH live validation
+
+`GET https://kisskh.do/api/DramaList/List?page=1&type=2&...&pageSize=10`
+returned HTTP 200, `application/json; charset=utf-8`, and a 2,054-byte JSON
+body with `page`, `pageSize`, `totalCount` and `data`. The page held 10 rows;
+each observed row had a stable integer `id`, `title`, `episodesCount`, `label`,
+`thumbnail` and `favoriteID`. List rows did not contain year, a per-row content
+type, audio-language or subtitle-language fields. The previous “unexpected
+shape” result was caused by discovery's response reader: its JSON decode and
+return statements were unreachable after an unconditional HTTP-error raise.
+Successful HTTP responses now return decoded JSON, while a JSON-shaped body
+served as HTML is rejected as an access/interstitial response.
+
+The same endpoint returned these provider-reported first-page totals with
+`pageSize=10`: type 2=1,595, type 1=6,899, and type 3=2,552. The current public
+JavaScript bundle refers to `DramaList/Show`, `DramaList/LastUpdate`,
+`DramaList/Search` and `DramaList/Drama`; it does not refer to `/List`. `/List`
+nevertheless returned valid JSON in bounded probes. Totals are therefore
+reported as API partition totals, not independently verified population totals.
+
+The site returned HTTP 200 HTML for both `/robots.txt` requests instead of a
+robots document, so no explicit crawl directives or crawl delay could be read.
+No access challenge or rate limit appeared during these probes. Discovery used
+the normal robots check, sequential requests, one-second configured delay,
+zero retries and an explicit request budget for every invocation.
+
+The command run record (each dispatch count includes the robots request):
+
+| Run | Budget / requests | Pages | Parsed / unique | Inserted / updated / unchanged | Result |
+|---|---:|---:|---:|---:|---|
+| Dry-run, type 2 page 1 | 2 / 2 | 1 | 20 / 20 | 0 / 0 / 0 | PARTIAL; no writes |
+| Persist type 2 page 1 | 2 / 2 | 1 | 20 / 20 | 20 / 0 / 0 | PARTIAL; checkpoint page 1 |
+| Replay type 2 page 1 | 2 / 2 | 1 | 20 / 20 | 0 / 0 / 20 | PARTIAL; same 20 native IDs |
+| Resume type 2 page 2 | 2 / 2 | 1 | 20 / 20 | 20 / 0 / 0 | PARTIAL; checkpoint page 2 |
+| Resume type 2 page 3 | 2 / 2 | 1 | 20 / 20 | 20 / 0 / 0 | PARTIAL; checkpoint page 3 |
+| Targeted query `One Piece` | 4 / 4 | Search | 104 / 104 | 103 / 0 / 1 | PARTIAL; 103 temporary scratch rows then removed |
+
+The first page-1 replay (two additional dispatches) ran before the report
+comparison fix and was incorrectly counted as 20 updates because ingestion
+normalizes `content_type` into the stored payload. The corrected replay shown
+above was then repeated and correctly counted 20 unchanged records. Thus the
+16-command-dispatch total includes both replay attempts.
+
+The full-list checkpoint resumed from page 1 to 2 and then 3 across separate
+command invocations. Its final scratch counts are 60 `ScrapedContentMapping`
+rows with 60 distinct `(provider ID, content type)` identities and 60 canonical
+`ProviderContent` rows. It has zero `ContentMapping`, `Offer` and legacy movie
+links. Every row is marked `unverified_discovery`; no automatic TMDb association
+or playback offer was created. The endpoint reports 80 pages for type 2 at the
+discovery page size of 20; only pages 1–3 were scanned. No terminal page was
+observed, so coverage remains `UNKNOWN` and state remains `PARTIAL`.
+
+The public detail API route was found in the current site JavaScript as
+`/api/DramaList/Drama/{id}?isq=...`. Bounded metadata probes returned:
+
+| ID / title | List partition | Detail type | Release year | Episode evidence |
+|---|---|---|---:|---|
+| 10973, “High (School) On Sex - Season 2” | type 2 | `Movie` | 2025 | 6 episodes |
+| 9987, “Ang Mutya ng Section E - The Muse of Section E” | type 1 | `TVSeries` | 2025 | 19 episodes |
+| 1266, “One Piece” | type 3 | `Anime` | 2021 | 1,180 episodes |
+| 5972, “One Piece Film: Red” | type 3 | `Anime` | 2022 | 1 episode |
+
+KissKH's repository adapter previously had no detail-fetch method. Listing
+fields remain the persisted observations; detail probes were used to validate
+the partition signal and metadata availability, not to claim playback. The
+provider's `Anime` detail type includes both a series and a film, so type 3 is
+no longer treated wholesale as series: multi-episode anime is classified as a
+series, while a one-episode anime row without explicit `Movie` or `TVSeries`
+evidence blocks that page instead of being guessed. The type 2 and type 1
+partition signals were corroborated by the detail samples above.
+
+The detail responses contained release dates and episode lists, but no audio
+or subtitle language fields. `country`, `sub` and the website's English-facing
+interface are not language evidence. Audio and subtitle values stay unknown;
+the API's title/episode metadata does not confirm playable availability.
 
 An isolated `catalogue_discovery_scratch` database was migrated from an empty
 PostgreSQL database through all migrations. Its command status was empty before
@@ -98,7 +174,7 @@ runtime migrations were run during validation.
 | Provider | Strategy | Completion evidence / current limit |
 |---|---|---|
 | AnimeWorld | `/az-list?page=N`, card-local parser | Traversal logic is fixture-tested. The live domain probe did not return a listing, so page links, classification and terminal behavior remain unverified. |
-| KissKH | API `type` partitions 2/1/3 and `pageSize=200` | Traversal logic is fixture-tested. The live API response shape did not match the expected `data` array; totals, empty-page behavior and partition termination remain unverified. |
+| KissKH | API `type` partitions 2/1/3 and `pageSize=20` | Types 2 and 1 were corroborated as Movie and TVSeries by detail samples. Type 3 is the mixed Anime category; a one-episode Anime detail is ambiguous and blocks that page. Type 2 has 80 reported pages; only pages 1–3 were traversed, so the provider remains PARTIAL. |
 | HydraHD | `movies/date/N` and `tv-shows/date/N` | Separate cursor logic is fixture-tested. Live fallback did not produce listing HTML; pagination and terminal behavior remain unverified. |
 | CineBlog01 | `/film/` and `/serie-tv/`, `/page/N/` | Archive traversal logic is fixture-tested. Live fallback did not produce a listing; pagination links and terminal behavior remain unverified. |
 | StreamingCommunity | Existing root, film, series, archive listing paths | Live response was HTTP 403. No workaround or additional path guessing was attempted; public pagination is unverified. |

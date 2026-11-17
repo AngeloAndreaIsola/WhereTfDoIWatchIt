@@ -56,6 +56,26 @@ class CatalogueDiscoveryTests(TestCase):
         self.assertEqual(second["pages_scanned"], 1)
         self.assertEqual(ScrapedContentMapping.objects.filter(provider=self.providers[slug]).count(), 2)
 
+    def test_replaying_a_page_reports_persisted_items_as_unchanged(self):
+        slug = "kisskh"
+
+        def one_page(_scraper, provider_slug, part, page, query=None):
+            _scraper.session.get("https://fixture.invalid/page")
+            return [fixture_item(provider_slug, part=part)], True, 1, "fixture_terminal_page"
+
+        with patch("tracker.services.catalogue_discovery._page", side_effect=one_page), \
+             patch("tracker.services.catalogue_discovery._parts", return_value=["2"]), \
+             patch("requests.Session.get", return_value=object()):
+            first = run_discovery(slug, request_budget=2, delay=0)
+            state = CatalogueDiscoveryState.objects.get(provider=self.providers[slug])
+            state.cursor = {}
+            state.save(update_fields=["cursor", "updated_at"])
+            replay = run_discovery(slug, request_budget=2, delay=0)
+
+        self.assertEqual(first["items_inserted"], 1)
+        self.assertEqual(replay["items_unchanged"], 1)
+        self.assertEqual(ScrapedContentMapping.objects.filter(provider=self.providers[slug]).count(), 1)
+
     def test_failed_run_exposes_dispatched_request_count_and_durable_report(self):
         slug = "animeworld"
 

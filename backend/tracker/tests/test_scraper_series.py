@@ -189,7 +189,7 @@ class KissKHClassificationTests(TestCase):
             if "type=1" in url:
                 return {"data": [{"id": 11, "title": "A Drama", "year": 2021}]}
             if "type=3" in url:
-                return {"data": [{"id": 12, "title": "An Anime", "year": 2022}]}
+                return {"data": [{"id": 12, "title": "An Anime", "year": 2022, "episodesCount": 12}]}
             return None
 
         mock_fetch.side_effect = fake_fetch
@@ -220,11 +220,12 @@ class KissKHClassificationTests(TestCase):
         self.assertTrue(any("type=2" in u for u in urls))
 
     @patch.object(KissKHScraper, "fetch_url")
-    def test_same_entry_returned_by_two_types_is_deduped(self, mock_fetch):
+    def test_same_native_id_in_movie_and_series_partitions_stays_separate(self, mock_fetch):
         entry = {"id": 77, "title": "Shared", "year": 2019}
         mock_fetch.return_value = [entry]
         items = self.scraper.run(query="shared")
-        self.assertEqual(len(items), 1)
+        self.assertEqual({item.content_type for item in items}, {"movie", "series"})
+        self.assertEqual(len(items), 2)
 
     @patch.object(KissKHScraper, "fetch_url")
     def test_failed_requests_do_not_break_the_run(self, mock_fetch):

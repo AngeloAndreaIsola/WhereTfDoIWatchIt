@@ -51,6 +51,20 @@ class CatalogueDiscoveryError(RuntimeError):
         super().__init__(report.get("last_error") or "Catalogue discovery failed")
 
 
+def _same_persisted_observation(mapping, item):
+    """Compare against the payload normalized by persist_scraped_item()."""
+    expected_payload = dict(item.raw_payload) if isinstance(item.raw_payload, dict) else {}
+    expected_payload.setdefault("content_type", item.content_type)
+    return (
+        mapping.scraped_title == item.title
+        and mapping.scraped_year == item.year
+        and mapping.scraped_content_type == item.content_type
+        and mapping.scraped_url == item.source_url
+        and mapping.raw_payload == expected_payload
+        and mapping.is_available == item.availability
+    )
+
+
 def _parts(slug):
     if slug == "kisskh": return [v[0] for v in KissKHScraper.BROWSE_TYPES]
     if slug == "hydrahd": return ["movies", "tv-shows"]
@@ -64,25 +78,33 @@ def _page(scraper, slug, part, page, query=None):
     """Return (items, terminal, known_pages, evidence). None means failure."""
     if slug == "kisskh":
         kind = dict((k, t) for k, t in KissKHScraper.BROWSE_TYPES)[part]
-        path = f"/api/DramaList/List?page={page}&type={part}&sub=0&country=0&status=0&order=1&pageSize={scraper.PAGE_SIZE}"
+        path = f"/api/DramaList/List?page={page}&type={part}&sub=0&country=0&status=0&order=1&pageSize={scraper.DISCOVERY_PAGE_SIZE}"
         raw = scraper._fetch_api(path)
         if not isinstance(raw, dict): return None, False, None, "missing_or_unexpected_api_response"
+        if raw.get("error") or raw.get("success") is False:
+            return None, False, None, "api_error_response"
         rows = raw.get("data")
         if not isinstance(rows, list): return None, False, None, "missing_data_array"
+        try:
+            response_page = int(raw.get("page"))
+            page_size = int(raw.get("pageSize"))
+            total = int(raw.get("totalCount"))
+        except (TypeError, ValueError):
+            return None, False, None, "missing_or_invalid_pagination_metadata"
+        if response_page != page or page_size < 1 or total < 0:
+            return None, False, None, "inconsistent_pagination_metadata"
+        if not rows and page <= (total + page_size - 1) // page_size:
+            return None, False, None, "empty_page_before_reported_terminal_page"
         items = scraper.parse_items(rows, content_type=kind)
-        page_total = raw.get("totalPages") or raw.get("pageCount") or raw.get("total_pages") or raw.get("page_count")
-        total = raw.get("totalCount") or raw.get("total") or raw.get("count")
-        try: page_total = int(page_total) if page_total is not None else None
-        except (TypeError, ValueError): page_total = None
-        try: total = int(total) if total is not None else None
-        except (TypeError, ValueError): total = None
+        page_total = (total + page_size - 1) // page_size
         totals = getattr(scraper, "catalogue_totals", {})
-        if total is not None:
-            totals[part] = total
-            scraper.catalogue_totals = totals
-        page_total = page_total or ((total + scraper.PAGE_SIZE - 1) // scraper.PAGE_SIZE if total else None)
-        terminal = (page >= page_total) if page_total is not None else ((page * scraper.PAGE_SIZE >= total) if total is not None else not rows)
-        return items, terminal, page_total, "api_total_or_empty_page"
+        totals[part] = total
+        scraper.catalogue_totals = totals
+        terminal = page >= page_total
+        if len(items) != len(rows):
+            evidence = "unclassified_or_malformed_anime_rows" if part == "3" else "malformed_listing_rows"
+            return None, False, page_total, evidence
+        return items, terminal, page_total, "api_total_count"
     if slug == "hydrahd":
         kind = "series" if part == "tv-shows" else "movie"
         last = None
@@ -221,8 +243,13 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
             if response is None: return None
             if int(response.status_code) >= 400:
                 raise _HttpFailure(int(response.status_code), response.headers.get("Retry-After"))
-                try: return response.json()
-                except ValueError: return response.text
+            content_type = str(response.headers.get("Content-Type") or "").lower()
+            if "/api/dramalist/" in url.lower() and "json" not in content_type:
+                return response.text
+            try:
+                return response.json()
+            except ValueError:
+                return response.text
         scraper.fetch_url = fetch_discovery_url
         parts = _parts(slug)
         if dry_run:
@@ -280,7 +307,7 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                             ).first()
                         persist_scraped_item(provider=provider, item=item)
                         if prior is None: report["items_inserted"] += 1
-                        elif prior.scraped_url == item.source_url and prior.raw_payload == item.raw_payload: report["items_unchanged"] += 1
+                        elif _same_persisted_observation(prior, item): report["items_unchanged"] += 1
                         else: report["items_updated"] += 1
                 report["pages_scanned"] = 1 if rows else 0
                 report["status"] = "PARTIAL"  # provider search is never a completeness traversal
@@ -366,7 +393,7 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                                 ).first()
                             persist_scraped_item(provider=provider, item=item)
                             if prior is None: report["items_inserted"] += 1
-                            elif prior.scraped_url == item.source_url and prior.raw_payload == item.raw_payload: report["items_unchanged"] += 1
+                            elif _same_persisted_observation(prior, item): report["items_unchanged"] += 1
                             else: report["items_updated"] += 1
                     pagination_is_partial = evidence in {"pagination_not_demonstrated", "pagination_follow_not_verified"}
                     if not dry_run and not pagination_is_partial:

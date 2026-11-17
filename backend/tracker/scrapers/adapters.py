@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime
 from typing import Any, Optional
 from urllib.parse import urlencode, urljoin
 
@@ -77,6 +78,7 @@ class KissKHScraper(BaseScraper):
     # single request return hundreds of titles instead of ten.
     PAGE_SIZE = 200
     PAGES_PER_TYPE = 3
+    DISCOVERY_PAGE_SIZE = 20
 
     def _fetch_api(self, path: str):
         for base in self.API_BASES:
@@ -86,14 +88,16 @@ class KissKHScraper(BaseScraper):
         return None
 
     # KissKH's API `type` parameter is the site's own structured content flag and
-    # the only reliable signal it exposes (payload rows carry no per-item type):
-    # 2 = films, 1 = drama series, 3 = anime series. `type=0` (mixed) is avoided
-    # because it yields no usable classification, so each type is fetched on its own
-    # and the response type stamps every item parsed from it.
+    # 2 = movie partition, 1 = TV-series partition, 3 = anime partition. `type=0`
+    # is avoided because it carries no partition signal. The anime partition is
+    # mixed and single-episode anime remains unclassified unless detail metadata
+    # provides an explicit `Movie` or `TVSeries` type.
     BROWSE_TYPES: tuple[tuple[str, str], ...] = (
         ("2", "movie"),
         ("1", "series"),
-        ("3", "series"),
+        # The provider calls this partition "Anime". It contains both films
+        # and multi-episode works, so it is not itself a movie/series signal.
+        ("3", "anime"),
     )
 
     def _execute_run(self, query: Optional[str] = None) -> list[ScrapedItem]:
@@ -151,7 +155,11 @@ class KissKHScraper(BaseScraper):
         for item in items:
             payload = item.raw_payload
             entry_id = payload.get("id") if isinstance(payload, dict) else None
-            key = entry_id if entry_id is not None else (item.title, item.year)
+            key = (
+                (str(entry_id), item.content_type)
+                if entry_id is not None
+                else (item.title, item.year, item.content_type)
+            )
             if key in seen:
                 continue
             seen.add(key)
@@ -160,17 +168,51 @@ class KissKHScraper(BaseScraper):
 
     def parse_items(self, raw_data: Any, content_type: str = "movie") -> list[ScrapedItem]:
         items: list[ScrapedItem] = []
-        for entry in raw_data or []:
+        if not isinstance(raw_data, list):
+            return items
+        for entry in raw_data:
             if not isinstance(entry, dict):
                 continue
             title = entry.get("title") or entry.get("name")
-            if not title:
+            native_id = entry.get("id")
+            if not title or native_id is None or isinstance(native_id, (dict, list, bool)):
+                continue
+            native_id = str(native_id).strip()
+            if not native_id:
                 continue
             year = entry.get("year") or entry.get("releaseYear")
+            if not year and entry.get("releaseDate"):
+                try:
+                    year = datetime.fromisoformat(
+                        str(entry["releaseDate"]).replace("Z", "+00:00")
+                    ).year
+                except ValueError:
+                    year = None
             try:
                 year_int = int(year) if year else None
             except (ValueError, TypeError):
                 year_int = None
+            if year_int is not None and not 1900 <= year_int <= 2100:
+                year_int = None
+            provider_type = str(entry.get("type") or "").strip().casefold()
+            detail_types = {"movie": "movie", "tvseries": "series"}
+            item_type = detail_types.get(provider_type)
+            if item_type is None:
+                if content_type == "anime" or provider_type == "anime":
+                    try:
+                        episodes_count = int(entry.get("episodesCount"))
+                    except (TypeError, ValueError):
+                        continue
+                    # Multiple source-reported episodes establish a series.
+                    # One episode may be a film or a single-episode series; do
+                    # not guess between them.
+                    if episodes_count <= 1:
+                        continue
+                    item_type = "series"
+                elif content_type in {"movie", "series"}:
+                    item_type = content_type
+                else:
+                    continue
 
             # Missing fields mean the provider did not report metadata.  Do
             # not turn that absence into an English/1080p claim: ranking treats
@@ -178,14 +220,14 @@ class KissKHScraper(BaseScraper):
             audio = entry.get("audio_languages") or entry.get("audio") or []
             subs = entry.get("subtitle_languages") or entry.get("subtitles") or []
             quality = entry.get("quality")
-            url_path = entry.get("url") or f"https://kisskh.do/Drama/{entry.get('id')}"
+            url_path = entry.get("url") or f"https://kisskh.do/Drama/{native_id}"
 
             items.append(
                 ScrapedItem(
                     title=str(title),
                     provider_slug=self.provider_slug,
                     year=year_int,
-                    content_type=content_type,
+                    content_type=item_type,
                     source_url=str(url_path),
                     audio_languages=audio if isinstance(audio, list) else [str(audio)],
                     subtitle_languages=subs if isinstance(subs, list) else [str(subs)],
