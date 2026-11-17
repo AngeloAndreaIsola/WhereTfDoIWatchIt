@@ -375,6 +375,8 @@ describe("Watched section", () => {
     ).toBe(true);
 
     await user.click(screen.getByRole("button", { name: "Movies" }));
+    // Filters are staged: the request waits for Apply.
+    await user.click(screen.getByRole("button", { name: "Apply filters" }));
 
     await waitFor(() => {
       expect(

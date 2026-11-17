@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ViewerLanguageBuilder from "./ViewerLanguageBuilder";
 import { useViewerPreferences } from "./ViewerPreferencesProvider";
 import { ProviderFilter, ProviderItem } from "./ProviderFilter";
@@ -20,6 +20,7 @@ export interface FilterState {
   quality: string; // "", "4k,uhd", "hdr", "hd", "sd"
   score_min: string; // "", "8.0", "7.0", "6.0", "5.0"
   sort_by: string; // "", "rating_desc", "year_desc", "year_asc", "title_asc", "title_desc"
+  watched: string; // "all", "watched", "unwatched"
 }
 
 interface FilterBarProps {
@@ -28,7 +29,56 @@ interface FilterBarProps {
   showStatusFilter?: boolean;
 }
 
+/** The all-defaults value used by "Reset". content_type/watched are enums. */
+const EMPTY_FILTER_STATE: FilterState = {
+  q: "",
+  content_type: "all",
+  genre: "",
+  year_min: "",
+  year_max: "",
+  actors: [],
+  providers: [],
+  country: "",
+  status: "",
+  quality: "",
+  score_min: "",
+  sort_by: "",
+  watched: "all",
+};
+
+/** Field-by-field comparison; `actors` needs an id-set compare, not `===`. */
+function sameFilters(a: FilterState, b: FilterState): boolean {
+  if (a === b) return true;
+  const actorIdsA = a.actors.map((x) => x.id).sort((x, y) => x - y);
+  const actorIdsB = b.actors.map((x) => x.id).sort((x, y) => x - y);
+  return (
+    a.q === b.q &&
+    a.content_type === b.content_type &&
+    a.genre === b.genre &&
+    a.year_min === b.year_min &&
+    a.year_max === b.year_max &&
+    a.providers.length === b.providers.length &&
+    a.providers.every((p) => b.providers.includes(p)) &&
+    a.country === b.country &&
+    a.status === b.status &&
+    a.quality === b.quality &&
+    a.score_min === b.score_min &&
+    a.sort_by === b.sort_by &&
+    (a.watched || "all") === (b.watched || "all") &&
+    actorIdsA.length === actorIdsB.length &&
+    actorIdsA.every((id, i) => id === actorIdsB[i])
+  );
+}
+
 export function FilterBar({ filters, onChange, showStatusFilter = true }: FilterBarProps) {
+  // Controls edit a local draft; nothing reaches the parent (and so no request
+  // is issued) until Apply is pressed. `filters` is the last applied value, so
+  // an external reset or URL-driven change re-seeds the draft.
+  const [draft, setDraft] = useState<FilterState>(filters);
+  const [applied, setApplied] = useState<FilterState>(filters);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+
   const [genres, setGenres] = useState<{ id: number; name: string }[]>([]);
   const [providers, setProviders] = useState<ProviderItem[]>([]);
   const [actorSearch, setActorSearch] = useState("");
@@ -83,19 +133,47 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
     return () => clearTimeout(timer);
   }, [actorSearch]);
 
+  // Re-seed the draft only when the parent genuinely pushes a different applied
+  // value (external reset, "Clear filters", a URL-driven change). A parent that
+  // merely re-sends the same value — or echoes a new object with equal fields —
+  // must NOT clobber edits the user has staged but not yet applied, so the
+  // comparison is against the last observed prop, not against the draft.
+  const lastPropRef = useRef(filters);
+  useEffect(() => {
+    if (sameFilters(lastPropRef.current, filters)) return;
+    lastPropRef.current = filters;
+    setDraft(filters);
+    setApplied(filters);
+  }, [filters]);
+
+  const isDirty = !sameFilters(draft, applied);
+
+  const handleApply = () => {
+    setApplied(draftRef.current);
+    onChange(draftRef.current);
+  };
+
+  const handleReset = () => {
+    const cleared: FilterState = { ...EMPTY_FILTER_STATE, watched: "all" };
+    setDraft(cleared);
+    setApplied(cleared);
+    setActorSearch("");
+    onChange(cleared);
+  };
+
+  const updateDraft = (patch: Partial<FilterState>) =>
+    setDraft((current) => ({ ...current, ...patch }));
+
   const addActor = (actor: { id: number; name: string }) => {
-    if (!filters.actors.some((a) => a.id === actor.id)) {
-      onChange({ ...filters, actors: [...filters.actors, actor] });
+    if (!draft.actors.some((a) => a.id === actor.id)) {
+      updateDraft({ actors: [...draft.actors, actor] });
     }
     setActorSearch("");
     setShowActorSuggestions(false);
   };
 
   const removeActor = (id: number) => {
-    onChange({
-      ...filters,
-      actors: filters.actors.filter((a) => a.id !== id),
-    });
+    updateDraft({ actors: draft.actors.filter((a) => a.id !== id) });
   };
 
   return (
@@ -159,8 +237,8 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
           <input
             type="text"
             placeholder="Search by title..."
-            value={filters.q}
-            onChange={(e) => onChange({ ...filters, q: e.target.value })}
+            value={draft.q}
+            onChange={(e) => updateDraft({ q: e.target.value })}
             className="w-full px-3 py-1.5 text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
           />
         </div>
@@ -178,9 +256,9 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
               <button
                 key={t.id}
                 type="button"
-                onClick={() => onChange({ ...filters, content_type: t.id })}
+                onClick={() => updateDraft({ content_type: t.id })}
                 className={`flex-1 py-1.5 text-center font-medium transition-colors ${
-                  filters.content_type === t.id
+                  draft.content_type === t.id
                     ? "bg-indigo-600 text-white"
                     : "bg-gray-50 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-100"
                 }`}
@@ -224,9 +302,9 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
             </div>
           )}
         </div>
-        {filters.actors.length > 0 && (
+        {draft.actors.length > 0 && (
           <div className="flex flex-wrap gap-2 mt-2">
-            {filters.actors.map((actor) => (
+            {draft.actors.map((actor) => (
               <span
                 key={actor.id}
                 className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800 dark:bg-indigo-900/60 dark:text-indigo-200"
@@ -252,8 +330,8 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
             Genre
           </label>
           <select
-            value={filters.genre}
-            onChange={(e) => onChange({ ...filters, genre: e.target.value })}
+            value={draft.genre}
+            onChange={(e) => updateDraft({ genre: e.target.value })}
             className="w-full px-3 py-1.5 text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
           >
             <option value="">All Genres</option>
@@ -271,10 +349,8 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
           </label>
           <ProviderFilter
             providers={providers}
-            selectedProviders={filters.providers || []}
-            onChange={(selectedSlugs) =>
-              onChange({ ...filters, providers: selectedSlugs })
-            }
+            selectedProviders={draft.providers || []}
+            onChange={(selectedSlugs) => updateDraft({ providers: selectedSlugs })}
           />
         </div>
 
@@ -285,8 +361,8 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
           <input
             type="number"
             placeholder="e.g. 2020"
-            value={filters.year_min}
-            onChange={(e) => onChange({ ...filters, year_min: e.target.value })}
+            value={draft.year_min}
+            onChange={(e) => updateDraft({ year_min: e.target.value })}
             className="w-full px-3 py-1.5 text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
           />
         </div>
@@ -298,8 +374,8 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
           <input
             type="number"
             placeholder="e.g. 2026"
-            value={filters.year_max}
-            onChange={(e) => onChange({ ...filters, year_max: e.target.value })}
+            value={draft.year_max}
+            onChange={(e) => updateDraft({ year_max: e.target.value })}
             className="w-full px-3 py-1.5 text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
           />
         </div>
@@ -309,8 +385,8 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
             Quality
           </label>
           <select
-            value={filters.quality}
-            onChange={(e) => onChange({ ...filters, quality: e.target.value })}
+            value={draft.quality}
+            onChange={(e) => updateDraft({ quality: e.target.value })}
             className="w-full px-3 py-1.5 text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
           >
             <option value="">All Qualities</option>
@@ -326,8 +402,8 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
             Min Rating
           </label>
           <select
-            value={filters.score_min}
-            onChange={(e) => onChange({ ...filters, score_min: e.target.value })}
+            value={draft.score_min}
+            onChange={(e) => updateDraft({ score_min: e.target.value })}
             className="w-full px-3 py-1.5 text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
           >
             <option value="">All Ratings</option>
@@ -343,8 +419,8 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
             Sort By
           </label>
           <select
-            value={filters.sort_by}
-            onChange={(e) => onChange({ ...filters, sort_by: e.target.value })}
+            value={draft.sort_by}
+            onChange={(e) => updateDraft({ sort_by: e.target.value })}
             className="w-full px-3 py-1.5 text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
           >
             <option value="">Default / Newest</option>
@@ -362,8 +438,8 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
               Watchability Status
             </label>
             <select
-              value={filters.status}
-              onChange={(e) => onChange({ ...filters, status: e.target.value })}
+              value={draft.status}
+              onChange={(e) => updateDraft({ status: e.target.value })}
               className="w-full px-3 py-1.5 text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
             >
               <option value="">All Statuses</option>
@@ -374,6 +450,48 @@ export function FilterBar({ filters, onChange, showStatusFilter = true }: Filter
             </select>
           </div>
         )}
+
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+            Watched
+          </label>
+          <select
+            value={draft.watched || "all"}
+            onChange={(e) => updateDraft({ watched: e.target.value })}
+            aria-label="Watched status"
+            className="w-full px-3 py-1.5 text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+          >
+            <option value="all">All</option>
+            <option value="watched">✓ Watched</option>
+            <option value="unwatched">○ Unwatched</option>
+          </select>
+        </div>
+      </div>
+
+      {/* Apply / Reset — filters are staged locally until Apply is pressed */}
+      <div className="flex items-center justify-end gap-2 border-t border-gray-200 pt-3 dark:border-gray-800">
+        {isDirty && (
+          <span className="mr-auto text-xs text-gray-500 dark:text-gray-400">
+            Unapplied filter changes
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={handleReset}
+          disabled={!isDirty}
+          className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+        >
+          Reset
+        </button>
+        <button
+          type="button"
+          onClick={handleApply}
+          disabled={!isDirty}
+          aria-label="Apply filters"
+          className="rounded-lg bg-indigo-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Apply filters
+        </button>
       </div>
     </div>
   );

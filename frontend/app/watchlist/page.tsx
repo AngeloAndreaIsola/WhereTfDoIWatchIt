@@ -66,6 +66,8 @@ const buildWatchlistQuery = (filters: FilterState, page: number): string => {
   if (filters.quality) params.set("quality", filters.quality);
   if (filters.score_min) params.set("score_min", filters.score_min);
   if (filters.sort_by) params.set("sort_by", filters.sort_by);
+  if (filters.watched && filters.watched !== "all")
+    params.set("watched", filters.watched);
   filters.actors.forEach((a) => params.append("actor_id", `${a.id}:${a.name}`));
   if (page > 1) params.set("page", page.toString());
   return params.toString();
@@ -95,6 +97,7 @@ export default function WatchlistPage() {
       quality: sp.get("quality") || "",
       score_min: sp.get("score_min") || "",
       sort_by: sp.get("sort_by") || "",
+      watched: sp.get("watched") || "all",
     };
   };
 
@@ -169,6 +172,8 @@ export default function WatchlistPage() {
     if (filters.status) params.set("status", filters.status);
     if (filters.score_min) params.set("score_min", filters.score_min);
     if (filters.sort_by) params.set("sort_by", filters.sort_by);
+    if (filters.watched && filters.watched !== "all")
+      params.set("watched", filters.watched);
     filters.actors.forEach((a) => params.append("actor_id", a.id.toString()));
     if (currentCountry) params.set("current_country", currentCountry);
 

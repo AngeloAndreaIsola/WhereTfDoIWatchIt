@@ -172,6 +172,8 @@ export interface UnifiedCatalogItem {
   year: number | null;
   poster_path: string | null;
   content_type: string;
+  /** True/false when the watched filter is active, otherwise null. */
+  is_watched?: boolean | null;
   provider: {
     slug: string;
     name: string;

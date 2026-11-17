@@ -5,7 +5,7 @@ import logging
 from typing import Optional
 
 from django.db.models import Q, QuerySet
-from tracker.models import Movie, Preference
+from tracker.models import Movie, Preference, UserMovieData
 from tracker.services.availability_reads import get_local_offers
 from tracker.services.watchability import (
     WatchabilityStatus,
@@ -128,6 +128,26 @@ def apply_composable_filters(
                 queryset = [m for m in queryset if getattr(m, "tmdb_rating", None) is not None and getattr(m, "tmdb_rating") >= min_val]
         except (ValueError, TypeError):
             pass
+
+    # 6b. Watched state filter (all | watched | unwatched)
+    # Read once for the whole candidate set: the watched flag lives on
+    # UserMovieData.is_watched, the same row the mark/unmark endpoints write.
+    # Deliberately NOT the watchlist — WatchlistItem membership is a different
+    # question ("do I want to see this?") and must never stand in for watched.
+    watched_filter = (
+        params.get("watched") or params.get("watched_status") or ""
+    ).lower().strip()
+    if watched_filter in ("watched", "unwatched"):
+        watched_movie_ids = set(
+            UserMovieData.objects.filter(
+                user_id=preference.user_id if preference else 1,
+                is_watched=True,
+            ).values_list("movie_id", flat=True)
+        )
+        if watched_filter == "watched":
+            queryset = [m for m in queryset if m.id in watched_movie_ids]
+        else:  # unwatched
+            queryset = [m for m in queryset if m.id not in watched_movie_ids]
 
     # Convert queryset to list if it was evaluated
     movie_list = list(queryset)
