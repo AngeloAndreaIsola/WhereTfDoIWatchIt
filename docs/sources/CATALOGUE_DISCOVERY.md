@@ -1698,7 +1698,7 @@ The exact source was checked as project `new-sources`, service `db`, container
 migration head `0053`. The backend writer was stopped for the backup and then
 returned to its started state. A pre-existing restart/endpoint failure reports
 missing `tracker_cataloguediscoverystate.heartbeat_at`; the live schema was left
-untouched. Authorized rollout must first apply `0054`–`0056` using the guarded
+untouched. Authorized rollout must first apply availability `0016` and tracker `0054`–`0056` using the guarded
 migration workflow. Clone checks validate that schema prerequisite; they do not
 constitute a live application health check.
 
@@ -1858,3 +1858,178 @@ The complete isolated PostgreSQL backend suite passed **3,334 tests**. Both
 actual backup-clone integration imports passed all 14 checks. Migration
 consistency (`makemigrations --check --dry-run`, `migrate --check`) and Django
 system checks passed. No live migration was applied.
+
+### P0 live schema diagnosis and final rollout procedure (2026-11-17)
+
+Verdict: **`CANONICAL_LIVE_ROLLOUT_SAFE`** for the documented, separately
+authorized procedure. This supersedes the earlier rollout-readiness summary.
+**Live remains unmigrated and has received no canonical writes.** The success
+criterion was verified on faithful restores, rather than bypassing the live
+migration guard. The actual live backend remains blocked until authorization.
+
+The [exact eight-stage rollout/rollback commands](CANONICAL_LIVE_ROLLOUT.md)
+cover preflight, a fresh verified backup, clone rehearsal, guarded migrations,
+post-migration integrity, exactly 387 imports, replay, post-import checks and
+verified database restoration. Every live-write operation has an authorization
+ID. **Do not execute the procedure as part of this preparation task.** The
+[current machine-readable audit](../audits/canonical_rollout_20261117.json)
+contains source history, physical schema/constraints/indexes, reproduced errors,
+clone receipts, constraint and endpoint checks, rollback results and coverage.
+
+#### Precise root cause and correction
+
+Read-only checks confirmed project `new-sources`, database container
+`new-sources-db-1`, database/user `tracker`, host `db` and volume
+`new-sources_pgdata`. Live history ends at **tracker `0053` and availability
+`0015`**. Physical objects agree with that history; no false migration record or
+failed migration implementation was found. The checked-out models require four
+pending migrations:
+
+| Migration | Required schema/data change |
+|---|---|
+| `availability.0016_contentmapping_match_evidence` | Add non-null JSON `ContentMapping.match_evidence` |
+| `tracker.0054_discovered_catalogue_last_seen` | Add/index/backfill non-null `last_seen_at` from original `updated_at`/`discovered_at` |
+| `tracker.0055_cataloguediscoverystate_heartbeat_at_and_more` | Add `heartbeat_at`, `lease_expires_at`, `lease_owner`; create `CanonicalBootstrapEvidence` and its constraints/index |
+| `tracker.0056_movie_tmdb_content_type_identity` | Replace global `Movie.tmdb_id` uniqueness with `(tmdb_id, content_type)` uniqueness |
+
+Tracker dependencies form `0053 → 0054 → 0055 → 0056`. Availability `0016`
+depends on its `0015` and is an additional prerequisite omitted from the earlier
+summary. **Targeting tracker `0056` alone does not apply availability `0016`.**
+The reviewed all-app guarded plan contains exactly the four migrations above.
+
+The retained provider endpoint error is
+`column tracker_cataloguediscoverystate.heartbeat_at does not exist`
+(**SQLSTATE 42703**). Read-only SQL reproduced the missing column and also
+confirmed missing `last_seen_at`, missing `match_evidence` (both 42703), and the
+missing bootstrap-evidence relation (**42P01**). The other new lease fields are
+absent. `tracker_movie_tmdb_id_key` still enforces the old global numeric-ID
+uniqueness; `uniq_movie_tmdb_content_type` is absent.
+
+The current host-mounted runtime entrypoint correctly runs `migrate --check`
+before starting the server. It exits **1** for the four pending migrations,
+causing the current restart loop. It must not be changed to run migrations
+automatically. A stale baked entrypoint is not in use: Compose selects the
+host-mounted guard, and the development backend mounts current source. The
+migration service is separately exposed through the `ops` profile and requires
+exact database, host and confirmation-token checks. No guard was bypassed on
+live; no history was faked or constraints manually changed there.
+
+#### Fresh backup and faithful migration/import/rollback rehearsals
+
+A new read-only custom-format dump was saved outside Git/database volumes:
+
+`/Users/angeloandreaisola/Documents/database-backups/WhereTfDoIWatchIt/new-sources_tracker_schema_20261117T200359Z.dump`
+
+SHA-256: `c296db28fbbebdb9e5aaffc73ea5c4f36df8e9416816e0f4783d11ba87900979`.
+The backend was already blocked by its schema check; no other application
+sessions were present. Source row hashes stayed stable before/after `pg_dump`.
+No live service stop/start, migration, reconciliation or rollback was executed.
+The original dump was restored into fresh disposable PostgreSQL databases;
+all **57 source table counts and full row hashes** matched, as did the inspected
+physical columns, constraints, indexes and original migration history.
+
+The final `canonical_schema_verified_20261117` restore applied the four guarded
+migrations without implementation changes. **15 migration integrity checks
+passed**: all 5,095 discoveries and 3,300 legacy mapping IDs/fields were retained;
+old observation fields, provider settings and checkpoint values were unchanged;
+every `last_seen_at` matched its original timestamp; no deletion or offer
+occurred. Django's expected metadata changes are explicit: four migration
+history rows, one content type and four permissions for the new evidence model.
+Existing content types and permissions remain unchanged.
+
+The committed first manifest is byte-for-byte unchanged, SHA-256
+`eec5c6717a0e7bf185cf29c7c3f213eeff5b4382ff6d0d1277f140322518df8a`.
+All 387 proofs passed fresh offline validation. Its exact import inserted 387
+typed canonical titles, evidence rows, unavailable provider-content identities
+and mappings, plus one disabled identity-only Source. All **15 import/replay
+checks passed**, including every relationship, all 4,708 unselected discoveries,
+unrelated row hashes, settings/checkpoints and identical replay timestamps.
+Zero HTTP requests, cache writes or offers resulted. The 475-association second
+batch and `Blue` (1968) were not included.
+
+On the migrated clone, explicit negative-PK, rollback-only probes demonstrated
+that movie and series rows can share a numeric TMDb ID and same-namespace
+duplicates fail against `uniq_movie_tmdb_content_type`. Probes left no rows or
+sequence changes. The read-only `/api/providers/` smoke check returned **200
+with 50 providers**, with HTTP upstream dispatch forbidden. Thus the exact
+missing-column reader works after the correction. Live health was not changed.
+
+A separate isolated PostgreSQL instance then rehearsed all migrations plus the
+387 import followed by **database replacement from the verified backup**.
+Complete rows, original history and inspected schema returned exactly to the
+pre-migration state. The runbook uses `pg_restore --clean --if-exists --create`
+with `postgres` as the maintenance connection and checks the archive database
+name `tracker`: a plain object-level `--clean` restore cannot reliably remove
+the new evidence table/foreign keys absent from the old archive. This destructive
+rollback requires its own explicit authorization. Restoring the baseline also
+restores the original code/schema mismatch; current application code must stay
+stopped until an operator selects compatible code or another authorized attempt.
+
+#### Safer verification and continued isolated coverage
+
+`audit_canonical_rollout` now provides exact-target **read-only** `snapshot`,
+`migrations`, `import` and `unchanged` checks for live or clone verification.
+The process enforces read-only transactions and preserves audit output files.
+Migration validation distinguishes allowed new columns and Django metadata
+from existing data and checks original-column hashes. The existing clone-only
+verification script shares the same integrity implementation. Manifest
+validation now explicitly rejects missing migration history or physical schema
+requirements before attempting association writes, including the overlooked
+availability migration and an absent typed constraint despite recorded history.
+
+After completing schema investigation and first-manifest validation, one new
+bounded sub-batch evaluated **250 previously unevaluated records** on the
+separate reconciliation clone. All 1,000 prior evaluated IDs, including pending
+outcomes, were excluded. No old ambiguity was automatically retried. The full
+239-record evidence audit, isolated import and idempotent replay passed; these
+additional associations are **not part of the first live rollout**.
+
+| Metric | Sub-batch 5 |
+|---|---:|
+| Previously evaluated | 1,000 |
+| Newly evaluated | 250 |
+| Exact candidates | 240 |
+| Verified associations / unique canonical titles | 239 |
+| Rejected candidate observations | 104 |
+| Ambiguous candidates | 9 |
+| Unmatched records | 2 |
+| TMDb requests, including independent validation | 513 (489 bootstrap + 24 validation) |
+| Cache hits | 0 |
+| Independent validation | 24/24 confirmed |
+| Remaining unevaluated inventory | 3,845 |
+| Remaining unassociated inventory | 3,994 |
+| Matching yield | 95.6% |
+
+HydraHD movies: **145/150 verified**, five ambiguous, zero unmatched, 295
+bootstrap requests. Series: **94/100 verified**, four ambiguous, two unmatched,
+194 bootstrap requests. Ceilings remained 520 bootstrap and 50 validation
+attempts, 0.3-second minimum dispatch spacing, at most two transient retries,
+restriction-stop behavior and existing Retry-After/cache/checkpoint rules.
+No failures, retries or rate limits occurred. The
+[239-association isolated manifest](../audits/canonical_batch5_20261117.manifest.json)
+retains complete evidence and expected changes. The rolling audit retains all
+five ID selections and all pending outcomes for later continuation.
+
+Cumulative results are **1,250/5,095 evaluated (24.53%)**, **1,101 verified
+associations (21.61% inventory coverage)**, **118 ambiguous**, **30 unmatched**
+and **one held** (`Blue`). There are **3,845 unevaluated** and **3,994
+unassociated** records. Consecutive audited yields are 60.4%, 94.4%, 94.8%, 95.2%
+and 95.6%; the changing provider/type composition prevents a catalogue-wide
+yield projection. Cumulative HydraHD verified counts are 652 movies and 449
+series; AnimeWorld blockers are unchanged.
+
+Current work used **513 new TMDb requests, zero cache hits**. Totals are
+**2,393 requests and 849 cache hits** (26.19% including historical replay hits).
+Independent checks total 121 confirmations and one historical inconclusive hold;
+they still share the TMDb authority and do not establish provider-detail ground
+truth or a catalogue-wide false-positive rate. Prior cache/evidence results are
+preserved. All discovery cursors, RSS state, provider settings, disabled schedules
+and restricted-provider blockers remain intact. No language extraction, playback
+offers or automatic availability inference was introduced.
+
+Validation passed: **75 focused tests**, **3,342 isolated PostgreSQL backend
+tests**, migration consistency and system checks, actual faithful-clone migration
+and 387 import/replay checks, physical namespace probes, provider endpoint smoke
+check and exact rollback restoration. The runbook's Bash blocks pass syntax
+validation without executing the live procedure. A final read-only live check
+confirmed every source row, history entry and inspected schema object unchanged.

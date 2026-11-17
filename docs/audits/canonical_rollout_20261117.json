@@ -2,8 +2,8 @@
   "date": "2026-11-17",
   "repository": "AngeloAndreaIsola/WhereTfDoIWatchIt",
   "branch": "new-sources",
-  "starting_commit": "2d2268b612d96aa122e44465729c3a8aea33c5d6",
-  "verdict": "CANONICAL_ROLLOUT_READY",
+  "starting_commit": "8a21fada715a263d1b83df0852e801d358afe421",
+  "verdict": "CANONICAL_LIVE_ROLLOUT_SAFE",
   "supersedes_for_rollout": "canonical_scale_20261117.json (retained unchanged as historical evidence)",
   "first_batch": {
     "audited": 388,
@@ -98,29 +98,29 @@
     ]
   },
   "cumulative": {
-    "newly_evaluated": 1000,
+    "newly_evaluated": 1250,
     "bootstrap_tmdb_requests": null,
     "bootstrap_cache_hits": null,
-    "exact_candidates": 872,
-    "verified_associations": 862,
-    "rejected_candidates": 482,
-    "ambiguous_candidates": 109,
-    "unmatched_records": 28,
+    "exact_candidates": 1112,
+    "verified_associations": 1101,
+    "rejected_candidates": 586,
+    "ambiguous_candidates": 118,
+    "unmatched_records": 30,
     "conflicting_records": 0,
     "held_from_rollout": 1,
-    "unique_canonical_titles": 862,
-    "matching_yield": 0.862,
+    "unique_canonical_titles": 1101,
+    "matching_yield": 0.8808,
     "previously_evaluated": 0,
-    "tmdb_requests": 1880,
+    "tmdb_requests": 2393,
     "cache_hits": 849,
     "independent_validation_results": {
-      "sampled": 98,
-      "confirmed": 97,
+      "sampled": 122,
+      "confirmed": 121,
       "inconclusive": 1,
       "excluded": 1
     },
-    "remaining_unevaluated_inventory": 4095,
-    "remaining_unassociated_inventory": 4233,
+    "remaining_unevaluated_inventory": 3845,
+    "remaining_unassociated_inventory": 3994,
     "by_provider_and_content_type": [
       {
         "provider": "animeworld",
@@ -173,34 +173,34 @@
       {
         "provider": "hydrahd",
         "content_type": "movie",
-        "newly_evaluated": 550,
+        "newly_evaluated": 700,
         "bootstrap_tmdb_requests": null,
         "bootstrap_cache_hits": null,
-        "exact_candidates": 513,
-        "verified_associations": 507,
-        "rejected_candidates": 385,
-        "ambiguous_candidates": 36,
+        "exact_candidates": 659,
+        "verified_associations": 652,
+        "rejected_candidates": 474,
+        "ambiguous_candidates": 41,
         "unmatched_records": 6,
         "conflicting_records": 0,
         "held_from_rollout": 1,
-        "unique_canonical_titles": 507,
-        "matching_yield": 0.9218181818181819
+        "unique_canonical_titles": 652,
+        "matching_yield": 0.9314285714285714
       },
       {
         "provider": "hydrahd",
         "content_type": "series",
-        "newly_evaluated": 371,
+        "newly_evaluated": 471,
         "bootstrap_tmdb_requests": null,
         "bootstrap_cache_hits": null,
-        "exact_candidates": 359,
-        "verified_associations": 355,
-        "rejected_candidates": 97,
-        "ambiguous_candidates": 9,
-        "unmatched_records": 7,
+        "exact_candidates": 453,
+        "verified_associations": 449,
+        "rejected_candidates": 112,
+        "ambiguous_candidates": 13,
+        "unmatched_records": 9,
         "conflicting_records": 0,
         "held_from_rollout": 0,
-        "unique_canonical_titles": 355,
-        "matching_yield": 0.9568733153638814
+        "unique_canonical_titles": 449,
+        "matching_yield": 0.9532908704883227
       }
     ]
   },
@@ -1578,6 +1578,384 @@
         "failed": 0,
         "retried": 0,
         "cache_hits": 0
+      }
+    },
+    {
+      "newly_evaluated": 250,
+      "bootstrap_tmdb_requests": 489,
+      "bootstrap_cache_hits": 0,
+      "exact_candidates": 240,
+      "verified_associations": 239,
+      "rejected_candidates": 104,
+      "ambiguous_candidates": 9,
+      "unmatched_records": 2,
+      "conflicting_records": 0,
+      "held_from_rollout": 0,
+      "unique_canonical_titles": 239,
+      "matching_yield": 0.956,
+      "previously_evaluated": 1000,
+      "tmdb_requests": 513,
+      "cache_hits": 0,
+      "independent_validation_results": {
+        "sampled": 24,
+        "confirmed": 24,
+        "inconclusive": 0
+      },
+      "remaining_unevaluated_inventory": 3845,
+      "remaining_unassociated_inventory": 3994,
+      "by_provider_and_content_type": [
+        {
+          "provider": "hydrahd",
+          "content_type": "movie",
+          "newly_evaluated": 150,
+          "bootstrap_tmdb_requests": 295,
+          "bootstrap_cache_hits": 0,
+          "exact_candidates": 146,
+          "verified_associations": 145,
+          "rejected_candidates": 89,
+          "ambiguous_candidates": 5,
+          "unmatched_records": 0,
+          "conflicting_records": 0,
+          "held_from_rollout": 0,
+          "unique_canonical_titles": 145,
+          "matching_yield": 0.9666666666666667
+        },
+        {
+          "provider": "hydrahd",
+          "content_type": "series",
+          "newly_evaluated": 100,
+          "bootstrap_tmdb_requests": 194,
+          "bootstrap_cache_hits": 0,
+          "exact_candidates": 94,
+          "verified_associations": 94,
+          "rejected_candidates": 15,
+          "ambiguous_candidates": 4,
+          "unmatched_records": 2,
+          "conflicting_records": 0,
+          "held_from_rollout": 0,
+          "unique_canonical_titles": 94,
+          "matching_yield": 0.94
+        }
+      ],
+      "batch": 5,
+      "record_ids": [
+        90,
+        100,
+        117,
+        177,
+        197,
+        207,
+        230,
+        251,
+        280,
+        296,
+        309,
+        349,
+        392,
+        402,
+        409,
+        453,
+        460,
+        465,
+        472,
+        476,
+        494,
+        539,
+        559,
+        581,
+        645,
+        650,
+        654,
+        661,
+        715,
+        737,
+        748,
+        818,
+        875,
+        896,
+        900,
+        906,
+        954,
+        959,
+        992,
+        998,
+        1043,
+        1052,
+        1061,
+        1100,
+        1105,
+        1123,
+        1124,
+        1174,
+        1177,
+        1182,
+        1192,
+        1201,
+        1220,
+        1227,
+        1263,
+        1276,
+        1358,
+        1363,
+        1393,
+        1408,
+        1409,
+        1421,
+        1426,
+        1428,
+        1454,
+        1502,
+        1522,
+        1549,
+        1556,
+        1599,
+        1622,
+        1629,
+        1630,
+        1638,
+        1650,
+        1675,
+        1694,
+        1712,
+        1757,
+        1760,
+        1772,
+        1789,
+        1842,
+        1852,
+        1859,
+        1862,
+        1898,
+        1936,
+        2018,
+        2027,
+        2054,
+        2061,
+        2071,
+        2078,
+        2081,
+        2094,
+        2109,
+        2180,
+        2227,
+        2253,
+        2255,
+        2260,
+        2283,
+        2293,
+        2296,
+        2348,
+        2351,
+        2361,
+        2392,
+        2394,
+        2408,
+        2411,
+        2439,
+        2456,
+        2477,
+        2495,
+        2500,
+        2502,
+        2510,
+        2583,
+        2605,
+        2689,
+        2690,
+        2733,
+        2744,
+        2784,
+        2807,
+        2809,
+        2820,
+        2822,
+        2836,
+        2862,
+        2869,
+        2899,
+        2900,
+        2917,
+        2927,
+        2946,
+        2953,
+        2963,
+        2964,
+        3003,
+        3010,
+        3017,
+        3028,
+        3029,
+        3042,
+        3167,
+        3175,
+        3190,
+        3274,
+        3278,
+        3309,
+        3310,
+        3313,
+        3318,
+        3339,
+        3343,
+        3364,
+        3380,
+        3384,
+        3404,
+        3416,
+        3419,
+        3428,
+        3438,
+        3452,
+        3498,
+        3500,
+        3510,
+        3612,
+        3613,
+        3617,
+        3629,
+        3635,
+        3679,
+        3703,
+        3704,
+        3739,
+        3774,
+        3800,
+        3802,
+        3811,
+        3841,
+        3842,
+        3857,
+        3888,
+        3897,
+        3924,
+        3951,
+        3995,
+        4018,
+        4019,
+        4023,
+        4034,
+        4043,
+        4053,
+        4078,
+        4090,
+        4166,
+        4193,
+        4210,
+        4226,
+        4227,
+        4246,
+        4255,
+        4292,
+        4299,
+        4333,
+        4340,
+        4346,
+        4403,
+        4424,
+        4455,
+        4457,
+        4476,
+        4507,
+        4512,
+        4528,
+        4529,
+        4555,
+        4574,
+        4584,
+        4611,
+        4636,
+        4640,
+        4657,
+        4663,
+        4683,
+        4708,
+        4716,
+        4739,
+        4758,
+        4763,
+        4778,
+        4785,
+        4813,
+        4817,
+        4829,
+        4830,
+        4854,
+        4859,
+        4860,
+        4894,
+        4915,
+        4942,
+        4987,
+        5017,
+        5039,
+        5054
+      ],
+      "bootstrap_budget": {
+        "limit": 520,
+        "attempted": 489,
+        "remaining": 31,
+        "succeeded": 489,
+        "failed": 0,
+        "retried": 0,
+        "cache_hits": 0
+      },
+      "validation_budget": {
+        "limit": 50,
+        "attempted": 24,
+        "remaining": 26,
+        "succeeded": 24,
+        "failed": 0,
+        "retried": 0,
+        "cache_hits": 0
+      },
+      "request_scope": "new proposal + independent validation; offline imports/replays cost zero requests/cache writes",
+      "evidence_audit": {
+        "audited": 239,
+        "retained_evidence_valid": 239,
+        "included": 239,
+        "excluded": [],
+        "sha256": "01b687fcaf52001b0eb6f70cae901f0c3451a90a22029398db0ffeea74e1c209"
+      },
+      "clone_integrity": {
+        "checks": {
+          "all_discovery_identities_preserved": true,
+          "all_other_tables_unchanged": true,
+          "legacy_3300_rows_unchanged": true,
+          "provider_settings_unchanged": true,
+          "checkpoints_unchanged": true,
+          "pending_records_preserved_in_full": true,
+          "all_existing_provider_content_preserved": true,
+          "existing_source_settings_preserved": true,
+          "no_offers": true,
+          "replay_every_table_and_timestamp_unchanged": true,
+          "expected_row_inserts": true,
+          "expected_source_inserts": true,
+          "new_sources_disabled_identity_only": true,
+          "every_canonical_and_provider_relationship_correct": true,
+          "schema_and_history_unchanged": true
+        },
+        "passed": true,
+        "relationship_errors": [],
+        "associations_checked": 239,
+        "unselected_records_checked": 4856,
+        "counts": {
+          "availability_contentmapping": 1101,
+          "availability_offer": 0,
+          "availability_providercontent": 1101,
+          "availability_source": 3,
+          "tracker_canonicalbootstrapevidence": 1101,
+          "tracker_discoveredcataloguerecord": 5095,
+          "tracker_movie": 1101,
+          "tracker_scrapedcontentmapping": 3300
+        },
+        "before_sha256": "c2d6b17208964d28559ca757ee2fb3d521a18e074b007aed421b72d127712234",
+        "after_sha256": "ef81ef53fa7052a67a9af23da165006ac15fd25d1fd9b6a56810b65711c132ba",
+        "replay_sha256": "ef81ef53fa7052a67a9af23da165006ac15fd25d1fd9b6a56810b65711c132ba"
+      },
+      "isolated_manifest": {
+        "path": "canonical_batch5_20261117.manifest.json",
+        "sha256": "01b687fcaf52001b0eb6f70cae901f0c3451a90a22029398db0ffeea74e1c209",
+        "not_in_first_live_batch": true
       }
     }
   ],
@@ -6385,29 +6763,679 @@
         "exact_candidates": 0,
         "rejected_candidates": 0
       }
+    },
+    {
+      "record_id": 197,
+      "provider": "hydrahd",
+      "provider_native_id": "",
+      "title": "Crave",
+      "year": 2025,
+      "content_type": "movie",
+      "evidence": [
+        "search did not produce one exact title/year/type candidate"
+      ],
+      "status": "AMBIGUOUS",
+      "tmdb_id": null,
+      "action": "DRY_RUN",
+      "candidates": [
+        {
+          "tmdb_id": 1591140,
+          "title": "Crave",
+          "year": 2025,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 1573295,
+          "title": "Crave",
+          "year": 2025,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 1270554,
+          "title": "Crave",
+          "year": 2025,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 1749132,
+          "title": "I Too, Crave Death",
+          "year": 2025,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 1545032,
+          "title": "Sometimes I Crave Tearing My Skin Off",
+          "year": 2025,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 1567134,
+          "title": "The Body Craves Impact as Love Bursts",
+          "year": 2025,
+          "content_type": "movie"
+        }
+      ],
+      "metrics": {
+        "tmdb_requests": 1,
+        "cache_hits": 0,
+        "exact_candidates": 0,
+        "rejected_candidates": 3
+      }
+    },
+    {
+      "record_id": 645,
+      "provider": "hydrahd",
+      "provider_native_id": "",
+      "title": "Gamble",
+      "year": 2018,
+      "content_type": "movie",
+      "evidence": [
+        "search did not produce one exact title/year/type candidate"
+      ],
+      "status": "AMBIGUOUS",
+      "tmdb_id": null,
+      "action": "DRY_RUN",
+      "candidates": [
+        {
+          "tmdb_id": 533646,
+          "title": "Gamble",
+          "year": 2018,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 1690493,
+          "title": "Gamble",
+          "year": 2018,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 527180,
+          "title": "Gamble",
+          "year": 2018,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 721231,
+          "title": "Gamble",
+          "year": 2018,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 525833,
+          "title": "Gamble",
+          "year": 2018,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 908302,
+          "title": "The Pension Gamble",
+          "year": 2018,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 921922,
+          "title": "Gamble King of Asia",
+          "year": 2018,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 623759,
+          "title": "Blowout: Inside America's Energy Gamble",
+          "year": 2018,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 520213,
+          "title": "Gambler's Ballad: The Legend of Johnny Thompson",
+          "year": 2018,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 1523429,
+          "title": "The Gamblers punto su di me",
+          "year": 2018,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 888354,
+          "title": "The Last Gambler",
+          "year": 2018,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 8052,
+          "title": "Hard Eight",
+          "year": 1997,
+          "content_type": "movie"
+        }
+      ],
+      "metrics": {
+        "tmdb_requests": 1,
+        "cache_hits": 0,
+        "exact_candidates": 0,
+        "rejected_candidates": 7
+      }
+    },
+    {
+      "record_id": 1061,
+      "provider": "hydrahd",
+      "provider_native_id": "",
+      "title": "A Prophet",
+      "year": 2026,
+      "content_type": "series",
+      "evidence": [
+        "search did not produce one exact title/year/type candidate"
+      ],
+      "status": "AMBIGUOUS",
+      "tmdb_id": null,
+      "action": "DRY_RUN",
+      "candidates": [
+        {
+          "tmdb_id": 289078,
+          "title": "A Prophet",
+          "year": 2026,
+          "content_type": "series"
+        },
+        {
+          "tmdb_id": 224006,
+          "title": "A Prophet",
+          "year": 2026,
+          "content_type": "series"
+        },
+        {
+          "tmdb_id": 316898,
+          "title": "Trust Me: The False Prophet",
+          "year": 2026,
+          "content_type": "series"
+        },
+        {
+          "tmdb_id": 334465,
+          "title": "The Pandemic Prophet",
+          "year": 2026,
+          "content_type": "series"
+        }
+      ],
+      "metrics": {
+        "tmdb_requests": 1,
+        "cache_hits": 0,
+        "exact_candidates": 0,
+        "rejected_candidates": 2
+      }
+    },
+    {
+      "record_id": 1105,
+      "provider": "hydrahd",
+      "provider_native_id": "",
+      "title": "Richard Osman's House of Games",
+      "year": 2017,
+      "content_type": "series",
+      "evidence": [
+        "search did not produce one exact title/year/type candidate"
+      ],
+      "status": "UNMATCHED",
+      "tmdb_id": null,
+      "action": "DRY_RUN",
+      "candidates": [
+        {
+          "tmdb_id": 103960,
+          "title": "House of Games",
+          "year": 2017,
+          "content_type": "series"
+        }
+      ],
+      "metrics": {
+        "tmdb_requests": 1,
+        "cache_hits": 0,
+        "exact_candidates": 0,
+        "rejected_candidates": 1
+      }
+    },
+    {
+      "record_id": 3167,
+      "provider": "hydrahd",
+      "provider_native_id": "",
+      "title": "Cal",
+      "year": 1984,
+      "content_type": "movie",
+      "evidence": [
+        "multiple source releases or incomplete search; record-specific distinction required"
+      ],
+      "status": "AMBIGUOUS",
+      "tmdb_id": null,
+      "action": "DRY_RUN",
+      "candidates": [
+        {
+          "tmdb_id": 42084,
+          "title": "Cal",
+          "year": 1984,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 9453,
+          "title": "Caligula",
+          "year": 1979,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 124721,
+          "title": "Triumphs of a Man Called Horse",
+          "year": 1983,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 627230,
+          "title": "Călifar's Mill",
+          "year": 1984,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 42759,
+          "title": "The Call of the Wild",
+          "year": 1972,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 39878,
+          "title": "Calamity of Snakes",
+          "year": 1982,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 289130,
+          "title": "Caligula's Slaves",
+          "year": 1984,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 159324,
+          "title": "Calendar Girl Murders",
+          "year": 1984,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 257684,
+          "title": "Calamity Jane",
+          "year": 1984,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 634710,
+          "title": "Too Hot for May",
+          "year": 1984,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 140104,
+          "title": "A Man Called Rage",
+          "year": 1984,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 368392,
+          "title": "Call to Glory",
+          "year": 1984,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 431187,
+          "title": "Curtain Call",
+          "year": 1984,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 690252,
+          "title": "Our Calling",
+          "year": 1984,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 256136,
+          "title": "An Inspector Calls",
+          "year": 1984,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 46777,
+          "title": "The So-Called Caryatids",
+          "year": 1984,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 395794,
+          "title": "The Arctic Is Calling",
+          "year": 1984,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 91673,
+          "title": "Wolf and Calf",
+          "year": 1984,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 589040,
+          "title": "A Woman Calling",
+          "year": 1984,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 623727,
+          "title": "The Migrant Birds Are Coming",
+          "year": 1984,
+          "content_type": "movie"
+        }
+      ],
+      "metrics": {
+        "tmdb_requests": 1,
+        "cache_hits": 0,
+        "exact_candidates": 1,
+        "rejected_candidates": 19
+      }
+    },
+    {
+      "record_id": 3857,
+      "provider": "hydrahd",
+      "provider_native_id": "",
+      "title": "The Lost Ones",
+      "year": 2026,
+      "content_type": "movie",
+      "evidence": [
+        "search did not produce one exact title/year/type candidate"
+      ],
+      "status": "AMBIGUOUS",
+      "tmdb_id": null,
+      "action": "DRY_RUN",
+      "candidates": [
+        {
+          "tmdb_id": 1635771,
+          "title": "The Lost Ones",
+          "year": 2026,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 1509677,
+          "title": "The Lost Ones",
+          "year": 2026,
+          "content_type": "movie"
+        }
+      ],
+      "metrics": {
+        "tmdb_requests": 1,
+        "cache_hits": 0,
+        "exact_candidates": 0,
+        "rejected_candidates": 0
+      }
+    },
+    {
+      "record_id": 3951,
+      "provider": "hydrahd",
+      "provider_native_id": "",
+      "title": "Flip or Flop",
+      "year": 2013,
+      "content_type": "series",
+      "evidence": [
+        "search did not produce one exact title/year/type candidate"
+      ],
+      "status": "AMBIGUOUS",
+      "tmdb_id": null,
+      "action": "DRY_RUN",
+      "candidates": [
+        {
+          "tmdb_id": 62618,
+          "title": "Flip or Flop",
+          "year": 2013,
+          "content_type": "series"
+        },
+        {
+          "tmdb_id": 320244,
+          "title": "Flip or Flop",
+          "year": 2013,
+          "content_type": "series"
+        }
+      ],
+      "metrics": {
+        "tmdb_requests": 1,
+        "cache_hits": 0,
+        "exact_candidates": 0,
+        "rejected_candidates": 0
+      }
+    },
+    {
+      "record_id": 4226,
+      "provider": "hydrahd",
+      "provider_native_id": "",
+      "title": "The Mole",
+      "year": 2001,
+      "content_type": "series",
+      "evidence": [
+        "search did not produce one exact title/year/type candidate"
+      ],
+      "status": "AMBIGUOUS",
+      "tmdb_id": null,
+      "action": "DRY_RUN",
+      "candidates": [
+        {
+          "tmdb_id": 7404,
+          "title": "The Mole",
+          "year": 2001,
+          "content_type": "series"
+        },
+        {
+          "tmdb_id": 28067,
+          "title": "Adrian Mole: The Cappuccino Years",
+          "year": 2001,
+          "content_type": "series"
+        },
+        {
+          "tmdb_id": 19788,
+          "title": "The Mole",
+          "year": 2001,
+          "content_type": "series"
+        },
+        {
+          "tmdb_id": 329825,
+          "title": "The Mole - O Sabotador",
+          "year": 2001,
+          "content_type": "series"
+        }
+      ],
+      "metrics": {
+        "tmdb_requests": 1,
+        "cache_hits": 0,
+        "exact_candidates": 0,
+        "rejected_candidates": 2
+      }
+    },
+    {
+      "record_id": 4457,
+      "provider": "hydrahd",
+      "provider_native_id": "",
+      "title": "The Cycle",
+      "year": 2026,
+      "content_type": "movie",
+      "evidence": [
+        "search did not produce one exact title/year/type candidate"
+      ],
+      "status": "AMBIGUOUS",
+      "tmdb_id": null,
+      "action": "DRY_RUN",
+      "candidates": [
+        {
+          "tmdb_id": 1290418,
+          "title": "The Cycle",
+          "year": 2026,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 1537518,
+          "title": "The Cycle of Love",
+          "year": 2026,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 1638424,
+          "title": "The Cycle",
+          "year": 2026,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 1748951,
+          "title": "Breaking the Cycle",
+          "year": 2026,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 1777012,
+          "title": "The Cycle of the Darkened Croach",
+          "year": 2026,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 1732808,
+          "title": "Spin Cycle: The Change We Carry",
+          "year": 2026,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 1787910,
+          "title": "The cycle of life",
+          "year": 2026,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 1646195,
+          "title": "The Cycle: Becoming a Pro Rider",
+          "year": 2026,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 1395162,
+          "title": "Life (cycle) of the Hong Kong Newt",
+          "year": 2024,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 1784104,
+          "title": "The Life Cycle of a Grey Ant",
+          "year": 2026,
+          "content_type": "movie"
+        },
+        {
+          "tmdb_id": 1678219,
+          "title": "Midori Matsumoto’s: The Life Cycle Of A Cicada",
+          "year": 2026,
+          "content_type": "movie"
+        }
+      ],
+      "metrics": {
+        "tmdb_requests": 1,
+        "cache_hits": 0,
+        "exact_candidates": 0,
+        "rejected_candidates": 9
+      }
+    },
+    {
+      "record_id": 4663,
+      "provider": "hydrahd",
+      "provider_native_id": "",
+      "title": "The Box",
+      "year": 2026,
+      "content_type": "series",
+      "evidence": [
+        "search did not produce one exact title/year/type candidate"
+      ],
+      "status": "AMBIGUOUS",
+      "tmdb_id": null,
+      "action": "DRY_RUN",
+      "candidates": [
+        {
+          "tmdb_id": 282318,
+          "title": "The Box",
+          "year": 2026,
+          "content_type": "series"
+        },
+        {
+          "tmdb_id": 10660,
+          "title": "The Box",
+          "year": 2026,
+          "content_type": "series"
+        },
+        {
+          "tmdb_id": 331448,
+          "title": "Out of the Box",
+          "year": 2026,
+          "content_type": "series"
+        },
+        {
+          "tmdb_id": 323802,
+          "title": "Love Blind Box The Hunter Becomes the Prey",
+          "year": 2026,
+          "content_type": "series"
+        },
+        {
+          "tmdb_id": 324026,
+          "title": "The Black Box: Dawood Al Shirian",
+          "year": 2026,
+          "content_type": "series"
+        }
+      ],
+      "metrics": {
+        "tmdb_requests": 1,
+        "cache_hits": 0,
+        "exact_candidates": 0,
+        "rejected_candidates": 3
+      }
+    },
+    {
+      "record_id": 4860,
+      "provider": "hydrahd",
+      "provider_native_id": "",
+      "title": "Gary Barlow's Wine Tour: South Africa",
+      "year": 2024,
+      "content_type": "series",
+      "evidence": [
+        "search did not produce one exact title/year/type candidate"
+      ],
+      "status": "UNMATCHED",
+      "tmdb_id": null,
+      "action": "DRY_RUN",
+      "candidates": [
+        {
+          "tmdb_id": 275915,
+          "title": "Gary Barlow's Wine Tour",
+          "year": 2024,
+          "content_type": "series"
+        }
+      ],
+      "metrics": {
+        "tmdb_requests": 1,
+        "cache_hits": 0,
+        "exact_candidates": 0,
+        "rejected_candidates": 1
+      }
     }
   ],
   "api_accounting": {
-    "historical_requests": 857,
-    "new_bootstrap_requests": 975,
-    "new_independent_validation_requests": 48,
-    "total_new_requests": 1023,
-    "cumulative_requests": 1880,
-    "historical_cache_hits": 849,
+    "previous_requests": 1880,
+    "new_bootstrap_requests": 489,
+    "new_independent_validation_requests": 24,
+    "total_new_requests": 513,
+    "cumulative_requests": 2393,
+    "previous_cache_hits": 849,
     "new_cache_hits": 0,
     "cumulative_cache_hits": 849,
-    "import_and_replay_requests": 0,
-    "import_and_replay_cache_hits": 0,
+    "cumulative_cache_hit_fraction_including_historical_replays": 0.2618753855644664,
+    "manifest_import_and_replay_requests": 0,
     "failed": 0,
     "retries": 0,
     "rate_limits": 0,
     "sub_batch_request_ceiling": 520,
-    "independent_validation_ceiling_per_sub_batch": 50,
-    "minimum_request_interval_seconds": 0.3,
+    "validation_request_ceiling": 50,
+    "minimum_interval_seconds": 0.3,
     "maximum_transient_retries": 2,
-    "independent_validation": "97 confirmed queries, 1 historical inconclusive excluded. Queries share the TMDb authority; no catalogue-wide false-positive estimate."
+    "independent_validation": "121 confirmed queries cumulatively; 1 historical inconclusive held. Same TMDb authority, not independent provider-detail ground truth."
   },
-  "coverage_scope": "All association/coverage figures describe reviewed proposals and isolated databases. Actual live has 5095 discoveries and zero canonical associations.",
+  "coverage_scope": "All verified counts describe isolated associations/reviewed proposals. Live retains 5095 discoveries, 3300 legacy scraped mappings, zero canonical records/mappings/offers. Only the unchanged first 387 manifest is proposed for live.",
   "live_rollout": {
     "authorized": false,
     "applied": false,
@@ -6415,14 +7443,16 @@
     "live_canonical_writes": 0,
     "live_tmdb_requests": 0,
     "required_migrations": [
-      "tracker.0054",
-      "tracker.0055",
-      "tracker.0056"
+      "availability.0016_contentmapping_match_evidence",
+      "tracker.0054_discovered_catalogue_last_seen",
+      "tracker.0055_cataloguediscoverystate_heartbeat_at_and_more",
+      "tracker.0056_movie_tmdb_content_type_identity"
     ],
     "guard": "Guarded migrations then checksum/exact-target confirmed offline import only after separate explicit live authorization",
-    "known_preexisting_live_issue": "Backend was already restarting; logs report missing tracker_cataloguediscoverystate.heartbeat_at on live head 0053. Live schema not modified. Clone guarded migrations resolve the schema prerequisite.",
+    "known_preexisting_live_issue": "Pending four migrations cause runtime migrate --check exit 1; historical provider endpoint missing heartbeat_at. Live remains unchanged and unhealthy until separately authorized migration execution.",
     "rollback": "Restore the checksummed fresh pre-rollout dump after stopping writers; rehearse restoration and compare all rows before reopening writes.",
-    "all_live_tables_unchanged": true
+    "all_live_tables_unchanged": true,
+    "procedure": "../sources/CANONICAL_LIVE_ROLLOUT.md"
   },
   "discovery_safeguards": {
     "unattended_schedules_enabled": false,
@@ -6444,49 +7474,53 @@
   "validation": {
     "focused": {
       "status": "PASS",
-      "artifact": ".catalogue-staging/canonical-rollout/focused-final.log",
-      "sha256": "0ef5cdb0e699fe73330c3e8aef161a8327a6885ace270873f031b5a5dad436d3",
-      "tests": 67
+      "artifact": ".catalogue-staging/canonical-schema/focused.log",
+      "sha256": "14e9e3eb6f59af090479f3739f4f9f288ec8166bcd84097f485fd926e770599c",
+      "tests": 75
     },
     "full_isolated_backend": {
       "status": "PASS",
-      "artifact": ".catalogue-staging/canonical-rollout/full-suite-verified.log",
-      "sha256": "55b32dbe6707c840f83af4744030d5e818f094803ceb6554c0faa8af7103086e",
-      "tests": 3334
+      "artifact": ".catalogue-staging/canonical-schema/full-suite.log",
+      "sha256": "29656d4623e0aa81c84a2e9aa7c5fe9174f4cf9a4083b32461c9d443438c4329",
+      "tests": 3342
     },
     "migration_consistency": {
       "status": "PASS",
-      "artifact": ".catalogue-staging/canonical-rollout/migration-consistency.log",
+      "artifact": ".catalogue-staging/canonical-schema/migration-consistency.log",
       "sha256": "a2bfa7b376c38062f77ce2b1e703876aaa04662f96355cdf5dc9d0d075302b05"
     },
     "system_check": {
       "status": "PASS",
-      "artifact": ".catalogue-staging/canonical-rollout/system-check.log",
+      "artifact": ".catalogue-staging/canonical-schema/system-check.log",
       "sha256": "1e3e63f221bde88816c4a4ef7367691607b20cc1d194028a02ec9ae0586cf9b1"
     },
-    "backup_clone_integration": {
+    "backup_clone_migration_import_and_rollback": {
       "status": "PASS",
-      "first_batch_checks": 14,
-      "next_batch_checks": 14,
-      "fresh_backup_restores": 3,
-      "no_cache_fixture_required_for_final_first_batch_import": true
+      "migration_integrity_checks": 15,
+      "first_manifest_integrity_checks": 15,
+      "standalone_namespace_probe_and_provider_endpoint": true,
+      "rollback_exact_restore": true,
+      "runbook_bash_syntax": "PASS (syntax only; live procedure not executed)"
     },
-    "harness": "PostgreSQL test_canonical_scale; runner uses PYTHONPATH=/app/scripts and temporary Compose test-file mounts, matching docker-compose.test.yml. Initial harness-only missing-file/import failures corrected; no tests suppressed."
+    "shared_clone_driver": {
+      "status": "PASS",
+      "checks": 14
+    },
+    "harness": "PostgreSQL test_canonical_scale; PYTHONPATH=/app/scripts, with temporary exact copies of Compose test fixtures matching docker-compose.test.yml mounts. No tests suppressed; temporary backend copies removed.",
+    "runbook_sha256": "5f99d315d6fb56e932ac09c20edd4a2f627bd512c4105673a48e4b3e8b2c1da9"
   },
   "backup": {
-    "path": "/Users/angeloandreaisola/Documents/database-backups/WhereTfDoIWatchIt/new-sources_tracker_canonical_20261117T193249Z.dump",
-    "sha256": "b1f01749b4137b82f46b57cc1f0d58ca81e47ed644c1289a988ec305c7379d24",
-    "size_bytes": 1603585,
+    "path": "/Users/angeloandreaisola/Documents/database-backups/WhereTfDoIWatchIt/new-sources_tracker_schema_20261117T200359Z.dump",
+    "sha256": "c296db28fbbebdb9e5aaffc73ea5c4f36df8e9416816e0f4783d11ba87900979",
+    "bytes": 1603585,
     "database": "tracker",
     "container": "new-sources-db-1",
     "volume": "new-sources_pgdata",
-    "writer_stopped_during_backup": true,
-    "backend_initial_state": "restarting (exit 1); restored to started state",
-    "restores_successful": 3,
-    "all_57_table_counts_and_hashes_match_source": true,
-    "source_snapshot_sha256": "a6eaaa6cb2f158051141ac7fa6c75048098c82f619e2bea78f3a6ea08039ac3f",
-    "restored_snapshot_sha256": "a6eaaa6cb2f158051141ac7fa6c75048098c82f619e2bea78f3a6ea08039ac3f",
-    "live_after_sha256": "a6eaaa6cb2f158051141ac7fa6c75048098c82f619e2bea78f3a6ea08039ac3f"
+    "clone_database": "canonical_schema_20261117",
+    "source_all_57_table_counts_and_full_row_hashes_equal_restore": true,
+    "live_no_write_operations": true,
+    "writer_state": "backend restart blocked by migrate --check; no other database sessions in read-only pg_stat_activity inspection; source row hashes stable before/after pg_dump",
+    "faithful_restores": 3
   },
   "clone_first_batch": {
     "checks": {
@@ -6503,7 +7537,8 @@
       "expected_row_inserts": true,
       "expected_source_inserts": true,
       "new_sources_disabled_identity_only": true,
-      "every_canonical_and_provider_relationship_correct": true
+      "every_canonical_and_provider_relationship_correct": true,
+      "schema_and_history_unchanged": true
     },
     "passed": true,
     "relationship_errors": [],
@@ -6519,9 +7554,9 @@
       "tracker_movie": 387,
       "tracker_scrapedcontentmapping": 3300
     },
-    "before_sha256": "47a6d3adf08ae37d4f42cfd4dfa82267fb32669653ea48d4e56d834a9288c0b6",
-    "after_sha256": "a118b4a655e78842b2e986d7d1bde12778796de166dab765f1bba67b9e9af060",
-    "replay_sha256": "a118b4a655e78842b2e986d7d1bde12778796de166dab765f1bba67b9e9af060",
+    "before_sha256": "f05b89f46187add915f7a8aadf9d4fe557c7eba4a492db3639ea351641df86b6",
+    "after_sha256": "f4ad7e8295706582833a7c8ffb099bee2a9ea321c8af74449465a6e2a62eb54c",
+    "replay_sha256": "f4ad7e8295706582833a7c8ffb099bee2a9ea321c8af74449465a6e2a62eb54c",
     "import_receipt": {
       "mode": "APPLY",
       "associations_validated": 387,
@@ -6622,5 +7657,2226 @@
       "manifest_sha256": "2496712fc69725d6b814c4c4ee516718341920485ffb8ef6846c150064de316f"
     }
   },
-  "proof_expiration_policy": "Manifest import fails closed when any embedded proof expires; no automatic refresh or retries of ambiguous records."
+  "proof_expiration_policy": "Manifest import fails closed when any embedded proof expires; no automatic refresh or retries of ambiguous records.",
+  "previous_rollout_api_accounting": {
+    "historical_requests": 857,
+    "new_bootstrap_requests": 975,
+    "new_independent_validation_requests": 48,
+    "total_new_requests": 1023,
+    "cumulative_requests": 1880,
+    "historical_cache_hits": 849,
+    "new_cache_hits": 0,
+    "cumulative_cache_hits": 849,
+    "import_and_replay_requests": 0,
+    "import_and_replay_cache_hits": 0,
+    "failed": 0,
+    "retries": 0,
+    "rate_limits": 0,
+    "sub_batch_request_ceiling": 520,
+    "independent_validation_ceiling_per_sub_batch": 50,
+    "minimum_request_interval_seconds": 0.3,
+    "maximum_transient_retries": 2,
+    "independent_validation": "97 confirmed queries, 1 historical inconclusive excluded. Queries share the TMDb authority; no catalogue-wide false-positive estimate."
+  },
+  "previous_backup": {
+    "path": "/Users/angeloandreaisola/Documents/database-backups/WhereTfDoIWatchIt/new-sources_tracker_canonical_20261117T193249Z.dump",
+    "sha256": "b1f01749b4137b82f46b57cc1f0d58ca81e47ed644c1289a988ec305c7379d24",
+    "size_bytes": 1603585,
+    "database": "tracker",
+    "container": "new-sources-db-1",
+    "volume": "new-sources_pgdata",
+    "writer_stopped_during_backup": true,
+    "backend_initial_state": "restarting (exit 1); restored to started state",
+    "restores_successful": 3,
+    "all_57_table_counts_and_hashes_match_source": true,
+    "source_snapshot_sha256": "a6eaaa6cb2f158051141ac7fa6c75048098c82f619e2bea78f3a6ea08039ac3f",
+    "restored_snapshot_sha256": "a6eaaa6cb2f158051141ac7fa6c75048098c82f619e2bea78f3a6ea08039ac3f",
+    "live_after_sha256": "a6eaaa6cb2f158051141ac7fa6c75048098c82f619e2bea78f3a6ea08039ac3f"
+  },
+  "schema_investigation": {
+    "root_cause": "Code requires pending migrations; source history and physical schema agree at tracker 0053 / availability 0015. Host-mounted runtime guard intentionally exits 1 at migrate --check. Previously served provider endpoint failed with SQLSTATE 42703 for absent heartbeat_at. No fake history or migration-implementation defect found.",
+    "live_project": "new-sources",
+    "live_container": "new-sources-db-1",
+    "live_host": "db",
+    "live_database": "tracker",
+    "live_volume": "new-sources_pgdata",
+    "backend_state": "restarting, exit 1 at read-only migration check",
+    "unapplied_plan": [
+      "availability.0016_contentmapping_match_evidence",
+      "tracker.0054_discovered_catalogue_last_seen",
+      "tracker.0055_cataloguediscoverystate_heartbeat_at_and_more",
+      "tracker.0056_movie_tmdb_content_type_identity"
+    ],
+    "live_migration_history": [
+      [
+        "admin",
+        "0001_initial"
+      ],
+      [
+        "admin",
+        "0002_logentry_remove_auto_add"
+      ],
+      [
+        "admin",
+        "0003_logentry_add_action_flag_choices"
+      ],
+      [
+        "auth",
+        "0001_initial"
+      ],
+      [
+        "auth",
+        "0002_alter_permission_name_max_length"
+      ],
+      [
+        "auth",
+        "0003_alter_user_email_max_length"
+      ],
+      [
+        "auth",
+        "0004_alter_user_username_opts"
+      ],
+      [
+        "auth",
+        "0005_alter_user_last_login_null"
+      ],
+      [
+        "auth",
+        "0006_require_contenttypes_0002"
+      ],
+      [
+        "auth",
+        "0007_alter_validators_add_error_messages"
+      ],
+      [
+        "auth",
+        "0008_alter_user_username_max_length"
+      ],
+      [
+        "auth",
+        "0009_alter_user_last_name_max_length"
+      ],
+      [
+        "auth",
+        "0010_alter_group_name_max_length"
+      ],
+      [
+        "auth",
+        "0011_update_proxy_permissions"
+      ],
+      [
+        "auth",
+        "0012_alter_user_first_name_max_length"
+      ],
+      [
+        "availability",
+        "0001_initial"
+      ],
+      [
+        "availability",
+        "0002_seed_ca_country"
+      ],
+      [
+        "availability",
+        "0003_providercontent_contentmapping_content_and_more"
+      ],
+      [
+        "availability",
+        "0004_seed_nl_country"
+      ],
+      [
+        "availability",
+        "0005_seed_phase_e_countries"
+      ],
+      [
+        "availability",
+        "0006_seed_aggregator_sources"
+      ],
+      [
+        "availability",
+        "0007_drop_incorrect_crave_mapping"
+      ],
+      [
+        "availability",
+        "0008_alter_syncrun_status"
+      ],
+      [
+        "availability",
+        "0009_offerprice"
+      ],
+      [
+        "availability",
+        "0010_offerevidence"
+      ],
+      [
+        "availability",
+        "0011_synccursor_progress_at"
+      ],
+      [
+        "availability",
+        "0012_tmdbsearchcache_providercontentcandidate"
+      ],
+      [
+        "availability",
+        "0013_harden_tmdb_search_cache"
+      ],
+      [
+        "availability",
+        "0014_wave2a_verified_mapping_acceptance"
+      ],
+      [
+        "availability",
+        "0015_availability_experiment_ledger"
+      ],
+      [
+        "contenttypes",
+        "0001_initial"
+      ],
+      [
+        "contenttypes",
+        "0002_remove_content_type_name"
+      ],
+      [
+        "sessions",
+        "0001_initial"
+      ],
+      [
+        "tracker",
+        "0001_initial"
+      ],
+      [
+        "tracker",
+        "0002_seed_empty_preference"
+      ],
+      [
+        "tracker",
+        "0003_apicallcounter"
+      ],
+      [
+        "tracker",
+        "0004_alter_apicallcounter_call_date_and_more"
+      ],
+      [
+        "tracker",
+        "0005_refreshrun"
+      ],
+      [
+        "tracker",
+        "0006_standardize_canonical_languages"
+      ],
+      [
+        "tracker",
+        "0007_provider_system"
+      ],
+      [
+        "tracker",
+        "0008_provider_domain_and_last_scraped"
+      ],
+      [
+        "tracker",
+        "0009_availability_url_movie_poster_path_and_more"
+      ],
+      [
+        "tracker",
+        "0010_preference_language_rule_and_more"
+      ],
+      [
+        "tracker",
+        "0011_availability_price_info_and_more"
+      ],
+      [
+        "tracker",
+        "0011_seed_free_streaming_providers"
+      ],
+      [
+        "tracker",
+        "0012_v2_unofficial_sources"
+      ],
+      [
+        "tracker",
+        "0013_merge_20260830_1219"
+      ],
+      [
+        "tracker",
+        "0014_move_bbc_to_free"
+      ],
+      [
+        "tracker",
+        "0015_movie_runtime_minutes_movie_tmdb_rating"
+      ],
+      [
+        "tracker",
+        "0016_movie_director"
+      ],
+      [
+        "tracker",
+        "0017_bbc_iplayer_country_code"
+      ],
+      [
+        "tracker",
+        "0018_nhk_to_free_streaming_provider"
+      ],
+      [
+        "tracker",
+        "0019_add_free_streaming_providers"
+      ],
+      [
+        "tracker",
+        "0020_provider_category_refactor"
+      ],
+      [
+        "tracker",
+        "0021_alter_movie_director"
+      ],
+      [
+        "tracker",
+        "0022_fix_legacy_scraper_providers_to_bvod"
+      ],
+      [
+        "tracker",
+        "0023_fix_watched_date"
+      ],
+      [
+        "tracker",
+        "0024_usermoviedata_watched_date"
+      ],
+      [
+        "tracker",
+        "0025_add_preference_current_country"
+      ],
+      [
+        "tracker",
+        "0026_allow_null_current_country"
+      ],
+      [
+        "tracker",
+        "0027_languageinfo_season"
+      ],
+      [
+        "tracker",
+        "0028_refreshrun_error"
+      ],
+      [
+        "tracker",
+        "0029_refreshrequest"
+      ],
+      [
+        "tracker",
+        "0030_refreshpriority_intent_hierarchy"
+      ],
+      [
+        "tracker",
+        "0031_refreshrequest_priority_remap"
+      ],
+      [
+        "tracker",
+        "0032_seed_youtube_provider"
+      ],
+      [
+        "tracker",
+        "0033_merge_duplicate_providers"
+      ],
+      [
+        "tracker",
+        "0034_refreshrequest_batch_cataloguerefreshrequest"
+      ],
+      [
+        "tracker",
+        "0035_country_aware_external_provider_mapping"
+      ],
+      [
+        "tracker",
+        "0036_availabilityrefresh_availabilityrefreshsource"
+      ],
+      [
+        "tracker",
+        "0037_refresh_request_blocked"
+      ],
+      [
+        "tracker",
+        "0038_cataloguerefreshavailabilityrefresh_and_more"
+      ],
+      [
+        "tracker",
+        "0039_refreshrun_abandoned_at"
+      ],
+      [
+        "tracker",
+        "0040_seed_rakuten_tv_provider"
+      ],
+      [
+        "tracker",
+        "0041_preference_vpn_enabled_subscription_access_mode"
+      ],
+      [
+        "tracker",
+        "0042_providercataloguepackage"
+      ],
+      [
+        "tracker",
+        "0043_apicallledger"
+      ],
+      [
+        "tracker",
+        "0044_refreshrequest_outcome"
+      ],
+      [
+        "tracker",
+        "0045_remove_refreshrequest_uniq_refreshrequest_pending_movie_source_and_more"
+      ],
+      [
+        "tracker",
+        "0046_availabilityrefresh_country"
+      ],
+      [
+        "tracker",
+        "0047_cataloguediscoverystate"
+      ],
+      [
+        "tracker",
+        "0047_preference_ranking_preferences"
+      ],
+      [
+        "tracker",
+        "0048_extensioncapability_extensionhandshakechallenge_and_more"
+      ],
+      [
+        "tracker",
+        "0049_scraped_content_type_identity"
+      ],
+      [
+        "tracker",
+        "0050_scraped_provider_native_identity"
+      ],
+      [
+        "tracker",
+        "0051_kisskh_pending_classification"
+      ],
+      [
+        "tracker",
+        "0052_discovered_catalogue_record"
+      ],
+      [
+        "tracker",
+        "0053_catalogue_url_identity_provenance"
+      ]
+    ],
+    "reproduced_read_only_errors": {
+      "provider_status": {
+        "success": false,
+        "error": "column \"heartbeat_at\" does not exist\nLINE 1: SELECT heartbeat_at FROM tracker_cataloguediscoverystate LIM...\n               ^",
+        "sqlstate": "42703"
+      },
+      "discovery_reader": {
+        "success": false,
+        "error": "column \"last_seen_at\" does not exist\nLINE 1: SELECT last_seen_at FROM tracker_discoveredcataloguerecord L...\n               ^",
+        "sqlstate": "42703"
+      },
+      "mapping_writer_metadata": {
+        "success": false,
+        "error": "column \"match_evidence\" does not exist\nLINE 1: SELECT match_evidence FROM availability_contentmapping LIMIT...\n               ^",
+        "sqlstate": "42703"
+      },
+      "bootstrap_evidence": {
+        "success": false,
+        "error": "relation \"tracker_canonicalbootstrapevidence\" does not exist\nLINE 1: SELECT id FROM tracker_canonicalbootstrapevidence LIMIT 1\n                       ^",
+        "sqlstate": "42P01"
+      }
+    },
+    "physical_before": {
+      "tracker_discoveredcataloguerecord": {
+        "columns": {
+          "id": {
+            "type_code": 20,
+            "nullable": false
+          },
+          "provider_native_id": {
+            "type_code": 1043,
+            "nullable": false
+          },
+          "title": {
+            "type_code": 1043,
+            "nullable": false
+          },
+          "source_url": {
+            "type_code": 1043,
+            "nullable": false
+          },
+          "discovered_at": {
+            "type_code": 1184,
+            "nullable": false
+          },
+          "original_metadata": {
+            "type_code": 3802,
+            "nullable": false
+          },
+          "classification_state": {
+            "type_code": 1043,
+            "nullable": false
+          },
+          "classified_content_type": {
+            "type_code": 1043,
+            "nullable": true
+          },
+          "discovery_verification_state": {
+            "type_code": 1043,
+            "nullable": false
+          },
+          "updated_at": {
+            "type_code": 1184,
+            "nullable": false
+          },
+          "provider_id": {
+            "type_code": 20,
+            "nullable": false
+          },
+          "identity_url": {
+            "type_code": 1043,
+            "nullable": false
+          },
+          "source_urls_seen": {
+            "type_code": 3802,
+            "nullable": false
+          },
+          "provenance_state": {
+            "type_code": 1043,
+            "nullable": false
+          },
+          "access_policy_state": {
+            "type_code": 1043,
+            "nullable": false
+          }
+        },
+        "constraints_and_indexes": {
+          "tracker_discoveredcataloguerecord_pkey": {
+            "columns": [
+              "id"
+            ],
+            "primary_key": true,
+            "unique": true,
+            "foreign_key": null,
+            "check": false,
+            "index": false,
+            "definition": null,
+            "options": null
+          },
+          "tracker_discoveredca_provider_id_04870624_fk_tracker_p": {
+            "columns": [
+              "provider_id"
+            ],
+            "primary_key": false,
+            "unique": false,
+            "foreign_key": [
+              "tracker_provider",
+              "id"
+            ],
+            "check": false,
+            "index": false,
+            "definition": null,
+            "options": null
+          },
+          "idx_disc_catalog_class": {
+            "columns": [
+              "provider_id",
+              "classification_state"
+            ],
+            "orders": [
+              "ASC",
+              "ASC"
+            ],
+            "primary_key": false,
+            "unique": false,
+            "foreign_key": null,
+            "check": false,
+            "index": true,
+            "type": "idx",
+            "definition": null,
+            "options": null
+          },
+          "tracker_discoveredcataloguerecord_provider_id_04870624": {
+            "columns": [
+              "provider_id"
+            ],
+            "orders": [
+              "ASC"
+            ],
+            "primary_key": false,
+            "unique": false,
+            "foreign_key": null,
+            "check": false,
+            "index": true,
+            "type": "idx",
+            "definition": null,
+            "options": null
+          },
+          "uniq_discovered_provider_identity_url": {
+            "columns": [
+              "provider_id",
+              "identity_url"
+            ],
+            "orders": [
+              "ASC",
+              "ASC"
+            ],
+            "primary_key": false,
+            "unique": true,
+            "foreign_key": null,
+            "check": false,
+            "index": true,
+            "type": "idx",
+            "definition": null,
+            "options": null
+          },
+          "uniq_discovered_provider_native_id": {
+            "columns": [
+              "provider_id",
+              "provider_native_id"
+            ],
+            "orders": [
+              "ASC",
+              "ASC"
+            ],
+            "primary_key": false,
+            "unique": true,
+            "foreign_key": null,
+            "check": false,
+            "index": true,
+            "type": "idx",
+            "definition": null,
+            "options": null
+          }
+        }
+      },
+      "tracker_cataloguediscoverystate": {
+        "columns": {
+          "id": {
+            "type_code": 20,
+            "nullable": false
+          },
+          "status": {
+            "type_code": 1043,
+            "nullable": false
+          },
+          "mode": {
+            "type_code": 1043,
+            "nullable": false
+          },
+          "cursor": {
+            "type_code": 3802,
+            "nullable": false
+          },
+          "report": {
+            "type_code": 3802,
+            "nullable": false
+          },
+          "started_at": {
+            "type_code": 1184,
+            "nullable": true
+          },
+          "last_success_at": {
+            "type_code": 1184,
+            "nullable": true
+          },
+          "last_successful_checkpoint": {
+            "type_code": 1184,
+            "nullable": true
+          },
+          "last_error": {
+            "type_code": 25,
+            "nullable": false
+          },
+          "updated_at": {
+            "type_code": 1184,
+            "nullable": false
+          },
+          "provider_id": {
+            "type_code": 20,
+            "nullable": false
+          }
+        },
+        "constraints_and_indexes": {
+          "tracker_cataloguediscoverystate_pkey": {
+            "columns": [
+              "id"
+            ],
+            "primary_key": true,
+            "unique": true,
+            "foreign_key": null,
+            "check": false,
+            "index": false,
+            "definition": null,
+            "options": null
+          },
+          "tracker_cataloguediscoverystate_provider_id_key": {
+            "columns": [
+              "provider_id"
+            ],
+            "primary_key": false,
+            "unique": true,
+            "foreign_key": null,
+            "check": false,
+            "index": false,
+            "definition": null,
+            "options": null
+          },
+          "tracker_cataloguedis_provider_id_dd4b1536_fk_tracker_p": {
+            "columns": [
+              "provider_id"
+            ],
+            "primary_key": false,
+            "unique": false,
+            "foreign_key": [
+              "tracker_provider",
+              "id"
+            ],
+            "check": false,
+            "index": false,
+            "definition": null,
+            "options": null
+          }
+        }
+      },
+      "availability_contentmapping": {
+        "columns": {
+          "id": {
+            "type_code": 20,
+            "nullable": false
+          },
+          "provider_content_id": {
+            "type_code": 1043,
+            "nullable": false
+          },
+          "content_type": {
+            "type_code": 1043,
+            "nullable": false
+          },
+          "tmdb_id": {
+            "type_code": 23,
+            "nullable": false
+          },
+          "confidence": {
+            "type_code": 701,
+            "nullable": false
+          },
+          "match_method": {
+            "type_code": 1043,
+            "nullable": false
+          },
+          "first_seen": {
+            "type_code": 1184,
+            "nullable": false
+          },
+          "last_verified": {
+            "type_code": 1184,
+            "nullable": true
+          },
+          "created_at": {
+            "type_code": 1184,
+            "nullable": false
+          },
+          "updated_at": {
+            "type_code": 1184,
+            "nullable": false
+          },
+          "provider_id": {
+            "type_code": 20,
+            "nullable": false
+          },
+          "source_id": {
+            "type_code": 20,
+            "nullable": false
+          },
+          "content_id": {
+            "type_code": 20,
+            "nullable": true
+          },
+          "revision": {
+            "type_code": 23,
+            "nullable": false
+          }
+        },
+        "constraints_and_indexes": {
+          "availability_contentmapping_pkey": {
+            "columns": [
+              "id"
+            ],
+            "primary_key": true,
+            "unique": true,
+            "foreign_key": null,
+            "check": false,
+            "index": false,
+            "definition": null,
+            "options": null
+          },
+          "uniq_contentmapping_provider_content": {
+            "columns": [
+              "provider_id",
+              "provider_content_id"
+            ],
+            "primary_key": false,
+            "unique": true,
+            "foreign_key": null,
+            "check": false,
+            "index": false,
+            "definition": null,
+            "options": null
+          },
+          "availability_content_provider_id_c6d888ef_fk_tracker_p": {
+            "columns": [
+              "provider_id"
+            ],
+            "primary_key": false,
+            "unique": false,
+            "foreign_key": [
+              "tracker_provider",
+              "id"
+            ],
+            "check": false,
+            "index": false,
+            "definition": null,
+            "options": null
+          },
+          "availability_content_source_id_27dae8d8_fk_availabil": {
+            "columns": [
+              "source_id"
+            ],
+            "primary_key": false,
+            "unique": false,
+            "foreign_key": [
+              "availability_source",
+              "id"
+            ],
+            "check": false,
+            "index": false,
+            "definition": null,
+            "options": null
+          },
+          "availability_content_content_id_333ef526_fk_availabil": {
+            "columns": [
+              "content_id"
+            ],
+            "primary_key": false,
+            "unique": false,
+            "foreign_key": [
+              "availability_providercontent",
+              "id"
+            ],
+            "check": false,
+            "index": false,
+            "definition": null,
+            "options": null
+          },
+          "availability_contentmapping_revision_check": {
+            "columns": [
+              "revision"
+            ],
+            "primary_key": false,
+            "unique": false,
+            "foreign_key": null,
+            "check": true,
+            "index": false,
+            "definition": null,
+            "options": null
+          },
+          "availability_contentmapping_content_id_333ef526": {
+            "columns": [
+              "content_id"
+            ],
+            "orders": [
+              "ASC"
+            ],
+            "primary_key": false,
+            "unique": false,
+            "foreign_key": null,
+            "check": false,
+            "index": true,
+            "type": "idx",
+            "definition": null,
+            "options": null
+          },
+          "availability_contentmapping_provider_id_c6d888ef": {
+            "columns": [
+              "provider_id"
+            ],
+            "orders": [
+              "ASC"
+            ],
+            "primary_key": false,
+            "unique": false,
+            "foreign_key": null,
+            "check": false,
+            "index": true,
+            "type": "idx",
+            "definition": null,
+            "options": null
+          },
+          "availability_contentmapping_source_id_27dae8d8": {
+            "columns": [
+              "source_id"
+            ],
+            "orders": [
+              "ASC"
+            ],
+            "primary_key": false,
+            "unique": false,
+            "foreign_key": null,
+            "check": false,
+            "index": true,
+            "type": "idx",
+            "definition": null,
+            "options": null
+          }
+        }
+      },
+      "tracker_movie": {
+        "columns": {
+          "id": {
+            "type_code": 20,
+            "nullable": false
+          },
+          "tmdb_id": {
+            "type_code": 23,
+            "nullable": false
+          },
+          "title": {
+            "type_code": 1043,
+            "nullable": false
+          },
+          "year": {
+            "type_code": 23,
+            "nullable": true
+          },
+          "poster_path": {
+            "type_code": 1043,
+            "nullable": false
+          },
+          "cast": {
+            "type_code": 3802,
+            "nullable": false
+          },
+          "content_type": {
+            "type_code": 1043,
+            "nullable": false
+          },
+          "genre_ids": {
+            "type_code": 3802,
+            "nullable": false
+          },
+          "genres": {
+            "type_code": 3802,
+            "nullable": false
+          },
+          "overview": {
+            "type_code": 25,
+            "nullable": false
+          },
+          "seasons_data": {
+            "type_code": 3802,
+            "nullable": false
+          },
+          "runtime_minutes": {
+            "type_code": 23,
+            "nullable": true
+          },
+          "tmdb_rating": {
+            "type_code": 701,
+            "nullable": true
+          },
+          "director": {
+            "type_code": 3802,
+            "nullable": false
+          }
+        },
+        "constraints_and_indexes": {
+          "tracker_movie_pkey": {
+            "columns": [
+              "id"
+            ],
+            "primary_key": true,
+            "unique": true,
+            "foreign_key": null,
+            "check": false,
+            "index": false,
+            "definition": null,
+            "options": null
+          },
+          "tracker_movie_tmdb_id_key": {
+            "columns": [
+              "tmdb_id"
+            ],
+            "primary_key": false,
+            "unique": true,
+            "foreign_key": null,
+            "check": false,
+            "index": false,
+            "definition": null,
+            "options": null
+          },
+          "tracker_movie_content_type_3a19e45e": {
+            "columns": [
+              "content_type"
+            ],
+            "orders": [
+              "ASC"
+            ],
+            "primary_key": false,
+            "unique": false,
+            "foreign_key": null,
+            "check": false,
+            "index": true,
+            "type": "idx",
+            "definition": null,
+            "options": null
+          },
+          "tracker_movie_content_type_3a19e45e_like": {
+            "columns": [
+              "content_type"
+            ],
+            "orders": [
+              "ASC"
+            ],
+            "primary_key": false,
+            "unique": false,
+            "foreign_key": null,
+            "check": false,
+            "index": true,
+            "type": "idx",
+            "definition": null,
+            "options": null
+          }
+        }
+      },
+      "tracker_canonicalbootstrapevidence": null
+    },
+    "physical_after": {
+      "tracker_discoveredcataloguerecord": {
+        "columns": {
+          "id": {
+            "type_code": 20,
+            "nullable": false
+          },
+          "provider_native_id": {
+            "type_code": 1043,
+            "nullable": false
+          },
+          "title": {
+            "type_code": 1043,
+            "nullable": false
+          },
+          "source_url": {
+            "type_code": 1043,
+            "nullable": false
+          },
+          "discovered_at": {
+            "type_code": 1184,
+            "nullable": false
+          },
+          "original_metadata": {
+            "type_code": 3802,
+            "nullable": false
+          },
+          "classification_state": {
+            "type_code": 1043,
+            "nullable": false
+          },
+          "classified_content_type": {
+            "type_code": 1043,
+            "nullable": true
+          },
+          "discovery_verification_state": {
+            "type_code": 1043,
+            "nullable": false
+          },
+          "updated_at": {
+            "type_code": 1184,
+            "nullable": false
+          },
+          "provider_id": {
+            "type_code": 20,
+            "nullable": false
+          },
+          "identity_url": {
+            "type_code": 1043,
+            "nullable": false
+          },
+          "source_urls_seen": {
+            "type_code": 3802,
+            "nullable": false
+          },
+          "provenance_state": {
+            "type_code": 1043,
+            "nullable": false
+          },
+          "access_policy_state": {
+            "type_code": 1043,
+            "nullable": false
+          },
+          "last_seen_at": {
+            "type_code": 1184,
+            "nullable": false
+          }
+        },
+        "constraints_and_indexes": {
+          "tracker_discoveredcataloguerecord_pkey": {
+            "columns": [
+              "id"
+            ],
+            "primary_key": true,
+            "unique": true,
+            "foreign_key": null,
+            "check": false,
+            "index": false,
+            "definition": null,
+            "options": null
+          },
+          "tracker_discoveredca_provider_id_04870624_fk_tracker_p": {
+            "columns": [
+              "provider_id"
+            ],
+            "primary_key": false,
+            "unique": false,
+            "foreign_key": [
+              "tracker_provider",
+              "id"
+            ],
+            "check": false,
+            "index": false,
+            "definition": null,
+            "options": null
+          },
+          "idx_disc_catalog_class": {
+            "columns": [
+              "provider_id",
+              "classification_state"
+            ],
+            "orders": [
+              "ASC",
+              "ASC"
+            ],
+            "primary_key": false,
+            "unique": false,
+            "foreign_key": null,
+            "check": false,
+            "index": true,
+            "type": "idx",
+            "definition": null,
+            "options": null
+          },
+          "tracker_discoveredcataloguerecord_last_seen_at_b3bc6274": {
+            "columns": [
+              "last_seen_at"
+            ],
+            "orders": [
+              "ASC"
+            ],
+            "primary_key": false,
+            "unique": false,
+            "foreign_key": null,
+            "check": false,
+            "index": true,
+            "type": "idx",
+            "definition": null,
+            "options": null
+          },
+          "tracker_discoveredcataloguerecord_provider_id_04870624": {
+            "columns": [
+              "provider_id"
+            ],
+            "orders": [
+              "ASC"
+            ],
+            "primary_key": false,
+            "unique": false,
+            "foreign_key": null,
+            "check": false,
+            "index": true,
+            "type": "idx",
+            "definition": null,
+            "options": null
+          },
+          "uniq_discovered_provider_identity_url": {
+            "columns": [
+              "provider_id",
+              "identity_url"
+            ],
+            "orders": [
+              "ASC",
+              "ASC"
+            ],
+            "primary_key": false,
+            "unique": true,
+            "foreign_key": null,
+            "check": false,
+            "index": true,
+            "type": "idx",
+            "definition": null,
+            "options": null
+          },
+          "uniq_discovered_provider_native_id": {
+            "columns": [
+              "provider_id",
+              "provider_native_id"
+            ],
+            "orders": [
+              "ASC",
+              "ASC"
+            ],
+            "primary_key": false,
+            "unique": true,
+            "foreign_key": null,
+            "check": false,
+            "index": true,
+            "type": "idx",
+            "definition": null,
+            "options": null
+          }
+        }
+      },
+      "tracker_cataloguediscoverystate": {
+        "columns": {
+          "id": {
+            "type_code": 20,
+            "nullable": false
+          },
+          "status": {
+            "type_code": 1043,
+            "nullable": false
+          },
+          "mode": {
+            "type_code": 1043,
+            "nullable": false
+          },
+          "cursor": {
+            "type_code": 3802,
+            "nullable": false
+          },
+          "report": {
+            "type_code": 3802,
+            "nullable": false
+          },
+          "started_at": {
+            "type_code": 1184,
+            "nullable": true
+          },
+          "last_success_at": {
+            "type_code": 1184,
+            "nullable": true
+          },
+          "last_successful_checkpoint": {
+            "type_code": 1184,
+            "nullable": true
+          },
+          "last_error": {
+            "type_code": 25,
+            "nullable": false
+          },
+          "updated_at": {
+            "type_code": 1184,
+            "nullable": false
+          },
+          "provider_id": {
+            "type_code": 20,
+            "nullable": false
+          },
+          "heartbeat_at": {
+            "type_code": 1184,
+            "nullable": true
+          },
+          "lease_expires_at": {
+            "type_code": 1184,
+            "nullable": true
+          },
+          "lease_owner": {
+            "type_code": 1043,
+            "nullable": false
+          }
+        },
+        "constraints_and_indexes": {
+          "tracker_cataloguediscoverystate_pkey": {
+            "columns": [
+              "id"
+            ],
+            "primary_key": true,
+            "unique": true,
+            "foreign_key": null,
+            "check": false,
+            "index": false,
+            "definition": null,
+            "options": null
+          },
+          "tracker_cataloguediscoverystate_provider_id_key": {
+            "columns": [
+              "provider_id"
+            ],
+            "primary_key": false,
+            "unique": true,
+            "foreign_key": null,
+            "check": false,
+            "index": false,
+            "definition": null,
+            "options": null
+          },
+          "tracker_cataloguedis_provider_id_dd4b1536_fk_tracker_p": {
+            "columns": [
+              "provider_id"
+            ],
+            "primary_key": false,
+            "unique": false,
+            "foreign_key": [
+              "tracker_provider",
+              "id"
+            ],
+            "check": false,
+            "index": false,
+            "definition": null,
+            "options": null
+          }
+        }
+      },
+      "availability_contentmapping": {
+        "columns": {
+          "id": {
+            "type_code": 20,
+            "nullable": false
+          },
+          "provider_content_id": {
+            "type_code": 1043,
+            "nullable": false
+          },
+          "content_type": {
+            "type_code": 1043,
+            "nullable": false
+          },
+          "tmdb_id": {
+            "type_code": 23,
+            "nullable": false
+          },
+          "confidence": {
+            "type_code": 701,
+            "nullable": false
+          },
+          "match_method": {
+            "type_code": 1043,
+            "nullable": false
+          },
+          "first_seen": {
+            "type_code": 1184,
+            "nullable": false
+          },
+          "last_verified": {
+            "type_code": 1184,
+            "nullable": true
+          },
+          "created_at": {
+            "type_code": 1184,
+            "nullable": false
+          },
+          "updated_at": {
+            "type_code": 1184,
+            "nullable": false
+          },
+          "provider_id": {
+            "type_code": 20,
+            "nullable": false
+          },
+          "source_id": {
+            "type_code": 20,
+            "nullable": false
+          },
+          "content_id": {
+            "type_code": 20,
+            "nullable": true
+          },
+          "revision": {
+            "type_code": 23,
+            "nullable": false
+          },
+          "match_evidence": {
+            "type_code": 3802,
+            "nullable": false
+          }
+        },
+        "constraints_and_indexes": {
+          "availability_contentmapping_revision_check": {
+            "columns": [
+              "revision"
+            ],
+            "primary_key": false,
+            "unique": false,
+            "foreign_key": null,
+            "check": true,
+            "index": false,
+            "definition": null,
+            "options": null
+          },
+          "availability_contentmapping_pkey": {
+            "columns": [
+              "id"
+            ],
+            "primary_key": true,
+            "unique": true,
+            "foreign_key": null,
+            "check": false,
+            "index": false,
+            "definition": null,
+            "options": null
+          },
+          "uniq_contentmapping_provider_content": {
+            "columns": [
+              "provider_id",
+              "provider_content_id"
+            ],
+            "primary_key": false,
+            "unique": true,
+            "foreign_key": null,
+            "check": false,
+            "index": false,
+            "definition": null,
+            "options": null
+          },
+          "availability_content_content_id_333ef526_fk_availabil": {
+            "columns": [
+              "content_id"
+            ],
+            "primary_key": false,
+            "unique": false,
+            "foreign_key": [
+              "availability_providercontent",
+              "id"
+            ],
+            "check": false,
+            "index": false,
+            "definition": null,
+            "options": null
+          },
+          "availability_content_provider_id_c6d888ef_fk_tracker_p": {
+            "columns": [
+              "provider_id"
+            ],
+            "primary_key": false,
+            "unique": false,
+            "foreign_key": [
+              "tracker_provider",
+              "id"
+            ],
+            "check": false,
+            "index": false,
+            "definition": null,
+            "options": null
+          },
+          "availability_content_source_id_27dae8d8_fk_availabil": {
+            "columns": [
+              "source_id"
+            ],
+            "primary_key": false,
+            "unique": false,
+            "foreign_key": [
+              "availability_source",
+              "id"
+            ],
+            "check": false,
+            "index": false,
+            "definition": null,
+            "options": null
+          },
+          "availability_contentmapping_content_id_333ef526": {
+            "columns": [
+              "content_id"
+            ],
+            "orders": [
+              "ASC"
+            ],
+            "primary_key": false,
+            "unique": false,
+            "foreign_key": null,
+            "check": false,
+            "index": true,
+            "type": "idx",
+            "definition": null,
+            "options": null
+          },
+          "availability_contentmapping_provider_id_c6d888ef": {
+            "columns": [
+              "provider_id"
+            ],
+            "orders": [
+              "ASC"
+            ],
+            "primary_key": false,
+            "unique": false,
+            "foreign_key": null,
+            "check": false,
+            "index": true,
+            "type": "idx",
+            "definition": null,
+            "options": null
+          },
+          "availability_contentmapping_source_id_27dae8d8": {
+            "columns": [
+              "source_id"
+            ],
+            "orders": [
+              "ASC"
+            ],
+            "primary_key": false,
+            "unique": false,
+            "foreign_key": null,
+            "check": false,
+            "index": true,
+            "type": "idx",
+            "definition": null,
+            "options": null
+          }
+        }
+      },
+      "tracker_movie": {
+        "columns": {
+          "id": {
+            "type_code": 20,
+            "nullable": false
+          },
+          "tmdb_id": {
+            "type_code": 23,
+            "nullable": false
+          },
+          "title": {
+            "type_code": 1043,
+            "nullable": false
+          },
+          "year": {
+            "type_code": 23,
+            "nullable": true
+          },
+          "poster_path": {
+            "type_code": 1043,
+            "nullable": false
+          },
+          "cast": {
+            "type_code": 3802,
+            "nullable": false
+          },
+          "content_type": {
+            "type_code": 1043,
+            "nullable": false
+          },
+          "genre_ids": {
+            "type_code": 3802,
+            "nullable": false
+          },
+          "genres": {
+            "type_code": 3802,
+            "nullable": false
+          },
+          "overview": {
+            "type_code": 25,
+            "nullable": false
+          },
+          "seasons_data": {
+            "type_code": 3802,
+            "nullable": false
+          },
+          "runtime_minutes": {
+            "type_code": 23,
+            "nullable": true
+          },
+          "tmdb_rating": {
+            "type_code": 701,
+            "nullable": true
+          },
+          "director": {
+            "type_code": 3802,
+            "nullable": false
+          }
+        },
+        "constraints_and_indexes": {
+          "tracker_movie_pkey": {
+            "columns": [
+              "id"
+            ],
+            "primary_key": true,
+            "unique": true,
+            "foreign_key": null,
+            "check": false,
+            "index": false,
+            "definition": null,
+            "options": null
+          },
+          "uniq_movie_tmdb_content_type": {
+            "columns": [
+              "tmdb_id",
+              "content_type"
+            ],
+            "primary_key": false,
+            "unique": true,
+            "foreign_key": null,
+            "check": false,
+            "index": false,
+            "definition": null,
+            "options": null
+          },
+          "tracker_movie_content_type_3a19e45e": {
+            "columns": [
+              "content_type"
+            ],
+            "orders": [
+              "ASC"
+            ],
+            "primary_key": false,
+            "unique": false,
+            "foreign_key": null,
+            "check": false,
+            "index": true,
+            "type": "idx",
+            "definition": null,
+            "options": null
+          },
+          "tracker_movie_content_type_3a19e45e_like": {
+            "columns": [
+              "content_type"
+            ],
+            "orders": [
+              "ASC"
+            ],
+            "primary_key": false,
+            "unique": false,
+            "foreign_key": null,
+            "check": false,
+            "index": true,
+            "type": "idx",
+            "definition": null,
+            "options": null
+          },
+          "tracker_movie_tmdb_id_529cf00c": {
+            "columns": [
+              "tmdb_id"
+            ],
+            "orders": [
+              "ASC"
+            ],
+            "primary_key": false,
+            "unique": false,
+            "foreign_key": null,
+            "check": false,
+            "index": true,
+            "type": "idx",
+            "definition": null,
+            "options": null
+          }
+        }
+      },
+      "tracker_canonicalbootstrapevidence": {
+        "columns": {
+          "id": {
+            "type_code": 20,
+            "nullable": false
+          },
+          "source_kind": {
+            "type_code": 1043,
+            "nullable": false
+          },
+          "verification_method": {
+            "type_code": 1043,
+            "nullable": false
+          },
+          "evidence": {
+            "type_code": 3802,
+            "nullable": false
+          },
+          "verified_at": {
+            "type_code": 1184,
+            "nullable": false
+          },
+          "discovered_record_id": {
+            "type_code": 20,
+            "nullable": false
+          },
+          "movie_id": {
+            "type_code": 20,
+            "nullable": false
+          }
+        },
+        "constraints_and_indexes": {
+          "tracker_canonicalbootstrapevidence_pkey": {
+            "columns": [
+              "id"
+            ],
+            "primary_key": true,
+            "unique": true,
+            "foreign_key": null,
+            "check": false,
+            "index": false,
+            "definition": null,
+            "options": null
+          },
+          "tracker_canonicalbootstrapevidence_discovered_record_id_key": {
+            "columns": [
+              "discovered_record_id"
+            ],
+            "primary_key": false,
+            "unique": true,
+            "foreign_key": null,
+            "check": false,
+            "index": false,
+            "definition": null,
+            "options": null
+          },
+          "tracker_canonicalboo_discovered_record_id_c7211603_fk_tracker_d": {
+            "columns": [
+              "discovered_record_id"
+            ],
+            "primary_key": false,
+            "unique": false,
+            "foreign_key": [
+              "tracker_discoveredcataloguerecord",
+              "id"
+            ],
+            "check": false,
+            "index": false,
+            "definition": null,
+            "options": null
+          },
+          "tracker_canonicalboo_movie_id_c7fb31f6_fk_tracker_m": {
+            "columns": [
+              "movie_id"
+            ],
+            "primary_key": false,
+            "unique": false,
+            "foreign_key": [
+              "tracker_movie",
+              "id"
+            ],
+            "check": false,
+            "index": false,
+            "definition": null,
+            "options": null
+          },
+          "idx_bootstrap_movie_verified": {
+            "columns": [
+              "movie_id",
+              "verified_at"
+            ],
+            "orders": [
+              "ASC",
+              "ASC"
+            ],
+            "primary_key": false,
+            "unique": false,
+            "foreign_key": null,
+            "check": false,
+            "index": true,
+            "type": "idx",
+            "definition": null,
+            "options": null
+          },
+          "tracker_canonicalbootstrapevidence_movie_id_c7fb31f6": {
+            "columns": [
+              "movie_id"
+            ],
+            "orders": [
+              "ASC"
+            ],
+            "primary_key": false,
+            "unique": false,
+            "foreign_key": null,
+            "check": false,
+            "index": true,
+            "type": "idx",
+            "definition": null,
+            "options": null
+          }
+        }
+      }
+    },
+    "history_and_physical_restore_exactly_match_source": true,
+    "migration_verification": {
+      "passed": true,
+      "checks": {
+        "exactly_expected_table_added": true,
+        "all_unrelated_rows_and_hashes_unchanged": true,
+        "existing_data_table_counts_unchanged": true,
+        "all_old_column_values_unchanged": true,
+        "last_seen_backfill_matches_original_timestamps": true,
+        "exactly_four_expected_migrations_added": true,
+        "new_evidence_table_empty": true,
+        "discoveries_5095_preserved": true,
+        "legacy_3300_preserved": true,
+        "providers_and_checkpoints_preserved": true,
+        "offers_remain_zero": true,
+        "schema_ready": true,
+        "existing_framework_rows_preserved": true,
+        "exact_expected_content_type_added": true,
+        "exact_four_expected_permissions_added": true
+      },
+      "expected_framework_additions": {
+        "django_content_type": [
+          {
+            "id": 66,
+            "model": "canonicalbootstrapevidence",
+            "app_label": "tracker"
+          }
+        ],
+        "auth_permission": [
+          {
+            "id": 228,
+            "name": "Can add canonical bootstrap evidence",
+            "codename": "add_canonicalbootstrapevidence",
+            "content_type_id": 66
+          },
+          {
+            "id": 229,
+            "name": "Can change canonical bootstrap evidence",
+            "codename": "change_canonicalbootstrapevidence",
+            "content_type_id": 66
+          },
+          {
+            "id": 230,
+            "name": "Can delete canonical bootstrap evidence",
+            "codename": "delete_canonicalbootstrapevidence",
+            "content_type_id": 66
+          },
+          {
+            "id": 231,
+            "name": "Can view canonical bootstrap evidence",
+            "codename": "view_canonicalbootstrapevidence",
+            "content_type_id": 66
+          }
+        ]
+      }
+    },
+    "constraint_and_endpoint_probe": {
+      "movie_and_tv_numeric_id_coexist": true,
+      "same_namespace_duplicate_rejected": true,
+      "all_probes_rolled_back": true,
+      "providers_endpoint_status": 200,
+      "provider_count": 50
+    },
+    "guard_configuration": {
+      "runtime_entrypoint": "host-mounted /runtime-guard-entrypoint.sh: migrate --check, collectstatic, exec",
+      "migration_service": "ops profile; guarded_migrate expected database, host and exact target confirmation",
+      "dev_backend": "bind-mounted checked-out backend source; guard blocks startup while four migrations pending"
+    },
+    "required_correction": "After separate authorization, execute the guarded all-app migration plan including availability.0016, not tracker 0056 alone. Then separately authorized exact 387 manifest import/replay.",
+    "live_modified": false,
+    "final_live_verification": {
+      "passed": true,
+      "checks": {
+        "all_rows_schema_history_unchanged": true
+      }
+    }
+  },
+  "rollback_rehearsal": {
+    "passed": true,
+    "host": "canonical-schema-rollback-db (isolated, no published ports)",
+    "before_state": "original tracker 0053 and availability 0015 backup",
+    "after_mutation": "all four migrations and exact 387 imports",
+    "restoration": "pg_restore --clean --if-exists --create --exit-on-error --no-owner --no-privileges -d postgres; replaces archive database tracker",
+    "verified": "all row hashes, original history and inspected physical schema exactly restored; no object-level table drops to force migration",
+    "live_rollback_executed": false,
+    "disposable_container_removed_after_success": true
+  },
+  "batch5": {
+    "newly_evaluated": 250,
+    "bootstrap_tmdb_requests": 489,
+    "bootstrap_cache_hits": 0,
+    "exact_candidates": 240,
+    "verified_associations": 239,
+    "rejected_candidates": 104,
+    "ambiguous_candidates": 9,
+    "unmatched_records": 2,
+    "conflicting_records": 0,
+    "held_from_rollout": 0,
+    "unique_canonical_titles": 239,
+    "matching_yield": 0.956,
+    "previously_evaluated": 1000,
+    "tmdb_requests": 513,
+    "cache_hits": 0,
+    "independent_validation_results": {
+      "sampled": 24,
+      "confirmed": 24,
+      "inconclusive": 0
+    },
+    "remaining_unevaluated_inventory": 3845,
+    "remaining_unassociated_inventory": 3994,
+    "by_provider_and_content_type": [
+      {
+        "provider": "hydrahd",
+        "content_type": "movie",
+        "newly_evaluated": 150,
+        "bootstrap_tmdb_requests": 295,
+        "bootstrap_cache_hits": 0,
+        "exact_candidates": 146,
+        "verified_associations": 145,
+        "rejected_candidates": 89,
+        "ambiguous_candidates": 5,
+        "unmatched_records": 0,
+        "conflicting_records": 0,
+        "held_from_rollout": 0,
+        "unique_canonical_titles": 145,
+        "matching_yield": 0.9666666666666667
+      },
+      {
+        "provider": "hydrahd",
+        "content_type": "series",
+        "newly_evaluated": 100,
+        "bootstrap_tmdb_requests": 194,
+        "bootstrap_cache_hits": 0,
+        "exact_candidates": 94,
+        "verified_associations": 94,
+        "rejected_candidates": 15,
+        "ambiguous_candidates": 4,
+        "unmatched_records": 2,
+        "conflicting_records": 0,
+        "held_from_rollout": 0,
+        "unique_canonical_titles": 94,
+        "matching_yield": 0.94
+      }
+    ],
+    "batch": 5,
+    "record_ids": [
+      90,
+      100,
+      117,
+      177,
+      197,
+      207,
+      230,
+      251,
+      280,
+      296,
+      309,
+      349,
+      392,
+      402,
+      409,
+      453,
+      460,
+      465,
+      472,
+      476,
+      494,
+      539,
+      559,
+      581,
+      645,
+      650,
+      654,
+      661,
+      715,
+      737,
+      748,
+      818,
+      875,
+      896,
+      900,
+      906,
+      954,
+      959,
+      992,
+      998,
+      1043,
+      1052,
+      1061,
+      1100,
+      1105,
+      1123,
+      1124,
+      1174,
+      1177,
+      1182,
+      1192,
+      1201,
+      1220,
+      1227,
+      1263,
+      1276,
+      1358,
+      1363,
+      1393,
+      1408,
+      1409,
+      1421,
+      1426,
+      1428,
+      1454,
+      1502,
+      1522,
+      1549,
+      1556,
+      1599,
+      1622,
+      1629,
+      1630,
+      1638,
+      1650,
+      1675,
+      1694,
+      1712,
+      1757,
+      1760,
+      1772,
+      1789,
+      1842,
+      1852,
+      1859,
+      1862,
+      1898,
+      1936,
+      2018,
+      2027,
+      2054,
+      2061,
+      2071,
+      2078,
+      2081,
+      2094,
+      2109,
+      2180,
+      2227,
+      2253,
+      2255,
+      2260,
+      2283,
+      2293,
+      2296,
+      2348,
+      2351,
+      2361,
+      2392,
+      2394,
+      2408,
+      2411,
+      2439,
+      2456,
+      2477,
+      2495,
+      2500,
+      2502,
+      2510,
+      2583,
+      2605,
+      2689,
+      2690,
+      2733,
+      2744,
+      2784,
+      2807,
+      2809,
+      2820,
+      2822,
+      2836,
+      2862,
+      2869,
+      2899,
+      2900,
+      2917,
+      2927,
+      2946,
+      2953,
+      2963,
+      2964,
+      3003,
+      3010,
+      3017,
+      3028,
+      3029,
+      3042,
+      3167,
+      3175,
+      3190,
+      3274,
+      3278,
+      3309,
+      3310,
+      3313,
+      3318,
+      3339,
+      3343,
+      3364,
+      3380,
+      3384,
+      3404,
+      3416,
+      3419,
+      3428,
+      3438,
+      3452,
+      3498,
+      3500,
+      3510,
+      3612,
+      3613,
+      3617,
+      3629,
+      3635,
+      3679,
+      3703,
+      3704,
+      3739,
+      3774,
+      3800,
+      3802,
+      3811,
+      3841,
+      3842,
+      3857,
+      3888,
+      3897,
+      3924,
+      3951,
+      3995,
+      4018,
+      4019,
+      4023,
+      4034,
+      4043,
+      4053,
+      4078,
+      4090,
+      4166,
+      4193,
+      4210,
+      4226,
+      4227,
+      4246,
+      4255,
+      4292,
+      4299,
+      4333,
+      4340,
+      4346,
+      4403,
+      4424,
+      4455,
+      4457,
+      4476,
+      4507,
+      4512,
+      4528,
+      4529,
+      4555,
+      4574,
+      4584,
+      4611,
+      4636,
+      4640,
+      4657,
+      4663,
+      4683,
+      4708,
+      4716,
+      4739,
+      4758,
+      4763,
+      4778,
+      4785,
+      4813,
+      4817,
+      4829,
+      4830,
+      4854,
+      4859,
+      4860,
+      4894,
+      4915,
+      4942,
+      4987,
+      5017,
+      5039,
+      5054
+    ],
+    "bootstrap_budget": {
+      "limit": 520,
+      "attempted": 489,
+      "remaining": 31,
+      "succeeded": 489,
+      "failed": 0,
+      "retried": 0,
+      "cache_hits": 0
+    },
+    "validation_budget": {
+      "limit": 50,
+      "attempted": 24,
+      "remaining": 26,
+      "succeeded": 24,
+      "failed": 0,
+      "retried": 0,
+      "cache_hits": 0
+    },
+    "request_scope": "new proposal + independent validation; offline imports/replays cost zero requests/cache writes",
+    "evidence_audit": {
+      "audited": 239,
+      "retained_evidence_valid": 239,
+      "included": 239,
+      "excluded": [],
+      "sha256": "01b687fcaf52001b0eb6f70cae901f0c3451a90a22029398db0ffeea74e1c209"
+    },
+    "clone_integrity": {
+      "checks": {
+        "all_discovery_identities_preserved": true,
+        "all_other_tables_unchanged": true,
+        "legacy_3300_rows_unchanged": true,
+        "provider_settings_unchanged": true,
+        "checkpoints_unchanged": true,
+        "pending_records_preserved_in_full": true,
+        "all_existing_provider_content_preserved": true,
+        "existing_source_settings_preserved": true,
+        "no_offers": true,
+        "replay_every_table_and_timestamp_unchanged": true,
+        "expected_row_inserts": true,
+        "expected_source_inserts": true,
+        "new_sources_disabled_identity_only": true,
+        "every_canonical_and_provider_relationship_correct": true,
+        "schema_and_history_unchanged": true
+      },
+      "passed": true,
+      "relationship_errors": [],
+      "associations_checked": 239,
+      "unselected_records_checked": 4856,
+      "counts": {
+        "availability_contentmapping": 1101,
+        "availability_offer": 0,
+        "availability_providercontent": 1101,
+        "availability_source": 3,
+        "tracker_canonicalbootstrapevidence": 1101,
+        "tracker_discoveredcataloguerecord": 5095,
+        "tracker_movie": 1101,
+        "tracker_scrapedcontentmapping": 3300
+      },
+      "before_sha256": "c2d6b17208964d28559ca757ee2fb3d521a18e074b007aed421b72d127712234",
+      "after_sha256": "ef81ef53fa7052a67a9af23da165006ac15fd25d1fd9b6a56810b65711c132ba",
+      "replay_sha256": "ef81ef53fa7052a67a9af23da165006ac15fd25d1fd9b6a56810b65711c132ba"
+    },
+    "isolated_manifest": {
+      "path": "canonical_batch5_20261117.manifest.json",
+      "sha256": "01b687fcaf52001b0eb6f70cae901f0c3451a90a22029398db0ffeea74e1c209",
+      "not_in_first_live_batch": true
+    }
+  },
+  "rollout_authorization_operations": [
+    {
+      "id": "W0",
+      "operation": "maintenance stop/resume existing writers",
+      "executed_on_live": false
+    },
+    {
+      "id": "M1",
+      "operation": "four guarded migrations",
+      "executed_on_live": false
+    },
+    {
+      "id": "C1",
+      "operation": "exact first 387 manifest import",
+      "executed_on_live": false
+    },
+    {
+      "id": "C2",
+      "operation": "idempotent replay",
+      "executed_on_live": false
+    },
+    {
+      "id": "R1",
+      "operation": "destructive database restore from verified backup if rollback explicitly authorized",
+      "executed_on_live": false
+    }
+  ]
 }

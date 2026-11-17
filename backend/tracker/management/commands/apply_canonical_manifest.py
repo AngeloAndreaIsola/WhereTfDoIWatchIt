@@ -7,6 +7,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import connection
 
 from tracker.services.canonical_rollout import apply_manifest
+from tracker.services.canonical_integrity import schema_status
 
 
 class Command(BaseCommand):
@@ -33,6 +34,11 @@ class Command(BaseCommand):
                 cursor.execute('SELECT current_database()')
                 if cursor.fetchone()[0] != name:
                     raise CommandError('Connected database differs from expected target')
+        if connection.vendor == 'postgresql':
+            schema = schema_status(connection)
+            if not schema['ready']:
+                raise CommandError('Schema not ready; separately authorize guarded migrations: '
+                                   + '; '.join(schema['missing_requirements']))
         try:
             result = apply_manifest(json.loads(payload), apply=options['apply'])
         except (KeyError, TypeError, ValueError) as exc:
