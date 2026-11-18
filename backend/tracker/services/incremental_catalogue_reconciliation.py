@@ -25,6 +25,7 @@ from tracker.models import (
     DiscoveredCatalogueRecord, Movie, Provider,
 )
 from tracker.services.bulk_refresh import try_source_lock, release_source_lock
+from tracker.services.canonical_association_validation import canonical_association_conflict
 from tracker.services.canonical_verification import CanonicalVerifier, evidence_agrees
 from tracker.services.catalogue_reconciliation import (
     _apply_classification, _extract_year, _normal_title, _provider_content_id,
@@ -119,6 +120,16 @@ def _assert_owner(run_id, owner):
     return run
 
 
+def _validate_association(record, media, year, result, *, lock=False):
+    if result["status"] != "VERIFIED":
+        return
+    conflict = canonical_association_conflict(record, media, year, result["tmdb_id"], lock=lock)
+    if conflict:
+        result.pop("verified_details", None)
+        result.update(status="CONFLICTING", association_conflict=True,
+                      action=conflict["action"], evidence=result["evidence"] + conflict["evidence"])
+
+
 def _commit_record(record, result, *, run_id, owner, verifier, totals):
     """Evidence, association, outcome and successful cursor commit together."""
     with transaction.atomic():
@@ -127,14 +138,8 @@ def _commit_record(record, result, *, run_id, owner, verifier, totals):
         if fingerprint_v1(locked) != fingerprint_v1(record):
             raise CommandError("Discovery changed during verification; retry current metadata")
         media, year = _type_evidence(record)[0], _extract_year(record)[0]
-        mapping = ContentMapping.objects.select_for_update().filter(
-            provider_id=record.provider_id, provider_content_id=_provider_content_id(record),
-        ).first() if result["status"] == "VERIFIED" else None
-        if mapping and (mapping.tmdb_id != result["tmdb_id"] or mapping.content_type != media):
-            result.pop("verified_details", None)
-            result.update(status="CONFLICTING", action="existing_canonical_mapping_conflict",
-                          evidence=["existing canonical mapping preserved; candidate requires operator review"])
-        elif result["status"] == "VERIFIED":
+        _validate_association(locked, media, year, result, lock=True)
+        if result["status"] == "VERIFIED":
             details = result.pop("verified_details", None)
             if details is not None:
                 verifier.persist_verified(record, media, year, details,
@@ -155,6 +160,7 @@ def _commit_record(record, result, *, run_id, owner, verifier, totals):
                 raise CommandError("Existing canonical mapping changed during verification")
             result["status"] = "ASSOCIATED"
         elif (media and record.title.strip() and result["status"] not in {"BLOCKED", "ERROR"}
+              and not result.get("association_conflict")
               and result.get("action") != "existing_canonical_mapping_conflict"):
             _apply_classification(record, media, year, {"status": "UNMATCHED"})
         previous = CatalogueReconciliationRecord.objects.filter(discovered_record=record).first()
@@ -274,6 +280,7 @@ def run_incremental_reconciliation(provider_slug, *, limit=25, request_budget=50
                             "apply": False, "allow_network": allow_network,
                             "return_details": True, "cached_candidates": cached,
                         }, totals, result)
+                _validate_association(record, media, year, result)
                 result["tmdb_requests"] = budget.attempted - before
                 if apply:
                     _commit_record(record, result, run_id=run.pk, owner=owner, verifier=verifier, totals=totals)
