@@ -1,0 +1,52 @@
+{
+  "enabled": false,
+  "providers": {
+    "hydrahd": {
+      "enabled": false,
+      "historical": {
+        "enabled": false,
+        "interval_seconds": 86400,
+        "request_budget": 1,
+        "delay_seconds": 2,
+        "retry_limit": 0
+      },
+      "incremental": {
+        "enabled": false,
+        "interval_seconds": 86400,
+        "request_budget": 2,
+        "overlap_pages": 1,
+        "delay_seconds": 2,
+        "retry_limit": 0
+      },
+      "reconciliation": {
+        "enabled": false,
+        "interval_seconds": 86400,
+        "record_limit": 5,
+        "request_budget": 10,
+        "delay_seconds": 2,
+        "retry_limit": 0,
+        "allow_network": false
+      }
+    },
+    "animeworld": {
+      "enabled": false,
+      "incremental": {
+        "enabled": false,
+        "interval_seconds": 86400,
+        "request_budget": 1,
+        "overlap_pages": 1,
+        "delay_seconds": 2,
+        "retry_limit": 0
+      },
+      "reconciliation": {
+        "enabled": false,
+        "interval_seconds": 86400,
+        "record_limit": 5,
+        "request_budget": 10,
+        "delay_seconds": 2,
+        "retry_limit": 0,
+        "allow_network": false
+      }
+    }
+  }
+}

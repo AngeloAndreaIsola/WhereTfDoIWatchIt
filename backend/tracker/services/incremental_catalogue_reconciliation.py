@@ -127,7 +127,14 @@ def _commit_record(record, result, *, run_id, owner, verifier, totals):
         if fingerprint_v1(locked) != fingerprint_v1(record):
             raise CommandError("Discovery changed during verification; retry current metadata")
         media, year = _type_evidence(record)[0], _extract_year(record)[0]
-        if result["status"] == "VERIFIED":
+        mapping = ContentMapping.objects.select_for_update().filter(
+            provider_id=record.provider_id, provider_content_id=_provider_content_id(record),
+        ).first() if result["status"] == "VERIFIED" else None
+        if mapping and (mapping.tmdb_id != result["tmdb_id"] or mapping.content_type != media):
+            result.pop("verified_details", None)
+            result.update(status="CONFLICTING", action="existing_canonical_mapping_conflict",
+                          evidence=["existing canonical mapping preserved; candidate requires operator review"])
+        elif result["status"] == "VERIFIED":
             details = result.pop("verified_details", None)
             if details is not None:
                 verifier.persist_verified(record, media, year, details,
@@ -142,8 +149,13 @@ def _commit_record(record, result, *, run_id, owner, verifier, totals):
                                 "title": proof.movie.title, "year": year, "content_type": media}],
             })
             result["action"] = action
-            result["status"] = "CONFLICTING" if action == "existing_canonical_mapping_conflict" else "ASSOCIATED"
-        elif media and record.title.strip() and result["status"] not in {"BLOCKED", "ERROR"}:
+            if action == "existing_canonical_mapping_conflict":
+                # A mapping inserted by another writer after our initial read
+                # must roll back candidate identity/proof creation as well.
+                raise CommandError("Existing canonical mapping changed during verification")
+            result["status"] = "ASSOCIATED"
+        elif (media and record.title.strip() and result["status"] not in {"BLOCKED", "ERROR"}
+              and result.get("action") != "existing_canonical_mapping_conflict"):
             _apply_classification(record, media, year, {"status": "UNMATCHED"})
         previous = CatalogueReconciliationRecord.objects.filter(discovered_record=record).first()
         attempts = (previous.attempts if previous else 0) + 1
@@ -177,7 +189,8 @@ def run_incremental_reconciliation(provider_slug, *, limit=25, request_budget=50
     provider = Provider.objects.get(slug=provider_slug)
     lock = f"unofficial-canonical:{provider_slug}"
     if not try_source_lock(lock):
-        return {"provider": provider_slug, "status": "LOCKED", "records": [], "offers_created": 0}
+        return {"provider": provider_slug, "status": "LOCKED", "records": [], "offers_created": 0,
+                "tmdb_budget": budget.to_dict()}
     run, owner = None, uuid.uuid4().hex
     report = {"provider": provider_slug, "status": "COMPLETED", "mode": "APPLY" if apply else "DRY_RUN",
               "records": [], "offers_created": 0}
@@ -187,13 +200,26 @@ def run_incremental_reconciliation(provider_slug, *, limit=25, request_budget=50
             with transaction.atomic():
                 run, _ = CatalogueReconciliationRun.objects.select_for_update().get_or_create(provider=provider)
                 if run.lease_owner and run.lease_expires_at and run.lease_expires_at > now:
-                    return {**report, "status": "LOCKED"}
+                    report["status"] = "LOCKED"
+                    return report
                 if run.cooldown_until and run.cooldown_until > now:
-                    return {**report, "status": "COOLDOWN", "cooldown_until": run.cooldown_until.isoformat()}
+                    report.update(status="COOLDOWN", cooldown_until=run.cooldown_until.isoformat())
+                    return report
                 report["recovered_expired_lease"] = bool(run.lease_owner)
                 run.lease_owner, run.started_at, run.status = owner, now, "RUNNING"
                 run.lease_expires_at = now + timedelta(seconds=LEASE_SECONDS)
                 run.save()
+        else:
+            # A preview can still spend HTTP requests. Respect durable guards
+            # without creating or updating progress, leases or cache rows.
+            persisted = CatalogueReconciliationRun.objects.filter(provider=provider).first()
+            if persisted:
+                if persisted.lease_owner and persisted.lease_expires_at and persisted.lease_expires_at > now:
+                    report["status"] = "LOCKED"
+                    return report
+                if persisted.cooldown_until and persisted.cooldown_until > now:
+                    report.update(status="COOLDOWN", cooldown_until=persisted.cooldown_until.isoformat())
+                    return report
         # Freeze a bounded selection. Progress is per observation, never a
         # high-water ID that would strand older rows after their metadata edit.
         from itertools import islice

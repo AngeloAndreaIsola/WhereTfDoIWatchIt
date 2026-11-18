@@ -128,6 +128,18 @@ outcomes, request/cache counters, restrictions, errors and lease recovery.
 provider/mode switches below are deliberately disabled; this is a template,
 not an enabled deployment configuration.
 
+The [conservative canary template](INCREMENTAL_RECONCILIATION_CANARY.json) also
+keeps every switch and network access disabled. It proposes at most five
+reconciliation records / ten HTTP attempts, two-second spacing, no retries,
+and daily intervals. Discovery budgets are one historical page or two
+incremental requests for HydraHD, and one permitted RSS request for AnimeWorld.
+AnimeWorld historical archive discovery is not configured. A future authorized
+canary should run one provider once with explicit record IDs, inspect its
+associations, request counters and zero-offer result, then obtain authorization
+before enabling any recurring mode. This template is not loaded automatically.
+Schedule enable flags require JSON `true`; quoted boolean strings never enable
+a mode, and `allow_network` must be a JSON boolean.
+
 ```json
 {
   "enabled": false,
@@ -168,7 +180,20 @@ there is no historical archive collector or new provider-domain fallback.
 ## Disposable-clone rehearsal
 
 Restore a current `pg_dump` into a separately named PostgreSQL container/database.
-Set the runner's Django environment to that clone, apply migrations there, then:
+Before applying migrations to that restored clone, verify migration compatibility:
+
+```sh
+python scripts/validate_incremental_migrations.py \
+  --database incremental_catalogue --host YOUR_CLONE_HOST \
+  --output /evidence/clone-migrations.json
+```
+
+This guarded rehearsal applies, reverses and reapplies `0057`/`0058`, verifies
+all original application-table hashes and the deferred baseline, and leaves the
+clone migrated. It requires the restored `0056`/`0016` baseline and the audited
+completed inventory. All commands here must use the clone's environment.
+
+With the runner configured for the migrated clone, run:
 
 ```sh
 python scripts/validate_incremental_catalogue.py \

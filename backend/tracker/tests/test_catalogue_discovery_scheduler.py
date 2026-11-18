@@ -26,6 +26,24 @@ class CatalogueDiscoverySchedulerTests(TestCase):
         self.assertEqual(result, {"status": "DISABLED", "runs": [], "skipped": []})
         run.assert_not_called()
 
+    def test_string_false_cannot_enable_schedules_or_network(self):
+        module = "tracker.services.catalogue_discovery_scheduler"
+        config = {"enabled": "false", "providers": {"hydrahd": {"enabled": True,
+            "reconciliation": {"enabled": True}}}}
+        with patch(f"{module}.run_incremental_reconciliation") as reconcile:
+            self.assertEqual(process_due_discovery_schedules(config=config)["status"], "DISABLED")
+            config["enabled"] = True
+            config["providers"]["hydrahd"]["enabled"] = "false"
+            self.assertEqual(process_due_discovery_schedules(config=config)["runs"], [])
+            config["providers"]["hydrahd"]["enabled"] = True
+            config["providers"]["hydrahd"]["reconciliation"]["enabled"] = "false"
+            self.assertEqual(process_due_discovery_schedules(config=config)["runs"], [])
+            config["providers"]["hydrahd"]["reconciliation"].update(enabled=True, allow_network="false")
+            result = process_due_discovery_schedules(config=config)
+            self.assertEqual(result["runs"], [])
+            self.assertIn("allow_network", result["skipped"][0]["reason"])
+        reconcile.assert_not_called()
+
     def test_modes_have_independent_due_times_budgets_and_enable_switches(self):
         now = timezone.now()
         CatalogueDiscoveryState.objects.create(

@@ -34,7 +34,7 @@ def main():
     from availability.tests.test_candidate_gateway import FakeResponse
     from tracker.models import (
         CanonicalBootstrapEvidence, CatalogueDiscoveryState, CatalogueReconciliationRecord,
-        CatalogueReconciliationRun, DiscoveredCatalogueRecord, Provider, ScrapedContentMapping,
+        CatalogueReconciliationRun, DiscoveredCatalogueRecord, Movie, Provider, ScrapedContentMapping,
     )
     from tracker.scrapers.adapters import AnimeWorldScraper
     from tracker.scrapers.base import ScrapedItem
@@ -119,6 +119,25 @@ def main():
         rss.refresh_from_db()
         assert rss.classified_content_type == "series"
         report["scenarios"]["rss_missing_year"] = {"guid_stable": True, "classified_as": "series", "state": "UNMATCHED", "tmdb_requests": 0}
+
+        rss.original_metadata["year"] = 2020
+        rss.save()
+        # Deliberately share a numeric TMDb ID with the new movie. TV and movie
+        # details, caches and canonical identities must remain separate.
+        shared_id = 1999999001
+        tv_responses = [FakeResponse(200, {"results": [{"id": shared_id, "name": rss.title,
+                            "first_air_date": "2020-01-01"}]}),
+                        FakeResponse(200, {"id": shared_id, "name": rss.title,
+                            "first_air_date": "2020-01-01"})]
+        with patch("requests.Session.get", side_effect=tv_responses) as http:
+            rss_verified = job("animeworld", allow_network=True, request_budget=2)
+        assert rss_verified["records"][0]["status"] == "ASSOCIATED" and http.call_count == 2
+        assert ContentMapping.objects.get(provider=anime, provider_content_id=rss.provider_native_id).content_type == "series"
+        assert set(Movie.objects.filter(tmdb_id=shared_id).values_list("content_type", flat=True)) == {"movie", "series"}
+        assert job("animeworld")["selected"] == 0
+        report["scenarios"]["rss_verified_and_media_identity_separation"] = {
+            "state": "ASSOCIATED", "tmdb_requests": 2, "replay_selected": 0,
+            "shared_numeric_id_distinct_movie_and_series": True}
 
         mapping = list(ContentMapping.objects.filter(provider_content_id=record.provider_native_id).values())
         proof = list(CanonicalBootstrapEvidence.objects.filter(discovered_record=record).values())
@@ -221,6 +240,8 @@ def main():
         with patch("requests.Session.get", return_value=FakeResponse(429, headers={"Retry-After": "900"})) as http:
             rate = job(record_ids=[limited.pk], allow_network=True, request_budget=2)
         assert rate["status"] == "BLOCKED" and http.call_count == 1 and job()["status"] == "COOLDOWN"
+        preview = run_incremental_reconciliation("hydrahd", allow_network=True)
+        assert preview["status"] == "COOLDOWN" and preview["tmdb_budget"]["attempted"] == 0
         report["scenarios"]["rate_limit"] = {"requests": 1, "persisted_cooldown": True}
         assert Offer.objects.count() == 0
         report["offers_created"] = 0

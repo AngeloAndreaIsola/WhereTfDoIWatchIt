@@ -1,0 +1,157 @@
+{
+  "verdict": "INCREMENTAL_RECONCILIATION_READY_TO_MERGE",
+  "feature_branch": "feature/incremental-catalogue-reconciliation",
+  "reviewed_feature_commit": "ac30782f7f3c8483d54338f8471d62ecaa188a62",
+  "target_branch": "new-sources",
+  "target_commit": "a7ce47f5a15107ea8df1c39c740e8699f0f6cd68",
+  "integration_conflicts": false,
+  "original_audits_present_in_feature_commit": true,
+  "findings_fixed": [
+    "network previews bypassed persistent cooldowns and leases",
+    "mapping conflicts left contradictory candidate identity/proof",
+    "quoted false enabled scheduler switches/network via truthiness",
+    "lock/cooldown returns omitted request accounting"
+  ],
+  "regression_tests_added": 5,
+  "tests": {
+    "focused_postgresql": {
+      "status": "PASSED",
+      "count": 160,
+      "seconds": 4.971
+    },
+    "complete_isolated_backend": {
+      "status": "PASSED",
+      "count": 3382,
+      "seconds": 113.57
+    },
+    "makemigrations_check": "PASSED",
+    "migrate_check": "PASSED",
+    "django_system_check": "PASSED",
+    "compose_config": "PASSED",
+    "diff_check": "PASSED"
+  },
+  "migration_rehearsal": {
+    "status": "PASSED",
+    "database": "incremental_review",
+    "restored_migration_leaves": {
+      "tracker": "0056_movie_tmdb_content_type_identity",
+      "availability": "0016_contentmapping_match_evidence"
+    },
+    "migration_plan": [
+      [
+        "tracker",
+        "0057_incremental_catalogue_reconciliation",
+        false
+      ],
+      [
+        "tracker",
+        "0058_baseline_completed_catalogue",
+        false
+      ]
+    ],
+    "original_application_tables_preserved": 48,
+    "migrated_application_tables": 50,
+    "baseline": {
+      "BASELINED": 326,
+      "ASSOCIATED": 4769
+    },
+    "baseline_attempts": 0,
+    "eligible_now_and_in_ten_years": 0,
+    "reverse_and_reapply": "PASSED",
+    "offers_created": 0
+  },
+  "integration_rehearsal": {
+    "database": "incremental_review",
+    "http": "fixture interception only",
+    "scenarios": {
+      "new_hydra_and_replay": {
+        "discovery_requests": 1,
+        "tmdb_requests": 2,
+        "associations_added": 1,
+        "replay_selected": 0
+      },
+      "rss_missing_year": {
+        "guid_stable": true,
+        "classified_as": "series",
+        "state": "UNMATCHED",
+        "tmdb_requests": 0
+      },
+      "rss_verified_and_media_identity_separation": {
+        "state": "ASSOCIATED",
+        "tmdb_requests": 2,
+        "replay_selected": 0,
+        "shared_numeric_id_distinct_movie_and_series": true
+      },
+      "metadata_change": {
+        "state": "CONFLICTING",
+        "old_mapping_preserved": true,
+        "old_proof_preserved": true
+      },
+      "interruption_and_expired_lease": {
+        "first_commit_retained": true,
+        "only_remaining_record_resumed": true
+      },
+      "concurrent_jobs": {
+        "second_postgres_connection": "LOCKED"
+      },
+      "budget_and_cache_recovery": {
+        "first_requests": 1,
+        "resume_requests": 1,
+        "state": "ASSOCIATED"
+      },
+      "expired_evidence": {
+        "state": "CACHE_MISS",
+        "stale_proof_not_applied": true
+      },
+      "unresolved_candidates": {
+        "state": "AMBIGUOUS",
+        "immediate_retry_selected": 0
+      },
+      "atomic_commit_failure": {
+        "partial_evidence_and_outcome_rolled_back": true,
+        "cached_resume": "ASSOCIATED"
+      },
+      "rate_limit": {
+        "requests": 1,
+        "persisted_cooldown": true
+      }
+    },
+    "historical_checkpoint": {
+      "movies": 132,
+      "tv-shows": 77
+    },
+    "baseline": {
+      "discoveries": 5095,
+      "associations": 4769,
+      "unresolved_deferred": 326,
+      "legacy_mappings": 3300,
+      "offers": 0,
+      "eligible": 0
+    },
+    "offers_created": 0,
+    "rollback_preserved_all_application_tables": true,
+    "tables_verified": 50,
+    "status": "PASSED"
+  },
+  "live_preservation": {
+    "postgresql_enforced_read_only": true,
+    "application_tables_equal_to_restored_baseline": 48,
+    "migration_leaves": {
+      "availability": "0016_contentmapping_match_evidence",
+      "tracker": "0056_movie_tmdb_content_type_identity"
+    }
+  },
+  "scheduling": {
+    "three_modes_independent": true,
+    "all_disabled_by_default": true,
+    "unattended_execution_enabled": false,
+    "canary_template": "docs/sources/INCREMENTAL_RECONCILIATION_CANARY.json",
+    "canary_validation": "VALID_DISABLED",
+    "canary_provider_modes": 5
+  },
+  "bulk_reconciliation_repeated": false,
+  "live_writes_migrations_crawls_or_schedule_changes": false,
+  "merged_or_pushed": false,
+  "remaining_blockers": [],
+  "deployment_requires_separate_authorization": true
+}

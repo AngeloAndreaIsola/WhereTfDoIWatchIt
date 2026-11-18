@@ -74,7 +74,7 @@ def _validated_mode_config(provider_slug, mode, value):
     if not 1 <= overlap_pages <= 10:
         raise ValueError("scheduled overlap_pages must be between 1 and 10")
     result = {
-        "enabled": bool(value.get("enabled", False)),
+        "enabled": value.get("enabled", False) is True,
         "interval_seconds": interval,
         "request_budget": request_budget,
         "delay_seconds": delay,
@@ -85,7 +85,10 @@ def _validated_mode_config(provider_slug, mode, value):
         limit = int(value.get("record_limit", 25))
         if not 1 <= limit <= 250:
             raise ValueError("scheduled record_limit must be between 1 and 250")
-        result.update(record_limit=limit, allow_network=bool(value.get("allow_network", False)))
+        allow_network = value.get("allow_network", False)
+        if not isinstance(allow_network, bool):
+            raise ValueError("scheduled allow_network must be a JSON boolean")
+        result.update(record_limit=limit, allow_network=allow_network)
     return result
 
 
@@ -93,7 +96,7 @@ def process_due_discovery_schedules(*, config=None, now=None):
     """Run only enabled, due provider/mode schedules; each failure is isolated."""
     config = _schedule_config(config)
     now = now or django_timezone.now()
-    if not config.get("enabled", False):
+    if config.get("enabled", False) is not True:
         return {"status": "DISABLED", "runs": [], "skipped": []}
     providers = config.get("providers", {})
     if not isinstance(providers, dict):
@@ -101,7 +104,7 @@ def process_due_discovery_schedules(*, config=None, now=None):
 
     result = {"status": "ENABLED", "runs": [], "skipped": []}
     for provider_slug, provider_config in providers.items():
-        if not isinstance(provider_config, dict) or not provider_config.get("enabled", False):
+        if not isinstance(provider_config, dict) or provider_config.get("enabled", False) is not True:
             continue
         if provider_slug not in SCHEDULED_DISCOVERY_PROVIDERS:
             result["skipped"].append({"provider": provider_slug, "reason": "provider_not_schedule_eligible"})

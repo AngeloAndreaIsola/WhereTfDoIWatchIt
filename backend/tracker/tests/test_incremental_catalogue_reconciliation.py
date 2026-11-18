@@ -235,9 +235,66 @@ class IncrementalReconciliationTests(TestCase):
         self.assertEqual(request.call_count, 1)
         self.assertEqual(report["status"], "BLOCKED")
         self.assertEqual(second["status"], "COOLDOWN")
+        self.assertEqual(second["tmdb_budget"]["attempted"], 0)
         self.assertGreater(CatalogueReconciliationRun.objects.get().cooldown_until, timezone.now() + timedelta(minutes=14))
         self.assertEqual(CatalogueReconciliationRecord.objects.count(), 1)
         self.assertFalse(TmdbSearchCache.objects.exists())
+
+    def test_network_preview_respects_persisted_cooldown_without_mutation(self):
+        self.discovery()
+        CatalogueReconciliationRun.objects.create(
+            provider=self.provider, cooldown_until=timezone.now() + timedelta(minutes=15))
+        before = list(CatalogueReconciliationRun.objects.values())
+        with patch("requests.Session.get", side_effect=AssertionError("cooldown must cover previews")) as http:
+            report = run_incremental_reconciliation("hydrahd", allow_network=True)
+        self.assertEqual(report["status"], "COOLDOWN")
+        self.assertEqual(report["tmdb_budget"]["attempted"], 0)
+        http.assert_not_called()
+        self.assertEqual(list(CatalogueReconciliationRun.objects.values()), before)
+        self.assertFalse(CatalogueReconciliationRecord.objects.exists())
+
+    def test_conflicting_operator_mapping_cannot_leave_new_canonical_proof(self):
+        record = self.discovery()
+        self.cache(record)
+        self.run_job()
+        # An operator has corrected the mapping, independently of bootstrap proof.
+        ContentMapping.objects.update(tmdb_id=992)
+        CanonicalBootstrapEvidence.objects.all().delete()
+        Movie.objects.all().delete()
+        mapping_before = list(ContentMapping.objects.values())
+        content_before = list(ProviderContent.objects.values())
+        report = self.run_job(review=True, record_ids=[record.pk])
+        self.assertEqual(report["records"][0]["status"], "CONFLICTING")
+        self.assertFalse(CanonicalBootstrapEvidence.objects.exists())
+        self.assertFalse(Movie.objects.exists())
+        self.assertEqual(list(ContentMapping.objects.values()), mapping_before)
+        self.assertEqual(list(ProviderContent.objects.values()), content_before)
+        self.assertEqual(self.run_job()["selected"], 0)
+
+    def test_expired_owner_cannot_commit_or_advance_checkpoint(self):
+        record = self.discovery()
+        self.cache(record)
+        from tracker.services.incremental_catalogue_reconciliation import _commit_record
+        def expire(*args, **kwargs):
+            CatalogueReconciliationRun.objects.update(lease_expires_at=timezone.now() - timedelta(seconds=1))
+            return _commit_record(*args, **kwargs)
+        with patch(f"{MODULE}._commit_record", side_effect=expire), self.assertRaises(RuntimeError):
+            self.run_job()
+        self.assertFalse(CanonicalBootstrapEvidence.objects.exists())
+        self.assertFalse(ContentMapping.objects.exists())
+        self.assertFalse(CatalogueReconciliationRecord.objects.exists())
+        self.assertIsNone(CatalogueReconciliationRun.objects.get().last_completed_record_id)
+
+    def test_mapping_conflict_after_verification_rolls_back_candidate_proof(self):
+        record = self.discovery()
+        self.cache(record)
+        with patch(f"{MODULE}._apply_classification", return_value="existing_canonical_mapping_conflict") as classify:
+            report = self.run_job()
+        self.assertEqual(report["records"][0]["status"], "CONFLICTING")
+        classify.assert_called_once()
+        self.assertFalse(CanonicalBootstrapEvidence.objects.exists())
+        self.assertFalse(Movie.objects.exists())
+        self.assertEqual(CatalogueReconciliationRecord.objects.get().status, "CONFLICTING")
 
     def test_transport_errors_have_backoff_and_are_not_negative_cached(self):
         self.discovery()
@@ -286,7 +343,9 @@ class IncrementalReconciliationTests(TestCase):
         self.discovery(year=None)
         run = CatalogueReconciliationRun.objects.create(provider=self.provider, status="RUNNING", lease_owner="other",
             lease_expires_at=timezone.now() + timedelta(minutes=5))
-        self.assertEqual(self.run_job()["status"], "LOCKED")
+        locked = self.run_job()
+        self.assertEqual(locked["status"], "LOCKED")
+        self.assertEqual(locked["tmdb_budget"]["attempted"], 0)
         run.refresh_from_db()
         self.assertEqual(run.lease_owner, "other")
         run.lease_expires_at = timezone.now() - timedelta(seconds=1)
@@ -475,6 +534,7 @@ class IncrementalConcurrencyTests(TransactionTestCase):
             with ThreadPoolExecutor(max_workers=1) as pool:
                 result = pool.submit(competing_job).result(timeout=10)
             self.assertEqual(result["status"], "LOCKED")
+            self.assertEqual(result["tmdb_budget"]["attempted"], 0)
             self.assertFalse(CatalogueReconciliationRun.objects.exists())
         finally:
             release_source_lock(key)
