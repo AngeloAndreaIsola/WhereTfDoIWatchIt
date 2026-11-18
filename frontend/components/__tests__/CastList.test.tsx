@@ -50,6 +50,41 @@ describe("CastList", () => {
     expect(screen.queryByText(/Actor 12/)).not.toBeInTheDocument();
   });
 
+  it("expands and collapses via keyboard (Tab + Enter)", async () => {
+    const user = userEvent.setup();
+    render(<CastList cast={makeCast(10)} />);
+
+    const toggle = screen.getByRole("button", { name: /show all cast/i });
+    while (document.activeElement !== toggle) await user.tab();
+    expect(toggle).toHaveFocus();
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    await user.keyboard("{Enter}");
+    expect(screen.getAllByRole("link")).toHaveLength(10);
+    expect(screen.getByRole("button", { name: /show less/i })).toHaveAttribute(
+      "aria-expanded",
+      "true"
+    );
+
+    await user.keyboard("{Enter}");
+    expect(screen.getAllByRole("link")).toHaveLength(8);
+    expect(screen.getByRole("button", { name: /show all cast/i })).toHaveAttribute(
+      "aria-expanded",
+      "false"
+    );
+  });
+
+  it("renders duplicate person ids without key collisions", () => {
+    const cast = [
+      member(42, "Actor One", "Role A"),
+      member(42, "Actor One", "Role B"),
+    ];
+    render(<CastList cast={cast} />);
+    expect(screen.getAllByRole("link")).toHaveLength(2);
+    expect(screen.getByText("Actor One as Role A")).toBeInTheDocument();
+    expect(screen.getByText("Actor One as Role B")).toBeInTheDocument();
+  });
+
   it("links cast members to their TMDb person page with accessible names", () => {
     render(<CastList cast={[member(42, "Ada Lovelace", "Analyst")]} />);
     const link = screen.getByRole("link", { name: /ada lovelace/i });

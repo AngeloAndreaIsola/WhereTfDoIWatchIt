@@ -37,9 +37,11 @@ export default function CastList({ cast }: CastListProps) {
           const label = personLabel(person);
           const badgeClass =
             "rounded-full bg-blue-50 px-2.5 py-0.5 text-xs text-blue-700 dark:bg-blue-900/30 dark:text-blue-300";
+          // TMDb can repeat a person id across roles; index keeps keys unique.
+          const key = `${person.id}-${index}`;
           return hasUsableId(person) ? (
             <a
-              key={person.id}
+              key={key}
               href={`https://www.themoviedb.org/person/${person.id}`}
               target="_blank"
               rel="noopener noreferrer"
@@ -49,7 +51,7 @@ export default function CastList({ cast }: CastListProps) {
               {label}
             </a>
           ) : (
-            <span key={`no-id-${index}`} className={badgeClass}>
+            <span key={key} className={badgeClass}>
               {label}
             </span>
           );
