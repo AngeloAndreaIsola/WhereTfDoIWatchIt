@@ -69,7 +69,7 @@ class CatalogueDiscoverySchedulerTests(TestCase):
         self.assertEqual(len(result["runs"]), 1)
         run.assert_called_once_with(
             "hydrahd", mode="incremental", request_budget=7, delay=1.0,
-            retry_limit=1, overlap_pages=2,
+            retry_limit=1, overlap_pages=2, max_pages=1, max_redirects=3,
         )
         self.assertEqual(result["skipped"], [{"provider": "hydrahd", "mode": "historical", "reason": "interval_not_elapsed"}])
 

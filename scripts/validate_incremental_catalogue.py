@@ -38,6 +38,7 @@ def main():
     )
     from tracker.scrapers.adapters import AnimeWorldScraper
     from tracker.scrapers.base import ScrapedItem
+    from tracker.tests.discovery_fixtures import fixture_permission, FakeClock
     from tracker.services.bulk_refresh import try_source_lock, release_source_lock
     from tracker.services.catalogue_discovery import _persist_unclassified_observation, run_discovery
     from tracker.services.incremental_catalogue_reconciliation import (
@@ -91,7 +92,11 @@ def main():
             scraper.session.get("https://fixture.invalid/listing")
             return [item], True, 1, "rehearsal_terminal"
         with patch("tracker.services.catalogue_discovery._parts", return_value=["movies"]), patch(
-                "tracker.services.catalogue_discovery._page", side_effect=page), patch("requests.Session.get", return_value=FakeResponse()):
+                "tracker.services.catalogue_discovery._page", side_effect=page), patch(
+                "tracker.services.catalogue_discovery.permission_for", side_effect=fixture_permission), patch(
+                "tracker.services.discovery_http.public_addresses", return_value=["93.184.216.34"]), patch(
+                "tracker.services.discovery_http.SystemClock", side_effect=FakeClock), patch(
+                "tracker.services.discovery_http.DiscoveryHTTP._send", return_value=FakeResponse()):
             discovery = run_discovery("hydrahd", mode="incremental", request_budget=1, delay=0)
         record = DiscoveredCatalogueRecord.objects.get(provider=hydra, title=title)
         assert list(eligible_records("hydrahd"))[0][0].pk == record.pk

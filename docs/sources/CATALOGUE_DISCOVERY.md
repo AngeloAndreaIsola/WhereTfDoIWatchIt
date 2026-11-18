@@ -1,5 +1,11 @@
 # Unofficial catalogue discovery operations
 
+Current safety policy (2026-11-18): the historical observations below do not
+establish automation permission. Unverified providers, including HydraHD and
+AnimeWorld RSS, now fail permission preflight before DNS/HTTP or run writes.
+See [request controls](DISCOVERY_REQUEST_CONTROLS.md) and the
+[source permission audit](HYDRAHD_PERMISSION_AUDIT.md). All schedules remain disabled.
+
 The command `discover_unofficial_catalogue` now persists raw listing observations
 in `DiscoveredCatalogueRecord`. These records remain pending classification and
 do not create canonical mappings, TMDb associations, or playback offers. Migration

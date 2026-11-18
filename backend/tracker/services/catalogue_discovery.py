@@ -34,6 +34,8 @@ from tracker.services.scraped_mapping import persist_scraped_item, provider_cont
 from tracker.services.bulk_refresh import try_source_lock, release_source_lock
 from tracker.services.catalogue_identity import normalize_catalogue_url
 from tracker.services.catalogue_reconciliation_inputs import MEANINGFUL_KEYS_V1
+from tracker.services.discovery_http import DiscoveryHTTP, RequestBudgetReached as _RequestBudgetReached
+from tracker.services.discovery_policy import DiscoveryPolicyError, permission_for
 
 
 PROVIDERS = {"animeworld", "kisskh", "hydrahd", "cineblog01", "streamingcommunity", "altadefinizione"}
@@ -47,10 +49,6 @@ SCHEDULED_DISCOVERY_PROVIDERS = {"hydrahd", "animeworld"}
 DEFAULT_INCREMENTAL_OVERLAP_PAGES = 3
 MAX_INLINE_RETRY_AFTER_SECONDS = 30.0
 DISCOVERY_LEASE_SECONDS = int(os.environ.get("UNOFFICIAL_CATALOGUE_LEASE_SECONDS", "3600"))
-
-
-class _RequestBudgetReached(BaseException):
-    pass
 
 
 class _HttpFailure(Exception):
@@ -372,12 +370,12 @@ def _page(scraper, slug, part, page, query=None):
     return None, False, None, "unsupported_provider"
 
 
-def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, retry_limit=1, dry_run=False, targeted_query=None, partition=None, overlap_pages=DEFAULT_INCREMENTAL_OVERLAP_PAGES):
+def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, retry_limit=1, dry_run=False, targeted_query=None, partition=None, overlap_pages=DEFAULT_INCREMENTAL_OVERLAP_PAGES, max_pages=10, max_redirects=3, clock=None):
     slug = (provider_slug or "").lower()
     if slug not in PROVIDERS: raise ValueError(f"Unsupported provider: {slug}")
     if mode not in DISCOVERY_MODE_KEYS: raise ValueError(f"Unsupported discovery mode: {mode}")
-    if request_budget < 1: raise ValueError("request_budget must be positive")
-    if retry_limit < 0: raise ValueError("retry_limit cannot be negative")
+    if type(max_pages) is not int or not 1 <= max_pages <= 250: raise ValueError("max_pages must be 1..250")
+    if type(retry_limit) is not int or not 0 <= retry_limit <= 2: raise ValueError("retry_limit must be 0..2")
     if overlap_pages < 1: raise ValueError("overlap_pages must be positive")
     if DISCOVERY_LEASE_SECONDS <= 0: raise ValueError("UNOFFICIAL_CATALOGUE_LEASE_SECONDS must be positive")
     mode_key = DISCOVERY_MODE_KEYS[mode]
@@ -395,43 +393,55 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
         raise RuntimeError(f"A discovery run is already active for {slug}")
     try:
         provider = Provider.objects.get(slug=slug)
+        def preflight_stop(reason, status="BLOCKED"):
+            return {"status": status, "provider": slug, "mode": mode_key, "dry_run": dry_run,
+                    "pages_scanned": 0, "pages_attempted": 0, "requests_made": 0,
+                    "last_error": reason}
+        permission = permission_for(provider)
+        try:
+            if not provider.is_enabled or provider.config.get("discovery_permission") == "DENIED":
+                raise DiscoveryPolicyError("source_permission_denied")
+            permission.require(slug)
+            if slug in PROVENANCE_BLOCKED:
+                raise DiscoveryPolicyError("source_provenance_unverified")
+        except DiscoveryPolicyError as exc:
+            return preflight_stop(str(exc))
+        # Check every discovery mode: restrictions belong to the provider, not
+        # just the selected cursor. Failed preflight never writes a run/lease.
+        prior = CatalogueDiscoveryState.objects.filter(provider=provider).first()
+        if prior:
+            _, prior_modes = _mode_cursors(prior)
+            candidates = [prior.cursor or {}, prior.report or {}, *prior_modes.values(),
+                          *((prior.report or {}).get("mode_reports") or {}).values()]
+            for value in candidates:
+                until = value.get("cooldown_until")
+                if until:
+                    try:
+                        parsed = datetime.fromisoformat(str(until).replace("Z", "+00:00"))
+                        if parsed.tzinfo is None: parsed = parsed.replace(tzinfo=timezone.utc)
+                    except (TypeError, ValueError):
+                        return preflight_stop("invalid_provider_cooldown")
+                    if parsed > django_timezone.now():
+                        return preflight_stop("provider_cooldown_active", "COOLDOWN")
+        http = DiscoveryHTTP(permission, request_budget=request_budget, interval=delay,
+                             max_redirects=max_redirects, clock=clock)
+        page_limit = min(max_pages, permission.page_limit)
+        pages_attempted = 0
         scraper = resolve_scraper_class(slug)()
-        if slug in PROVENANCE_BLOCKED:
-            report = {
-                "status": "BLOCKED", "mode": mode, "pages_scanned": 0,
-                "items_seen": 0, "items_unique": 0, "items_inserted": 0,
-                "items_pending_classification": 0, "requests_made": 0,
-                "last_error": PROVENANCE_BLOCKED[slug],
-            }
-            if not dry_run:
-                state, _ = CatalogueDiscoveryState.objects.get_or_create(provider=provider)
-                state.status, state.mode, state.report, state.last_error = "BLOCKED", mode, report, report["last_error"]
-                state.save()
-            return {**report, "provider": slug, "dry_run": dry_run}
-        # Count every dispatch, including domain fallback, and retry only
-        # transient network/5xx/429 failures with an explicit bounded limit.
-        requests_made = 0
-        original_get = scraper.session.get
-        def budgeted_get(*args, **kwargs):
-            nonlocal requests_made
-            if requests_made >= request_budget:
-                raise _RequestBudgetReached()
-            requests_made += 1
-            return original_get(*args, **kwargs)
-        scraper.session.get = budgeted_get
+        http.install(scraper.session)
         user_agent = "Mozilla/5.0 (compatible; WTDW catalogue discovery)"
         robots_by_origin = {}
-        def request_with_retries(url, headers):
+        def request_with_retries(url, headers, *, kind="listing"):
             for attempt in range(retry_limit + 1):
                 try:
-                    response = scraper.session.get(url, timeout=scraper.timeout, headers=headers)
+                    response = http.get(url, headers=headers, kind=kind, retry=attempt > 0)
                 except requests.RequestException:
                     if attempt >= retry_limit: raise
-                    if delay: time.sleep(delay * (2 ** attempt))
+                    http.clock.sleep(http.interval * (2 ** attempt))
                     continue
                 status = int(response.status_code)
                 if status == 429 or status >= 500:
-                    retry_after = response.headers.get("Retry-After") if status == 429 else None
+                    retry_after = response.headers.get("Retry-After")
                     if attempt >= retry_limit:
                         raise _HttpFailure(status, retry_after)
                     wait = _retry_after_seconds(retry_after)
@@ -439,20 +449,21 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                         # Defer long cooldowns to the next scheduled tick rather
                         # than holding a worker process asleep for minutes.
                         raise _HttpFailure(status, retry_after)
-                    if wait is None: wait = delay * (2 ** attempt)
-                    if wait: time.sleep(wait)
+                    if wait is None: wait = http.interval * (2 ** attempt)
+                    if wait: http.clock.sleep(wait)
                     continue
                 return response
             return None
 
         def fetch_discovery_url(url, headers=None):
+            permission.validate_url(url)
             request_headers = {"User-Agent": user_agent}
             if headers: request_headers.update(headers)
             parts = urlsplit(url)
             origin = urlunsplit((parts.scheme, parts.netloc, "", "", ""))
             if origin not in robots_by_origin:
                 robots_url = f"{origin}/robots.txt"
-                robots_response = request_with_retries(robots_url, {"User-Agent": user_agent})
+                robots_response = request_with_retries(robots_url, {"User-Agent": user_agent}, kind="robots")
                 if robots_response is None:
                     raise _HttpFailure(503)
                 if int(robots_response.status_code) in (404, 410):
@@ -467,8 +478,11 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
             if robots and not robots.can_fetch(user_agent, url):
                 raise _HttpFailure(403)
             crawl_delay = robots.crawl_delay(user_agent) if robots else None
-            if crawl_delay and delay < crawl_delay:
-                time.sleep(crawl_delay - delay)
+            if crawl_delay:
+                http.interval = max(http.interval, float(crawl_delay))
+            rate = robots.request_rate(user_agent) if robots else None
+            if rate and rate.requests > 0:
+                http.interval = max(http.interval, rate.seconds / rate.requests)
             response = request_with_retries(url, request_headers)
             if response is None: return None
             if int(response.status_code) >= 400:
@@ -606,6 +620,8 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                 # KissKH, HydraHD and AnimeWorld. Others currently offer only
                 # partial catalogue filtering, which remains explicitly partial.
                 try:
+                    pages_attempted += 1
+                    http.begin_page()
                     rows = scraper.run(query=targeted_query)
                 except _RequestBudgetReached:
                     rows = []
@@ -640,11 +656,18 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                         else: report["items_updated"] += 1
                 report["pages_scanned"] = 1 if rows else 0
                 report["status"] = "PARTIAL"  # provider search is never a completeness traversal
-                return {**report, "provider": slug, "requests_made": requests_made, "dry_run": dry_run, "query": targeted_query}
+                return {**report, "provider": slug, "requests_made": http.attempted, "dry_run": dry_run,
+                        "query": targeted_query, "pages_attempted": pages_attempted, "page_limit": page_limit,
+                        "request_accounting": http.report()}
             for part in parts:
                 if part in completed_parts: continue
                 page = 1 if slug == "animeworld" else int((cursor.get("parts") or {}).get(part, 0)) + 1
-                while requests_made < request_budget:
+                while http.attempted < http.limit:
+                    if pages_attempted >= page_limit:
+                        report.update(status="PARTIAL", last_error="page budget exhausted")
+                        break
+                    pages_attempted += 1
+                    http.begin_page()
                     active_page = (part, page)
                     try:
                         rows, terminal, total_pages, evidence = _page(scraper, slug, part, page, targeted_query)
@@ -668,9 +691,11 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                             report["status"] = "BLOCKED" if exc.status in (403, 429) else "FAILED"
                             report["last_error"] = f"HTTP {exc.status}"
                             report["failed_pages"].append({"partition": part, "page": page, "status": exc.status})
-                            if exc.retry_after is not None:
-                                report["retry_after"] = exc.retry_after
+                            if exc.retry_after is not None or exc.status == 429:
                                 retry_seconds = _retry_after_seconds(exc.retry_after)
+                                if retry_seconds is None and exc.status == 429:
+                                    retry_seconds = 300
+                                report["retry_after"] = retry_seconds
                                 if retry_seconds is not None:
                                     report["cooldown_until"] = (django_timezone.now() + timedelta(seconds=retry_seconds)).isoformat()
                             raise RuntimeError(report["last_error"]) from exc
@@ -926,8 +951,8 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                     if mode_key == "incremental" and slug == "hydrahd" and page >= overlap_pages:
                         break
                     page += 1
-                    if delay: time.sleep(delay)
-                if requests_made >= request_budget and part not in completed_parts:
+                    # Every attempt is paced by the shared HTTP gate.
+                if (http.attempted >= http.limit or pages_attempted >= page_limit) and part not in completed_parts:
                     report["status"] = "PARTIAL"
                     break
             unresolved_count = KissKHPendingClassification.objects.filter(
@@ -965,21 +990,33 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
         except KeyboardInterrupt:
             report["status"] = "PARTIAL"
             report["last_error"] = "Stopped by operator; committed page checkpoint retained"
+        except DiscoveryPolicyError as exc:
+            report.update(status="BLOCKED", last_error=str(exc))
+            raise CatalogueDiscoveryError({**report, "provider": slug, "requests_made": http.attempted,
+                "request_accounting": http.report(), "checkpoint": cursor,
+                "pages_attempted": pages_attempted, "page_limit": page_limit}) from None
         except Exception as exc:
             if report["status"] != "BLOCKED": report["status"] = "FAILED"
             if not report.get("last_error"):
                 report["last_error"] = f"Catalogue page failed ({type(exc).__name__}); checkpoint retained"
             if active_page and not any(x.get("partition") == active_page[0] and x.get("page") == active_page[1] for x in report["failed_pages"]):
                 report["failed_pages"].append({"partition": active_page[0], "page": active_page[1], "error": report["last_error"]})
-            report["requests_dispatched"] = requests_made
+            report["requests_dispatched"] = http.attempted
             raise CatalogueDiscoveryError({
                 **report,
                 "provider": slug,
-                "requests_made": requests_made,
+                "requests_made": http.attempted,
                 "dry_run": dry_run,
                 "checkpoint": cursor,
+                "request_accounting": http.report(),
+                "pages_attempted": pages_attempted,
+                "page_limit": page_limit,
             }) from exc
         finally:
+            report["pages_attempted"] = pages_attempted
+            report["page_limit"] = page_limit
+            report["request_accounting"] = http.report()
+            report["requests_dispatched"] = http.attempted
             if not dry_run:
                 state.status = report["status"]
                 mode_reports = deepcopy((state.report or {}).get("mode_reports", {}))
@@ -1001,10 +1038,10 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                 state.save(update_fields=["status", "report", "last_error", "cursor", "last_success_at",
                                           "heartbeat_at", "lease_owner", "lease_expires_at", "updated_at"])
         report["new_unique_titles"] = report["items_inserted"]
-        return {**report, "provider": slug, "requests_made": requests_made, "dry_run": dry_run, "checkpoint": cursor, "checkpoints_by_mode": deepcopy(mode_cursors), "partition": partition}
+        return {**report, "provider": slug, "requests_made": http.attempted, "dry_run": dry_run, "checkpoint": cursor, "checkpoints_by_mode": deepcopy(mode_cursors), "partition": partition}
     finally:
         try:
-            scraper.session.get = original_get
+            scraper.session.close()
         except (UnboundLocalError, AttributeError):
             pass
         release_source_lock(lock_name)

@@ -1,3 +1,4 @@
+from tracker.tests.discovery_fixtures import enable_discovery_fixtures
 import importlib
 import json
 from datetime import timedelta
@@ -30,6 +31,7 @@ MODULE = "tracker.services.incremental_catalogue_reconciliation"
 @override_settings(TMDB_API_KEY="fixture")
 class IncrementalReconciliationTests(TestCase):
     def setUp(self):
+        enable_discovery_fixtures(self)
         self.provider = Provider.objects.get_or_create(slug="hydrahd", defaults={"name": "HydraHD"})[0]
         self.anime = Provider.objects.get_or_create(slug="animeworld", defaults={"name": "AnimeWorld"})[0]
 
@@ -60,7 +62,7 @@ class IncrementalReconciliationTests(TestCase):
                 source_url="https://hydrahd.gd/movie/new", raw_payload={"id": "native-new", "year": 2020})], True, 1, "fixture"
         with patch("tracker.services.catalogue_discovery._parts", return_value=["movies"]), \
                 patch("tracker.services.catalogue_discovery._page", side_effect=page), \
-                patch("requests.Session.get", return_value=FakeResponse()):
+                patch("tracker.services.discovery_http.DiscoveryHTTP._send", return_value=FakeResponse()):
             run_discovery("hydrahd", mode="incremental", request_budget=1, delay=0)
         record = DiscoveredCatalogueRecord.objects.get(provider=self.provider)
         self.assertEqual(record.classification_state, "PENDING")

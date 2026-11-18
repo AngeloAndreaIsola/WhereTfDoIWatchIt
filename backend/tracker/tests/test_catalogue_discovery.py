@@ -1,4 +1,5 @@
 from unittest.mock import patch
+from tracker.tests.discovery_fixtures import enable_discovery_fixtures, FixtureResponse
 from datetime import datetime, timezone, timedelta
 
 from django.test import TestCase
@@ -22,6 +23,7 @@ def fixture_item(slug, page=1, part=""):
 
 class CatalogueDiscoveryTests(TestCase):
     def setUp(self):
+        enable_discovery_fixtures(self)
         self.providers = {
             slug: Provider.objects.get_or_create(slug=slug, defaults={"name": slug, "category": "scraper"})[0]
             for slug in PROVIDERS
@@ -34,7 +36,7 @@ class CatalogueDiscoveryTests(TestCase):
                     _scraper.session.get("https://fixture.invalid/page")
                     return [fixture_item(provider_slug, part=part)], True, 1, "fixture_terminal_page"
 
-                with patch("tracker.services.catalogue_discovery.PROVENANCE_BLOCKED", {}), patch("tracker.services.catalogue_discovery._page", side_effect=page), patch("requests.Session.get", return_value=object()):
+                with patch("tracker.services.catalogue_discovery.PROVENANCE_BLOCKED", {}), patch("tracker.services.catalogue_discovery._page", side_effect=page), patch("tracker.services.discovery_http.DiscoveryHTTP._send", return_value=FixtureResponse()):
                     mode = "incremental" if slug == "animeworld" else "historical"
                     result = run_discovery(slug, mode=mode, request_budget=10, delay=0)
                 self.assertEqual(result["status"], "PARTIAL" if slug == "animeworld" else "COMPLETED")
@@ -65,7 +67,7 @@ class CatalogueDiscoveryTests(TestCase):
             return [fixture_item(provider_slug, page)], page == 2, 2, "fixture_terminal_page"
 
         with patch("tracker.services.catalogue_discovery._parts", return_value=["movies"]), \
-             patch("tracker.services.catalogue_discovery._page", side_effect=pages), patch("requests.Session.get", return_value=object()):
+             patch("tracker.services.catalogue_discovery._page", side_effect=pages), patch("tracker.services.discovery_http.DiscoveryHTTP._send", return_value=FixtureResponse()):
             first = run_discovery(slug, request_budget=1, delay=0)
             self.assertEqual(first["status"], "PARTIAL")
             self.assertEqual(first["pages_remaining"], 1)
@@ -83,7 +85,7 @@ class CatalogueDiscoveryTests(TestCase):
 
         with patch("tracker.services.catalogue_discovery._parts", return_value=["movies"]), \
              patch("tracker.services.catalogue_discovery._page", side_effect=interrupted_page), \
-             patch("requests.Session.get", return_value=object()):
+             patch("tracker.services.discovery_http.DiscoveryHTTP._send", return_value=FixtureResponse()):
             first = run_discovery("hydrahd", request_budget=3, delay=0)
 
         self.assertEqual(first["status"], "PARTIAL")
@@ -97,7 +99,7 @@ class CatalogueDiscoveryTests(TestCase):
 
         with patch("tracker.services.catalogue_discovery._parts", return_value=["movies"]), \
              patch("tracker.services.catalogue_discovery._page", side_effect=resumed_page), \
-             patch("requests.Session.get", return_value=object()):
+             patch("tracker.services.discovery_http.DiscoveryHTTP._send", return_value=FixtureResponse()):
             second = run_discovery("hydrahd", request_budget=1, delay=0)
 
         self.assertEqual(second["page_ranges"], {"movies": [2, 2]})
@@ -121,7 +123,7 @@ class CatalogueDiscoveryTests(TestCase):
         with patch("tracker.services.catalogue_discovery.DISCOVERY_LEASE_SECONDS", 60), \
              patch("tracker.services.catalogue_discovery._parts", return_value=["movies"]), \
              patch("tracker.services.catalogue_discovery._page", side_effect=resume), \
-             patch("requests.Session.get", return_value=object()):
+             patch("tracker.services.discovery_http.DiscoveryHTTP._send", return_value=FixtureResponse()):
             result = run_discovery("hydrahd", mode="historical", request_budget=2, delay=0)
 
         state.refresh_from_db()
@@ -150,7 +152,7 @@ class CatalogueDiscoveryTests(TestCase):
             return [fixture_item(provider_slug, part=part)], True, 1, "fixture_terminal_page"
 
         with patch("tracker.services.catalogue_discovery._page", side_effect=one_page), \
-             patch("requests.Session.get", return_value=object()):
+             patch("tracker.services.discovery_http.DiscoveryHTTP._send", return_value=FixtureResponse()):
             result = run_discovery("hydrahd", partition="movies", request_budget=2, delay=0)
         state = CatalogueDiscoveryState.objects.get(provider=self.providers["hydrahd"])
         self.assertEqual(result["status"], "PARTIAL")
@@ -164,7 +166,7 @@ class CatalogueDiscoveryTests(TestCase):
             return [item], False, None, f"pagination_links_navigation_max={page + 3}"
 
         with patch("tracker.services.catalogue_discovery._page", side_effect=rolling_pages), \
-             patch("requests.Session.get", return_value=object()):
+             patch("tracker.services.discovery_http.DiscoveryHTTP._send", return_value=FixtureResponse()):
             result = run_discovery("hydrahd", partition="movies", request_budget=3, delay=0)
         state = CatalogueDiscoveryState.objects.get(provider=self.providers["hydrahd"])
         self.assertEqual(result["pages_scanned"], 3)
@@ -183,7 +185,7 @@ class CatalogueDiscoveryTests(TestCase):
         )
         with patch("tracker.services.catalogue_discovery._parts", return_value=["movies"]), \
              patch("tracker.services.catalogue_discovery._page", side_effect=_HttpFailure(404)), \
-             patch("requests.Session.get", return_value=object()):
+             patch("tracker.services.discovery_http.DiscoveryHTTP._send", return_value=FixtureResponse()):
             result = run_discovery(
                 "hydrahd", partition="movies", request_budget=2, delay=0,
             )
@@ -212,7 +214,7 @@ class CatalogueDiscoveryTests(TestCase):
 
         with patch("tracker.services.catalogue_discovery._parts", return_value=["movies"]), \
              patch("tracker.services.catalogue_discovery._page", side_effect=empty_page), \
-             patch("requests.Session.get", return_value=object()):
+             patch("tracker.services.discovery_http.DiscoveryHTTP._send", return_value=FixtureResponse()):
             result = run_discovery(
                 "hydrahd", partition="movies", request_budget=2, delay=0,
             )
@@ -242,7 +244,7 @@ class CatalogueDiscoveryTests(TestCase):
 
         with patch("tracker.services.catalogue_discovery._parts", return_value=["movies"]), \
              patch("tracker.services.catalogue_discovery._page", side_effect=page), \
-             patch("requests.Session.get", return_value=object()):
+             patch("tracker.services.discovery_http.DiscoveryHTTP._send", return_value=FixtureResponse()):
             result = run_discovery("hydrahd", mode="incremental", overlap_pages=2, request_budget=2, delay=0)
 
         state.refresh_from_db()
@@ -259,7 +261,7 @@ class CatalogueDiscoveryTests(TestCase):
 
         with patch("tracker.services.catalogue_discovery._parts", return_value=["movies"]), \
              patch("tracker.services.catalogue_discovery._page", side_effect=page), \
-             patch("requests.Session.get", return_value=object()):
+             patch("tracker.services.discovery_http.DiscoveryHTTP._send", return_value=FixtureResponse()):
             first = run_discovery("hydrahd", mode="incremental", overlap_pages=2, request_budget=1, delay=0)
             second = run_discovery("hydrahd", mode="incremental", overlap_pages=2, request_budget=1, delay=0)
 
@@ -283,7 +285,7 @@ class CatalogueDiscoveryTests(TestCase):
 
         with patch("tracker.services.catalogue_discovery._parts", return_value=["movies"]), \
              patch("tracker.services.catalogue_discovery._page", side_effect=page), \
-             patch("requests.Session.get", return_value=object()):
+             patch("tracker.services.discovery_http.DiscoveryHTTP._send", return_value=FixtureResponse()):
             first = run_discovery("hydrahd", mode="incremental", overlap_pages=2, request_budget=2, delay=0)
             page_contents = {1: ["b"], 2: ["a"]}
             second = run_discovery("hydrahd", mode="incremental", overlap_pages=2, request_budget=2, delay=0)
@@ -305,7 +307,7 @@ class CatalogueDiscoveryTests(TestCase):
             return [item], False, None, "official_rss_snapshot_not_full_archive"
 
         with patch("tracker.services.catalogue_discovery._page", side_effect=rss_page), \
-             patch("requests.Session.get", return_value=object()):
+             patch("tracker.services.discovery_http.DiscoveryHTTP._send", return_value=FixtureResponse()):
             first = run_discovery("animeworld", mode="incremental", request_budget=2, delay=0)
             second = run_discovery("animeworld", mode="incremental", request_budget=2, delay=0)
 
@@ -337,14 +339,14 @@ class CatalogueDiscoveryTests(TestCase):
             Response(200, text="User-agent: *\nAllow: /\n"),
             Response(429, headers={"Retry-After": "120"}),
         ]
-        with patch("requests.Session.get", side_effect=responses) as get, \
+        with patch("tracker.services.discovery_http.DiscoveryHTTP._send", side_effect=responses) as get, \
              patch("tracker.services.catalogue_discovery.time.sleep") as sleep:
             with self.assertRaises(CatalogueDiscoveryError) as raised:
                 run_discovery("hydrahd", mode="historical", request_budget=3, delay=1, retry_limit=1)
 
         state = CatalogueDiscoveryState.objects.get(provider=self.providers["hydrahd"])
         self.assertEqual(get.call_count, 2)
-        sleep.assert_not_called()
+        sleep.assert_not_called()  # injectable HTTP clock handles spacing
         self.assertEqual(raised.exception.report["failed_pages"], [{"partition": "movies", "page": 1, "status": 429}])
         self.assertEqual(state.cursor["modes"]["historical"]["cooldown_until"], raised.exception.report["cooldown_until"])
         self.assertGreater(datetime.fromisoformat(state.cursor["modes"]["historical"]["cooldown_until"]), datetime.now(timezone.utc))
@@ -359,7 +361,7 @@ class CatalogueDiscoveryTests(TestCase):
         with patch("tracker.services.catalogue_discovery.PROVENANCE_BLOCKED", {}), \
              patch("tracker.services.catalogue_discovery._page", side_effect=one_page), \
              patch("tracker.services.catalogue_discovery._parts", return_value=["2"]), \
-             patch("requests.Session.get", return_value=object()):
+             patch("tracker.services.discovery_http.DiscoveryHTTP._send", return_value=FixtureResponse()):
             first = run_discovery(slug, request_budget=2, delay=0)
             state = CatalogueDiscoveryState.objects.get(provider=self.providers[slug])
             state.cursor = {}
@@ -429,7 +431,7 @@ class CatalogueDiscoveryTests(TestCase):
         with patch("tracker.services.catalogue_discovery.PROVENANCE_BLOCKED", {}), \
              patch("tracker.services.catalogue_discovery._page", side_effect=one_page), \
              patch("tracker.services.catalogue_discovery._parts", return_value=["/"]), \
-             patch("requests.Session.get", return_value=object()):
+             patch("tracker.services.discovery_http.DiscoveryHTTP._send", return_value=FixtureResponse()):
             first = run_discovery(slug, request_budget=2, delay=0)
             state = CatalogueDiscoveryState.objects.get(provider=self.providers[slug])
             state.cursor = {}
@@ -461,7 +463,7 @@ class CatalogueDiscoveryTests(TestCase):
         with patch("tracker.services.catalogue_discovery.PROVENANCE_BLOCKED", {}), \
              patch("tracker.services.catalogue_discovery._page", side_effect=two_partitions), \
              patch("tracker.services.catalogue_discovery._parts", return_value=["film", "series"]), \
-             patch("requests.Session.get", return_value=object()):
+             patch("tracker.services.discovery_http.DiscoveryHTTP._send", return_value=FixtureResponse()):
             result = run_discovery(slug, request_budget=3, delay=0)
 
         records = DiscoveredCatalogueRecord.objects.filter(provider=self.providers[slug])
@@ -513,7 +515,7 @@ class CatalogueDiscoveryTests(TestCase):
             return CataloguePageRows([item]), True, 1, "api_total_count"
         with patch("tracker.services.catalogue_discovery._page", side_effect=pages), \
              patch("tracker.services.catalogue_discovery._parts", return_value=["1", "2"]), \
-             patch("requests.Session.get", return_value=object()):
+             patch("tracker.services.discovery_http.DiscoveryHTTP._send", return_value=FixtureResponse()):
             result = run_discovery(slug, request_budget=3, delay=0)
         rows = ScrapedContentMapping.objects.filter(provider=self.providers[slug])
         self.assertEqual(rows.count(), 2)
@@ -536,7 +538,7 @@ class CatalogueDiscoveryTests(TestCase):
             return CataloguePageRows([item], total_count=41, page=2, page_size=20), False, 3, "api_total_count"
         with patch("tracker.services.catalogue_discovery._page", side_effect=pages), \
              patch("tracker.services.catalogue_discovery._parts", return_value=["2"]), \
-             patch("requests.Session.get", return_value=object()):
+             patch("tracker.services.discovery_http.DiscoveryHTTP._send", return_value=FixtureResponse()):
             result = run_discovery(slug, request_budget=2, delay=0)
         state.refresh_from_db()
         self.assertEqual(result["status"], "PARTIAL")
@@ -553,7 +555,7 @@ class CatalogueDiscoveryTests(TestCase):
             raise RuntimeError("fixture page failure")
 
         with patch("tracker.services.catalogue_discovery._page", side_effect=failed_page), \
-             patch("requests.Session.get", return_value=object()):
+             patch("tracker.services.discovery_http.DiscoveryHTTP._send", return_value=FixtureResponse()):
             with self.assertRaises(CatalogueDiscoveryError) as caught:
                 run_discovery(slug, request_budget=3, delay=0)
 

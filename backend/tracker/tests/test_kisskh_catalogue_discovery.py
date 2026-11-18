@@ -1,3 +1,4 @@
+from tracker.tests.discovery_fixtures import enable_discovery_fixtures, FixtureResponse
 from unittest.mock import patch
 
 from django.test import TestCase
@@ -30,6 +31,7 @@ def observed_page(*, page=1, page_size=20, total=41, row_id=10973, title="Sample
 
 class KissKHCatalogueParserTests(TestCase):
     def setUp(self):
+        enable_discovery_fixtures(self)
         self.scraper = KissKHScraper()
 
     def test_listing_schema_keeps_unclassified_rows_pending(self):
@@ -172,9 +174,10 @@ class KissKHCatalogueParserTests(TestCase):
 
 class KissKHCatalogueRequestTests(TestCase):
     def setUp(self):
+        enable_discovery_fixtures(self)
         self.provider = Provider.objects.get(slug="kisskh")
 
-    @patch("tracker.services.catalogue_discovery.requests.Session.get")
+    @patch("tracker.services.discovery_http.DiscoveryHTTP._send")
     def test_discovery_decodes_json_and_scans_one_bounded_live_schema_page(self, get):
         class Response:
             def __init__(self, *, body="", payload=None, content_type="text/plain"):
@@ -201,7 +204,7 @@ class KissKHCatalogueRequestTests(TestCase):
         self.assertEqual(result["status"], "PARTIAL")
         self.assertFalse(CatalogueDiscoveryState.objects.filter(provider=self.provider).exists())
 
-    @patch("tracker.services.catalogue_discovery.requests.Session.get")
+    @patch("tracker.services.discovery_http.DiscoveryHTTP._send")
     def test_json_shaped_html_challenge_is_not_parsed_as_api_data(self, get):
         class Response:
             status_code = 200
@@ -227,7 +230,7 @@ class KissKHCatalogueRequestTests(TestCase):
         self.assertEqual(report["last_error"], "missing_or_unexpected_api_response")
         self.assertEqual(report["requests_made"], 2)
 
-    @patch("tracker.services.catalogue_discovery.requests.Session.get")
+    @patch("tracker.services.discovery_http.DiscoveryHTTP._send")
     def test_robots_disallow_prevents_api_request(self, get):
         class Robots:
             status_code = 200
@@ -249,6 +252,7 @@ class KissKHCatalogueRequestTests(TestCase):
 
 class KissKHPendingClassificationTests(TestCase):
     def setUp(self):
+        enable_discovery_fixtures(self)
         self.provider = Provider.objects.get_or_create(
             slug="kisskh", defaults={"name": "KissKH", "category": "scraper"}
         )[0]
@@ -264,7 +268,7 @@ class KissKHPendingClassificationTests(TestCase):
             return CataloguePageRows([typed], [pending], total_count=2), True, 1, "api_total_count"
         with patch("tracker.services.catalogue_discovery._page", side_effect=page), \
              patch("tracker.services.catalogue_discovery._parts", return_value=["2"]), \
-             patch("requests.Session.get", return_value=object()):
+             patch("tracker.services.discovery_http.DiscoveryHTTP._send", return_value=FixtureResponse()):
             result = run_discovery("kisskh", request_budget=2, delay=0)
         self.assertEqual(result["items_inserted"], 2)
         self.assertEqual(result["items_pending_classification"], 1)
@@ -278,7 +282,7 @@ class KissKHPendingClassificationTests(TestCase):
         state.save(update_fields=["cursor", "updated_at"])
         with patch("tracker.services.catalogue_discovery._page", side_effect=page), \
              patch("tracker.services.catalogue_discovery._parts", return_value=["2"]), \
-             patch("requests.Session.get", return_value=object()):
+             patch("tracker.services.discovery_http.DiscoveryHTTP._send", return_value=FixtureResponse()):
             replay = run_discovery("kisskh", request_budget=2, delay=0)
         self.assertEqual(replay["pending_unchanged"], 1)
         self.assertEqual(KissKHPendingClassification.objects.filter(provider=self.provider).count(), 1)
@@ -319,7 +323,7 @@ class KissKHPendingClassificationTests(TestCase):
             return CataloguePageRows([], [pending_row], total_count=40), False, 2, "api_total_count"
         with patch("tracker.services.catalogue_discovery._page", side_effect=page), \
              patch("tracker.services.catalogue_discovery._parts", return_value=["2"]), \
-             patch("requests.Session.get", return_value=object()):
+             patch("tracker.services.discovery_http.DiscoveryHTTP._send", return_value=FixtureResponse()):
             with self.assertRaises(CatalogueDiscoveryError):
                 run_discovery("kisskh", request_budget=3, delay=0)
         self.assertTrue(KissKHPendingClassification.objects.filter(provider=self.provider, native_id="88").exists())

@@ -119,7 +119,7 @@ class PendingCataloguePersistenceTests(TestCase):
             result = run_discovery("cineblog01", request_budget=3)
         self.assertEqual(result["status"], "BLOCKED")
         self.assertEqual(result["requests_made"], 0)
-        resolver.assert_called_once_with("cineblog01")
+        resolver.assert_not_called()
         self.assertFalse(DiscoveredCatalogueRecord.objects.filter(provider=candidate).exists())
 
     def test_animeworld_rss_snapshot_adds_new_guid_and_replays_existing_guid(self):

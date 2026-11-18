@@ -63,6 +63,8 @@ def _validated_mode_config(provider_slug, mode, value):
     delay = float(value.get("delay_seconds", 1.0))
     retry_limit = int(value.get("retry_limit", 1))
     overlap_pages = int(value.get("overlap_pages", 3))
+    max_pages = int(value.get("max_pages", 1))
+    max_redirects = int(value.get("max_redirects", 3))
     if not 60 <= interval <= 31 * 24 * 60 * 60:
         raise ValueError("schedule interval_seconds must be from 60 seconds to 31 days")
     if not 1 <= request_budget <= 40:
@@ -73,6 +75,8 @@ def _validated_mode_config(provider_slug, mode, value):
         raise ValueError("scheduled retry_limit must be between 0 and 2")
     if not 1 <= overlap_pages <= 10:
         raise ValueError("scheduled overlap_pages must be between 1 and 10")
+    if not 1 <= max_pages <= 250 or not 0 <= max_redirects <= 5:
+        raise ValueError("scheduled max_pages must be 1..250 and max_redirects 0..5")
     result = {
         "enabled": value.get("enabled", False) is True,
         "interval_seconds": interval,
@@ -80,6 +84,8 @@ def _validated_mode_config(provider_slug, mode, value):
         "delay_seconds": delay,
         "retry_limit": retry_limit,
         "overlap_pages": overlap_pages,
+        "max_pages": max_pages,
+        "max_redirects": max_redirects,
     }
     if mode == "reconciliation":
         limit = int(value.get("record_limit", 25))
@@ -164,6 +170,7 @@ def process_due_discovery_schedules(*, config=None, now=None):
                         delay=mode_config["delay_seconds"],
                         retry_limit=mode_config["retry_limit"],
                         overlap_pages=mode_config["overlap_pages"],
+                        max_pages=mode_config["max_pages"], max_redirects=mode_config["max_redirects"],
                     )
             except CatalogueDiscoveryError as exc:
                 report = exc.report

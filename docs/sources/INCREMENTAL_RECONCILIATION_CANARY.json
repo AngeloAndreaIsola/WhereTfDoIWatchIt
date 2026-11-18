@@ -6,17 +6,21 @@
       "historical": {
         "enabled": false,
         "interval_seconds": 86400,
-        "request_budget": 1,
+        "request_budget": 5,
         "delay_seconds": 2,
-        "retry_limit": 0
+        "retry_limit": 0,
+        "max_pages": 1,
+        "max_redirects": 3
       },
       "incremental": {
         "enabled": false,
         "interval_seconds": 86400,
-        "request_budget": 2,
+        "request_budget": 5,
         "overlap_pages": 1,
         "delay_seconds": 2,
-        "retry_limit": 0
+        "retry_limit": 0,
+        "max_pages": 1,
+        "max_redirects": 3
       },
       "reconciliation": {
         "enabled": false,
@@ -33,10 +37,12 @@
       "incremental": {
         "enabled": false,
         "interval_seconds": 86400,
-        "request_budget": 1,
+        "request_budget": 5,
         "overlap_pages": 1,
         "delay_seconds": 2,
-        "retry_limit": 0
+        "retry_limit": 0,
+        "max_pages": 1,
+        "max_redirects": 3
       },
       "reconciliation": {
         "enabled": false,
