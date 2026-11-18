@@ -184,6 +184,15 @@ def run_incremental_reconciliation(provider_slug, *, limit=25, request_budget=50
                                    retries=1, record_ids=None, review=False):
     if provider_slug not in PROVIDERS:
         raise ValueError("Incremental reconciliation supports HydraHD and permitted AnimeWorld RSS observations only")
+    return _run_reconciliation(provider_slug, limit=limit, request_budget=request_budget,
+        allow_network=allow_network, apply=apply, interval=interval, retries=retries,
+        record_ids=record_ids, review=review)
+
+
+def _run_reconciliation(provider_slug, *, limit=25, request_budget=50,
+                        allow_network=False, apply=False, interval=0.25,
+                        retries=1, record_ids=None, review=False):
+    """Shared engine; public entry points own their provider/scope/permission gates."""
     if (not 1 <= limit <= 250 or not 1 <= request_budget <= 500
             or not 0 <= retries <= 2 or not math.isfinite(interval) or not 0 <= interval <= 60):
         raise ValueError("Require limit 1..250, request_budget 1..500, retries 0..2 and interval 0..60")
