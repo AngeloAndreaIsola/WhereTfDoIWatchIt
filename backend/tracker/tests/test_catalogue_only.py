@@ -313,6 +313,18 @@ class CatalogueOnlyTests(TestCase):
             self.import_batch(replace(self.result, contents=[item,replace(item,provider_content_id="different")]), apply=True)
         self.assertFalse(DiscoveredCatalogueRecord.objects.exists())
 
+    def test_metadata_and_robots_urls_cannot_become_catalogue_title_identities(self):
+        from availability.tests.tubi_fixtures import MOVIES_1
+
+        item = self.result.contents[0]
+        for url in (MOVIES_1, "https://tubitv.com/sitemap.xml", "https://tubitv.com/robots.txt"):
+            before = table_rows()
+            with self.subTest(url=url), self.assertRaises(DiscoveryPolicyError):
+                self.import_batch(
+                    replace(self.result, contents=[replace(item, url=url)]), apply=True)
+            self.assertEqual(table_rows(), before)
+        self.assertFalse(DiscoveredCatalogueRecord.objects.exists())
+
     def test_unknown_denied_expired_permission_and_disabled_provider_block(self):
         for policy in (replace(PERMISSION_FIXTURE, status="UNVERIFIED"),
                        replace(PERMISSION_FIXTURE, status="DENIED"),

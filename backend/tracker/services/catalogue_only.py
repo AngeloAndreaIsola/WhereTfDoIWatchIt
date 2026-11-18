@@ -7,6 +7,7 @@ mocking the same reviewed registry used by discovery; there is no approval flag.
 from datetime import date
 import hashlib
 import json
+import re
 import unicodedata
 
 from django.db import transaction
@@ -21,9 +22,24 @@ from tracker.services.discovery_policy import DiscoveryPolicyError, permission_f
 
 # Reviewed parser bindings, not automation grants. Adding a binding does not
 # enable the legacy command, CLI choices, scheduler or source permission.
-COLLECTORS = {"tubi": {"source": "tubi", "country": "US"}}
+# ``title_path`` is the only accepted shape for a catalogue-title identity:
+# robots, sitemaps and other permitted metadata URLs are not titles.
+COLLECTORS = {"tubi": {"source": "tubi", "country": "US",
+                       "title_path": r"/(movies|series)/[0-9]+/[^/]+/?"}}
 SOURCE_KIND = "catalogue_collector_v1"
 CHECKPOINT_KEY = "catalogue_only_v1"
+
+
+def _require_title_url(url, permission, binding):
+    """Keep every permission URL guard, then require a title-detail path.
+
+    ``validate_url`` accepts both title and metadata patterns; collectors must
+    not be able to promote a permitted sitemap/robots URL into a title record.
+    """
+    parts = permission.validate_url(url)
+    if not re.fullmatch(binding["title_path"], parts.path):
+        raise DiscoveryPolicyError("catalogue_url_not_a_title")
+    return parts
 
 
 def require_collector_permission(provider_slug):
@@ -70,7 +86,7 @@ def _normalized(item, provider, permission, binding):
     # The downstream canonical mapping's native-ID column is 100 characters.
     if not native or len(native) > 100 or not title or len(title) > 255:
         raise ValueError("Invalid catalogue title/native identity")
-    permission.validate_url(item.url)
+    _require_title_url(item.url, permission, binding)
     if len(item.url) > 500:
         raise ValueError("Catalogue URL exceeds model limit")
     if item.release_date is not None and (type(item.release_date) is not date
