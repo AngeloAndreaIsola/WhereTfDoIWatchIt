@@ -4,6 +4,24 @@ from django.core.management import CommandError, call_command
 from django.test import SimpleTestCase
 
 
+def _compose_root(test_file=None):
+    """Locate the checkout that owns both Compose files.
+
+    CI runs these tests from ``backend/`` on the runner, while the isolated
+    test image copies the backend to ``/app`` and bind-mounts the Compose
+    files there. Discover the root from the test module instead of assuming
+    either layout or a hardcoded container path.
+    """
+    from pathlib import Path
+
+    here = (test_file or Path(__file__)).resolve()
+    for parent in here.parents:
+        if ((parent / "docker-compose.yml").is_file()
+                and (parent / "docker-compose.test.yml").is_file()):
+            return parent
+    raise AssertionError("Repository root with both Compose files not found")
+
+
 class GuardedMigrateTests(SimpleTestCase):
     def setUp(self):
         self.connection = type("Connection", (), {"settings_dict": {"NAME": "scratch_db", "HOST": "db-test"}})()
@@ -68,9 +86,7 @@ class RuntimeEntrypointSafetyTests(SimpleTestCase):
             self.assertIn(required, content)
 
     def test_compose_backend_uses_host_mounted_runtime_guard(self):
-        from pathlib import Path
-
-        config = Path("/app/docker-compose.yml")
+        config = _compose_root() / "docker-compose.yml"
         content = config.read_text(encoding="utf-8")
         self.assertIn(
             'entrypoint: ["/bin/sh", "/runtime-guard-entrypoint.sh"]', content
@@ -83,11 +99,22 @@ class RuntimeEntrypointSafetyTests(SimpleTestCase):
         self.assertNotIn('entrypoint: ["/entrypoint.sh"]', content)
 
     def test_backend_test_service_uses_a_separate_ephemeral_database(self):
-        from pathlib import Path
-
-        config = Path(__file__).resolve().parents[2] / "docker-compose.test.yml"
+        config = _compose_root() / "docker-compose.test.yml"
         content = config.read_text(encoding="utf-8")
         self.assertIn("POSTGRES_DB: wtdwi_test", content)
         self.assertIn("POSTGRES_HOST: db-test", content)
         self.assertIn("tmpfs:", content)
         self.assertIn('entrypoint: ["python"]', content)
+
+    def test_compose_root_resolves_from_host_and_container_layouts(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
+            (root / "docker-compose.test.yml").write_text("services: {}\n", encoding="utf-8")
+            for rel in ("backend/tracker/tests/test_guarded_migrate.py",
+                        "tracker/tests/test_guarded_migrate.py"):
+                with self.subTest(rel=rel):
+                    self.assertEqual(_compose_root(root / rel), root)

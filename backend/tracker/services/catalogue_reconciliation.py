@@ -27,6 +27,10 @@ def _normal_title(value):
 
 
 def _type_evidence(record):
+    from tracker.services.catalogue_only import collector_type_evidence
+    collector = collector_type_evidence(record)
+    if collector:
+        return collector
     metadata = record.original_metadata if isinstance(record.original_metadata, dict) else {}
     provider = record.provider.slug
     partition = str(metadata.get("catalogue_partition") or "").casefold()
