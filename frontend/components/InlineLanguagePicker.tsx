@@ -4,6 +4,7 @@ import React, { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   CANONICAL_LANGUAGES,
   CANONICAL_LANGUAGE_MAP,
+  isCanonicalLanguageCode,
   normalizeLanguageCode,
 } from "@/lib/languages";
 
@@ -43,6 +44,7 @@ export default function InlineLanguagePicker({
   const [announcement, setAnnouncement] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
   const listboxId = useId();
 
   useEffect(() => {
@@ -60,19 +62,53 @@ export default function InlineLanguagePicker({
 
   const filteredOptions = useMemo(() => {
     const q = query.trim().toLowerCase();
+    if (!q) {
+      return CANONICAL_LANGUAGES.filter(
+        (lang) => !selectedCodes.includes(lang.code)
+      );
+    }
+
     const normalizedQuery = normalizeLanguageCode(query);
-    return CANONICAL_LANGUAGES.filter((lang) => {
+    const exactCode = isCanonicalLanguageCode(normalizedQuery)
+      ? normalizedQuery
+      : null;
+
+    // An exact code match that is already selected must not fall through to a
+    // different language that merely contains the query as a substring.
+    if (exactCode && selectedCodes.includes(exactCode)) return [];
+
+    const ranked = CANONICAL_LANGUAGES.filter((lang) => {
       if (selectedCodes.includes(lang.code)) return false;
-      if (!q) return true;
       const haystack = `${lang.code} ${lang.name} ${getEnglishName(lang.code)}`.toLowerCase();
       return haystack.includes(q) || lang.code === normalizedQuery;
+    }).map((lang) => {
+      let tier = 2;
+      if (exactCode && lang.code === exactCode) {
+        tier = 0;
+      } else {
+        const fields = [lang.code, lang.name, getEnglishName(lang.code)];
+        if (fields.some((f) => f.toLowerCase().startsWith(q))) tier = 1;
+      }
+      return { lang, tier };
     });
+
+    // Array.prototype.sort is stable, so ties keep canonical list order.
+    ranked.sort((a, b) => a.tier - b.tier);
+    return ranked.map((r) => r.lang);
   }, [query, selectedCodes]);
 
   const safeActiveIndex =
     filteredOptions.length === 0
       ? -1
       : Math.min(activeIndex, filteredOptions.length - 1);
+
+  useEffect(() => {
+    if (!isOpen || safeActiveIndex < 0) return;
+    const option = listRef.current?.children[
+      safeActiveIndex
+    ] as HTMLElement | undefined;
+    option?.scrollIntoView?.({ block: "nearest" });
+  }, [isOpen, safeActiveIndex]);
 
   const addCode = (code: string) => {
     if (selectedCodes.includes(code)) return;
@@ -135,7 +171,15 @@ export default function InlineLanguagePicker({
       : undefined;
 
   return (
-    <div ref={containerRef} className="relative">
+    <div
+      ref={containerRef}
+      className="relative"
+      onBlur={(e) => {
+        if (!containerRef.current?.contains(e.relatedTarget as Node)) {
+          setIsOpen(false);
+        }
+      }}
+    >
       <span aria-live="polite" className="sr-only">
         {announcement}
       </span>
@@ -193,6 +237,7 @@ export default function InlineLanguagePicker({
 
       {isOpen && (
         <ul
+          ref={listRef}
           id={listboxId}
           role="listbox"
           aria-label={ariaLabel}

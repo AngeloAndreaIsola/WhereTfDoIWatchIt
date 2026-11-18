@@ -1,4 +1,5 @@
 import { render, screen, fireEvent } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi } from "vitest";
 import InlineLanguagePicker from "../InlineLanguagePicker";
 
@@ -164,5 +165,103 @@ describe("InlineLanguagePicker", () => {
     const chip = screen.getByText("English (EN)");
     fireEvent.click(chip.parentElement!);
     expect(input()).toHaveFocus();
+  });
+
+  it.each([
+    ["EN", "English"],
+    ["IT", "Italiano"],
+    ["JA", "日本語"],
+    ["KO", "한국어"],
+    ["FR", "Français"],
+    ["ZH", "中文"],
+  ])(
+    "prioritizes the exact ISO-code match for %s over substring matches",
+    (code, name) => {
+      const { onChange } = renderPicker();
+      fireEvent.focus(input());
+      fireEvent.change(input(), { target: { value: code } });
+
+      const options = screen.getAllByRole("option");
+      expect(options[0]).toHaveTextContent(`${name} (${code})`);
+
+      fireEvent.keyDown(input(), { key: "Enter" });
+      expect(onChange).toHaveBeenCalledWith([code]);
+    }
+  );
+
+  it("prioritizes prefix matches over substring matches", () => {
+    renderPicker();
+    fireEvent.focus(input());
+    // "eng" is a prefix of English's name but only a substring of others.
+    fireEvent.change(input(), { target: { value: "eng" } });
+
+    const options = screen.getAllByRole("option");
+    expect(options[0]).toHaveTextContent("English (EN)");
+  });
+
+  it("does not select a different language when an already-selected exact code is typed", () => {
+    const { onChange } = renderPicker(["EN"]);
+    fireEvent.focus(input());
+    // "en" is an exact match for the already-selected EN; substring matches
+    // like Bengali must not be selectable via Enter.
+    fireEvent.change(input(), { target: { value: "en" } });
+
+    expect(screen.queryByRole("option")).not.toBeInTheDocument();
+    fireEvent.keyDown(input(), { key: "Enter" });
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("closes the dropdown when keyboard focus leaves the picker", async () => {
+    const user = userEvent.setup();
+    render(
+      <div>
+        <InlineLanguagePicker
+          selectedCodes={[]}
+          onChange={vi.fn()}
+          ariaLabel="Test languages"
+        />
+        <button type="button">next field</button>
+      </div>
+    );
+
+    await user.click(input());
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+
+    await user.tab();
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  });
+
+  it("keeps the dropdown open when focus moves inside the picker", async () => {
+    const user = userEvent.setup();
+    renderPicker(["EN"]);
+
+    await user.click(input());
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+
+    // Shift+Tab moves focus to the chip remove button, still inside the
+    // picker container, so the dropdown must stay open.
+    await user.tab({ shift: true });
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+  });
+
+  it("scrolls the highlighted option into view during keyboard navigation", () => {
+    const scrollSpy = vi.fn();
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrollSpy;
+    try {
+      renderPicker();
+      fireEvent.focus(input());
+      fireEvent.change(input(), { target: { value: "a" } });
+
+      // Navigate well beyond the first viewport of suggestions.
+      for (let i = 0; i < 30; i++) {
+        fireEvent.keyDown(input(), { key: "ArrowDown" });
+      }
+
+      expect(scrollSpy).toHaveBeenCalledWith({ block: "nearest" });
+      expect(scrollSpy.mock.calls.length).toBeGreaterThan(30);
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
   });
 });
