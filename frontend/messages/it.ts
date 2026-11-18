@@ -9,6 +9,9 @@ export const it: TranslationCatalog = {
     preferences: "Preferenze",
     subscriptions: "Abbonamenti",
     candidateReview: "Revisione Candidati",
+    openMenu: "Apri menu",
+    closeMenu: "Chiudi menu",
+    mainNav: "Navigazione principale",
   },
   locale: {
     label: "Lingua",
