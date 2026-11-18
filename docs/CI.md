@@ -37,7 +37,7 @@ The workflow consists of two independent jobs running on `ubuntu-latest`:
   2. Sets up Python 3.12 with pip cache (`actions/setup-python@v5`).
   3. Installs requirements via `pip install -r requirements.txt`.
   4. Runs database migrations via `python manage.py migrate`.
-  5. Executes test suite via `python manage.py test tracker -v 2`.
+  5. Executes test suite via `python manage.py test tracker availability -v 2 --noinput`.
 
 > **Mocking External APIs:** All backend unit tests mock calls to TMDb and RapidAPI (Streaming Availability API). `TMDB_API_KEY` and `RAPIDAPI_KEY` are explicitly set to empty strings in CI so that no external network calls or rate limits are consumed during testing.
 
@@ -65,7 +65,7 @@ If a CI run fails, follow these instructions to reproduce and fix the failure lo
 To run backend tests locally using Docker Compose (recommended):
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml exec backend python manage.py test tracker -v 2
+docker compose -f docker-compose.yml -f docker-compose.dev.yml exec backend python manage.py test tracker availability -v 2 --noinput
 ```
 
 To run backend tests locally on bare metal / host environment with PostgreSQL running:
@@ -82,7 +82,7 @@ export RAPIDAPI_KEY=""
 
 pip install -r requirements.txt
 python manage.py migrate
-python manage.py test tracker -v 2
+python manage.py test tracker availability -v 2 --noinput
 ```
 
 ### Frontend Failures
