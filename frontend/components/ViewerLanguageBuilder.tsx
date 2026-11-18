@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useState } from "react";
-import { CANONICAL_LANGUAGE_MAP, normalizeLanguageCode } from "@/lib/languages";
+import { isCanonicalLanguageCode } from "@/lib/languages";
+import InlineLanguagePicker from "./InlineLanguagePicker";
 
 export interface Viewer {
   name: string;
@@ -20,7 +21,7 @@ interface ViewerLanguageBuilderProps {
 
 export default function ViewerLanguageBuilder({ rule, onChange }: ViewerLanguageBuilderProps) {
   const [newViewerName, setNewViewerName] = useState("");
-  const [newViewerLangsInput, setNewViewerLangsInput] = useState("");
+  const [newViewerLangs, setNewViewerLangs] = useState<string[]>([]);
   const [addError, setAddError] = useState("");
 
   const handleAddViewer = (e: React.FormEvent) => {
@@ -33,41 +34,18 @@ export default function ViewerLanguageBuilder({ rule, onChange }: ViewerLanguage
       return;
     }
 
-    const rawTokens = newViewerLangsInput
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-
-    if (rawTokens.length === 0) {
-      setAddError("Please enter at least one language code (e.g., EN, IT, JA).");
+    if (newViewerLangs.length === 0) {
+      setAddError("Please add at least one language using the language picker.");
       return;
     }
 
-    const validLangs: string[] = [];
-    const invalidTokens: string[] = [];
-    const seen = new Set<string>();
-
-    for (const token of rawTokens) {
-      const canonical = normalizeLanguageCode(token);
-      if (canonical) {
-        if (!seen.has(canonical)) {
-          seen.add(canonical);
-          validLangs.push(canonical);
-        }
-      } else {
-        invalidTokens.push(token);
-      }
-    }
-
-    if (invalidTokens.length > 0) {
-      setAddError(`Invalid language code(s): ${invalidTokens.join(", ")}. Please use valid 2-character language codes (e.g. EN, IT, JA).`);
-      return;
-    }
-
-    const updatedViewers = [...rule.viewers, { name: trimmedName, languages: validLangs }];
+    const updatedViewers = [
+      ...rule.viewers,
+      { name: trimmedName, languages: newViewerLangs },
+    ];
     onChange({ type: "viewers", viewers: updatedViewers });
     setNewViewerName("");
-    setNewViewerLangsInput("");
+    setNewViewerLangs([]);
   };
 
   const handleRemoveViewer = (index: number) => {
@@ -75,18 +53,13 @@ export default function ViewerLanguageBuilder({ rule, onChange }: ViewerLanguage
     onChange({ type: "viewers", viewers: updatedViewers });
   };
 
-  const handleUpdateViewerLangs = (index: number, rawInput: string) => {
-    const rawTokens = rawInput
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-
+  const handleUpdateViewerLangs = (index: number, codes: string[]) => {
     const validLangs: string[] = [];
     const seen = new Set<string>();
 
-    for (const token of rawTokens) {
-      const canonical = normalizeLanguageCode(token);
-      if (canonical && !seen.has(canonical)) {
+    for (const code of codes) {
+      const canonical = code.trim().toUpperCase();
+      if (isCanonicalLanguageCode(canonical) && !seen.has(canonical)) {
         seen.add(canonical);
         validLangs.push(canonical);
       }
@@ -120,7 +93,7 @@ export default function ViewerLanguageBuilder({ rule, onChange }: ViewerLanguage
               key={index}
               viewer={viewer}
               onRemove={() => handleRemoveViewer(index)}
-              onUpdateLangs={(input) => handleUpdateViewerLangs(index, input)}
+              onUpdateLangs={(codes) => handleUpdateViewerLangs(index, codes)}
             />
           ))
         )}
@@ -157,13 +130,11 @@ export default function ViewerLanguageBuilder({ rule, onChange }: ViewerLanguage
             <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
               Languages Spoken / Understood
             </label>
-            <input
-              type="text"
-              placeholder="e.g. EN, IT"
-              value={newViewerLangsInput}
-              onChange={(e) => setNewViewerLangsInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') handleAddViewer(e); }}
-              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-mono text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+            <InlineLanguagePicker
+              selectedCodes={newViewerLangs}
+              onChange={setNewViewerLangs}
+              ariaLabel="Languages spoken or understood by the new viewer"
+              placeholder="Search language or code (e.g. JA, Japanese)…"
             />
           </div>
 
@@ -185,39 +156,10 @@ export default function ViewerLanguageBuilder({ rule, onChange }: ViewerLanguage
 interface ViewerRowProps {
   viewer: Viewer;
   onRemove: () => void;
-  onUpdateLangs: (rawInput: string) => void;
+  onUpdateLangs: (codes: string[]) => void;
 }
 
 function ViewerRow({ viewer, onRemove, onUpdateLangs }: ViewerRowProps) {
-  const [editingLangs, setEditingLangs] = useState(viewer.languages.join(", "));
-  const [error, setError] = useState("");
-
-  React.useEffect(() => {
-    setEditingLangs(viewer.languages.join(", "));
-  }, [viewer.languages]);
-
-  const handleBlur = () => {
-    setError("");
-    const rawTokens = editingLangs
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-
-    const invalidTokens: string[] = [];
-    for (const token of rawTokens) {
-      if (!normalizeLanguageCode(token)) {
-        invalidTokens.push(token);
-      }
-    }
-
-    if (invalidTokens.length > 0) {
-      setError(`Invalid language code(s): ${invalidTokens.join(", ")}`);
-      return;
-    }
-
-    onUpdateLangs(editingLangs);
-  };
-
   return (
     <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 shadow-xs dark:border-gray-700 dark:bg-gray-900/40">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -230,16 +172,16 @@ function ViewerRow({ viewer, onRemove, onUpdateLangs }: ViewerRowProps) {
           </span>
         </div>
 
-        <div className="flex flex-1 items-center gap-2 min-w-[200px]">
-          <span className="text-xs text-gray-500 dark:text-gray-400">Speaks:</span>
-          <input
-            type="text"
-            value={editingLangs}
-            onChange={(e) => setEditingLangs(e.target.value)}
-            onBlur={handleBlur}
-            placeholder="EN, IT"
-            className="flex-1 rounded-md border border-gray-300 bg-white px-2.5 py-1 text-xs font-mono shadow-xs focus:border-blue-500 focus:outline-none dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
-          />
+        <div className="flex min-w-[200px] flex-1 items-center gap-2">
+          <span className="shrink-0 text-xs text-gray-500 dark:text-gray-400">Speaks:</span>
+          <div className="min-w-0 flex-1">
+            <InlineLanguagePicker
+              selectedCodes={viewer.languages}
+              onChange={onUpdateLangs}
+              ariaLabel={`Languages spoken or understood by ${viewer.name}`}
+              placeholder="Add language…"
+            />
+          </div>
         </div>
 
         <button
@@ -252,27 +194,6 @@ function ViewerRow({ viewer, onRemove, onUpdateLangs }: ViewerRowProps) {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
           </svg>
         </button>
-      </div>
-
-      {error && (
-        <div className="mt-1 text-[11px] text-red-600 dark:text-red-400">
-          {error}
-        </div>
-      )}
-
-      {/* Spoken language badges */}
-      <div className="mt-2 flex flex-wrap gap-1">
-        {viewer.languages.map((code) => {
-          const canonicalName = CANONICAL_LANGUAGE_MAP[code];
-          return (
-            <span
-              key={code}
-              className="inline-flex items-center rounded-md bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700 dark:bg-blue-950/60 dark:text-blue-300"
-            >
-              {code} {canonicalName ? `(${canonicalName})` : ""}
-            </span>
-          );
-        })}
       </div>
     </div>
   );
