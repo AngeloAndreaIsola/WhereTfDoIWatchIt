@@ -78,4 +78,14 @@ describe("AppNav mobile menu", () => {
 
     expect(document.getElementById("mobile-nav-menu")).toBeNull();
   });
+
+  it("switches between the inline nav and the menu at the lg breakpoint", () => {
+    renderNav();
+    const inlineNav = screen.getAllByRole("navigation", { name: "Main navigation" })[0];
+    expect(inlineNav).toHaveClass("hidden", "lg:flex");
+    expect(inlineNav.className).not.toContain("sm:flex");
+    const toggleWrapper = screen.getByRole("button", { name: "Open menu" }).parentElement;
+    expect(toggleWrapper).toHaveClass("lg:hidden");
+    expect(toggleWrapper?.className).not.toContain("sm:hidden");
+  });
 });

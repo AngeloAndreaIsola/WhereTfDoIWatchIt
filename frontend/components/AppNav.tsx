@@ -100,14 +100,14 @@ export function AppNav() {
 
   return (
     <>
-      <nav aria-label={navLabel} className="hidden items-center gap-1 sm:flex sm:gap-2">
+      <nav aria-label={navLabel} className="hidden items-center gap-2 lg:flex">
         <NavLinks pathname={pathname} t={t} layout="inline" />
-        <div className="ml-1 pl-1 sm:ml-2 sm:pl-2 border-l border-gray-200 dark:border-gray-800">
+        <div className="ml-2 pl-2 border-l border-gray-200 dark:border-gray-800">
           <LocaleSwitcher />
         </div>
       </nav>
 
-      <div ref={menuRef} className="relative sm:hidden">
+      <div ref={menuRef} className="relative lg:hidden">
         <button
           ref={buttonRef}
           type="button"
