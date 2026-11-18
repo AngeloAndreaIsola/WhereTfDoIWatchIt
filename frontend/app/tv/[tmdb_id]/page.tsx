@@ -9,6 +9,7 @@ import { useCurrentLocation } from "@/components/CurrentLocationProvider";
 import RefreshAvailabilityButton from "@/components/RefreshAvailabilityButton";
 import AvailabilityState from "@/components/AvailabilityState";
 import LastKnownOffers from "@/components/LastKnownOffers";
+import CastList from "@/components/CastList";
 import type { PrimeOffer, PrimeSeriesResponse } from "@/lib/api";
 import { fetchPrimeSeriesOffers, addToWatchlist, markMovieWatched, unmarkMovieWatched, removeWatchlistItem, requestAvailabilityRefresh } from "@/lib/api";
 
@@ -533,30 +534,7 @@ export default function SeriesDetailPage({ params }: SeriesDetailPageProps) {
                 )}
 
                 {/* Cast */}
-                {data.series.cast && data.series.cast.length > 0 && (
-                  <div className="mt-3">
-                    <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                      Cast
-                    </h3>
-                    <div className="mt-1 flex flex-wrap gap-1.5">
-                      {data.series.cast.slice(0, 8).map((person) => (
-                        <span
-                          key={person.id}
-                          className="rounded-full bg-blue-50 px-2.5 py-0.5 text-xs text-blue-700 dark:bg-blue-900/30 dark:text-blue-300"
-                        >
-                          {person.character
-                            ? `${person.name} as ${person.character}`
-                            : person.name}
-                        </span>
-                      ))}
-                      {data.series.cast.length > 8 && (
-                        <span className="text-xs text-gray-400">
-                          +{data.series.cast.length - 8} more
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                )}
+                <CastList cast={data.series.cast} />
               </div>
             </div>
           </div>
