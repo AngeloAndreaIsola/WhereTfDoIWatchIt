@@ -109,6 +109,20 @@ class ManualScraperReviewTests(TestCase):
         candidate.save()
         self.assertEqual(stored_review(self.mapping)["candidates"], [])
 
+    def test_review_timestamp_cannot_make_old_persisted_evidence_fresh(self):
+        candidate = ProviderContentCandidate.objects.create(
+            provider_content=self.content, tmdb_id=420, title="Fixture Identity", year=2020,
+            content_type="movie", scoring_evidence={"content_title": "Fixture Identity",
+                "content_year": 2020, "content_type": "movie"},
+        )
+        ProviderContentCandidate.objects.filter(pk=candidate.pk).update(
+            created_at=timezone.now() - timedelta(days=31), updated_at=timezone.now())
+        before = self.snapshot()
+        result = stored_review(self.mapping)
+        self.assertEqual(result["candidate_state"], "stale")
+        self.assertEqual(result["candidates"], [])
+        self.assertEqual(self.snapshot(), before)
+
     def test_cached_candidates_are_bounded_and_typed(self):
         self.cache_search([self.candidate(i) for i in range(1, 12)] + [self.candidate(20, "series")])
         result = stored_review(self.mapping)

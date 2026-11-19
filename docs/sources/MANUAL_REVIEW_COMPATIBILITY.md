@@ -18,7 +18,8 @@ Findings:
    finite attempt budgets, disabled redirects, retry ceilings and Retry-After.
    These are sufficient to restore suggestions without any network on GET.
    Persistent suggestions must still match current source identity/type/year;
-   expired or rejected evidence is not verification.
+   expired or rejected evidence is not verification. Review timestamps cannot
+   rejuvenate old candidate evidence; use a fresh search cache instead.
 3. The current frontend has **no consumer** of `/api/scrapers/unresolved/` or
    `/api/scrapers/confirm-match/`. `/candidate-review` instead reads the separate
    ProviderContent candidate-admin endpoints, shows evidence/conflicts and uses

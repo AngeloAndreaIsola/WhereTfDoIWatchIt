@@ -113,7 +113,7 @@ def stored_review(mapping):
                 provider_content=content, content_type=kind,
             ).exclude(review_state="rejected").order_by("-confidence_score", "pk"):
                 evidence = candidate.scoring_evidence if isinstance(candidate.scoring_evidence, dict) else {}
-                if (candidate.updated_at <= now - timedelta(days=30)
+                if (min(candidate.created_at, candidate.updated_at) <= now - timedelta(days=30)
                         or not _same_title(evidence.get("content_title"), mapping.scraped_title)
                         or evidence.get("content_type") != kind
                         or evidence.get("content_year") != mapping.scraped_year):
