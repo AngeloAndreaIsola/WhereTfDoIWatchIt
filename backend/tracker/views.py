@@ -131,6 +131,7 @@ from .services.refresh_requests import (
     request_watchlist_refresh,
 )
 from .services.scraper_runner import run_provider_scraper
+from .services.membership import get_or_create_watchlist_membership
 from .services.manual_review_policy import ManualReviewBlocked
 from .services.legacy_manual_review import stored_review, explicit_lookup, confirm_mapping
 from availability.candidate_admin_views import verify_operator_mutation_guard
@@ -1452,7 +1453,11 @@ def export_combined(request):
 
 @api_view(["POST"])
 def watchlist_resolve(request):
-    """Resolve selected movies into Movie and WatchlistItem database records."""
+    """Resolve selected movies into Movie and WatchlistItem database records.
+
+    Membership is idempotent per (user, movie) (#106): a selection that already
+    has a watchlist row (any source) reuses it and preserves its provenance.
+    """
     selections = request.data.get("selections") if isinstance(request.data, dict) else None
     if not selections or not isinstance(selections, list):
         return Response(
@@ -1487,6 +1492,7 @@ def watchlist_resolve(request):
             unique_selections.append(item)
 
     watchlist_items = []
+    created_count = 0
     for sel in unique_selections:
         movie, created = Movie.objects.get_or_create(
             tmdb_id=sel["tmdb_id"],
@@ -1500,11 +1506,14 @@ def watchlist_resolve(request):
         if not created and sel.get("poster_path") and not movie.poster_path:
             movie.poster_path = sel.get("poster_path")
             movie.save()
-        item, _ = WatchlistItem.objects.get_or_create(
-            user_id=1,
-            movie=movie,
-            source="letterboxd_resolved",
+        # Reuse the user's existing membership regardless of source (#106):
+        # resolving an ambiguous import for a manually-added title must not
+        # create a second row. Provenance of the first entry is preserved.
+        item, item_created = get_or_create_watchlist_membership(
+            movie, user_id=1, source="letterboxd_resolved"
         )
+        if item_created:
+            created_count += 1
         # Event-driven refresh: resolved selections become eligible for
         # canonical availability refresh (idempotent, local-only).
         request_availability_refresh(movie, priority=RefreshPriority.WATCHLIST, country=_active_country(request))
@@ -1513,6 +1522,11 @@ def watchlist_resolve(request):
     return Response(
         {
             "resolved_count": len(watchlist_items),
+            # Idempotency contract (#106): resolved_count counts selections
+            # mapped to a membership; created_count counts only memberships
+            # actually created. Re-resolving an already-listed title returns
+            # the existing row (created_count=0), never a duplicate.
+            "created_count": created_count,
             "items": WatchlistItemSerializer(watchlist_items, many=True).data,
         },
         status=status.HTTP_201_CREATED,
@@ -3309,6 +3323,10 @@ def add_to_watchlist(request):
     Request body:
         tmdb_id (int, required): the TMDb ID of the movie/series to add
         content_type (str, optional): "movie" (default) or "series"
+
+    Idempotent per (user, movie) (#106): if the title already has a watchlist
+    membership from any source (import or resolution), that row is reused and
+    HTTP 200 is returned instead of creating a duplicate.
     """
     from .services.enrichment import resolve_or_create_movie
 
@@ -3327,28 +3345,29 @@ def add_to_watchlist(request):
         logger.exception("Failed to resolve/create movie for tmdb_id=%s", tmdb_id)
         return Response({"error": f"Movie lookup failed: {exc}"}, status=502)
 
-    # Check if already in watchlist
-    if WatchlistItem.objects.filter(user_id=1, movie=movie, source="manual").exists():
-        return Response({
-            "message": "Movie already in watchlist",
-            "watchlist_item": WatchlistItemSerializer(WatchlistItem.objects.filter(user_id=1, movie=movie, source="manual").first()).data,
-        })
-
+    # One logical membership per (user, movie): source is provenance, not
+    # identity (#106). Reuse any existing row regardless of how the title
+    # entered the watchlist (manual add, import, or ambiguity resolution).
     try:
         with transaction.atomic():
-            watchlist_item = WatchlistItem.objects.create(
-                user_id=1,
-                movie=movie,
-                source="manual",
+            watchlist_item, created = get_or_create_watchlist_membership(
+                movie, user_id=1, source="manual"
             )
-            # Event-driven refresh (Phase B): local insert in the same
-            # transaction — the response never waits for a provider; the
-            # budgeted refresh run drains it later.
-            request_availability_refresh(
-                watchlist_item.movie,
-                priority=RefreshPriority.WATCHLIST,
-                country=_active_country(request),
-            )
+            if created:
+                # Event-driven refresh (Phase B): local insert in the same
+                # transaction — the response never waits for a provider; the
+                # budgeted refresh run drains it later.
+                request_availability_refresh(
+                    watchlist_item.movie,
+                    priority=RefreshPriority.WATCHLIST,
+                    country=_active_country(request),
+                )
+
+        if not created:
+            return Response({
+                "message": "Movie already in watchlist",
+                "watchlist_item": WatchlistItemSerializer(watchlist_item).data,
+            })
 
         # Create UserMovieData entry if not exists
         user_data, _ = UserMovieData.objects.get_or_create(
