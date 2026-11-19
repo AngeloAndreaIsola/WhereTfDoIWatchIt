@@ -329,4 +329,3 @@ class KissKHPendingClassificationTests(TestCase):
         self.assertTrue(KissKHPendingClassification.objects.filter(provider=self.provider, native_id="88").exists())
         state = CatalogueDiscoveryState.objects.get(provider=self.provider)
         self.assertEqual(state.cursor["parts"]["2"], 1)
-

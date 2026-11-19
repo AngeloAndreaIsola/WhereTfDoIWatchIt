@@ -35,7 +35,8 @@ collectors retain their separately managed behavior; this change establishes no
 new broadcaster permission.
 
 Blocked provider cards retain observation counts/history and have no refresh
-target. Seeding metadata does not authorize execution or change permission grants.
+target. Their saved counts remain labelled active mappings, never playback
+availability, even when permission removes the refresh target. Seeding metadata does not authorize execution or change permission grants.
 No runtime permission, rate budget, schedule, migration or deployment setting was
 enabled by this integration.
 

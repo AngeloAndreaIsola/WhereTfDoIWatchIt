@@ -237,7 +237,7 @@ export default function ProviderGrid({
                 {/* Operational meta: counts and last run come batched with the
                     list response, so the card never fetches its own data. */}
                 <span className="mt-2 text-[10px] text-gray-500 dark:text-gray-400">
-                  {provider.available_items ?? 0} {provider.refresh_kind === "scraper" ? "active mappings" : "available"}
+                  {provider.available_items ?? 0} {(provider.category === "scraper" || provider.refresh_kind === "scraper" || (!provider.refresh_kind && provider.has_scraper)) ? "active mappings" : "available"}
                 </span>
                 <span className="text-[10px] text-gray-400 dark:text-gray-500">
                   {isRefreshing ? (

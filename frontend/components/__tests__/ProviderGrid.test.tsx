@@ -90,6 +90,15 @@ describe("ProviderGrid Component", () => {
     expect(screen.getByText("HTTP 451")).toBeInTheDocument();
   });
 
+  it("keeps blocked scraper observations distinct from availability", () => {
+    render(<ProviderGrid providers={[{
+      ...refreshableProviders[1], refresh_kind: null, has_scraper: true,
+    }]} onToggle={vi.fn()} onRefresh={vi.fn()} />);
+    expect(screen.getByText("61 active mappings")).toBeInTheDocument();
+    expect(screen.queryByText("61 available")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Refresh KissKH" })).not.toBeInTheDocument();
+  });
+
   it("renders major providers grid with active/inactive states", () => {
     render(<ProviderGrid providers={mockProviders} onToggle={vi.fn()} />);
 
