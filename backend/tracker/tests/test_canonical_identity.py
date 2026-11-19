@@ -4,7 +4,7 @@ from django.db import IntegrityError, transaction
 from django.test import TestCase
 
 from tracker.models import Movie
-from tracker.services.unified_catalogue import _movies_by_tmdb_id
+from tracker.services.unified_catalogue import _movies_by_identity
 from tracker.views import _load_content_item, _resolve_watch_item, _unique_movie_for_tmdb
 
 
@@ -24,7 +24,7 @@ class CanonicalIdentityTests(TestCase):
             self.assertEqual(_load_content_item(42, 'series'), self.series)
             self.assertIsNone(_resolve_watch_item(42))
         self.assertIsNone(_unique_movie_for_tmdb(42))
-        resolved = _movies_by_tmdb_id([42])
+        resolved = _movies_by_identity([self.movie, self.series])
         self.assertEqual(resolved[(42, 'movie')], self.movie)
         self.assertEqual(resolved[(42, 'series')], self.series)
 

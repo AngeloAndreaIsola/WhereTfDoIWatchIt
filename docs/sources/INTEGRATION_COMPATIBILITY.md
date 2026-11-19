@@ -1,5 +1,9 @@
 # Unofficial scraper integration and completeness notes
 
+Current safety boundary: the adapter paths below document parser capabilities,
+not execution permission. All six unofficial legacy execution paths are blocked;
+see [merge readiness](MERGE_READINESS.md). No automation grant is verified.
+
 Phase 2 adds the explicit checkpointed discovery operation documented in
 [`CATALOGUE_DISCOVERY.md`](CATALOGUE_DISCOVERY.md). The bounded execution in
 this table describes the normal scraper/refresh button path; it remains

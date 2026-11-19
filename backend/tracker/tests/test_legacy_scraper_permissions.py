@@ -45,7 +45,7 @@ class LegacyScraperPermissionTests(TestCase):
     def snapshot(self):
         return {
             model._meta.label: list(model.objects.order_by("pk").values())
-            for model in (Movie, ProviderContent, ContentMapping, Offer,
+            for model in (Provider, Movie, ProviderContent, ContentMapping, Offer,
                           ScrapedContentMapping, CatalogueDiscoveryState)
         }
 
@@ -70,6 +70,33 @@ class LegacyScraperPermissionTests(TestCase):
                     }, format="json")
                     self.assertEqual(response.status_code, 409)
                     self.assertEqual(response.json()["code"], "source_permission_unverified")
+
+    def test_disabled_sources_are_blocked_through_every_http_route(self):
+        for provider in self.providers:
+            Provider.objects.filter(pk=provider.pk).update(is_enabled=False)
+            self.baseline["tracker.Provider"] = list(Provider.objects.order_by("pk").values())
+            for path in (f"/api/providers/{provider.slug}/refresh/", "/api/scrapers/run/",
+                         "/api/v2/unofficial/scrape/"):
+                response = self.client.post(path, {"provider_slug": provider.slug}, format="json")
+                self.assertIn(response.status_code, (404, 409))
+                if response.status_code == 409:
+                    self.assertEqual(response.json()["code"], "source_disabled")
+
+    def test_denied_and_expired_grants_are_blocked_at_http_boundary(self):
+        for provider in self.providers:
+            for state in ("DENIED", "VERIFIED"):
+                permission = DiscoveryPermission(
+                    provider.slug, status=state, hostname="example.test", paths=(r"/.*",),
+                    reviewed_on=date.today() - timedelta(days=2),
+                    expires_on=date.today() - timedelta(days=1), evidence="expired fixture",
+                )
+                expected = "source_permission_denied" if state == "DENIED" else "source_permission_unverified"
+                with patch.dict(PERMISSIONS, {provider.slug: permission}):
+                    for path in (f"/api/providers/{provider.slug}/refresh/", "/api/scrapers/run/",
+                                 "/api/v2/unofficial/scrape/"):
+                        response = self.client.post(path, {"provider_slug": provider.slug}, format="json")
+                        self.assertEqual(response.status_code, 409)
+                        self.assertEqual(response.json()["code"], expected)
 
     def test_direct_execution_and_transport_cannot_bypass_selection(self):
         for provider in self.providers:
@@ -96,6 +123,9 @@ class LegacyScraperPermissionTests(TestCase):
                         ContentMatcher().match_item(item)
                     with self.assertRaises(ScraperExecutionIneligible):
                         ContentMatcher._upsert_mapping(provider, item, movie=self.movie)
+                    from tracker.services.scraped_mapping import persist_scraped_item
+                    with self.assertRaises(ScraperExecutionIneligible):
+                        persist_scraped_item(provider=provider, item=item, movie=self.movie, apply_match=True)
 
     def test_permissions_deny_expiry_disable_and_self_approval_all_fail_closed(self):
         today = date.today()

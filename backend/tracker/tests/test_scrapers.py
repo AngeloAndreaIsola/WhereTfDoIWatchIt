@@ -1,4 +1,6 @@
 """Tests for the priority-source scrapers (BBC, NHK, RaiPlay) and the registry."""
+# Calls to _execute_run below exercise retained parser orchestration with fixture
+# HTTP seams; public run()/session authorization is tested separately.
 from unittest.mock import patch
 
 from django.test import TestCase
@@ -192,7 +194,7 @@ class HydraHDScraperTest(TestCase):
                 }
             ]
         }
-        items = self.scraper.run(query="Inception")
+        items = self.scraper._execute_run(query="Inception")
         mock_fetch.assert_called()
         call_kwargs = mock_fetch.call_args
         self.assertIn("headers", call_kwargs.kwargs or {})
@@ -207,13 +209,13 @@ class HydraHDScraperTest(TestCase):
     @patch.object(HydraHDScraper, "fetch_url")
     def test_search_all_urls_fail_returns_empty(self, mock_fetch):
         mock_fetch.return_value = None
-        items = self.scraper.run(query="NonexistentMovie")
+        items = self.scraper._execute_run(query="NonexistentMovie")
         self.assertEqual(items, [])
 
     @patch.object(HydraHDScraper, "fetch_url")
     def test_no_query_browse_uses_unified_fetch_url(self, mock_fetch):
         mock_fetch.return_value = None
-        items = self.scraper.run(query=None)
+        items = self.scraper._execute_run(query=None)
         self.assertEqual(items, [])
         mock_fetch.assert_called()
 

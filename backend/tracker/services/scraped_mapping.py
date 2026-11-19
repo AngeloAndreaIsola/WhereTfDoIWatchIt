@@ -47,6 +47,9 @@ def persist_scraped_item(
     to changing the association with ``apply_match=True``.  Both routes then
     project the exact same row into the canonical catalogue.
     """
+    if apply_match:
+        from .scraper_policy import require_legacy_execution
+        require_legacy_execution(provider)
     payload = dict(item.raw_payload) if isinstance(item.raw_payload, dict) else {}
     payload.setdefault("content_type", item.content_type)
     native_id = provider_content_id_for_item(item)

@@ -279,7 +279,7 @@ def unified_catalog(request):
     include_scraper = scope.include_scraper
 
     unified_items = []
-    seen_tmdb_ids = set()
+    seen_identities = set()
 
     # Watched flag for the official half, read once. Official rows are Movie
     # rows, so this is the same UserMovieData source the mark/unmark endpoints
@@ -311,7 +311,7 @@ def unified_catalog(request):
         for item in evaluated:
             m = item["movie"]
             watch_res = item["watchability"]
-            seen_tmdb_ids.add(m.tmdb_id)
+            seen_identities.add(identity_key(m.tmdb_id, m.content_type))
 
             # Membership already reflects the watched filter (applied inside
             # apply_composable_filters); this only labels the row for display.
@@ -359,7 +359,7 @@ def unified_catalog(request):
         scraped_items = unofficial_catalogue_items(
             request.GET,
             allowed_provider_slugs=allowed_provider_slugs,
-            exclude_tmdb_ids=seen_tmdb_ids,
+            exclude_identities=seen_identities,
         )
         raw_content_type = (
             request.GET.get("content_type") or request.GET.get("type") or ""

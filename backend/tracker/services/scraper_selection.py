@@ -1,10 +1,10 @@
 """The single policy boundary for legacy scraper execution.
 
-Registration exposes parsers only; execution requires a separate policy check.  A missing registration is
-*not* permission to run :class:`GenericURLAdapter`: a provider with a canonical
-catalogue collector must use that collector, and a named legacy scraper that is
-retired must fail explicitly.  Generic crawling remains available only to
-genuinely imported ``category='scraper'`` providers.
+Registration exposes parsers only; execution requires a separate policy check.
+A missing registration is not permission to run :class:`GenericURLAdapter`:
+a provider with a canonical catalogue collector must use that collector, and a
+retired named scraper must fail explicitly. Imported scraper metadata also
+requires a reviewed grant and a guarded transport before execution.
 
 All HTTP scraper entry points and ``scraper_runner`` use this module.  Keep
 new execution paths out of the registry/adapter modules so this rule cannot be
@@ -18,6 +18,7 @@ from ..models import Provider, ProviderCategory
 from ..scrapers import resolve_scraper_class
 from ..scrapers.adapters import GenericURLAdapter
 from .provider_status import catalogue_source_map
+from .discovery_policy import UNOFFICIAL_PROVIDERS
 from .scraper_policy import ScraperExecutionIneligible, require_legacy_execution
 
 
@@ -59,7 +60,6 @@ def select_provider_scraper(provider: Provider) -> ScraperSelection:
         )
     # Known unofficial slugs cannot escape policy through category changes or
     # registry removal. Unknown imported scraper providers are checked below.
-    from .discovery_policy import UNOFFICIAL_PROVIDERS
     if slug in UNOFFICIAL_PROVIDERS:
         require_legacy_execution(provider)
     scraper_class = resolve_scraper_class(slug)

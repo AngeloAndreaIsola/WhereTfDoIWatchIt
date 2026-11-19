@@ -10,6 +10,8 @@ Three concerns:
 - season gating: show-level scraper offers are suppressed when the series
   detail request is narrowed to one season.
 """
+# Calls to _execute_run below exercise retained parser orchestration with fixture
+# HTTP seams; public run()/session authorization is tested separately.
 from unittest.mock import MagicMock, patch
 
 from django.test import TestCase
@@ -83,7 +85,7 @@ def raiplay_html(typology: str, title: str = "Title", weblink: str = "/programmi
 """
 
 
-def series_item(title="Dune", year=2021, provider_slug="kisskh") -> ScrapedItem:
+def series_item(title="Dune", year=2021, provider_slug="nhk_world") -> ScrapedItem:
     return ScrapedItem(
         title=title,
         provider_slug=provider_slug,
@@ -231,10 +233,13 @@ class KissKHClassificationTests(TestCase):
         self.assertEqual(len(items), 2)
 
     @patch.object(KissKHScraper, "fetch_url")
-    def test_failed_requests_do_not_break_the_run(self, mock_fetch):
+    def test_unapproved_run_stops_before_a_failing_transport(self, mock_fetch):
+        from tracker.services.scraper_policy import ScraperExecutionIneligible
         mock_fetch.side_effect = Exception("blocked")
-        self.assertEqual(self.scraper._execute_run(query=None), [])
-        self.assertEqual(self.scraper._execute_run(query="x"), [])
+        for query in (None, "x"):
+            with self.assertRaises(ScraperExecutionIneligible):
+                self.scraper.run(query=query)
+        mock_fetch.assert_not_called()
 
 
 class RaiPlayClassificationTests(TestCase):
@@ -303,8 +308,8 @@ class ContentMatcherContentTypeTests(TestCase):
     def setUp(self):
         self.client = APIClient()
         self.provider, _ = Provider.objects.get_or_create(
-            slug="kisskh",
-            defaults={"name": "KissKH", "category": "scraper", "is_enabled": True},
+            slug="nhk_world",
+            defaults={"name": "NHK", "category": "scraper", "is_enabled": True},
         )
         if self.provider.category != "scraper":
             self.provider.category = "scraper"
@@ -357,7 +362,7 @@ class ContentMatcherContentTypeTests(TestCase):
         ]
         item = ScrapedItem(
             title="Dune",
-            provider_slug="kisskh",
+            provider_slug="nhk_world",
             year=2021,
             content_type="movie",
             source_url="https://example.com/movie/dune",
@@ -403,7 +408,7 @@ class ContentMatcherContentTypeTests(TestCase):
         self.assertEqual(mapping.raw_payload.get("content_type"), "series")
 
     @patch("tracker.scrapers.base.TMDbClient.search")
-    def test_unresolved_review_searches_in_the_stored_type(self, mock_search):
+    def test_unresolved_review_retains_stored_type_without_a_search(self, mock_search):
         mock_search.return_value = []
         ContentMatcher().match_item(series_item(title="Nope", year=1999))
         mock_search.reset_mock()
@@ -411,7 +416,7 @@ class ContentMatcherContentTypeTests(TestCase):
         response = self.client.get("/api/scrapers/unresolved/")
 
         self.assertEqual(response.status_code, 200)
-        mock_search.assert_called_once_with("Nope", year=1999, content_type="series")
+        mock_search.assert_not_called()
         self.assertEqual(response.json()[0]["raw_payload"]["content_type"], "series")
 
 
@@ -424,8 +429,8 @@ class ScrapePayloadContentTypeTests(TestCase):
     def setUp(self):
         self.client = APIClient()
         self.provider, _ = Provider.objects.get_or_create(
-            slug="kisskh",
-            defaults={"name": "KissKH", "category": "scraper", "is_enabled": True},
+            slug="nhk_world",
+            defaults={"name": "NHK", "category": "scraper", "is_enabled": True},
         )
 
     @patch("tracker.services.scraper_selection.resolve_scraper_class")
@@ -441,7 +446,7 @@ class ScrapePayloadContentTypeTests(TestCase):
 
         response = self.client.post(
             "/api/scrapers/run/",
-            {"provider_slug": "kisskh"},
+            {"provider_slug": "nhk_world"},
             content_type="application/json",
         )
 
@@ -461,8 +466,8 @@ class ConfirmMatchContentTypeTests(TestCase):
     def setUp(self):
         self.client = APIClient()
         self.provider, _ = Provider.objects.get_or_create(
-            slug="kisskh",
-            defaults={"name": "KissKH", "category": "scraper", "is_enabled": True},
+            slug="nhk_world",
+            defaults={"name": "NHK", "category": "scraper", "is_enabled": True},
         )
         self.mapping = ScrapedContentMapping.objects.create(
             provider=self.provider,

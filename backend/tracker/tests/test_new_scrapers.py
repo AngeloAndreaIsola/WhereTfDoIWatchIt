@@ -3,6 +3,8 @@
 Fixtures mirror the *actual* live markup: image-only anchors whose titles live
 in ``data-title``/``title`` attributes, not in anchor text.
 """
+# Calls to _execute_run below exercise retained parser orchestration with fixture
+# HTTP seams; public run()/session authorization is tested separately.
 from unittest.mock import patch
 
 from django.test import TestCase

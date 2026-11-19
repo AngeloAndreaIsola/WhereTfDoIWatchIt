@@ -120,15 +120,15 @@ def unofficial_catalogue_items(
     params,
     *,
     allowed_provider_slugs: Optional[set[str]],
-    exclude_tmdb_ids: Optional[set[int]] = None,
+    exclude_identities: Optional[set[tuple[int, str]]] = None,
 ) -> list[dict]:
     """The unofficial half of the unified catalogue, canonically sourced.
 
     Reads through ``ProviderCatalogueQueryService`` (local canonical
     ``ProviderContent`` / ``ContentMapping`` rows) and maps each entry onto
     the existing response shape, so the frontend contract is unchanged.
-    ``exclude_tmdb_ids`` carries the ids already presented by the official
-    half so one title never appears twice.
+    ``exclude_identities`` carries typed identities already presented by the
+    official half so one title never appears twice.
 
     Display follows the historical response: for a resolved title the
     ``Movie`` row wins (canonical title/year/poster/content type), for an
@@ -144,8 +144,12 @@ def unofficial_catalogue_items(
         country=country or None,
         year_min=_digit(params.get("year_min")),
         year_max=_digit(params.get("year_max")),
-        exclude_tmdb_ids=exclude_tmdb_ids,
     )
+    if exclude_identities:
+        entries = [
+            entry for entry in entries
+            if identity_key(entry.tmdb_id, entry.content_type) not in exclude_identities
+        ]
     movies = _movies_by_identity(entries)
 
     def resolved_movie(entry):

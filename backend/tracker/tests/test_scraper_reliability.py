@@ -11,6 +11,8 @@ regressions these tests pin are structural:
 - Search terms were interpolated into URLs raw, letting ``&``/``+``/spaces
   rewrite the query string.
 """
+# Calls to _execute_run below exercise retained parser orchestration with fixture
+# HTTP seams; public run()/session authorization is tested separately.
 from unittest.mock import patch
 
 import requests
@@ -286,14 +288,13 @@ class AnimeWorldBrowseRequestTests(SimpleTestCase):
         fetch.return_value = None
         self.assertEqual(AnimeWorldScraper()._execute_run(query=None), [])
 
-    def test_browse_timeout_is_absorbed_by_the_shared_helper(self):
+    def test_unapproved_browse_never_retries_or_dispatches(self):
+        from tracker.services.scraper_policy import ScraperExecutionIneligible
         scraper = AnimeWorldScraper()
-        with patch.object(scraper.session, "get",
-                          side_effect=requests.exceptions.Timeout("slow")) as get:
-            self.assertEqual(scraper._execute_run(query=None), [])
-        self.assertTrue(get.called)
-        # fetch_url retries each URL max_retries times, then gives up.
-        self.assertEqual(get.call_count, 4 * (1 + scraper.max_retries))
+        with patch.object(scraper.session, "get") as get:
+            with self.assertRaises(ScraperExecutionIneligible):
+                scraper._execute_run(query=None)
+        get.assert_not_called()
 
 
 class DocumentedRealMarkupTests(SimpleTestCase):

@@ -129,7 +129,7 @@ def minimal_card_status(provider: Provider) -> dict:
     return {
         "refresh_kind": refresh_kind,
         "source_slug": source_slug,
-        "last_run": provider.last_scraped_at if refresh_kind == SCRAPER else None,
+        "last_run": provider.last_scraped_at,
         "last_run_error": "",
         "available_items": 0,
         "refreshing": False,
@@ -332,7 +332,7 @@ def provider_card_status(providers) -> dict[int, dict]:
             status[provider.id] = {
                 "refresh_kind": None,
                 "source_slug": None,
-                "last_run": default_last_runs.get(provider.id),
+                "last_run": provider.last_scraped_at or default_last_runs.get(provider.id),
                 "last_run_error": "",
                 "available_items": scraped_counts.get(provider.id, 0) or offer_counts.get(provider.id, 0),
                 "refreshing": False,

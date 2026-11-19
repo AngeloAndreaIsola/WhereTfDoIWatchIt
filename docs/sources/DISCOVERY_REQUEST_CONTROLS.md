@@ -4,8 +4,10 @@ Discovery is fail closed. The checked-in permission registry currently has no
 verified unofficial automation grants. In particular, HydraHD and AnimeWorld
 return `BLOCKED` before scraper creation, DNS, run/lease creation or HTTP. The
 underlying old scraper adapters are not a permission bypass. This gate covers
-`discover_unofficial_catalogue` and its scheduler entry; unrelated legacy scraper
-commands are outside this change and must not be used as substitutes.
+`discover_unofficial_catalogue` and its scheduler entry. Legacy execution and
+matching additionally fail closed through the shared scraper policy; see
+[merge-readiness boundaries](MERGE_READINESS.md). Parser registration cannot
+authorize legacy HTTP or TMDb calls.
 
 The collector owns one `DiscoveryHTTP` transport per provider run. Every actual
 GET reserves an attempt before its socket-producing `_send` seam, including
