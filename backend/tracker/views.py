@@ -59,7 +59,12 @@ from .serializers import (
 )
 from tracker.scrapers import ContentMatcher, ScrapedItem
 from tracker.services.filtering import apply_composable_filters, parse_actor_filters
-from tracker.services.unified_catalogue import resolve_catalogue_scope, unofficial_catalogue_items
+from tracker.services.unified_catalogue import (
+    identity_key,
+    resolve_catalogue_scope,
+    unofficial_catalogue_items,
+    watched_identity_keys,
+)
 from tracker.services.watchability import (
     QUALIFYING_OFFER_TYPES,
     WatchabilityStatus,
@@ -283,7 +288,9 @@ def unified_catalog(request):
         request.GET.get("watched") or request.GET.get("watched_status") or ""
     ).lower().strip()
     watched_movie_ids: set[int] = set()
-    if watched_filter in ("watched", "unwatched", "all"):
+    # The official half needs its own watched-id set only when it is queried;
+    # a scraper-only request must not pay for an unused read.
+    if include_official and watched_filter in ("watched", "unwatched", "all"):
         watched_movie_ids = set(
             UserMovieData.objects.filter(
                 user_id=1, is_watched=True
@@ -367,23 +374,17 @@ def unified_catalog(request):
                 if (item.get("content_type") or "movie") == selected_content_type
             ]
         if watched_filter in ("watched", "unwatched", "all"):
-            # An unofficial entry has watch state only once it resolves to a
-            # local Movie; an unresolved entry has never been tracked, so it
-            # can only ever be unwatched. One batched read over the resolved
-            # tmdb ids, then keep/drop each row.
-            resolved_ids = {
-                item["tmdb_id"] for item in scraped_items if item.get("tmdb_id")
-            }
-            watched_tmdb_ids: set[int] = set()
-            if resolved_ids:
-                watched_tmdb_ids = set(
-                    UserMovieData.objects.filter(
-                        user_id=1, movie__tmdb_id__in=resolved_ids, is_watched=True
-                    ).values_list("movie__tmdb_id", flat=True)
-                )
+            # Identity is (TMDb id, media type), not the id alone: TMDb numbers
+            # movies and TV in separate namespaces while Movie.tmdb_id is
+            # stores the typed identity, so an id-only match could lend a watched
+            # movie's state to an unrelated series (or vice versa). Rows with
+            # a missing/invalid media type never resolve and are never
+            # claimed watched. One batched read serves the whole page.
+            watched_ids = watched_identity_keys(scraped_items)
             keep = []
             for item in scraped_items:
-                is_watched = item.get("tmdb_id") in watched_tmdb_ids
+                key = identity_key(item.get("tmdb_id"), item.get("content_type"))
+                is_watched = key is not None and key in watched_ids
                 if watched_filter != "all" and is_watched != (watched_filter == "watched"):
                     continue
                 item["is_watched"] = is_watched

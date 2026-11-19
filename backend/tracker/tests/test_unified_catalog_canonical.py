@@ -22,7 +22,9 @@ from availability.models import (
 )
 from availability.services.legacy_ingest import ingest_scraped_mapping
 from availability.tests.reconciliation_fixtures import ReconciliationFixtureMixin
-from tracker.models import Movie, Provider, ScrapedContentMapping, Subscription
+from tracker.models import (
+    Movie, Provider, ScrapedContentMapping, Subscription, UserMovieData,
+)
 from tracker.scrapers import ContentMatcher, ScrapedItem
 from tracker.services.tmdb import TMDbItem
 from tracker.tests.availability_factories import local_offer
@@ -171,6 +173,25 @@ class UnifiedCatalogContractTests(UnifiedCatalogCanonicalTestCase):
         by_source = {item["source"]: item for item in data["results"]}
         self.assertEqual(by_source["official"]["tmdb_id"], 700)
         self.assertEqual(by_source["scraper"]["title"], "Extra Film")
+
+    def test_watched_label_survives_official_unofficial_dedupe(self):
+        movie = Movie.objects.create(
+            tmdb_id=920, title="Dedup Film", year=2021, content_type="movie"
+        )
+        UserMovieData.objects.create(user_id=1, movie=movie, is_watched=True)
+        self._scrape(
+            scraped_title="Dedup Film", scraped_year=2021,
+            movie=movie, is_confirmed=True, confidence_score=1.0,
+        )
+
+        data = self._results("?watched=all")
+
+        # The official row wins dedupe; its watched label still comes from
+        # UserMovieData, never from the scraped row or watchlist membership.
+        self.assertEqual(data["count"], 1)
+        [item] = data["results"]
+        self.assertEqual(item["source"], "official")
+        self.assertIs(item["is_watched"], True)
 
 
 class UnifiedCatalogFilterTests(UnifiedCatalogCanonicalTestCase):

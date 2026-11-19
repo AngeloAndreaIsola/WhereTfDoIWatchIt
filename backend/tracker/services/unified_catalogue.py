@@ -24,9 +24,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+from availability.domain.enums import ContentType
 from availability.services.catalogue_query import ProviderCatalogueQueryService
+from availability.services.normalize import normalize_content_type as _normalize_source_content_type
 
-from ..models import Movie, Provider
+from ..models import Movie, Provider, UserMovieData
 from .filtering import cast_matches_actors, parse_actor_filters
 
 
@@ -144,17 +146,22 @@ def unofficial_catalogue_items(
         year_max=_digit(params.get("year_max")),
         exclude_tmdb_ids=exclude_tmdb_ids,
     )
-    movies = _movies_by_tmdb_id(entry.tmdb_id for entry in entries)
+    movies = _movies_by_identity(entries)
+
+    def resolved_movie(entry):
+        key = identity_key(entry.tmdb_id, entry.content_type)
+        return movies.get(key) if key is not None else None
+
     actor_ids, actor_names = parse_actor_filters(params)
     if actor_ids or actor_names:
         entries = [
             entry
             for entry in entries
-            if (movie := movies.get((entry.tmdb_id, entry.content_type))) is not None
+            if (movie := resolved_movie(entry)) is not None
             and cast_matches_actors(movie.cast, actor_ids, actor_names)
         ]
     return [
-        _as_api_item(entry, movies.get((entry.tmdb_id, entry.content_type)))
+        _as_api_item(entry, resolved_movie(entry))
         for entry in entries
     ]
 
@@ -165,15 +172,81 @@ def _digit(value) -> Optional[int]:
     return int(value)
 
 
-def _movies_by_tmdb_id(tmdb_ids) -> dict[tuple[int, str], Movie]:
-    """Batch ``Movie`` lookup for resolved entries (one query, at most)."""
-    wanted = {tmdb_id for tmdb_id in tmdb_ids if tmdb_id}
-    if not wanted:
+def identity_media_type(value) -> Optional[str]:
+    """Normalize a media type for identity comparisons.
+
+    Only movie/series identify a title. Season and episode rows describe a
+    series' children, and an unknown token is not evidence of either kind, so
+    both are deliberately unresolved rather than guessed.
+    """
+    try:
+        normalized = _normalize_source_content_type(str(value or ""))
+    except (TypeError, ValueError):
+        return None
+    if normalized in (ContentType.MOVIE, ContentType.SERIES):
+        return str(normalized)
+    return None
+
+
+def identity_key(tmdb_id, content_type) -> Optional[tuple[int, str]]:
+    """The full identity of a catalogue row: ``(tmdb_id, media_type)``.
+
+    TMDb assigns movie and TV ids from separate namespaces while
+    ``Movie`` stores the typed identity. An id without a known media type is
+    therefore not an identity and must never inherit another title's state.
+    """
+    media_type = identity_media_type(content_type)
+    if media_type is None:
+        return None
+    try:
+        parsed_id = int(tmdb_id)
+    except (TypeError, ValueError):
+        return None
+    if parsed_id <= 0:
+        return None
+    return (parsed_id, media_type)
+
+
+def watched_identity_keys(items, *, user_id: int = 1) -> set[tuple[int, str]]:
+    """Batched watched-state lookup for unofficial catalogue rows.
+
+    Returns the identities (id + media type) this user has actually watched.
+    One query regardless of the number of rows, and no lookup at all for rows
+    with a missing or invalid media type.
+    """
+    keys = {identity_key(item.get("tmdb_id"), item.get("content_type")) for item in items}
+    keys.discard(None)
+    if not keys:
+        return set()
+    rows = UserMovieData.objects.filter(
+        user_id=user_id, is_watched=True, movie__tmdb_id__in={key[0] for key in keys}
+    ).values_list("movie__tmdb_id", "movie__content_type")
+    watched: set[tuple[int, str]] = set()
+    for tmdb_id, raw_type in rows:
+        media_type = identity_media_type(raw_type)
+        if media_type is not None:
+            watched.add((tmdb_id, media_type))
+    return watched
+
+
+def _movies_by_identity(entries) -> dict[tuple[int, str], Movie]:
+    """One batched ``Movie`` lookup keyed by full identity, never id alone."""
+    keys = {
+        identity_key(entry.tmdb_id, entry.content_type)
+        for entry in entries
+    }
+    keys.discard(None)
+    if not keys:
         return {}
-    movies = Movie.objects.filter(tmdb_id__in=wanted).only(
-        "tmdb_id", "title", "year", "poster_path", "content_type", "cast"
-    )
-    return {(movie.tmdb_id, movie.content_type): movie for movie in movies}
+    movies = Movie.objects.filter(
+        tmdb_id__in={key[0] for key in keys}
+    ).only("tmdb_id", "title", "year", "poster_path", "content_type", "cast")
+    resolved: dict[tuple[int, str], Movie] = {}
+    for movie in movies:
+        media_type = identity_media_type(movie.content_type)
+        if media_type is not None:
+            resolved[(movie.tmdb_id, media_type)] = movie
+    return resolved
 
 
 def _as_api_item(entry, movie: Optional[Movie] = None) -> dict:

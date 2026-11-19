@@ -17,9 +17,11 @@ from __future__ import annotations
 from datetime import date
 from unittest.mock import patch
 
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 
-from tracker.models import Movie, UserMovieData, WatchlistItem
+from tracker.models import Movie, Provider, UserMovieData, WatchlistItem
 from tracker.tests.availability_factories import local_offer
 
 
@@ -329,8 +331,14 @@ class UnifiedCatalogWatchedFilterTests(TestCase):
         )
         _mark_watched(resolved)
         scraper_items = [
-            {"tmdb_id": 714, "source": "scraper", "title": "Resolved Scraper"},
-            {"tmdb_id": None, "source": "scraper", "title": "Unresolved Scraper"},
+            {
+                "tmdb_id": 714, "content_type": "movie",
+                "source": "scraper", "title": "Resolved Scraper",
+            },
+            {
+                "tmdb_id": None, "content_type": "movie",
+                "source": "scraper", "title": "Unresolved Scraper",
+            },
         ]
 
         with patch(
@@ -385,3 +393,118 @@ class UnifiedCatalogWatchedFilterTests(TestCase):
 
         self.assertNotIn(712, self._official_ids("?watched=watched"))
         self.assertIn(712, self._official_ids("?watched=unwatched"))
+
+
+class UnofficialIdentitySafetyTests(TestCase):
+    """Unofficial rows inherit watched state only on a full identity match.
+
+    TMDb keeps movie and TV id namespaces apart while ``Movie.tmdb_id`` is
+    globally unique, so id-only matching could assign a watched movie's state
+    to an unrelated series carrying the same number.
+    """
+
+    def setUp(self):
+        Provider.objects.create(slug="hydra", name="Hydra", category="scraper")
+        self.movie = Movie.objects.create(
+            tmdb_id=800, title="Watched Film", year=2020, content_type="movie"
+        )
+        self.series = Movie.objects.create(
+            tmdb_id=801, title="Watched Show", year=2019, content_type="series"
+        )
+        _mark_watched(self.movie)
+        _mark_watched(self.series)
+
+    @staticmethod
+    def _item(tmdb_id, content_type, title):
+        row = {"tmdb_id": tmdb_id, "source": "scraper", "title": title}
+        if content_type is not None:
+            row["content_type"] = content_type
+        return row
+
+    def _rows(self, items, query="watched=all"):
+        url = "/api/catalog/unified/?providers=hydra"
+        if query:
+            url += f"&{query}"
+        with patch("tracker.views.unofficial_catalogue_items", return_value=items):
+            resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 200, resp.content)
+        return resp.json()["results"]
+
+    def _ambiguous_items(self):
+        return [
+            self._item(800, "movie", "Matching Film"),
+            self._item(800, "tv", "Film ID as Series"),
+            self._item(801, "series", "Matching Show"),
+            self._item(801, "film", "Series ID as Movie"),
+            self._item(900, "movie", "Unresolved Film"),
+            self._item(None, "movie", "No TMDb ID"),
+            self._item(800, None, "No Media Type"),
+            self._item(800, "season", "Season Row"),
+            self._item(800, "bogus", "Invalid Media Type"),
+        ]
+
+    def test_watched_movie_and_series_match_their_own_media_type(self):
+        rows = {row["title"]: row for row in self._rows(self._ambiguous_items())}
+        self.assertIs(rows["Matching Film"]["is_watched"], True)
+        self.assertIs(rows["Matching Show"]["is_watched"], True)
+        for title in (
+            "Film ID as Series",
+            "Series ID as Movie",
+            "Unresolved Film",
+            "No TMDb ID",
+            "No Media Type",
+            "Season Row",
+            "Invalid Media Type",
+        ):
+            with self.subTest(title=title):
+                self.assertIs(rows[title]["is_watched"], False)
+
+    def test_same_id_mismatched_content_type_is_filtered_as_unwatched(self):
+        watched_titles = {
+            row["title"] for row in self._rows(self._ambiguous_items(), "watched=watched")
+        }
+        self.assertEqual(watched_titles, {"Matching Film", "Matching Show"})
+
+        unwatched = self._rows(self._ambiguous_items(), "watched=unwatched")
+        self.assertEqual(len(unwatched), 7)
+        self.assertTrue(all(row["is_watched"] is False for row in unwatched))
+
+    def test_missing_or_invalid_media_type_cannot_claim_watched(self):
+        items = [
+            self._item(800, None, "No Media Type"),
+            self._item(800, "", "Blank Media Type"),
+            self._item(800, "episode", "Episode Row"),
+            self._item(800, "nonsense", "Invalid Media Type"),
+        ]
+        rows = {row["title"]: row for row in self._rows(items)}
+        self.assertTrue(all(row["is_watched"] is False for row in rows.values()))
+
+    def test_watched_lookup_is_one_batched_query(self):
+        with CaptureQueriesContext(connection) as ctx:
+            self._rows(self._ambiguous_items())
+        watch_queries = [
+            query["sql"]
+            for query in ctx.captured_queries
+            if "tracker_usermoviedata" in query["sql"]
+        ]
+        self.assertEqual(len(watch_queries), 1)
+
+    def test_no_watched_parameter_leaves_the_label_absent(self):
+        rows = self._rows([self._item(800, "movie", "Matching Film")], "")
+        self.assertNotIn("is_watched", rows[0])
+
+    def test_watchlist_membership_does_not_claim_watched(self):
+        watchlisted = Movie.objects.create(
+            tmdb_id=802, title="Watchlisted Film", content_type="movie"
+        )
+        WatchlistItem.objects.create(user_id=1, movie=watchlisted, source="manual")
+        rows = self._rows([self._item(802, "movie", "Watchlisted Film")])
+        self.assertIs(rows[0]["is_watched"], False)
+
+    def test_another_users_watched_state_is_not_reused(self):
+        other = Movie.objects.create(
+            tmdb_id=803, title="Other User Film", content_type="movie"
+        )
+        _mark_watched(other, user_id=2)
+        rows = self._rows([self._item(803, "movie", "Other User Film")])
+        self.assertIs(rows[0]["is_watched"], False)

@@ -7,6 +7,9 @@ export interface TranslationCatalog {
     preferences: string;
     subscriptions: string;
     candidateReview: string;
+    openMenu: string;
+    closeMenu: string;
+    mainNav: string;
   };
   locale: {
     label: string;
@@ -48,6 +51,9 @@ export const en: TranslationCatalog = {
     preferences: "Preferences",
     subscriptions: "Subscriptions",
     candidateReview: "Candidate Review",
+    openMenu: "Open menu",
+    closeMenu: "Close menu",
+    mainNav: "Main navigation",
   },
   locale: {
     label: "Language",

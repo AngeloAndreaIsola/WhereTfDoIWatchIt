@@ -9,6 +9,9 @@ export const ja: TranslationCatalog = {
     preferences: "設定",
     subscriptions: "サブスクリプション",
     candidateReview: "候補レビュー",
+    openMenu: "メニューを開く",
+    closeMenu: "メニューを閉じる",
+    mainNav: "メインナビゲーション",
   },
   locale: {
     label: "言語",

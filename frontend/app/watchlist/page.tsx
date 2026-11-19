@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams, useRouter } from "next/navigation";
 import { FilterBar, FilterState } from "@/components/FilterBar";
@@ -126,6 +126,11 @@ export default function WatchlistPage() {
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [pendingWatched, setPendingWatched] = useState<number | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const abortRef = useRef<AbortController | null>(null);
+  const fetchGenerationRef = useRef(0);
 
   const [vpnModalState, setVpnModalState] = useState<{
     isOpen: boolean;
@@ -168,7 +173,16 @@ export default function WatchlistPage() {
     setFilters(newFilters);
   };
 
+  // Re-reads the currently filtered query. Every request has an
+  // AbortController and a generation number: a response arriving after a
+  // newer request (or after a mutation) is discarded instead of overwriting
+  // fresher rows.
   useEffect(() => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const generation = ++fetchGenerationRef.current;
+
     setLoading(true);
     const params = new URLSearchParams();
     params.set("page", page.toString());
@@ -193,7 +207,9 @@ export default function WatchlistPage() {
     if (currentCountry) params.set("current_country", currentCountry);
 
     setError(null);
-    const resPromise = fetch(`/api/watchlist/report/?${params.toString()}`);
+    const resPromise = fetch(`/api/watchlist/report/?${params.toString()}`, {
+      signal: controller.signal,
+    });
     if (!resPromise || typeof resPromise.then !== "function") {
       setLoading(false);
       return;
@@ -214,22 +230,50 @@ export default function WatchlistPage() {
         return res.json();
       })
       .then((data) => {
+        if (
+          controller.signal.aborted ||
+          generation !== fetchGenerationRef.current
+        ) {
+          return;
+        }
         // Handle array response for backwards compatibility or report wrapper
         const reportList = Array.isArray(data) ? data : data.report || [];
-        setItems(reportList);
         const p = data.pagination || {};
+        const totalPages = Math.max(1, p.total_pages || 1);
+        // A mutation can remove the final row of a page. Move to the last
+        // valid page instead of stranding the user on an empty one.
+        if (page > totalPages) {
+          setPage(totalPages);
+          return;
+        }
+        setItems(reportList);
         setPaginationInfo({
-          totalPages: p.total_pages || 1,
+          totalPages,
           hasNext: !!p.has_next,
           hasPrevious: !!p.has_previous,
         });
       })
       .catch((err: Error) => {
+        if (
+          controller.signal.aborted ||
+          generation !== fetchGenerationRef.current
+        ) {
+          return;
+        }
         setError(err.message || "Failed to load watchlist");
-        setItems([]);
+        // Keep the previously rendered rows — a failed refresh must not
+        // erase what the user was looking at.
       })
-      .finally(() => setLoading(false));
-  }, [page, filters]);
+      .finally(() => {
+        if (
+          !controller.signal.aborted &&
+          generation === fetchGenerationRef.current
+        ) {
+          setLoading(false);
+        }
+      });
+    return () => controller.abort();
+  }, [page, filters, currentCountry, refreshKey]);
 
   const handleWatchClick = (
     bestOffer: { country: string; service: string; url: string; is_current_country: boolean }
@@ -272,44 +316,43 @@ export default function WatchlistPage() {
     }
   };
 
-  const updateItemWatchedState = (
-    tmdbId: number,
-    userData: { is_watched?: boolean; rating?: number | null; review?: string; updated_at?: string } | null
-  ) => {
-    setItems((prev) =>
-      prev.map((item) =>
-        item.movie?.tmdb_id === tmdbId
-          ? {
-              ...item,
-              is_watched: !!userData?.is_watched,
-              user_data: userData,
-              movie: {
-                ...item.movie,
-                user_data: userData ? { is_watched: !!userData.is_watched } : undefined,
-              },
-            }
-          : item
-      )
-    );
-  };
+  // A watched mutation changes membership of the active watched filter, so
+  // the only reliable source of truth afterwards is the same filtered query
+  // the page renders. Re-running it also refreshes pagination counts, the
+  // summary and the empty state. Local row edits are deliberately avoided:
+  // they are how an unwatched row used to survive an Unwatched filter.
+  const revalidateWatchedMutation = () => setRefreshKey((key) => key + 1);
 
   const handleMarkWatched = async (tmdbId: number) => {
+    setActionError(null);
+    setPendingWatched(tmdbId);
     try {
-      const result = await markMovieWatched(tmdbId, {
-        watched_date: new Date().toISOString().split('T')[0],
+      await markMovieWatched(tmdbId, {
+        watched_date: new Date().toISOString().split("T")[0],
       });
-      updateItemWatchedState(tmdbId, result.user_data ?? { is_watched: true });
+      revalidateWatchedMutation();
     } catch (err) {
-      console.error("Failed to mark as watched:", err);
+      // Preserve the previous rows; only report the failure.
+      setActionError(
+        err instanceof Error ? err.message : "Failed to mark as watched"
+      );
+    } finally {
+      setPendingWatched(null);
     }
   };
 
   const handleUnmarkWatched = async (tmdbId: number) => {
+    setActionError(null);
+    setPendingWatched(tmdbId);
     try {
-      const result = await unmarkMovieWatched(tmdbId);
-      updateItemWatchedState(tmdbId, result.user_data ?? { is_watched: false });
+      await unmarkMovieWatched(tmdbId);
+      revalidateWatchedMutation();
     } catch (err) {
-      console.error("Failed to unmark as watched:", err);
+      setActionError(
+        err instanceof Error ? err.message : "Failed to unmark as watched"
+      );
+    } finally {
+      setPendingWatched(null);
     }
   };
 
@@ -380,11 +423,24 @@ export default function WatchlistPage() {
         showStatusFilter={true}
       />
 
-      {error ? (
-        <div className="p-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-xl text-red-800 dark:text-red-200 text-sm font-medium">
+      {actionError && (
+        <div
+          role="alert"
+          className="p-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-xl text-red-800 dark:text-red-200 text-sm font-medium"
+        >
+          {actionError}
+        </div>
+      )}
+
+      {error && (
+        <div
+          role="alert"
+          className="p-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-xl text-red-800 dark:text-red-200 text-sm font-medium"
+        >
           {error}
         </div>
-      ) : loading ? (
+      )}
+      {loading ? (
         <div className="py-12 text-center text-gray-500 animate-pulse">
           Loading wishlist items...
         </div>
@@ -517,9 +573,12 @@ export default function WatchlistPage() {
                                   handleUnmarkWatched(movie.tmdb_id);
                                 }
                               }}
-                              className="w-full py-2 text-xs font-medium rounded-lg border border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-800/30 transition-colors"
+                              disabled={pendingWatched === movie.tmdb_id}
+                              className="w-full py-2 text-xs font-medium rounded-lg border border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-800/30 transition-colors disabled:opacity-50"
                             >
-                              ✓ Watched — Click to Unmark
+                              {pendingWatched === movie.tmdb_id
+                                ? "Saving…"
+                                : "✓ Watched — Click to Unmark"}
                             </button>
                           ) : (
                             <button
@@ -528,9 +587,12 @@ export default function WatchlistPage() {
                                   handleMarkWatched(movie.tmdb_id);
                                 }
                               }}
-                              className="w-full py-2 text-xs font-medium rounded-lg border border-purple-300 dark:border-purple-700 text-purple-700 dark:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-800/30 transition-colors"
+                              disabled={pendingWatched === movie.tmdb_id}
+                              className="w-full py-2 text-xs font-medium rounded-lg border border-purple-300 dark:border-purple-700 text-purple-700 dark:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-800/30 transition-colors disabled:opacity-50"
                             >
-                              ✓ Mark as Watched
+                              {pendingWatched === movie.tmdb_id
+                                ? "Saving…"
+                                : "✓ Mark as Watched"}
                             </button>
                           )}
                           <button
