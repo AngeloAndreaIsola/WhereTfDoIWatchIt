@@ -22,8 +22,9 @@ routes, `BaseScraper.run`, `fetch_url`, direct session requests/prepared sends,
 `ContentMatcher`, and the automatic match persistence seam. Legacy manual
 confirmation for these sources also blocks before TMDb or writes. Existing saved
 confirmations and observations remain readable. The unresolved-review GET now
-returns persisted observations with empty candidate lists, with no implicit TMDb
-search for any provider. Candidate discovery needs a separately authorized action.
+returns persisted observations and reliable saved candidate suggestions, with no
+implicit TMDb search for any provider. Manual identity review is separate from
+collection; see [manual review compatibility](MANUAL_REVIEW_COMPATIBILITY.md).
 
 Even a future verified discovery grant cannot enable legacy scraper transports:
 their retries, implicit redirects and mirror fallback lack the reviewed request

@@ -32,6 +32,7 @@ urlpatterns = [
     path("scrapers/import-url/", views.scraper_import_url, name="scraper-import-url"),
     path("scrapers/run/", views.scraper_run, name="scraper-run"),
     path("scrapers/unresolved/", views.scraper_unresolved, name="scraper-unresolved"),
+    path("scrapers/candidates/lookup/", views.scraper_candidate_lookup, name="scraper-candidate-lookup"),
     path("scrapers/confirm-match/", views.scraper_confirm_match, name="scraper-confirm-match"),
     path("preferences/", views.preferences, name="preferences"),
     path("watchlist/", views.watchlist, name="watchlist"),

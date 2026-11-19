@@ -210,6 +210,16 @@ class CandidateAcceptanceService:
                 status_code=404,
             )
 
+        # The canonical review API must not bypass restricted-source manual
+        # policy merely because a caller supplied an authorize_network flag.
+        from tracker.services.discovery_policy import UNOFFICIAL_PROVIDERS
+        if (content.provider.slug or "").strip().lower() in UNOFFICIAL_PROVIDERS:
+            from tracker.services.manual_review_policy import require_manual_review, ManualReviewBlocked
+            try:
+                require_manual_review(content.provider)
+            except ManualReviewBlocked as exc:
+                raise CandidateAcceptanceError(str(exc), code=exc.code, status_code=exc.status) from None
+
         candidate = ProviderContentCandidate.objects.filter(
             provider_content=content,
             tmdb_id=tmdb_id,
@@ -260,7 +270,7 @@ class CandidateAcceptanceService:
         # Exact verification of TMDb ID and media type
         verified_tmdb_id = details["tmdb_id"]
         verified_content_type = details["content_type"]
-        if int(verified_tmdb_id) != int(tmdb_id):
+        if int(verified_tmdb_id) != int(tmdb_id) or verified_content_type != target_content_type:
             raise CandidateAcceptanceError(
                 f"Verified TMDb ID mismatch: expected {tmdb_id}, got {verified_tmdb_id}",
                 code="VERIFICATION_MISMATCH",
@@ -301,7 +311,7 @@ class CandidateAcceptanceService:
                 )
 
             # Check if existing mapping points to a DIFFERENT TMDb target
-            if existing_mapping and existing_mapping.tmdb_id != verified_tmdb_id:
+            if existing_mapping and (existing_mapping.tmdb_id, existing_mapping.content_type) != (verified_tmdb_id, verified_content_type):
                 # Must NOT silently replace. Generate impact manifest and fail closed.
                 planner = MappingCorrectionImpactPlanner(
                     provider=locked_content.provider,

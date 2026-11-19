@@ -476,45 +476,40 @@ class ConfirmMatchContentTypeTests(TestCase):
             scraped_url="https://example.com/bb",
         )
 
-    @patch("tracker.views.TMDbClient")
-    def test_confirming_a_series_uses_the_tv_endpoint(self, mock_client_cls):
-        mock_client_cls.return_value.details.return_value = TMDbItem(
-            tmdb_id=1396, title="Breaking Bad", year=2008, content_type="series"
-        )
-
-        response = self.client.post(
-            "/api/scrapers/confirm-match/",
-            {"mapping_id": self.mapping.id, "tmdb_id": 1396, "content_type": "series"},
-            content_type="application/json",
-        )
-
+    def test_confirming_a_series_uses_only_typed_cached_details(self):
+        from availability.models import TmdbDetailsCache
+        self.mapping.scraped_content_type = "series"
+        self.mapping.raw_payload = {"content_type": "series"}
+        self.mapping.save()
+        ingest_scraped_mapping(self.mapping)
+        TmdbDetailsCache.objects.create(tmdb_id=1396, content_type="series", details={
+            "tmdb_id": 1396, "title": "Breaking Bad", "year": 2008, "content_type": "series",
+        })
+        with patch("tracker.views.TMDbClient") as client:
+            response = self.client.post("/api/scrapers/confirm-match/", {
+                "mapping_id": self.mapping.id, "tmdb_id": 1396, "content_type": "series",
+            }, format="json")
         self.assertEqual(response.status_code, 200)
-        mock_client_cls.return_value.details.assert_called_once_with(
-            1396, content_type="series"
-        )
-        movie = Movie.objects.get(tmdb_id=1396)
-        self.assertEqual(movie.content_type, "series")
-
+        client.assert_not_called()
+        movie = Movie.objects.get(tmdb_id=1396, content_type="series")
         self.mapping.refresh_from_db()
         self.assertTrue(self.mapping.is_confirmed)
         self.assertEqual(self.mapping.movie_id, movie.id)
 
-    @patch("tracker.views.TMDbClient")
-    def test_confirming_without_a_type_defaults_to_the_movie_endpoint(self, mock_client_cls):
-        mock_client_cls.return_value.details.return_value = TMDbItem(
-            tmdb_id=438631, title="Dune", year=2021, content_type="movie"
-        )
-
-        response = self.client.post(
-            "/api/scrapers/confirm-match/",
-            {"mapping_id": self.mapping.id, "tmdb_id": 438631},
-            content_type="application/json",
-        )
-
+    def test_confirming_without_type_uses_stored_movie_identity_without_http(self):
+        from availability.models import TmdbDetailsCache
+        self.mapping.scraped_title, self.mapping.scraped_year = "Dune", 2021
+        self.mapping.save()
+        ingest_scraped_mapping(self.mapping)
+        TmdbDetailsCache.objects.create(tmdb_id=438631, content_type="movie", details={
+            "tmdb_id": 438631, "title": "Dune", "year": 2021, "content_type": "movie",
+        })
+        with patch("tracker.views.TMDbClient") as client:
+            response = self.client.post("/api/scrapers/confirm-match/", {
+                "mapping_id": self.mapping.id, "tmdb_id": 438631,
+            }, format="json")
         self.assertEqual(response.status_code, 200)
-        mock_client_cls.return_value.details.assert_called_once_with(
-            438631, content_type="movie"
-        )
+        client.assert_not_called()
         self.assertEqual(Movie.objects.get(tmdb_id=438631).content_type, "movie")
 
     def test_unknown_content_type_is_rejected(self):

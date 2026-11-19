@@ -417,24 +417,24 @@ class UnifiedCatalogWriteHookTests(UnifiedCatalogCanonicalTestCase):
     def test_confirm_match_bridges_the_manual_resolution(self, mock_client):
         row = ScrapedContentMapping.objects.create(
             provider=Provider.objects.get(slug="nhk_world"),
-            scraped_title="Confirm Me",
+            scraped_title="Confirmed Film",
             scraped_year=2013,
             scraped_url="https://hydra.example/confirm",
             is_available=True,
         )
-        mock_client.return_value.details.return_value = TMDbItem(
-            tmdb_id=31337, title="Confirmed Film", year=2013,
-            content_type="movie", overview="", poster_path="",
-            genres=[], genre_ids=[], cast=[], seasons_data=[],
-            rating=0.0, director=[],
-        )
+        ingest_scraped_mapping(row)
+        from availability.models import TmdbDetailsCache
+        TmdbDetailsCache.objects.create(tmdb_id=31337, content_type="movie", details={
+            "tmdb_id": 31337, "title": "Confirmed Film", "year": 2013, "content_type": "movie",
+        })
 
         resp = self.client.post(
             "/api/scrapers/confirm-match/",
             {"mapping_id": row.pk, "tmdb_id": 31337},
-            format="json",
+            content_type="application/json",
         )
         self.assertEqual(resp.status_code, 200)
+        mock_client.assert_not_called()
 
         mapping = ContentMapping.objects.get(provider=Provider.objects.get(slug="nhk_world"))
         self.assertEqual(mapping.tmdb_id, 31337)

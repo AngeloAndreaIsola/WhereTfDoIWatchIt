@@ -131,7 +131,9 @@ from .services.refresh_requests import (
     request_watchlist_refresh,
 )
 from .services.scraper_runner import run_provider_scraper
-from .services.scraper_policy import require_legacy_execution
+from .services.manual_review_policy import ManualReviewBlocked
+from .services.legacy_manual_review import stored_review, explicit_lookup, confirm_mapping
+from availability.candidate_admin_views import verify_operator_mutation_guard
 from .services.scraper_selection import (
     ScraperExecutionIneligible,
     select_provider_scraper,
@@ -1286,71 +1288,50 @@ def scraper_unresolved(request):
     # list must never perform an implicit TMDb search (or change a mapping).
     out = []
     for mapping in unresolved:
-        candidates = []
         data = ScrapedContentMappingSerializer(mapping).data
-        data["candidates"] = candidates
+        data.update(stored_review(mapping))
         out.append(data)
 
     return Response(out)
 
 
 @api_view(["POST"])
-def scraper_confirm_match(request):
-    """Confirm a mapping between scraped content and a TMDb movie.
-
-    ``content_type`` (``movie`` default, or ``series``) picks the TMDb details
-    endpoint and is stored on a newly created row. An already-tracked row is only
-    retyped when the caller states the type explicitly — a scraper result never
-    silently flips an existing row.
-    """
+def scraper_candidate_lookup(request):
+    """Explicit TMDb-only lookup, disabled without a separate reviewed grant."""
+    allowed, error = verify_operator_mutation_guard(request)
+    if not allowed:
+        return error
     data = request.data if isinstance(request.data, dict) else {}
-    mapping_id = data.get("mapping_id")
-    tmdb_id = data.get("tmdb_id")
+    if type(data.get("mapping_id")) is not int or data["mapping_id"] <= 0:
+        return Response({"error": "mapping_id must be a positive integer"}, status=400)
+    mapping = get_object_or_404(ScrapedContentMapping, pk=data["mapping_id"])
+    try:
+        return Response(explicit_lookup(mapping, tmdb_id=data.get("tmdb_id")))
+    except ManualReviewBlocked as exc:
+        return Response(exc.payload(), status=exc.status)
 
-    if not mapping_id or not tmdb_id:
-        return Response({"error": "mapping_id and tmdb_id are required"}, status=400)
 
-    raw_type = str(data.get("content_type") or "").strip().lower()
-    if raw_type and raw_type not in ("movie", "series"):
+@api_view(["POST"])
+def scraper_confirm_match(request):
+    """Explicit stored-evidence identity review; no collection or availability."""
+    allowed, error = verify_operator_mutation_guard(request)
+    if not allowed:
+        return error
+    data = request.data if isinstance(request.data, dict) else {}
+    mapping_id, tmdb_id = data.get("mapping_id"), data.get("tmdb_id")
+    if type(mapping_id) is not int or type(tmdb_id) is not int or min(mapping_id, tmdb_id) <= 0:
+        return Response({"error": "mapping_id and tmdb_id must be positive integers"}, status=400)
+    content_type = data.get("content_type")
+    if content_type is not None and (not isinstance(content_type, str) or content_type not in {"movie", "series"}):
         return Response({"error": "content_type must be 'movie' or 'series'"}, status=400)
-    content_type = raw_type or "movie"
-
-    mapping = get_object_or_404(ScrapedContentMapping, id=mapping_id)
-
+    mapping = get_object_or_404(ScrapedContentMapping, pk=mapping_id)
+    if content_type and content_type != mapping.scraped_content_type:
+        return Response({"code": "manual_review_content_type_conflict"}, status=409)
     try:
-        require_legacy_execution(mapping.provider)
-    except ScraperExecutionIneligible as exc:
-        return Response(exc.payload(), status=status.HTTP_409_CONFLICT)
-
-    client = TMDbClient(settings.TMDB_API_KEY)
-    try:
-        details = client.details(tmdb_id, content_type=content_type)
-        movie, created = Movie.objects.get_or_create(
-            tmdb_id=details.tmdb_id,
-            content_type=details.content_type or content_type,
-            defaults={
-                "title": details.title,
-                "year": details.year,
-                "content_type": details.content_type or content_type,
-            },
-        )
-        if not created and raw_type and movie.content_type != details.content_type:
-            movie.content_type = details.content_type
-            movie.save(update_fields=["content_type"])
-    except Exception as exc:
-        return Response({"error": f"Failed to fetch TMDb details: {exc}"}, status=400)
-
-    mapping.movie = movie
-    mapping.is_confirmed = True
-    mapping.confidence_score = 1.0
-    mapping.save()
-    # Re-project the confirmed mapping so the canonical row carries the
-    # manual match (MatchMethod.MANUAL) the catalogue reads back.
-    ingest_scraped_mapping(mapping)
-    # Manual match = explicit user intent: if the canonical path has no
-    # availability for this TMDb id yet, request an asynchronous refresh.
-    request_availability_refresh(movie, priority=RefreshPriority.EXPLICIT, country=_active_country(request))
-
+        mapping = confirm_mapping(mapping_id, tmdb_id, content_type,
+                                  expected_updated_at=data.get("expected_updated_at"))
+    except ManualReviewBlocked as exc:
+        return Response(exc.payload(), status=exc.status)
     return Response(ScrapedContentMappingSerializer(mapping).data)
 
 

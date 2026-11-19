@@ -246,6 +246,7 @@ export default function CandidateReviewPage() {
           </div>
 
           <div className="flex items-center gap-2">
+            <a href="/candidate-review/legacy" className="text-xs underline">Saved scraper observations</a>
             <button
               type="button"
               onClick={() => {
