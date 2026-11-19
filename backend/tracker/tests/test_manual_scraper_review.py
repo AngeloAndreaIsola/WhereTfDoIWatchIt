@@ -291,6 +291,17 @@ class ManualScraperReviewTests(TestCase):
         cache.save()
         self.assertEqual(self.confirm().json()["code"], "manual_review_ambiguous_identity")
 
+    def test_original_title_ambiguity_is_not_hidden_by_localized_display_titles(self):
+        self.cache_details(title="Localized One", original_title="Fixture Identity")
+        self.cache_search([
+            self.candidate(420, title="Localized One", original_title="Fixture Identity"),
+            self.candidate(421, title="Localized Two", original_title="Fixture Identity"),
+        ])
+        before = self.snapshot()
+        self.assertTrue(stored_review(self.mapping)["candidate_search_ambiguous"])
+        self.assertEqual(self.confirm().json()["code"], "manual_review_ambiguous_identity")
+        self.assertEqual(self.snapshot(), before)
+
     def test_saved_automatic_same_target_can_be_manually_confirmed_without_metadata_changes(self):
         movie = Movie.objects.create(tmdb_id=420, title="Fixture Identity", year=2020, overview="Keep me")
         ContentMapping.objects.create(provider=self.provider, source=self.content.source,

@@ -41,6 +41,10 @@ def _same_title(left, right):
                 == TMDbCandidateGateway._normalize_query(right))
 
 
+def _candidate_title_matches(candidate, title):
+    return any(_same_title(candidate.get(key), title) for key in ("title", "original_title"))
+
+
 def _candidates(raw, mapping, limit=MAX_CANDIDATES):
     """Untrusted cache/persisted suggestions never confer verified identity."""
     result, seen = [], set()
@@ -57,6 +61,7 @@ def _candidates(raw, mapping, limit=MAX_CANDIDATES):
             continue
         seen.add(identity)
         result.append({"tmdb_id": identity, "title": value["title"], "year": year,
+                       "original_title": value.get("original_title") if isinstance(value.get("original_title"), str) else "",
                        "content_type": value["content_type"],
                        "confidence_score": value.get("confidence_score", 0.0)})
         if limit is not None and len(result) == limit:
@@ -99,7 +104,7 @@ def stored_review(mapping):
         else:
             raw = entry.results if isinstance(entry.results, list) else []
             all_candidates = _candidates(raw, mapping, limit=None)
-            exact = {c["tmdb_id"] for c in all_candidates if _same_title(c["title"], mapping.scraped_title)
+            exact = {c["tmdb_id"] for c in all_candidates if _candidate_title_matches(c, mapping.scraped_title)
                      and c["year"] == mapping.scraped_year}
             ambiguous = len(exact) > 1 or any(isinstance(v, dict) and v.get("search_truncated") for v in raw)
             candidates = all_candidates[:MAX_CANDIDATES]
@@ -122,9 +127,10 @@ def stored_review(mapping):
                 ambiguous = ambiguous or candidate.review_state in {"ambiguous", "conflict"}
                 values.append({"tmdb_id": candidate.tmdb_id, "title": candidate.title,
                                "year": candidate.year, "content_type": candidate.content_type,
+                               "original_title": evidence.get("candidate_original_title", ""),
                                "confidence_score": candidate.confidence_score})
             all_candidates = _candidates(values, mapping, limit=None)
-            exact = {c["tmdb_id"] for c in all_candidates if _same_title(c["title"], mapping.scraped_title)
+            exact = {c["tmdb_id"] for c in all_candidates if _candidate_title_matches(c, mapping.scraped_title)
                      and c["year"] == mapping.scraped_year}
             ambiguous = ambiguous or len(exact) > 1
             candidates = all_candidates[:MAX_CANDIDATES]
@@ -259,7 +265,7 @@ def confirm_mapping(mapping_id, tmdb_id, content_type=None, expected_updated_at=
         review = stored_review(mapping)
         suggestions = review["candidates"]
         exact = {c["tmdb_id"] for c in suggestions
-                 if _same_title(c["title"], mapping.scraped_title) and c["year"] == mapping.scraped_year}
+                 if _candidate_title_matches(c, mapping.scraped_title) and c["year"] == mapping.scraped_year}
         if len(exact) > 1 or review.get("candidate_search_ambiguous"):
             raise ManualReviewBlocked("manual_review_ambiguous_identity")
         movie = Movie.objects.filter(tmdb_id=tmdb_id, content_type=kind).first()
