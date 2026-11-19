@@ -398,6 +398,8 @@ class ScrapedContentMapping(models.Model):
     )
     scraped_title = models.CharField(max_length=255)
     scraped_year = models.IntegerField(null=True, blank=True)
+    # Authoritative observation type for canonical projection and manual review;
+    # raw_payload metadata cannot override a valid stored value.
     scraped_content_type = models.CharField(max_length=12, choices=[("movie", "Movie"), ("series", "Series")], default="movie")
     provider_content_id = models.CharField(
         max_length=255,

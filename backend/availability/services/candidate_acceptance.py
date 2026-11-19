@@ -36,6 +36,24 @@ class CandidateAcceptanceError(Exception):
         self.extra = extra or {}
 
 
+def _validate_acceptance_candidate(candidate, content):
+    if (candidate.content_type not in (ContentType.MOVIE, ContentType.SERIES)
+            or candidate.content_type != content.content_type):
+        raise CandidateAcceptanceError(
+            "Candidate media type must match its provider content identity.",
+            code="CANDIDATE_TYPE_CONFLICT", status_code=409,
+        )
+    if candidate.review_state == CandidateReviewState.REJECTED:
+        raise CandidateAcceptanceError(
+            "A rejected candidate requires separate review before acceptance.",
+            code="CANDIDATE_REJECTED", status_code=409,
+        )
+    if candidate.review_state not in CandidateReviewState.values:
+        raise CandidateAcceptanceError(
+            "Unknown candidate review state.", code="CANDIDATE_STATE_CONFLICT", status_code=409,
+        )
+
+
 def check_recovery_supported(content: ProviderContent) -> bool:
     """Determine whether targeted recovery is supported for this ProviderContent.
 
@@ -231,9 +249,8 @@ class CandidateAcceptanceService:
                 status_code=404,
             )
 
-        target_content_type = candidate.content_type or content.content_type
-        if target_content_type not in (ContentType.MOVIE, ContentType.SERIES):
-            target_content_type = ContentType.MOVIE
+        _validate_acceptance_candidate(candidate, content)
+        target_content_type = candidate.content_type
 
         # Step 2: Remote TMDb verification through finite budget gateway WITHOUT holding DB locks
         gateway = self.gateway
@@ -289,6 +306,12 @@ class CandidateAcceptanceService:
 
             # Re-fetch candidate under lock
             locked_cand = ProviderContentCandidate.objects.select_for_update().get(id=candidate.id)
+            _validate_acceptance_candidate(locked_cand, locked_content)
+            if (locked_cand.tmdb_id, locked_cand.content_type) != (tmdb_id, verified_content_type):
+                raise CandidateAcceptanceError(
+                    "Candidate identity changed during verification.",
+                    code="CANDIDATE_IDENTITY_CHANGED", status_code=409,
+                )
 
             existing_mapping = (
                 ContentMapping.objects.select_for_update()
@@ -483,7 +506,20 @@ class CandidateRejectionService:
             )
 
         with writer_barrier("candidate rejection"), transaction.atomic():
+            # Same lock order as acceptance and legacy confirmation. The
+            # content lock also serializes creation of a previously absent map.
+            content = ProviderContent.objects.select_for_update().get(id=content.id)
             locked_cand = ProviderContentCandidate.objects.select_for_update().get(id=candidate.id)
+            existing_mapping = ContentMapping.objects.select_for_update().filter(
+                provider=content.provider, provider_content_id=content.provider_content_id,
+                match_method=MatchMethod.MANUAL,
+                tmdb_id=locked_cand.tmdb_id, content_type=locked_cand.content_type,
+            ).first()
+            if existing_mapping or locked_cand.review_state == CandidateReviewState.ACCEPTED:
+                raise CandidateAcceptanceError(
+                    "Rejecting an accepted or manually mapped identity requires explicit correction authorization.",
+                    code="CORRECTION_AUTHORIZATION_REQUIRED", status_code=409,
+                )
             prev_review_state = locked_cand.review_state
 
             locked_cand.review_state = CandidateReviewState.REJECTED

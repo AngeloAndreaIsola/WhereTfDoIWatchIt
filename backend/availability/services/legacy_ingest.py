@@ -50,19 +50,82 @@ def legacy_scraper_source() -> Source:
     return source
 
 
-def _content_type(payload: dict, movie) -> str:
-    """Canonical content type for one legacy row.
+class LegacyProjectionTypeConflict(ValueError):
+    """Existing identity needs separately authorized investigation/correction."""
 
-    Legacy rows are only ever movies or series (the scrape classifies the
-    item); anything else falls back to movie rather than failing the write.
-    """
-    raw = payload.get("content_type") or (getattr(movie, "content_type", None) or "")
-    value = str(raw).strip().lower()
+
+def _normalized_type(value):
+    value = str(value or "").strip().lower()
     if value in _SERIES_VALUES:
         return ContentType.SERIES
     if value == ContentType.MOVIE:
         return ContentType.MOVIE
-    return ContentType.MOVIE
+    return None
+
+
+def _content_type(mapping) -> str:
+    """Canonical content type for one legacy row.
+
+    A valid stored typed field is authoritative, including when payload
+    metadata disagrees. Only old/invalid typed fields use payload, linked Movie,
+    then the historical movie default. Identity conflicts are checked before
+    any writes by ``legacy_type_report``; inference never retypes saved data.
+    """
+    if mapping.scraped_content_type in {ContentType.MOVIE, ContentType.SERIES}:
+        return mapping.scraped_content_type
+    payload = mapping.raw_payload if isinstance(mapping.raw_payload, dict) else {}
+    return (_normalized_type(payload.get("content_type"))
+            or _normalized_type(getattr(mapping.movie, "content_type", None))
+            or ContentType.MOVIE)
+
+
+def legacy_type_report(mapping, *, for_update=False) -> dict:
+    """Read-only diagnosis used by ingestion and the dry-run audit command.
+
+    Existing wrong-type projections are not automatically deleted, retyped or
+    duplicated: candidates, audits and evidence may depend on their identity.
+    Even unverified drift requires separately authorized repair.
+    Ingestion requests row locks inside its transaction; the audit command
+    only performs ordinary SELECTs. Neither mode changes any row.
+    """
+    desired = _content_type(mapping)
+    payload = mapping.raw_payload if isinstance(mapping.raw_payload, dict) else {}
+    payload_type = _normalized_type(payload.get("content_type"))
+    projections = ProviderContent.objects.filter(
+        provider_id=mapping.provider_id, provider_content_id=_provider_content_id(mapping),
+    ).order_by("pk")
+    canonical = ContentMapping.objects.filter(
+        provider_id=mapping.provider_id, provider_content_id=_provider_content_id(mapping),
+    ).order_by("pk")
+    if for_update:
+        projections = projections.select_for_update()
+        canonical = canonical.select_for_update()
+    # Lock content before mappings, matching the canonical review services.
+    projections = list(projections.values("id", "content_type"))
+    canonical = list(canonical.values("id", "content_type", "tmdb_id", "match_method"))
+    conflicts = []
+    if mapping.movie_id and mapping.movie.content_type != desired:
+        conflicts.append("linked_movie_type_conflict")
+    if any(row["content_type"] != desired for row in projections):
+        conflicts.append("projection_type_drift")
+    if any(row["content_type"] != desired for row in canonical):
+        conflicts.append("canonical_mapping_type_conflict")
+    if mapping.movie_id and any(
+        row["match_method"] == MatchMethod.MANUAL
+        and (row["tmdb_id"], row["content_type"]) != (mapping.movie.tmdb_id, desired)
+        for row in canonical
+    ):
+        conflicts.append("verified_mapping_identity_conflict")
+    return {"legacy_id": mapping.pk, "provider_id": mapping.provider_id,
+            "stored_type": mapping.scraped_content_type, "payload_type": payload_type,
+            "proposed_type": desired,
+            "linked_movie": ({"id": mapping.movie_id, "tmdb_id": mapping.movie.tmdb_id,
+                              "content_type": mapping.movie.content_type} if mapping.movie_id else None),
+            "projections": projections, "canonical_mappings": canonical,
+            "conflicts": conflicts,
+            "payload_type_disagrees": bool(payload_type and payload_type != desired),
+            "proposal": ("Separate authorization required to investigate and repair identity drift"
+                         if conflicts else "Use stored type; ignore conflicting payload metadata")}
 
 
 def _languages(values) -> list[str]:
@@ -117,10 +180,10 @@ def _metadata(payload: dict, mapping, movie) -> dict:
 def _provider_content_id(mapping) -> str:
     """Stable canonical identity for one legacy row.
 
-    Derived from the legacy primary key because the legacy uniqueness is
-    ``(provider, scraped_title, scraped_year)`` — one row, one identity —
-    while scraped URLs are not unique (a URL import stamps one URL onto
-    every item of a run).
+    Derived from the legacy primary key: title/year and native-ID uniqueness
+    are scoped by ``scraped_content_type``. A movie and series can share their
+    title or numeric ID while retaining separate legacy/canonical identities.
+    Scraped URLs are not unique (an import can stamp one URL on a whole run).
     """
     return f"legacy-{mapping.pk}"
 
@@ -142,6 +205,8 @@ def ingest_scraped_mapping(mapping) -> ProviderContent:
     """
     with writer_barrier("legacy scraper ingestion"):
         with transaction.atomic():
+            # Do not ingest stale caller state after an explicit confirmation.
+            mapping = type(mapping).objects.select_for_update().get(pk=mapping.pk)
             return _ingest_scraped_mapping_locked(mapping)
 
 
@@ -149,7 +214,13 @@ def _ingest_scraped_mapping_locked(mapping) -> ProviderContent:
     """The mutating body of :func:`ingest_scraped_mapping`, barrier held."""
     payload = mapping.raw_payload if isinstance(mapping.raw_payload, dict) else {}
     movie = mapping.movie
-    content_type = _content_type(payload, movie)
+    report = legacy_type_report(mapping, for_update=True)
+    if report["conflicts"]:
+        raise LegacyProjectionTypeConflict(
+            f"Legacy row {mapping.pk}: {', '.join(report['conflicts'])}; "
+            "run audit_legacy_projection_types (read-only); correction requires separate authorization"
+        )
+    content_type = report["proposed_type"]
 
     year = None
     if movie is not None and getattr(movie, "year", None):

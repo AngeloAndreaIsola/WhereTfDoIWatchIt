@@ -19,7 +19,7 @@ from tracker.models import (Movie, Provider, ScrapedContentMapping, ApiCallCount
                             CatalogueReconciliationRecord)
 from tracker.services.manual_review_policy import TMDB_REVIEW_GRANTS, TMDbReviewGrant
 from tracker.services.discovery_policy import UNOFFICIAL_PROVIDERS
-from tracker.services.legacy_manual_review import stored_review
+from tracker.services.legacy_manual_review import stored_review, confirm_mapping
 
 
 class ManualScraperReviewTests(TestCase):
@@ -66,6 +66,110 @@ class ManualScraperReviewTests(TestCase):
         data = {"mapping_id": self.mapping.pk, "tmdb_id": 420}
         data.update(overrides)
         return self.client.post("/api/scrapers/confirm-match/", data, format="json")
+
+    def persisted_candidate(self, **overrides):
+        values = dict(provider_content=self.content, tmdb_id=420, title="Fixture Identity",
+                      year=2020, content_type="movie")
+        values.update(overrides)
+        return ProviderContentCandidate.objects.create(**values)
+
+    def test_confirmation_updates_pending_candidate_and_audits_real_state(self):
+        candidate = self.persisted_candidate()
+        unrelated = self.persisted_candidate(tmdb_id=421, title="Other")
+        unrelated_before = list(ProviderContentCandidate.objects.filter(pk=unrelated.pk).values())
+        self.cache_details()
+        self.assertEqual(self.confirm().status_code, 200)
+        candidate.refresh_from_db()
+        self.assertEqual(candidate.review_state, "accepted")
+        audit = self.content.review_audits.get()
+        self.assertEqual((audit.previous_review_state, audit.resulting_review_state), ("pending", "accepted"))
+        self.assertEqual(list(ProviderContentCandidate.objects.filter(pk=unrelated.pk).values()), unrelated_before)
+        before = self.snapshot()
+        self.assertEqual(self.confirm().status_code, 200)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_confirmation_without_candidate_creates_truthful_review_history(self):
+        self.cache_details()
+        self.assertEqual(self.confirm().status_code, 200)
+        candidate = ProviderContentCandidate.objects.get(provider_content=self.content, tmdb_id=420)
+        self.assertEqual(candidate.review_state, "accepted")
+        self.assertEqual(candidate.scoring_evidence["provenance"], "legacy_cached_details")
+        audit = self.content.review_audits.get()
+        self.assertEqual((audit.previous_review_state, audit.resulting_review_state), ("pending", "accepted"))
+
+    def test_already_accepted_candidate_records_actual_previous_state(self):
+        self.persisted_candidate(review_state="accepted")
+        self.cache_details()
+        self.assertEqual(self.confirm().status_code, 200)
+        audit = self.content.review_audits.get()
+        self.assertEqual((audit.previous_review_state, audit.resulting_review_state), ("accepted", "accepted"))
+        before = self.snapshot()
+        self.assertEqual(self.confirm().status_code, 200)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_canonical_acceptance_after_legacy_confirmation_is_idempotent(self):
+        self.cache_details()
+        self.assertEqual(self.confirm().status_code, 200)
+        canonical = ContentMapping.objects.get(content=self.content)
+        before = self.snapshot()
+        result = CandidateAcceptanceService().accept(provider_content_id=self.content.pk,
+            tmdb_id=420, expected_revision=canonical.revision, reason="Repeat saved decision")
+        self.assertEqual(result["status"], "already_accepted")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_rejection_cannot_contradict_manual_confirmation_even_with_old_pending_state(self):
+        self.persisted_candidate()
+        self.cache_details()
+        self.assertEqual(self.confirm().status_code, 200)
+        for state in ("accepted", "pending"):
+            ProviderContentCandidate.objects.filter(provider_content=self.content).update(review_state=state)
+            before = self.snapshot()
+            response = self.client.post(
+                f"/api/admin/provider-content/{self.content.pk}/candidates/420/reject/",
+                {"reason": "Contradict verified identity"}, format="json")
+            self.assertEqual(response.status_code, 409)
+            self.assertEqual(response.json()["code"], "CORRECTION_AUTHORIZATION_REQUIRED")
+            self.assertEqual(self.snapshot(), before)
+
+    def test_candidate_type_and_invalid_state_block_confirmation_without_writes(self):
+        candidate = self.persisted_candidate(content_type="series")
+        self.cache_details()
+        before = self.snapshot()
+        self.assertEqual(self.confirm().json()["code"], "manual_review_candidate_type_conflict")
+        self.assertEqual(self.snapshot(), before)
+        for state in ("rejected", "ambiguous", "conflict", "invalid"):
+            candidate.content_type, candidate.review_state = "movie", state
+            candidate.save()
+            before = self.snapshot()
+            self.assertEqual(self.confirm().status_code, 409)
+            self.assertEqual(self.snapshot(), before)
+
+    def test_audit_failure_rolls_back_all_confirmation_writes(self):
+        self.cache_details()
+        for existing in (False, True):
+            if existing:
+                self.persisted_candidate()
+            before = self.snapshot()
+            with patch("tracker.services.legacy_manual_review.CandidateReviewAudit.objects.create",
+                       side_effect=RuntimeError("synthetic audit failure")):
+                with self.assertRaisesMessage(RuntimeError, "synthetic audit failure"):
+                    confirm_mapping(self.mapping.pk, 420)
+            self.assertEqual(self.snapshot(), before)
+
+    def test_series_without_payload_type_can_be_confirmed_without_movie_id_collision(self):
+        movie = Movie.objects.create(tmdb_id=420, title="Separate movie", content_type="movie")
+        movie_before = list(Movie.objects.filter(pk=movie.pk).values())
+        series = ScrapedContentMapping.objects.create(provider=self.provider,
+            scraped_title="Fixture Identity", scraped_year=2020, scraped_content_type="series", raw_payload={})
+        content = ingest_scraped_mapping(series)
+        self.cache_details(kind="series")
+        self.assertEqual(self.confirm(mapping_id=series.pk, content_type="series").status_code, 200)
+        series.refresh_from_db()
+        self.assertEqual((series.movie.tmdb_id, series.movie.content_type), (420, "series"))
+        self.assertNotEqual(series.movie_id, movie.pk)
+        self.assertEqual(list(Movie.objects.filter(pk=movie.pk).values()), movie_before)
+        self.assertEqual(content.tmdb_candidates.get().review_state, "accepted")
+        self.assertFalse(Offer.objects.exists())
 
     def lookup(self, **overrides):
         data = {"mapping_id": self.mapping.pk}
@@ -209,7 +313,8 @@ class ManualScraperReviewTests(TestCase):
         CatalogueReconciliationRecord.objects.create(discovered_record=deferred,
             input_fingerprint="fixture", status="BASELINED")
         self.cache_details()
-        exclude = ("tracker.Movie", "tracker.ScrapedContentMapping", "availability.ContentMapping", "availability.CandidateReviewAudit")
+        exclude = ("tracker.Movie", "tracker.ScrapedContentMapping", "availability.ContentMapping",
+                   "availability.CandidateReviewAudit", "availability.ProviderContentCandidate")
         before = self.snapshot(exclude=exclude)
         response = self.confirm()
         self.assertEqual(response.status_code, 200, response.json())

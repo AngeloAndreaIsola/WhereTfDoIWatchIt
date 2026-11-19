@@ -11,11 +11,12 @@ class RecoveredCatalogFilterTests(TestCase):
             slug="hydra", name="Hydra", category="scraper", is_enabled=True
         )
 
-    def _scrape(self, title, *, year=2024, movie=None, payload=None, provider=None):
+    def _scrape(self, title, *, year=2024, movie=None, payload=None, provider=None, content_type="movie"):
         mapping = ScrapedContentMapping.objects.create(
             provider=provider or self.hydra,
             scraped_title=title,
             scraped_year=year,
+            scraped_content_type=content_type,
             scraped_url=f"https://hydra.example/{title.lower().replace(' ', '-')}",
             movie=movie,
             raw_payload=payload or {},
@@ -84,7 +85,7 @@ class RecoveredCatalogFilterTests(TestCase):
     def test_series_and_tv_alias_filter_both_catalogue_halves(self):
         Movie.objects.create(tmdb_id=831, title="Official Film", content_type="movie")
         series = Movie.objects.create(tmdb_id=832, title="Official Series", content_type="series")
-        self._scrape("Scraped Series", payload={"content_type": "series"})
+        self._scrape("Scraped Series", content_type="series", payload={"content_type": "series"})
 
         rows = self._results("?type=tv")
 

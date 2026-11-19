@@ -240,17 +240,19 @@ def confirm_mapping(mapping_id, tmdb_id, content_type=None, expected_updated_at=
         ).first()
         if existing and (existing.tmdb_id, existing.content_type) != (tmdb_id, kind):
             raise ManualReviewBlocked("manual_review_canonical_mapping_conflict")
-        selected = ProviderContentCandidate.objects.filter(provider_content=content, tmdb_id=tmdb_id).first()
+        # Serialize with canonical acceptance/rejection on the content, then the
+        # candidate. Never describe a transition without persisting it.
+        selected = ProviderContentCandidate.objects.select_for_update().filter(
+            provider_content=content, tmdb_id=tmdb_id).first()
         if selected and selected.content_type != kind:
             raise ManualReviewBlocked("manual_review_candidate_type_conflict")
         if selected and selected.review_state == "rejected":
             raise ManualReviewBlocked("manual_review_rejected_candidate")
-        if already_confirmed:
-            return mapping  # preserve saved decision without new writes or cache/network access
-        if ProviderContentCandidate.objects.filter(
-                provider_content=content, tmdb_id=tmdb_id, content_type=kind,
-                review_state__in=("rejected", "conflict", "ambiguous")).exists():
+        if selected and selected.review_state not in {"pending", "accepted"}:
             raise ManualReviewBlocked("manual_review_candidate_decision_conflict")
+        if (already_confirmed and existing and existing.match_method == MatchMethod.MANUAL
+                and selected and selected.review_state == "accepted"):
+            return mapping  # no new writes, timestamps or cache/network access
         details = TMDbCandidateGateway(allow_cache_writes=False).get_details(
             tmdb_id, content_type=kind, authorize_network=False,
         )
@@ -274,6 +276,18 @@ def confirm_mapping(mapping_id, tmdb_id, content_type=None, expected_updated_at=
         if movie is None:
             movie = Movie.objects.create(tmdb_id=tmdb_id, content_type=kind,
                                          title=details["title"], year=details["year"])
+        if selected is None:
+            # The audit schema describes candidate transitions. Materialize a
+            # real pending candidate from verified cache evidence first, within
+            # this transaction, rather than inventing a missing previous state.
+            selected = ProviderContentCandidate.objects.create(
+                provider_content=content, tmdb_id=tmdb_id, content_type=kind,
+                title=details["title"], year=details["year"],
+                scoring_evidence={"provenance": "legacy_cached_details",
+                                  "content_title": mapping.scraped_title,
+                                  "content_year": mapping.scraped_year, "content_type": kind},
+            )
+        previous_review_state = selected.review_state
         previous_revision = existing.revision if existing else None
         canonical, _ = MappingRepository().record(
             provider=mapping.provider, source=content.source,
@@ -286,10 +300,13 @@ def confirm_mapping(mapping_id, tmdb_id, content_type=None, expected_updated_at=
             canonical.save(update_fields=["match_method", "revision", "updated_at"])
         mapping.movie, mapping.is_confirmed, mapping.confidence_score = movie, True, 1.0
         mapping.save(update_fields=["movie", "is_confirmed", "confidence_score", "updated_at"])
+        if selected.review_state != "accepted":
+            selected.review_state = "accepted"
+            selected.save(update_fields=["review_state", "updated_at"])
         CandidateReviewAudit.objects.create(
             provider_content=content, candidate_tmdb_id=tmdb_id, action="accept",
             reason="Explicit legacy manual confirmation from fresh cached identity evidence",
-            previous_review_state="pending", resulting_review_state="accepted",
+            previous_review_state=previous_review_state, resulting_review_state=selected.review_state,
             expected_revision=previous_revision,
             resulting_revision=canonical.revision, verified_tmdb_id=tmdb_id,
             verified_content_type=kind, verification_provenance="legacy_cached_details",

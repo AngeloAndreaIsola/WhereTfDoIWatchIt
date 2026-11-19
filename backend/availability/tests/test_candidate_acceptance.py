@@ -397,6 +397,50 @@ class CandidateAcceptanceUnitTests(TestCase):
         self.assertEqual(audit.action, "reject")
         self.assertEqual(audit.reason, "Incorrect title match")
 
+    def test_acceptance_cannot_bypass_rejected_state_or_typed_identity(self):
+        gateway = MagicMock()
+        service = CandidateAcceptanceService(gateway=gateway)
+        for state, kind, code in (
+            (CandidateReviewState.REJECTED, "movie", "CANDIDATE_REJECTED"),
+            (CandidateReviewState.PENDING, "series", "CANDIDATE_TYPE_CONFLICT"),
+            (CandidateReviewState.PENDING, "", "CANDIDATE_TYPE_CONFLICT"),
+        ):
+            self.candidate.review_state, self.candidate.content_type = state, kind
+            self.candidate.save()
+            before = list(ProviderContentCandidate.objects.values())
+            with self.assertRaises(CandidateAcceptanceError) as error:
+                service.accept(provider_content_id=self.content.pk, tmdb_id=self.candidate.tmdb_id,
+                               reason="Explicit fixture", expected_revision=None)
+            self.assertEqual(error.exception.code, code)
+            self.assertEqual(list(ProviderContentCandidate.objects.values()), before)
+            self.assertFalse(ContentMapping.objects.exists())
+            self.assertFalse(CandidateReviewAudit.objects.exists())
+        gateway.get_details.assert_not_called()
+
+    def test_rejection_of_alternative_candidate_preserves_verified_mapping(self):
+        mapping = ContentMapping.objects.create(provider=self.provider, source=self.source,
+            provider_content_id=self.content.provider_content_id, content=self.content,
+            tmdb_id=1, content_type="movie", match_method="manual", confidence=1.0)
+        before = list(ContentMapping.objects.filter(pk=mapping.pk).values())
+        result = CandidateRejectionService().reject(provider_content_id=self.content.pk,
+            tmdb_id=self.candidate.tmdb_id, reason="Different identity")
+        self.assertEqual(result["status"], "rejected")
+        self.assertEqual(list(ContentMapping.objects.filter(pk=mapping.pk).values()), before)
+
+    def test_candidate_state_is_rechecked_after_details_verification(self):
+        gateway = MagicMock()
+        def reject_during_verification(**kwargs):
+            ProviderContentCandidate.objects.filter(pk=self.candidate.pk).update(review_state="rejected")
+            return {"tmdb_id": self.candidate.tmdb_id, "content_type": "movie", "title": "Fixture"}
+        gateway.get_details.side_effect = reject_during_verification
+        with self.assertRaises(CandidateAcceptanceError) as error:
+            CandidateAcceptanceService(gateway=gateway).accept(
+                provider_content_id=self.content.pk, tmdb_id=self.candidate.tmdb_id,
+                reason="Concurrent fixture", expected_revision=None)
+        self.assertEqual(error.exception.code, "CANDIDATE_REJECTED")
+        self.assertFalse(ContentMapping.objects.exists())
+        self.assertFalse(CandidateReviewAudit.objects.exists())
+
     def test_recovery_supported_provenance_check(self):
         # RaiPlay source supports targeted evidence and valid provider_content_id/provider_url exists
         self.assertTrue(check_recovery_supported(self.content))

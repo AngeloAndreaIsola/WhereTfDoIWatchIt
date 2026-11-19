@@ -280,9 +280,8 @@ class ContentMatcher:
     def _upsert_mapping(provider, item, movie=None, confidence=0.0):
         """Safely update-or-create a ScrapedContentMapping, deduping on conflict.
 
-        The mapping table has no ``content_type`` column, so the item's type is
-        stamped into ``raw_payload`` — it is what the unresolved-review flow reads
-        back to search TMDb in the right type.
+        The item's type is persisted in ``scraped_content_type`` (the
+        authoritative projection/review type) and echoed in ``raw_payload``.
 
         Every write is projected onto the canonical availability models through
         the legacy ingestion bridge, so ``ScrapedContentMapping`` and

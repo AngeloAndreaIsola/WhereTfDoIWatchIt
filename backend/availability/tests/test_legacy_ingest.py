@@ -16,8 +16,15 @@ pin the write-side contract of that bridge:
 from __future__ import annotations
 
 from datetime import date
+from io import StringIO
+import json
+from unittest.mock import patch
 
+from django.apps import apps
+from django.core.management import call_command
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 
 from availability.domain.enums import ContentType, MatchMethod, SourceType
 from availability.models import (
@@ -31,6 +38,7 @@ from availability.services.legacy_ingest import (
     delete_scraped_mapping,
     ingest_all,
     ingest_scraped_mapping,
+    LegacyProjectionTypeConflict,
 )
 from tracker.models import Movie, Provider, ScrapedContentMapping
 
@@ -73,12 +81,117 @@ class LegacyIngestTests(TestCase):
         self.assertEqual(Offer.objects.count(), 0)
 
     def test_series_rows_keep_the_canonical_series_type(self):
-        mapping = self._row(raw_payload={"content_type": "series"})
+        mapping = self._row(scraped_content_type="series", raw_payload={"content_type": "series"})
 
         content = ingest_scraped_mapping(mapping)
 
         self.assertEqual(content.content_type, ContentType.SERIES)
         self.assertEqual(content.release_date, date(2022, 1, 1))
+
+    def test_stored_series_type_survives_missing_or_conflicting_payload_and_reingestion(self):
+        for payload in ({}, {"content_type": "movie"}):
+            with self.subTest(payload=payload):
+                mapping = self._row(scraped_content_type="series", raw_payload=payload,
+                                    scraped_title=f"Series {payload}")
+                content = ingest_scraped_mapping(mapping)
+                self.assertEqual(content.content_type, "series")
+                self.assertEqual(ingest_scraped_mapping(mapping).pk, content.pk)
+                self.assertEqual(ProviderContent.objects.filter(
+                    provider_content_id=f"legacy-{mapping.pk}").count(), 1)
+
+    def test_stored_movie_type_wins_over_payload_series(self):
+        mapping = self._row(scraped_content_type="movie", raw_payload={"content_type": "series"})
+        self.assertEqual(ingest_scraped_mapping(mapping).content_type, "movie")
+
+    def snapshot(self):
+        return {m._meta.label: list(m.objects.order_by("pk").values()) for m in apps.get_models()}
+
+    def test_linked_movie_type_conflict_is_atomic_even_without_confirmation(self):
+        movie = Movie.objects.create(tmdb_id=904, title="Preserved movie", content_type="movie")
+        for confirmed in (False, True):
+            mapping = self._row(scraped_title=f"Series {confirmed}", scraped_content_type="series",
+                                movie=movie, is_confirmed=confirmed, raw_payload={"content_type": "series"})
+            before = self.snapshot()
+            with self.assertRaisesMessage(LegacyProjectionTypeConflict, "linked_movie_type_conflict"):
+                ingest_scraped_mapping(mapping)
+            self.assertEqual(self.snapshot(), before)
+
+    def test_drift_report_is_read_only_and_ingestion_never_duplicates_old_projection(self):
+        mapping = self._row()
+        content = ingest_scraped_mapping(mapping)
+        mapping.scraped_content_type = "series"
+        mapping.save()
+        before = self.snapshot()
+        with patch("requests.adapters.HTTPAdapter.send", side_effect=AssertionError("HTTP forbidden")):
+            output = StringIO()
+            with CaptureQueriesContext(connection) as queries:
+                call_command("audit_legacy_projection_types", mapping_id=mapping.pk, stdout=output)
+            self.assertTrue(queries)
+            for query in queries:
+                sql = query["sql"].lstrip().upper()
+                # PostgreSQL iterator() uses a read-only server-side cursor.
+                self.assertTrue(sql.startswith("SELECT") or
+                                (sql.startswith("DECLARE ") and " FOR SELECT " in sql), sql)
+                self.assertNotIn("FOR UPDATE", sql)
+            report, summary = [json.loads(line) for line in output.getvalue().splitlines()]
+            self.assertEqual(report["legacy_id"], mapping.pk)
+            self.assertEqual(report["proposed_type"], "series")
+            self.assertEqual(report["projections"], [{"id": content.pk, "content_type": "movie"}])
+            self.assertIn("projection_type_drift", report["conflicts"])
+            self.assertEqual(summary, {"affected": 1, "read_only": True})
+            for _ in range(2):
+                with self.assertRaisesMessage(LegacyProjectionTypeConflict, "projection_type_drift"):
+                    ingest_scraped_mapping(mapping)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_verified_mapping_type_conflict_cannot_be_retyped_or_replaced(self):
+        mapping = self._row(scraped_content_type="series")
+        canonical = ContentMapping.objects.create(provider=self.provider,
+            source=Source.objects.create(slug="fixture-audit", name="Fixture audit", type="web"),
+            provider_content_id=f"legacy-{mapping.pk}", content_type="movie", tmdb_id=905,
+            match_method="manual", confidence=1.0)
+        before = self.snapshot()
+        with self.assertRaisesMessage(LegacyProjectionTypeConflict, "canonical_mapping_type_conflict"):
+            ingest_scraped_mapping(mapping)
+        self.assertEqual(self.snapshot(), before)
+        canonical.content_type = "series"
+        canonical.save()
+        mapping.movie = Movie.objects.create(tmdb_id=906, title="Other series", content_type="series")
+        mapping.is_confirmed = True
+        mapping.save()
+        before = self.snapshot()
+        with self.assertRaisesMessage(LegacyProjectionTypeConflict, "verified_mapping_identity_conflict"):
+            ingest_scraped_mapping(mapping)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_same_numeric_movie_and_series_id_stay_distinct_after_repeated_ingestion(self):
+        for kind in ("movie", "series"):
+            movie = Movie.objects.create(tmdb_id=907, title=f"Fixture {kind}", content_type=kind)
+            mapping = self._row(scraped_content_type=kind, movie=movie, is_confirmed=True,
+                                raw_payload={"content_type": "movie"})
+            content = ingest_scraped_mapping(mapping)
+            self.assertEqual(ingest_scraped_mapping(mapping).pk, content.pk)
+        self.assertEqual(set(ProviderContent.objects.values_list("content_type", flat=True)), {"movie", "series"})
+        self.assertEqual(set(ContentMapping.objects.values_list("tmdb_id", "content_type")),
+                         {(907, "movie"), (907, "series")})
+
+    def test_invalid_stored_type_uses_legacy_payload_alias_fallback(self):
+        mapping = self._row(scraped_content_type="", raw_payload={"content_type": "tv"})
+        self.assertEqual(ingest_scraped_mapping(mapping).content_type, "series")
+
+    def test_conflicting_payload_report_preserves_verified_stored_movie(self):
+        movie = Movie.objects.create(tmdb_id=908, title="Verified movie", content_type="movie")
+        mapping = self._row(movie=movie, is_confirmed=True, raw_payload={"content_type": "series"})
+        content = ingest_scraped_mapping(mapping)
+        self.assertEqual(content.content_type, "movie")
+        self.assertEqual(ContentMapping.objects.get(content=content).content_type, "movie")
+        before = self.snapshot()
+        output = StringIO()
+        call_command("audit_legacy_projection_types", stdout=output)
+        report = json.loads(output.getvalue().splitlines()[0])
+        self.assertTrue(report["payload_type_disagrees"])
+        self.assertEqual(report["conflicts"], [])
+        self.assertEqual(self.snapshot(), before)
 
     def test_confirmed_linked_row_records_a_manual_mapping(self):
         movie = Movie.objects.create(tmdb_id=900, title="Linked Film", year=2020)
