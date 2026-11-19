@@ -225,6 +225,15 @@ class ManualScraperReviewTests(TestCase):
         self.assertEqual(self.confirm().status_code, 200)
         self.assertEqual(self.snapshot(), before)
 
+    def test_legacy_decimal_string_ids_work_without_loosening_identity_checks(self):
+        self.cache_details()
+        response = self.confirm(mapping_id=str(self.mapping.pk), tmdb_id="420")
+        self.assertEqual(response.status_code, 200, response.json())
+        self.mapping.refresh_from_db()
+        self.assertEqual(self.mapping.movie.tmdb_id, 420)
+        self.assertEqual(self.confirm(tmdb_id="420.0").status_code, 400)
+        self.assertEqual(self.confirm(tmdb_id=2**63).status_code, 400)
+
     def test_same_numeric_id_movie_and_series_remain_distinct(self):
         movie = Movie.objects.create(tmdb_id=420, title="Other Film", year=2001, content_type="movie")
         self.mapping.scraped_content_type = "series"

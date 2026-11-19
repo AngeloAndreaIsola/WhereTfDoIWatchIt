@@ -1295,6 +1295,18 @@ def scraper_unresolved(request):
     return Response(out)
 
 
+def _manual_review_id(value):
+    # Older JSON clients may serialize form input as decimal strings.
+    if isinstance(value, str) and value.isascii() and value.isdecimal():
+        try:
+            value = int(value)
+        except ValueError:
+            raise ManualReviewBlocked("invalid_review_identity", 400) from None
+    if type(value) is not int or not 0 < value <= 2147483647:
+        raise ManualReviewBlocked("invalid_review_identity", 400)
+    return value
+
+
 @api_view(["POST"])
 def scraper_candidate_lookup(request):
     """Explicit TMDb-only lookup, disabled without a separate reviewed grant."""
@@ -1302,11 +1314,11 @@ def scraper_candidate_lookup(request):
     if not allowed:
         return error
     data = request.data if isinstance(request.data, dict) else {}
-    if type(data.get("mapping_id")) is not int or data["mapping_id"] <= 0:
-        return Response({"error": "mapping_id must be a positive integer"}, status=400)
-    mapping = get_object_or_404(ScrapedContentMapping, pk=data["mapping_id"])
     try:
-        return Response(explicit_lookup(mapping, tmdb_id=data.get("tmdb_id")))
+        mapping_id = _manual_review_id(data.get("mapping_id"))
+        tmdb_id = _manual_review_id(data["tmdb_id"]) if data.get("tmdb_id") is not None else None
+        mapping = get_object_or_404(ScrapedContentMapping, pk=mapping_id)
+        return Response(explicit_lookup(mapping, tmdb_id=tmdb_id))
     except ManualReviewBlocked as exc:
         return Response(exc.payload(), status=exc.status)
 
@@ -1318,9 +1330,10 @@ def scraper_confirm_match(request):
     if not allowed:
         return error
     data = request.data if isinstance(request.data, dict) else {}
-    mapping_id, tmdb_id = data.get("mapping_id"), data.get("tmdb_id")
-    if type(mapping_id) is not int or type(tmdb_id) is not int or min(mapping_id, tmdb_id) <= 0:
-        return Response({"error": "mapping_id and tmdb_id must be positive integers"}, status=400)
+    try:
+        mapping_id, tmdb_id = _manual_review_id(data.get("mapping_id")), _manual_review_id(data.get("tmdb_id"))
+    except ManualReviewBlocked as exc:
+        return Response(exc.payload(), status=exc.status)
     content_type = data.get("content_type")
     if content_type is not None and (not isinstance(content_type, str) or content_type not in {"movie", "series"}):
         return Response({"error": "content_type must be 'movie' or 'series'"}, status=400)

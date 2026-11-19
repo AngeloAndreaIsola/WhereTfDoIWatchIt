@@ -74,7 +74,8 @@ granted. New HTTP functionality remains unreachable under current configuration.
 - Confirmation is a separate explicit operator POST using fresh cached details.
   RaiPlay/NHK retain stored-evidence review. Type, positive numeric ID, exact
   normalized title/original title, exact known year, saved observation version,
-  canonical mapping and metadata conflicts are checked. Truncated/ambiguous
+  canonical mapping and metadata conflicts are checked. Legacy decimal-string
+  JSON IDs remain accepted; booleans, floats and out-of-range IDs are rejected. Truncated/ambiguous
   searches and rejected candidates cannot silently become verified identity.
   Existing confirmed decisions are idempotent; replacing one remains blocked
   pending a separately reviewed correction. No existing Movie metadata is enriched
