@@ -1,6 +1,6 @@
 """The single policy boundary for legacy scraper execution.
 
-Named legacy scrapers are allowed while registered.  A missing registration is
+Registration exposes parsers only; execution requires a separate policy check.  A missing registration is
 *not* permission to run :class:`GenericURLAdapter`: a provider with a canonical
 catalogue collector must use that collector, and a named legacy scraper that is
 retired must fail explicitly.  Generic crawling remains available only to
@@ -18,6 +18,7 @@ from ..models import Provider, ProviderCategory
 from ..scrapers import resolve_scraper_class
 from ..scrapers.adapters import GenericURLAdapter
 from .provider_status import catalogue_source_map
+from .scraper_policy import ScraperExecutionIneligible, require_legacy_execution
 
 
 # These are named legacy implementations that may be removed from
@@ -36,47 +37,6 @@ LEGACY_SCRAPER_FALLBACK_DENYLIST = frozenset({
 DISCOVERY_ONLY_SCRAPERS = frozenset({"bilibili_tv", "ok_ru"})
 
 
-class ScraperExecutionIneligible(Exception):
-    """Stable, client-safe refusal to execute a scraper for one provider."""
-
-    def __init__(self, *, code: str, provider_slug: str, source_slug: str | None = None):
-        self.code = code
-        self.provider_slug = provider_slug
-        self.source_slug = source_slug
-        super().__init__(self.message)
-
-    @property
-    def message(self) -> str:
-        if self.code == "canonical_catalogue_provider":
-            return (
-                f"Scraper execution is unavailable for '{self.provider_slug}'; "
-                f"use canonical catalogue source '{self.source_slug}'."
-            )
-        if self.code == "retired_named_scraper":
-            return f"Scraper execution is unavailable for retired provider '{self.provider_slug}'."
-        if self.code == "discovery_only_provider":
-            return (
-                f"Catalogue scraping is unavailable for discovery-only provider "
-                f"'{self.provider_slug}'."
-            )
-        return (
-            f"No collector is registered for '{self.provider_slug}'; "
-            "no eligible scraper is available."
-        )
-
-    def payload(self) -> dict:
-        """HTTP-safe error schema shared by every scraper endpoint."""
-        alternative = None
-        if self.source_slug:
-            alternative = {"kind": "catalogue", "source": self.source_slug}
-        return {
-            "code": self.code,
-            "error": self.message,
-            "provider": self.provider_slug,
-            "alternative": alternative,
-        }
-
-
 @dataclass(frozen=True)
 class ScraperSelection:
     """Selected concrete scraper plus the reason it is eligible."""
@@ -88,7 +48,7 @@ class ScraperSelection:
 def select_provider_scraper(provider: Provider) -> ScraperSelection:
     """Return the only scraper eligible to run for *provider*.
 
-    Registered implementations retain their current behaviour.  If one is
+    Registered parsers do not confer execution permission.  If one is
     absent, canonical catalogue ownership and the explicit denylist are checked
     before the generic adapter.  This ordering is the retirement safety rule.
     """
@@ -97,8 +57,14 @@ def select_provider_scraper(provider: Provider) -> ScraperSelection:
         raise ScraperExecutionIneligible(
             code="discovery_only_provider", provider_slug=slug
         )
+    # Known unofficial slugs cannot escape policy through category changes or
+    # registry removal. Unknown imported scraper providers are checked below.
+    from .discovery_policy import UNOFFICIAL_PROVIDERS
+    if slug in UNOFFICIAL_PROVIDERS:
+        require_legacy_execution(provider)
     scraper_class = resolve_scraper_class(slug)
     if scraper_class is not None:
+        require_legacy_execution(provider)
         return ScraperSelection(scraper=scraper_class(), kind="registered")
 
     source_slug = catalogue_source_map().get(slug)
@@ -113,6 +79,7 @@ def select_provider_scraper(provider: Provider) -> ScraperSelection:
             code="retired_named_scraper", provider_slug=slug
         )
     if provider.category == ProviderCategory.SCRAPER:
+        require_legacy_execution(provider)
         return ScraperSelection(
             scraper=GenericURLAdapter(
                 provider_slug=provider.slug, domain=provider.domain or "example.com"

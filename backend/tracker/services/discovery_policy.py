@@ -59,7 +59,16 @@ class DiscoveryPermission:
         return parts
 
 
+UNOFFICIAL_PROVIDERS = frozenset({
+    "kisskh", "hydrahd", "animeworld", "streamingcommunity",
+    "cineblog01", "altadefinizione",
+})
+
 PERMISSIONS = {
+    "kisskh": DiscoveryPermission("kisskh"),
+    "streamingcommunity": DiscoveryPermission("streamingcommunity"),
+    "cineblog01": DiscoveryPermission("cineblog01"),
+    "altadefinizione": DiscoveryPermission("altadefinizione"),
     "hydrahd": DiscoveryPermission("hydrahd", hostname="hydrahd.gd"),
     # Official feed exposure and earlier robots access do not override the
     # documented anti-scraping terms or constitute an automation grant.

@@ -12,6 +12,7 @@ from django.conf import settings
 from tracker.languages import normalize_language_code
 from tracker.models import Movie, Provider, ScrapedContentMapping
 from tracker.services.tmdb import TMDbClient, TMDbMovie
+from tracker.services.scraper_policy import ScraperExecutionIneligible, require_legacy_execution
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,22 @@ class ScrapedItem:
         self.quality = normalize_quality(self.quality)
 
 
+class _LegacyScraperSession(requests.Session):
+    """Cover direct request/send calls as well as the fetch convenience method."""
+
+    def __init__(self, scraper):
+        super().__init__()
+        self.scraper = scraper
+
+    def request(self, *args, **kwargs):
+        require_legacy_execution(self.scraper.provider_slug)
+        return super().request(*args, **kwargs)
+
+    def send(self, *args, **kwargs):
+        require_legacy_execution(self.scraper.provider_slug)
+        return super().send(*args, **kwargs)
+
+
 class BaseScraper:
     provider_slug: str = ""
     timeout: int = 10
@@ -99,10 +116,11 @@ class BaseScraper:
     def __init__(self, timeout: Optional[int] = None):
         if timeout:
             self.timeout = timeout
-        self.session = requests.Session()
+        self.session = _LegacyScraperSession(self)
 
     def fetch_url(self, url: str, headers: Optional[dict] = None) -> Optional[dict | str]:
         """Fetch URL with retries, timeout, and error handling."""
+        require_legacy_execution(self.provider_slug)
         request_headers = {"User-Agent": DEFAULT_USER_AGENT}
         if headers:
             request_headers.update(headers)
@@ -130,8 +148,11 @@ class BaseScraper:
 
     def run(self, query: Optional[str] = None) -> list[ScrapedItem]:
         """Execute scraper run, catching failures gracefully."""
+        require_legacy_execution(self.provider_slug)
         try:
             return self._execute_run(query)
+        except ScraperExecutionIneligible:
+            raise
         except Exception as exc:
             logger.exception("Scraper %s failed during run: %s", self.provider_slug, exc)
             return []
@@ -154,6 +175,7 @@ class ContentMatcher:
         Returns: (movie, confidence_score, candidates, is_confirmed)
         """
         provider = Provider.objects.filter(slug=item.provider_slug).first()
+        require_legacy_execution(provider or item.provider_slug)
         if not provider:
             logger.warning("Provider with slug %s not found", item.provider_slug)
             return None, 0.0, [], False
@@ -272,6 +294,7 @@ class ContentMatcher:
         # package during Django app initialization.
         from tracker.services.scraped_mapping import persist_scraped_item
 
+        require_legacy_execution(provider)
         persist_scraped_item(
             provider=provider,
             item=item,

@@ -139,7 +139,7 @@ class StreamingCommunityScraperTest(TestCase):
     @patch.object(StreamingCommunityScraper, "fetch_url")
     def test_browse_returns_items(self, mock_fetch):
         mock_fetch.return_value = SC_PAGE
-        items = StreamingCommunityScraper().run(query=None)
+        items = StreamingCommunityScraper()._execute_run(query=None)
         # 4 listing pages, deduped by numeric title id -> 3 unique titles
         self.assertEqual(len(items), 3)
         self.assertTrue(all(i.provider_slug == "streamingcommunity" for i in items))
@@ -148,14 +148,14 @@ class StreamingCommunityScraperTest(TestCase):
     @patch.object(StreamingCommunityScraper, "fetch_url")
     def test_cloudflare_only_returns_empty(self, mock_fetch):
         mock_fetch.return_value = "<html>Attention Required! | Cloudflare</html>"
-        self.assertEqual(StreamingCommunityScraper().run(query="test"), [])
+        self.assertEqual(StreamingCommunityScraper()._execute_run(query="test"), [])
 
 
 class CineBlog01ScraperTest(TestCase):
     @patch.object(CineBlog01Scraper, "fetch_url")
     def test_browse_uses_pagination_and_title_attributes(self, mock_fetch):
         mock_fetch.return_value = CB_PAGE
-        items = CineBlog01Scraper().run(query=None)
+        items = CineBlog01Scraper()._execute_run(query=None)
         # 8 page fetches, deduped by URL -> 3 unique titles
         self.assertEqual(len(items), 3)
         self.assertEqual(mock_fetch.call_count, 8)
@@ -183,7 +183,7 @@ class AltaDefinizioneScraperTest(TestCase):
     @patch.object(AltaDefinizioneScraper, "fetch_url")
     def test_browse_returns_items_with_years(self, mock_fetch):
         mock_fetch.return_value = AD_PAGE
-        items = AltaDefinizioneScraper().run(query=None)
+        items = AltaDefinizioneScraper()._execute_run(query=None)
         # 4 listing pages, deduped by URL -> 2 unique titles
         self.assertEqual(len(items), 2)
         self.assertEqual(mock_fetch.call_count, 4)
@@ -208,7 +208,7 @@ class LegacyScraperPaginationTest(TestCase):
             return {"data": rows} if "type=2" in url else {"data": []}
 
         mock_fetch.side_effect = fake_fetch
-        items = KissKHScraper().run()
+        items = KissKHScraper()._execute_run()
 
         self.assertEqual(len(items), 200)
         urls = [c.args[0] for c in mock_fetch.call_args_list]
@@ -224,7 +224,7 @@ class LegacyScraperPaginationTest(TestCase):
             '<div class="title detz">Test</div>'
         )
         mock_fetch.return_value = page
-        HydraHDScraper().run()
+        HydraHDScraper()._execute_run()
 
         urls = [c.args[0] for c in mock_fetch.call_args_list]
         self.assertEqual(len(urls), 20)  # 10 pages x 2 categories

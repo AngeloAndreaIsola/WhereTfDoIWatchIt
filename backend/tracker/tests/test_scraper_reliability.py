@@ -218,14 +218,14 @@ class QueryEncodingTests(SimpleTestCase):
     @patch.object(AnimeWorldScraper, "fetch_url")
     def test_animeworld_search_encodes_the_keyword(self, fetch):
         fetch.return_value = {"html": ""}
-        AnimeWorldScraper().run(query=self.QUERY)
+        AnimeWorldScraper()._execute_run(query=self.QUERY)
         url = fetch.call_args.args[0]
         self.assertEqual(self._params(url)["keyword"], [self.QUERY])
 
     @patch.object(KissKHScraper, "fetch_url")
     def test_kisskh_search_encodes_the_query_and_keeps_type(self, fetch):
         fetch.return_value = []
-        KissKHScraper().run(query=self.QUERY)
+        KissKHScraper()._execute_run(query=self.QUERY)
         urls = [call.args[0] for call in fetch.call_args_list]
         self.assertTrue(urls)
         for url in urls:
@@ -236,14 +236,14 @@ class QueryEncodingTests(SimpleTestCase):
     @patch.object(NHKScraper, "fetch_url")
     def test_nhk_search_encodes_the_query(self, fetch):
         fetch.return_value = "<html></html>"
-        NHKScraper().run(query=self.QUERY)
+        NHKScraper()._execute_run(query=self.QUERY)
         url = fetch.call_args.args[0]
         self.assertEqual(self._params(url)["q"], [self.QUERY])
 
     @patch.object(HydraHDScraper, "fetch_url")
     def test_hydrahd_search_encodes_the_query_on_both_domains(self, fetch):
         fetch.side_effect = [None, "<html></html>"]
-        HydraHDScraper().run(query=self.QUERY)
+        HydraHDScraper()._execute_run(query=self.QUERY)
         urls = [call.args[0] for call in fetch.call_args_list]
         self.assertEqual(len(urls), 2)
         for url in urls:
@@ -254,7 +254,7 @@ class QueryEncodingTests(SimpleTestCase):
     @patch.object(RaiPlayScraper, "fetch_url")
     def test_raiplay_search_encodes_the_query(self, fetch):
         fetch.return_value = "<html></html>"
-        RaiPlayScraper().run(query=self.QUERY)
+        RaiPlayScraper()._execute_run(query=self.QUERY)
         url = fetch.call_args.args[0]
         self.assertEqual(self._params(url)["search"], [self.QUERY])
 
@@ -267,7 +267,7 @@ class AnimeWorldBrowseRequestTests(SimpleTestCase):
         fetch.return_value = anime_card("Only", "play/only", 2020)
         scraper = AnimeWorldScraper()
         with patch.object(scraper, "session") as session:
-            items = scraper.run(query=None)
+            items = scraper._execute_run(query=None)
 
         self.assertEqual(len(items), 4, "two categories x two pages")
         self.assertFalse(session.get.called, "browse must not bypass fetch_url")
@@ -284,13 +284,13 @@ class AnimeWorldBrowseRequestTests(SimpleTestCase):
     @patch.object(AnimeWorldScraper, "fetch_url")
     def test_browse_failure_is_empty_not_a_crash(self, fetch):
         fetch.return_value = None
-        self.assertEqual(AnimeWorldScraper().run(query=None), [])
+        self.assertEqual(AnimeWorldScraper()._execute_run(query=None), [])
 
     def test_browse_timeout_is_absorbed_by_the_shared_helper(self):
         scraper = AnimeWorldScraper()
         with patch.object(scraper.session, "get",
                           side_effect=requests.exceptions.Timeout("slow")) as get:
-            self.assertEqual(scraper.run(query=None), [])
+            self.assertEqual(scraper._execute_run(query=None), [])
         self.assertTrue(get.called)
         # fetch_url retries each URL max_retries times, then gives up.
         self.assertEqual(get.call_count, 4 * (1 + scraper.max_retries))
@@ -335,7 +335,7 @@ class DocumentedRealMarkupTests(SimpleTestCase):
     @patch.object(AnimeWorldScraper, "fetch_url")
     def test_animeworld_search_unwraps_the_html_envelope(self, fetch):
         fetch.return_value = {"html": self.REAL_SHAPE_HTML}
-        items = AnimeWorldScraper().run(query="naruto")
+        items = AnimeWorldScraper()._execute_run(query="naruto")
         self.assertEqual(
             [(i.title, i.year) for i in items],
             [("Naruto", 2002), ("Naruto Shippuden", 2007)],

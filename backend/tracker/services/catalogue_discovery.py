@@ -622,7 +622,9 @@ def run_discovery(provider_slug, *, mode="full", request_budget=20, delay=1.0, r
                 try:
                     pages_attempted += 1
                     http.begin_page()
-                    rows = scraper.run(query=targeted_query)
+                    # Preflight and the installed DiscoveryHTTP own this execution.
+                    # Do not enter the permanently blocked legacy run() path.
+                    rows = scraper._execute_run(query=targeted_query)
                 except _RequestBudgetReached:
                     rows = []
                     report["last_error"] = "request budget exhausted during targeted search"

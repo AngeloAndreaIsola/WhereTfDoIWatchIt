@@ -568,7 +568,7 @@ class CatalogueDiscoveryTests(TestCase):
         slug = "kisskh"
         with patch("tracker.services.catalogue_discovery.resolve_scraper_class") as resolve:
             scraper = resolve.return_value.return_value
-            scraper.run.return_value = [fixture_item(slug)]
+            scraper._execute_run.return_value = [fixture_item(slug)]
             result = run_discovery(slug, mode="targeted", targeted_query="fixture", delay=0)
         self.assertEqual(result["status"], "PARTIAL")
         self.assertEqual(result["items_seen"], 1)

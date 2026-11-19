@@ -126,6 +126,7 @@ from .services.refresh_requests import (
     request_watchlist_refresh,
 )
 from .services.scraper_runner import run_provider_scraper
+from .services.scraper_policy import require_legacy_execution
 from .services.scraper_selection import (
     ScraperExecutionIneligible,
     select_provider_scraper,
@@ -1280,37 +1281,11 @@ def scraper_unresolved(request):
         is_confirmed=False
     ).select_related("provider", "movie").order_by("-updated_at")
 
-    matcher = ContentMatcher()
+    # Review is a read-only projection of saved observations. Opening this
+    # list must never perform an implicit TMDb search (or change a mapping).
     out = []
     for mapping in unresolved:
-        payload = mapping.raw_payload if isinstance(mapping.raw_payload, dict) else {}
-        # The type the scrape was classified with, stored by _upsert_mapping.
-        content_type = payload.get("content_type") or "movie"
-        item = ScrapedItem(
-            title=mapping.scraped_title,
-            provider_slug=mapping.provider.slug,
-            year=mapping.scraped_year,
-            content_type=content_type,
-            source_url=mapping.scraped_url,
-        )
-
         candidates = []
-        try:
-            raw_cands = matcher.tmdb_client.search(
-                item.title, year=item.year, content_type=content_type
-            )
-            candidates = [
-                {
-                    "tmdb_id": c.tmdb_id,
-                    "title": c.title,
-                    "year": c.year,
-                    "confidence_score": matcher.calculate_confidence(item, c),
-                }
-                for c in raw_cands[:5]
-            ]
-        except Exception:
-            pass
-
         data = ScrapedContentMappingSerializer(mapping).data
         data["candidates"] = candidates
         out.append(data)
@@ -1340,6 +1315,11 @@ def scraper_confirm_match(request):
     content_type = raw_type or "movie"
 
     mapping = get_object_or_404(ScrapedContentMapping, id=mapping_id)
+
+    try:
+        require_legacy_execution(mapping.provider)
+    except ScraperExecutionIneligible as exc:
+        return Response(exc.payload(), status=status.HTTP_409_CONFLICT)
 
     client = TMDbClient(settings.TMDB_API_KEY)
     try:

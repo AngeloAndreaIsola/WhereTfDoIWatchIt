@@ -70,6 +70,7 @@ from ..models import (
     ScrapedContentMapping,
 )
 from ..scrapers import resolve_scraper_class
+from .scraper_policy import ScraperExecutionIneligible, require_legacy_execution
 
 CATALOGUE = "catalogue"
 SCRAPER = "scraper"
@@ -107,6 +108,10 @@ def refresh_target(
     if source_slug:
         return CATALOGUE, source_slug
     if resolve_scraper_class(provider.slug) or provider.category == ProviderCategory.SCRAPER:
+        try:
+            require_legacy_execution(provider)
+        except ScraperExecutionIneligible:
+            return None, None
         return SCRAPER, None
     return None, None
 
@@ -329,7 +334,7 @@ def provider_card_status(providers) -> dict[int, dict]:
                 "source_slug": None,
                 "last_run": default_last_runs.get(provider.id),
                 "last_run_error": "",
-                "available_items": offer_counts.get(provider.id, 0),
+                "available_items": scraped_counts.get(provider.id, 0) or offer_counts.get(provider.id, 0),
                 "refreshing": False,
                 "catalogue_sync_status": "IDLE",
                 "catalogue_sync_report": {},

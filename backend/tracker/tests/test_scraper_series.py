@@ -196,7 +196,7 @@ class KissKHClassificationTests(TestCase):
             return None
 
         mock_fetch.side_effect = fake_fetch
-        items = self.scraper.run(query=None)
+        items = self.scraper._execute_run(query=None)
 
         urls = [c.args[0] for c in mock_fetch.call_args_list]
         # The mixed `type=0` listing carries no usable signal — never used.
@@ -214,7 +214,7 @@ class KissKHClassificationTests(TestCase):
     @patch.object(KissKHScraper, "fetch_url")
     def test_search_queries_every_type(self, mock_fetch):
         mock_fetch.return_value = [{"id": 1, "title": "Result", "year": 2020, "type": "Movie"}]
-        self.scraper.run(query="dune")
+        self.scraper._execute_run(query="dune")
 
         urls = [c.args[0] for c in mock_fetch.call_args_list]
         self.assertTrue(all("DramaList/Search" in u for u in urls))
@@ -226,15 +226,15 @@ class KissKHClassificationTests(TestCase):
         def result(url, *args, **kwargs):
             return [{"id": 77, "title": "Shared", "year": 2019, "type": "TVSeries" if "type=1" in url else "Movie"}]
         mock_fetch.side_effect = result
-        items = self.scraper.run(query="shared")
+        items = self.scraper._execute_run(query="shared")
         self.assertEqual({item.content_type for item in items}, {"movie", "series"})
         self.assertEqual(len(items), 2)
 
     @patch.object(KissKHScraper, "fetch_url")
     def test_failed_requests_do_not_break_the_run(self, mock_fetch):
         mock_fetch.side_effect = Exception("blocked")
-        self.assertEqual(self.scraper.run(query=None), [])
-        self.assertEqual(self.scraper.run(query="x"), [])
+        self.assertEqual(self.scraper._execute_run(query=None), [])
+        self.assertEqual(self.scraper._execute_run(query="x"), [])
 
 
 class RaiPlayClassificationTests(TestCase):
@@ -290,7 +290,7 @@ class PrioritySourceClassificationTests(TestCase):
           </div>
         </body></html>
         """
-        items = NHKScraper().run(query="Japan Railway Journal")
+        items = NHKScraper()._execute_run(query="Japan Railway Journal")
         self.assertEqual(items[0].content_type, "movie")
 
 

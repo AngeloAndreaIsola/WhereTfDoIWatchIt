@@ -1,4 +1,8 @@
-"""Seed imported scraper providers."""
+"""Seed catalogue-visible provider metadata, never automation permission.
+
+``is_enabled`` controls visibility only. The reviewed permission registry and
+execution boundary remain authoritative regardless of these domains/settings.
+"""
 from __future__ import annotations
 
 from django.core.management.base import BaseCommand

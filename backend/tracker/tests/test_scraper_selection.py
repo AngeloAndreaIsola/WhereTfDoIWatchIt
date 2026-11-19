@@ -21,13 +21,10 @@ from tracker.services.scraper_selection import (
 
 
 class ScraperSelectionUnitTests(TestCase):
-    def test_current_registry_entries_remain_eligible(self):
+    def test_existing_broadcaster_paths_remain_eligible(self):
         expected = {
             "nhk_world": NHKScraper,
             "raiplay": RaiPlayScraper,
-            "kisskh": KissKHScraper,
-            "hydrahd": HydraHDScraper,
-            "animeworld": AnimeWorldScraper,
         }
         for slug, scraper_class in expected.items():
             with self.subTest(slug=slug):
@@ -39,7 +36,7 @@ class ScraperSelectionUnitTests(TestCase):
                 self.assertEqual(selection.kind, "registered")
                 self.assertIsInstance(selection.scraper, scraper_class)
 
-    def test_new_listing_scrapers_are_registered_without_aliases(self):
+    def test_listing_parsers_are_registered_but_not_authorized(self):
         from tracker.scrapers import (
             AltaDefinizioneScraper,
             CineBlog01Scraper,
@@ -57,9 +54,10 @@ class ScraperSelectionUnitTests(TestCase):
                     slug=slug,
                     defaults={"name": slug, "category": "scraper"},
                 )
-                selection = select_provider_scraper(provider)
-                self.assertEqual(selection.kind, "registered")
-                self.assertIsInstance(selection.scraper, scraper_class)
+                from tracker.scrapers import resolve_scraper_class
+                self.assertIs(resolve_scraper_class(slug), scraper_class)
+                with self.assertRaisesMessage(ScraperExecutionIneligible, "source_permission_unverified"):
+                    select_provider_scraper(provider)
 
     def test_metadata_importers_cannot_fall_through_to_generic_crawling(self):
         for slug in ("bilibili_tv", "ok_ru"):
@@ -219,7 +217,7 @@ class ScraperSelectionEndpointTests(TestCase):
         )
         generic.assert_not_called()
 
-    def test_valid_import_uses_generic_adapter_and_keeps_import_contract(self):
+    def test_unknown_import_has_no_automation_grant(self):
         fake = MagicMock()
         fake.run.return_value = []
         with patch(
@@ -231,7 +229,6 @@ class ScraperSelectionEndpointTests(TestCase):
                 format="json",
             )
 
-        self.assertEqual(response.status_code, 201)
-        self.assertEqual(response.json()["provider"]["slug"], "custom-source")
-        generic.assert_called_once_with(provider_slug="custom-source", domain="custom-source.example")
-        self.assertTrue(Subscription.objects.filter(provider__slug="custom-source").exists())
+        self._assert_ineligible(response, code="source_permission_unverified", provider="custom-source")
+        generic.assert_not_called()
+        self.assertFalse(Subscription.objects.filter(provider__slug="custom-source").exists())
