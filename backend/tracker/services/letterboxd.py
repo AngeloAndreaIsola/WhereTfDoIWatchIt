@@ -58,6 +58,10 @@ class LetterboxdRow:
     rewatch: bool = False
     source: str = "letterboxd"
     mal_id: Optional[int] = None
+    # Declared media type of the imported row ("movie" | "series"), when the
+    # source format provides one (#107). None = undeclared; the importer then
+    # applies the format default (MyAnimeList anime → series, else movie).
+    media_type: Optional[str] = None
 
 
 @dataclass
@@ -140,12 +144,25 @@ def parse_mal_xml(file_bytes: bytes) -> list[LetterboxdRow]:
             except ValueError:
                 mal_id = None
 
+        # MAL exports declare series_type (TV / Movie / OVA / ...). Anime
+        # films are movies; everything else is TV-shaped. Undeclared types
+        # stay None and fall back to the MAL series default at import time
+        # (#107) — a typed search miss goes to review, never a wrong guess.
+        media_type: Optional[str] = None
+        type_elem = anime.find("series_type")
+        series_type = (type_elem.text or "").strip().lower() if type_elem is not None else ""
+        if series_type == "movie":
+            media_type = "movie"
+        elif series_type:
+            media_type = "series"
+
         rows.append(
             LetterboxdRow(
                 title=title,
                 year=None,
                 source="myanimelist",
                 mal_id=mal_id,
+                media_type=media_type,
             )
         )
     return rows
@@ -690,16 +707,24 @@ def import_rows(
         movie_created = False
         item_created = False
 
+        expected_type = _search_content_type(row)
         if row.uri and row.uri in local_movies_by_uri:
-            movie = local_movies_by_uri[row.uri]
-        elif title_key in local_movies_by_title_year:
-            movie = local_movies_by_title_year[title_key]
-        elif (row.title.lower().strip(), None) in local_movies_by_title_year and row.year is None:
-            movie = local_movies_by_title_year[(row.title.lower().strip(), None)]
+            movie = _typed_cache_hit(local_movies_by_uri[row.uri], expected_type)
+        if movie is None and title_key in local_movies_by_title_year:
+            movie = _typed_cache_hit(local_movies_by_title_year[title_key], expected_type)
+        if movie is None and row.year is None:
+            movie = _typed_cache_hit(
+                local_movies_by_title_year.get((row.title.lower().strip(), None)),
+                expected_type,
+            )
 
         if movie is None:
             try:
-                matches = client.search(row.title, year=row.year)
+                # Provenance-driven media type (#107): MAL anime searches the
+                # TV endpoint; Letterboxd rows keep movie semantics.
+                matches = client.search(
+                    row.title, year=row.year, content_type=expected_type
+                )
             except Exception as exc:
                 logger.warning("TMDb search failed for %s: %s", row.title, exc)
                 result.skipped.append(
@@ -739,7 +764,7 @@ def import_rows(
 
             movie, created = Movie.objects.get_or_create(
                 tmdb_id=pick.tmdb_id,
-            content_type=pick.content_type or "movie",
+                content_type=pick.content_type or expected_type,
                 defaults={"title": pick.title, "year": pick.year, "poster_path": pick.poster_path or ""},
             )
             movie_created = created
@@ -826,6 +851,34 @@ def import_rows(
             )
 
     return result
+
+
+def _search_content_type(row: LetterboxdRow) -> str:
+    """Media-type contract for TMDb candidate search (#107).
+
+    Explicit row declaration wins; otherwise MyAnimeList anime rows search
+    the TV endpoint (anime exports are TV-shaped; declared anime films carry
+    ``media_type="movie"``). Letterboxd CSV/URL and canonical-CSV rows declare
+    no media type and keep movie semantics.
+    """
+    if row.media_type in ("movie", "series"):
+        return row.media_type
+    if row.source == "myanimelist":
+        return "series"
+    return "movie"
+
+
+def _typed_cache_hit(candidate: Optional[Movie], expected_type: str) -> Optional[Movie]:
+    """A local-cache hit must match the row's declared media type (#107).
+
+    Movie and series TMDb IDs live in separate namespaces; reusing a cached
+    movie for a series row (or vice versa) would link the wrong identity.
+    """
+    if candidate is None:
+        return None
+    if (candidate.content_type or "movie") != expected_type:
+        return None
+    return candidate
 
 
 def _select_match(matches: list[TMDbMovie], year: Optional[int]) -> Optional[TMDbMovie]:
