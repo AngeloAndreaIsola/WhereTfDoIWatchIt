@@ -89,6 +89,7 @@ def resolve_or_create_movie(tmdb_id: int, content_type: str = "movie") -> Movie:
     details = client.details(tmdb_id, content_type=content_type)
     movie, created = Movie.objects.get_or_create(
         tmdb_id=details.tmdb_id,
+        content_type=details.content_type or content_type,
         defaults={
             "title": details.title,
             "year": details.year,

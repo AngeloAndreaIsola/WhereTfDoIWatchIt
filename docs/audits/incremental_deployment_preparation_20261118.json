@@ -1,0 +1,188 @@
+{
+  "verdict": "DEPLOYMENT_PREPARATION_COMPLETE",
+  "deployed": false,
+  "branch": "integration/incremental-catalogue-safety",
+  "feature_commit": "11cc7416503c300b701945c8d39a7a2eaf6f943d",
+  "target_branch": "new-sources",
+  "target_local_and_origin_commit": "a7ce47f5a15107ea8df1c39c740e8699f0f6cd68",
+  "architecture": "Standalone backend-only Compose; immutable image IDs; no application bind mounts; read-only root; Gunicorn without reload; baked migration guard; existing external database network; no workers.",
+  "images": {
+    "old": {
+      "revision": "a7ce47f5a15107ea8df1c39c740e8699f0f6cd68",
+      "image": "sha256:3417517486d65b9e2fea71ce8d8cf29db2e2a5364706fc167da09d181b5efa36",
+      "tag": "wtdw-backend:a7ce47f5a151-60d1d4581e23-45c4293e",
+      "dependency_image": "sha256:4a5a7aa75a4222f57a76722a2249826684ad6a6f6f73e8b3e3ce3e0a8d9d1fd7",
+      "backend_archive_sha256": "66bc85eee9f21f9abd9f9bd721fe4632af9385aaa31afd5e35ae3a9cf27694a1",
+      "operations_sha256": "60d1d4581e23e826e00a146dcd6b1e3e52fc1deb023ca7ed642267b0936f829f"
+    },
+    "feature": {
+      "revision": "11cc7416503c300b701945c8d39a7a2eaf6f943d",
+      "image": "sha256:3e1bfcaf1b944cdde14c03ff6b463c4a2bb3b3646e6d5e03719030e3f695e1db",
+      "tag": "wtdw-backend:11cc7416503c-60d1d4581e23-45c4293e",
+      "dependency_image": "sha256:4a5a7aa75a4222f57a76722a2249826684ad6a6f6f73e8b3e3ce3e0a8d9d1fd7",
+      "backend_archive_sha256": "16452b8d20e992954f6f03c8a5cb958e15db3267afcf04b9ce54a0a58d6ac673",
+      "operations_sha256": "60d1d4581e23e826e00a146dcd6b1e3e52fc1deb023ca7ed642267b0936f829f"
+    }
+  },
+  "offline_rebuilds_reproduced_exact_image_ids": true,
+  "image_recovery_archive": {
+    "sha256": "2287fa4fe0698299ba2edd5e6591d7c60fbecb71240f39d97162bf0446ee5194",
+    "bytes": 69536522,
+    "images": [
+      "sha256:3417517486d65b9e2fea71ce8d8cf29db2e2a5364706fc167da09d181b5efa36",
+      "sha256:3e1bfcaf1b944cdde14c03ff6b463c4a2bb3b3646e6d5e03719030e3f695e1db",
+      "sha256:4a5a7aa75a4222f57a76722a2249826684ad6a6f6f73e8b3e3ce3e0a8d9d1fd7"
+    ],
+    "gzip_tar_validation": "PASSED",
+    "docker_load_verified": true
+  },
+  "backend_tests": {
+    "focused-160": {
+      "exit_code": 0,
+      "count": 160,
+      "seconds": 11.54
+    },
+    "focused-112": {
+      "exit_code": 0,
+      "count": 112,
+      "seconds": 10.23
+    },
+    "backend-3382": {
+      "exit_code": 0,
+      "count": 3382,
+      "seconds": 124.21
+    },
+    "migration-consistency": {
+      "exit_code": 0,
+      "count": null,
+      "seconds": 1.72
+    },
+    "django-check": {
+      "exit_code": 0,
+      "count": null,
+      "seconds": 1.65
+    }
+  },
+  "controller_safeguard_tests": 21,
+  "deployment_recovery_scenarios": 20,
+  "scenarios": {
+    "01-existing-0056-api-health": "PASSED",
+    "02-source-isolation-A": "PASSED",
+    "03-source-edit-does-not-reload": "PASSED",
+    "04-migrate-B-and-old-code-on-0058": "PASSED",
+    "05-feature-C-api-health": "PASSED",
+    "06-repeat-release-idempotent": "PASSED",
+    "07-unchanged-reconciliation-replay": "PASSED",
+    "07b-offline-bounded-canary-D": "PASSED",
+    "08-startup-failure-and-rollback": "PASSED",
+    "09-health-failure-and-rollback": "PASSED",
+    "10-interrupted-release-recovery": "PASSED",
+    "11-restore-original-0056": "PASSED",
+    "12-migration-failure-blocks-C": "PASSED",
+    "13-rollback-after-partial-migration": "PASSED",
+    "14-resume-migration-and-feature": "PASSED",
+    "15-repeat-migrations": "PASSED",
+    "16-restore-based-complete-recovery": "PASSED",
+    "16b-interrupted-restore-resume": "PASSED",
+    "17-migration-reverse-reapply": "PASSED",
+    "17-fixture-catalogue": "PASSED"
+  },
+  "old_backend_verified_on_schemas": [
+    "0056",
+    "0057",
+    "0058"
+  ],
+  "final_clone_schema": "0056",
+  "peer_api_health": "HTTP 200 via backend DNS on disposable internal network",
+  "live_preservation": {
+    "application_tables_unchanged": 48,
+    "counts": {
+      "canonical_associations": 4769,
+      "discoveries": 5095,
+      "legacy_mappings": 3300,
+      "offers": 0,
+      "unresolved": 326
+    },
+    "live_tracker_schema": "0056",
+    "live_availability_schema": "0016",
+    "live_backend_identity_image_mounts_config_unchanged": true,
+    "live_backend_was_already_restarting": true,
+    "live_backend_status": "restarting",
+    "live_backend_restart_count_at_start": 13,
+    "live_backend_restart_count_at_end": 25,
+    "live_containers_restarted_by_preparation": false,
+    "live_source_tracked_changes": false,
+    "all_refs_and_stashes_preserved_before_preparation_commit": true,
+    "target_origin_unchanged": true,
+    "rehearsal_containers_network_removed": true
+  },
+  "preserved_table_digests": {
+    "tracker_provider": {
+      "count": 50,
+      "sha256": "0359d80310569905f519a8535445560983351a3ddef4743dfd0ea76803dea82b"
+    },
+    "availability_source": {
+      "count": 3,
+      "sha256": "a27e21d91abd55321a328585024a595029e4060e83e13e399dbf2d8486617bd5"
+    },
+    "tracker_cataloguediscoverystate": {
+      "count": 5,
+      "sha256": "efc2426576cbf9884c03c7e799134b5c81c489dbe910b1d1703ce0de4ad08693"
+    },
+    "tracker_discoveredcataloguerecord": {
+      "count": 5095,
+      "sha256": "6ed1eab5281562ba98625095909cbc96ab7adb897eb0588a2c3d7376a715cf87"
+    },
+    "tracker_scrapedcontentmapping": {
+      "count": 3300,
+      "sha256": "3b717532b0b312a440d6299c47289df420fc5cdd37242bbf3ee05076cc74e4f5"
+    },
+    "tracker_canonicalbootstrapevidence": {
+      "count": 4769,
+      "sha256": "3aae20461a6c2eb5416ebd82d8d9b219eef3a8be0b51226a5ce9fb64504bc991"
+    },
+    "availability_contentmapping": {
+      "count": 4769,
+      "sha256": "de404ec223e4626c66f34efe38f3d86ce0b1836e56f3bcac21495a9d21b8fc97"
+    },
+    "availability_providercontent": {
+      "count": 4769,
+      "sha256": "08245bdedf463e9fed03393800e7fc524045f34779d15a530b1f78679459cadc"
+    },
+    "availability_offer": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    }
+  },
+  "all_scheduler_modes_disabled": true,
+  "preparation_dispatched_live_jobs": false,
+  "live_gate_execution_approvals": {
+    "A": "Source isolation and controlled backend replacement/restart",
+    "B": "Exclusive maintenance, backup/restore proof and live 0057/0058 migrations",
+    "C": "Feature image replacement and live compatibility/health verification",
+    "D": "One offline bounded reconciliation cycle, zero selected / zero HTTP expected",
+    "E": "Readiness review only; activation requires separate provider-specific plan and authorization"
+  },
+  "changes_completed": [
+    "Reviewed and preserved pre-existing untracked preparation",
+    "Durable gate/restore journals",
+    "Verified image export/load and CRC failure detection",
+    "Refused non-completed canaries",
+    "Refused forward progression during unfinished restore",
+    "Recovered rename-before-journal interruption"
+  ],
+  "remaining_preparation_blockers": [],
+  "execution_risks": [
+    "Live backend was already restarting at initial inspection; only separately authorized Gate A may replace it.",
+    "Exclusive write-free maintenance is required for the strict fixed baseline and restore recovery.",
+    "Full restore can lose post-backup writes and requires explicit separate acceptance; failed database is retained.",
+    "Do not reverse 0057 after real processing; application rollback retains expanded schema and new state.",
+    "Old corrupt private archive remains preserved and must not be used.",
+    "Live host routing/health is checked only during authorized execution; clone peer/internal API tests passed."
+  ],
+  "runbook": "docs/sources/INCREMENTAL_DEPLOYMENT.md",
+  "private_evidence_directory": "/Users/angeloandreaisola/orca/workspaces/WhereTfDoIWatchIt/incremental-integration-safety/.catalogue-staging/deployment-final-20261118T101748Z",
+  "merged": false,
+  "pushed": false,
+  "live_operations_executed": false
+}

@@ -38,6 +38,8 @@ from availability.sources import DEFAULT_SOURCE_SLUG
 from tracker.models import (
     CatalogueRefreshRequest,
     CatalogueRefreshStatus,
+    CatalogueDiscoveryState,
+    DiscoveredCatalogueRecord,
     Movie,
     Provider,
     RefreshRun,
@@ -55,8 +57,8 @@ def _scraped_item(title="Refreshed Title", year=2021):
         title=title,
         year=year,
         content_type="movie",
-        provider_slug="kisskh",
-        source_url="https://kisskh.example/1",
+        provider_slug="nhk_world",
+        source_url="https://nhk.example/1",
         availability=True,
         audio_languages=["EN"],
         subtitle_languages=[],
@@ -154,7 +156,7 @@ class ProviderListCardFieldTests(TestCase):
         self.assertTrue(self._card(data, "pbs")["refreshing"])
         self.assertFalse(self._card(data, "cbc_gem")["refreshing"])
 
-    def test_scraper_card_reports_scraper_target_and_its_own_items(self):
+    def test_blocked_scraper_card_retains_its_saved_items(self):
         provider = Provider.objects.get(slug="kisskh")
         provider.last_scraped_at = NOW - timedelta(days=1)
         provider.save()
@@ -176,11 +178,54 @@ class ProviderListCardFieldTests(TestCase):
         data = self.client.get("/api/providers/").json()
         card = self._card(data, "kisskh")
 
-        self.assertEqual(card["refresh_kind"], "scraper")
+        self.assertIsNone(card["refresh_kind"])
         self.assertIsNone(card["source_slug"])
         self.assertEqual(card["available_items"], 1)
         self.assertFalse(card["refreshing"])
         self.assertEqual(card["last_run"], provider.last_scraped_at.isoformat().replace("+00:00", "Z"))
+
+    def test_provider_card_exposes_pending_discovery_without_counting_it_as_availability(self):
+        provider = Provider.objects.get(slug="kisskh")
+        checked_at = timezone.now() - timedelta(hours=2)
+        CatalogueDiscoveryState.objects.create(
+            provider=provider,
+            status="BLOCKED",
+            cursor={"parts": {"movies": 128, "tv-shows": 73}},
+            last_successful_checkpoint=checked_at,
+            last_error="HTTP 451",
+        )
+        DiscoveredCatalogueRecord.objects.create(
+            provider=provider,
+            title="Pending title",
+            source_url="https://kisskh.example/title/1",
+            identity_url="https://kisskh.example/title/1",
+            classification_state="PENDING",
+        )
+        DiscoveredCatalogueRecord.objects.create(
+            provider=provider,
+            title="Classified title",
+            source_url="https://kisskh.example/title/2",
+            identity_url="https://kisskh.example/title/2",
+            classification_state="CLASSIFIED",
+        )
+
+        card = self._card(self.client.get("/api/providers/").json(), "kisskh")
+
+        self.assertEqual(card["available_items"], 0)
+        self.assertEqual(card["catalogue_discovery"], {
+            "inventory_count": 2,
+            "pending_classification_count": 1,
+            "last_successful_sync": checked_at.isoformat().replace("+00:00", "Z"),
+            "last_success_at": None,
+            "historical_checkpoint": {"movies": 128, "tv-shows": 73},
+            "incremental_checkpoint": {},
+            "coverage_status": "BLOCKED",
+            "error": "HTTP 451",
+            "new_discoveries_last_run": 0,
+            "duplicate_identities_last_run": 0,
+            "failed_pages_last_run": [],
+            "mode_reports": {},
+        })
 
     def test_plain_provider_reports_never_run_and_active_offer_count(self):
         movie = Movie.objects.create(tmdb_id=11, title="Plained", year=2019)
@@ -274,21 +319,21 @@ class ProviderRefreshEndpointTests(TestCase):
         self.assertTrue(Subscription.objects.filter(user_id=1, provider=provider).exists())
 
     def test_scraper_refresh_runs_that_scraper_only(self):
-        provider = Provider.objects.get(slug="kisskh")
+        provider = Provider.objects.get(slug="nhk_world")
         marker = CatalogueRefreshRequest.objects.filter(status=CatalogueRefreshStatus.PENDING)
 
         with patch(
             "tracker.services.scraper_selection.resolve_scraper_class",
             return_value=_fake_scraper_class([_scraped_item()]),
         ) as mock_resolve:
-            resp = self.client.post("/api/providers/kisskh/refresh/")
+            resp = self.client.post("/api/providers/nhk_world/refresh/")
 
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         body = resp.json()
         self.assertEqual(body["kind"], "scraper")
         self.assertFalse(body["queued"])
         self.assertEqual(body["count"], 1)
-        mock_resolve.assert_called_once_with("kisskh")
+        mock_resolve.assert_called_once_with("nhk_world")
 
         provider.refresh_from_db()
         self.assertIsNotNone(provider.last_scraped_at)
@@ -317,13 +362,13 @@ class ProviderRefreshEndpointTests(TestCase):
         self.assertTrue(Subscription.objects.filter(user_id=1, provider=provider).exists())
 
     def test_scraper_failure_returns_the_error_and_nothing_pretends_success(self):
-        provider = Provider.objects.get(slug="kisskh")
+        provider = Provider.objects.get(slug="nhk_world")
 
         with patch(
             "tracker.services.scraper_selection.resolve_scraper_class",
             return_value=_fake_scraper_class(error=RuntimeError("scrape down")),
         ):
-            resp = self.client.post("/api/providers/kisskh/refresh/")
+            resp = self.client.post("/api/providers/nhk_world/refresh/")
 
         self.assertEqual(resp.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
         self.assertIn("scrape down", resp.json()["error"])

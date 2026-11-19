@@ -10,6 +10,8 @@ Three concerns:
 - season gating: show-level scraper offers are suppressed when the series
   detail request is narrowed to one season.
 """
+# Calls to _execute_run below exercise retained parser orchestration with fixture
+# HTTP seams; public run()/session authorization is tested separately.
 from unittest.mock import MagicMock, patch
 
 from django.test import TestCase
@@ -83,7 +85,7 @@ def raiplay_html(typology: str, title: str = "Title", weblink: str = "/programmi
 """
 
 
-def series_item(title="Dune", year=2021, provider_slug="kisskh") -> ScrapedItem:
+def series_item(title="Dune", year=2021, provider_slug="nhk_world") -> ScrapedItem:
     return ScrapedItem(
         title=title,
         provider_slug=provider_slug,
@@ -176,7 +178,10 @@ class KissKHClassificationTests(TestCase):
 
     def test_parse_items_uses_the_declared_type(self):
         rows = [{"id": 1, "title": "Some Show", "year": 2020}]
+        self.assertEqual(self.scraper.parse_items(rows, content_type="series"), [])
+        rows = [{**rows[0], "type": "TVSeries"}]
         series = self.scraper.parse_items(rows, content_type="series")
+        rows = [{**rows[0], "type": "Movie"}]
         movies = self.scraper.parse_items(rows, content_type="movie")
         self.assertEqual(series[0].content_type, "series")
         self.assertEqual(movies[0].content_type, "movie")
@@ -185,15 +190,15 @@ class KissKHClassificationTests(TestCase):
     def test_browse_requests_each_type_and_classifies(self, mock_fetch):
         def fake_fetch(url, *args, **kwargs):
             if "type=2" in url:
-                return {"data": [{"id": 10, "title": "A Film", "year": 2020}]}
+                return {"data": [{"id": 10, "title": "A Film", "year": 2020, "type": "Movie"}]}
             if "type=1" in url:
-                return {"data": [{"id": 11, "title": "A Drama", "year": 2021}]}
+                return {"data": [{"id": 11, "title": "A Drama", "year": 2021, "type": "TVSeries"}]}
             if "type=3" in url:
-                return {"data": [{"id": 12, "title": "An Anime", "year": 2022}]}
+                return {"data": [{"id": 12, "title": "An Anime", "year": 2022, "episodesCount": 12}]}
             return None
 
         mock_fetch.side_effect = fake_fetch
-        items = self.scraper.run(query=None)
+        items = self.scraper._execute_run(query=None)
 
         urls = [c.args[0] for c in mock_fetch.call_args_list]
         # The mixed `type=0` listing carries no usable signal — never used.
@@ -206,13 +211,12 @@ class KissKHClassificationTests(TestCase):
         self.assertEqual(by_title, {
             "A Film": "movie",
             "A Drama": "series",
-            "An Anime": "series",
         })
 
     @patch.object(KissKHScraper, "fetch_url")
     def test_search_queries_every_type(self, mock_fetch):
-        mock_fetch.return_value = [{"id": 1, "title": "Result", "year": 2020}]
-        self.scraper.run(query="dune")
+        mock_fetch.return_value = [{"id": 1, "title": "Result", "year": 2020, "type": "Movie"}]
+        self.scraper._execute_run(query="dune")
 
         urls = [c.args[0] for c in mock_fetch.call_args_list]
         self.assertTrue(all("DramaList/Search" in u for u in urls))
@@ -220,17 +224,22 @@ class KissKHClassificationTests(TestCase):
         self.assertTrue(any("type=2" in u for u in urls))
 
     @patch.object(KissKHScraper, "fetch_url")
-    def test_same_entry_returned_by_two_types_is_deduped(self, mock_fetch):
-        entry = {"id": 77, "title": "Shared", "year": 2019}
-        mock_fetch.return_value = [entry]
-        items = self.scraper.run(query="shared")
-        self.assertEqual(len(items), 1)
+    def test_same_native_id_in_movie_and_series_partitions_stays_separate(self, mock_fetch):
+        def result(url, *args, **kwargs):
+            return [{"id": 77, "title": "Shared", "year": 2019, "type": "TVSeries" if "type=1" in url else "Movie"}]
+        mock_fetch.side_effect = result
+        items = self.scraper._execute_run(query="shared")
+        self.assertEqual({item.content_type for item in items}, {"movie", "series"})
+        self.assertEqual(len(items), 2)
 
     @patch.object(KissKHScraper, "fetch_url")
-    def test_failed_requests_do_not_break_the_run(self, mock_fetch):
+    def test_unapproved_run_stops_before_a_failing_transport(self, mock_fetch):
+        from tracker.services.scraper_policy import ScraperExecutionIneligible
         mock_fetch.side_effect = Exception("blocked")
-        self.assertEqual(self.scraper.run(query=None), [])
-        self.assertEqual(self.scraper.run(query="x"), [])
+        for query in (None, "x"):
+            with self.assertRaises(ScraperExecutionIneligible):
+                self.scraper.run(query=query)
+        mock_fetch.assert_not_called()
 
 
 class RaiPlayClassificationTests(TestCase):
@@ -286,7 +295,7 @@ class PrioritySourceClassificationTests(TestCase):
           </div>
         </body></html>
         """
-        items = NHKScraper().run(query="Japan Railway Journal")
+        items = NHKScraper()._execute_run(query="Japan Railway Journal")
         self.assertEqual(items[0].content_type, "movie")
 
 
@@ -299,8 +308,8 @@ class ContentMatcherContentTypeTests(TestCase):
     def setUp(self):
         self.client = APIClient()
         self.provider, _ = Provider.objects.get_or_create(
-            slug="kisskh",
-            defaults={"name": "KissKH", "category": "scraper", "is_enabled": True},
+            slug="nhk_world",
+            defaults={"name": "NHK", "category": "scraper", "is_enabled": True},
         )
         if self.provider.category != "scraper":
             self.provider.category = "scraper"
@@ -353,7 +362,7 @@ class ContentMatcherContentTypeTests(TestCase):
         ]
         item = ScrapedItem(
             title="Dune",
-            provider_slug="kisskh",
+            provider_slug="nhk_world",
             year=2021,
             content_type="movie",
             source_url="https://example.com/movie/dune",
@@ -368,8 +377,7 @@ class ContentMatcherContentTypeTests(TestCase):
 
     @patch("tracker.scrapers.base.TMDbClient.search")
     def test_existing_row_content_type_is_never_flipped(self, mock_search):
-        # A legacy row typed "movie" for an id TMDb now returns as a series:
-        # get_or_create must not rewrite it.
+        # Movie and TV can legitimately share a numeric TMDb ID.
         row = Movie.objects.create(
             tmdb_id=90209, title="Dune", year=2021, content_type="movie"
         )
@@ -381,7 +389,8 @@ class ContentMatcherContentTypeTests(TestCase):
         movie, _, _, _ = matcher.match_item(series_item())
 
         row.refresh_from_db()
-        self.assertEqual(movie.id, row.id)
+        self.assertNotEqual(movie.id, row.id)
+        self.assertEqual(movie.content_type, "series")
         self.assertEqual(row.content_type, "movie")
 
     @patch("tracker.scrapers.base.TMDbClient.search")
@@ -399,7 +408,7 @@ class ContentMatcherContentTypeTests(TestCase):
         self.assertEqual(mapping.raw_payload.get("content_type"), "series")
 
     @patch("tracker.scrapers.base.TMDbClient.search")
-    def test_unresolved_review_searches_in_the_stored_type(self, mock_search):
+    def test_unresolved_review_retains_stored_type_without_a_search(self, mock_search):
         mock_search.return_value = []
         ContentMatcher().match_item(series_item(title="Nope", year=1999))
         mock_search.reset_mock()
@@ -407,7 +416,7 @@ class ContentMatcherContentTypeTests(TestCase):
         response = self.client.get("/api/scrapers/unresolved/")
 
         self.assertEqual(response.status_code, 200)
-        mock_search.assert_called_once_with("Nope", year=1999, content_type="series")
+        mock_search.assert_not_called()
         self.assertEqual(response.json()[0]["raw_payload"]["content_type"], "series")
 
 
@@ -420,8 +429,8 @@ class ScrapePayloadContentTypeTests(TestCase):
     def setUp(self):
         self.client = APIClient()
         self.provider, _ = Provider.objects.get_or_create(
-            slug="kisskh",
-            defaults={"name": "KissKH", "category": "scraper", "is_enabled": True},
+            slug="nhk_world",
+            defaults={"name": "NHK", "category": "scraper", "is_enabled": True},
         )
 
     @patch("tracker.services.scraper_selection.resolve_scraper_class")
@@ -437,7 +446,7 @@ class ScrapePayloadContentTypeTests(TestCase):
 
         response = self.client.post(
             "/api/scrapers/run/",
-            {"provider_slug": "kisskh"},
+            {"provider_slug": "nhk_world"},
             content_type="application/json",
         )
 
@@ -457,8 +466,8 @@ class ConfirmMatchContentTypeTests(TestCase):
     def setUp(self):
         self.client = APIClient()
         self.provider, _ = Provider.objects.get_or_create(
-            slug="kisskh",
-            defaults={"name": "KissKH", "category": "scraper", "is_enabled": True},
+            slug="nhk_world",
+            defaults={"name": "NHK", "category": "scraper", "is_enabled": True},
         )
         self.mapping = ScrapedContentMapping.objects.create(
             provider=self.provider,
@@ -467,45 +476,40 @@ class ConfirmMatchContentTypeTests(TestCase):
             scraped_url="https://example.com/bb",
         )
 
-    @patch("tracker.views.TMDbClient")
-    def test_confirming_a_series_uses_the_tv_endpoint(self, mock_client_cls):
-        mock_client_cls.return_value.details.return_value = TMDbItem(
-            tmdb_id=1396, title="Breaking Bad", year=2008, content_type="series"
-        )
-
-        response = self.client.post(
-            "/api/scrapers/confirm-match/",
-            {"mapping_id": self.mapping.id, "tmdb_id": 1396, "content_type": "series"},
-            content_type="application/json",
-        )
-
+    def test_confirming_a_series_uses_only_typed_cached_details(self):
+        from availability.models import TmdbDetailsCache
+        self.mapping.scraped_content_type = "series"
+        self.mapping.raw_payload = {"content_type": "series"}
+        self.mapping.save()
+        ingest_scraped_mapping(self.mapping)
+        TmdbDetailsCache.objects.create(tmdb_id=1396, content_type="series", details={
+            "tmdb_id": 1396, "title": "Breaking Bad", "year": 2008, "content_type": "series",
+        })
+        with patch("tracker.views.TMDbClient") as client:
+            response = self.client.post("/api/scrapers/confirm-match/", {
+                "mapping_id": self.mapping.id, "tmdb_id": 1396, "content_type": "series",
+            }, format="json")
         self.assertEqual(response.status_code, 200)
-        mock_client_cls.return_value.details.assert_called_once_with(
-            1396, content_type="series"
-        )
-        movie = Movie.objects.get(tmdb_id=1396)
-        self.assertEqual(movie.content_type, "series")
-
+        client.assert_not_called()
+        movie = Movie.objects.get(tmdb_id=1396, content_type="series")
         self.mapping.refresh_from_db()
         self.assertTrue(self.mapping.is_confirmed)
         self.assertEqual(self.mapping.movie_id, movie.id)
 
-    @patch("tracker.views.TMDbClient")
-    def test_confirming_without_a_type_defaults_to_the_movie_endpoint(self, mock_client_cls):
-        mock_client_cls.return_value.details.return_value = TMDbItem(
-            tmdb_id=438631, title="Dune", year=2021, content_type="movie"
-        )
-
-        response = self.client.post(
-            "/api/scrapers/confirm-match/",
-            {"mapping_id": self.mapping.id, "tmdb_id": 438631},
-            content_type="application/json",
-        )
-
+    def test_confirming_without_type_uses_stored_movie_identity_without_http(self):
+        from availability.models import TmdbDetailsCache
+        self.mapping.scraped_title, self.mapping.scraped_year = "Dune", 2021
+        self.mapping.save()
+        ingest_scraped_mapping(self.mapping)
+        TmdbDetailsCache.objects.create(tmdb_id=438631, content_type="movie", details={
+            "tmdb_id": 438631, "title": "Dune", "year": 2021, "content_type": "movie",
+        })
+        with patch("tracker.views.TMDbClient") as client:
+            response = self.client.post("/api/scrapers/confirm-match/", {
+                "mapping_id": self.mapping.id, "tmdb_id": 438631,
+            }, format="json")
         self.assertEqual(response.status_code, 200)
-        mock_client_cls.return_value.details.assert_called_once_with(
-            438631, content_type="movie"
-        )
+        client.assert_not_called()
         self.assertEqual(Movie.objects.get(tmdb_id=438631).content_type, "movie")
 
     def test_unknown_content_type_is_rejected(self):
@@ -545,6 +549,7 @@ class UnofficialOffersSeasonGatingTests(TestCase):
             mapping = ScrapedContentMapping.objects.create(
                 provider=self.provider,
                 movie=target,
+                scraped_content_type=target.content_type,
                 scraped_title=target.title,
                 scraped_year=target.year,
                 scraped_url="https://hydrahd.ws/watchseries/x",

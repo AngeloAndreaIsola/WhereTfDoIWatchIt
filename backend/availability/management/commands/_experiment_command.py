@@ -7,7 +7,9 @@ from django.core.management.base import BaseCommand, CommandError
 from availability.services.experiment_runner import ExperimentBlocked, validate_manifest
 
 
-DEFAULT_MANIFEST = Path(settings.BASE_DIR).parent / "docs/experiments/stage2e_manifest.example.json"
+# Keep the approved, secret-free manifest inside the backend build context.
+# Repository-level docs are intentionally not copied into the runtime image.
+DEFAULT_MANIFEST = Path(__file__).resolve().parents[2] / "tests/fixtures/stage2e_manifest.example.json"
 
 
 class ExperimentCommand(BaseCommand):

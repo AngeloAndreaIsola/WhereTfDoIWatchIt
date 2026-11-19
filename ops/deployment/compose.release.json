@@ -1,0 +1,34 @@
+{
+  "services": {
+    "backend": {
+      "image": "${WTDW_IMAGE:?Pinned image ID required}",
+      "pull_policy": "never",
+      "entrypoint": ["/entrypoint.sh"],
+      "command": ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--timeout", "120", "--workers", "3", "--threads", "2"],
+      "env_file": [{"path": "${WTDW_BACKEND_ENV:?Frozen environment required}", "format": "raw"}],
+      "environment": {"UNOFFICIAL_CATALOGUE_DISCOVERY_SCHEDULES": ""},
+      "ports": ["127.0.0.1:${WTDW_PORT:?Explicit backend port required}:8000"],
+      "networks": ["existing"],
+      "read_only": true,
+      "tmpfs": ["/tmp", "/app/staticfiles"],
+      "restart": "unless-stopped",
+      "healthcheck": {
+        "test": ["CMD", "python", "/opt/wtdw/health.py"],
+        "interval": "5s", "timeout": "5s", "start_period": "10s", "retries": 6
+      }
+    },
+    "migrate": {
+      "image": "${WTDW_IMAGE:?Pinned image ID required}",
+      "pull_policy": "never",
+      "entrypoint": ["/guarded-migrate-entrypoint.sh"],
+      "env_file": [{"path": "${WTDW_BACKEND_ENV:?Frozen environment required}", "format": "raw"}],
+      "environment": {"UNOFFICIAL_CATALOGUE_DISCOVERY_SCHEDULES": ""},
+      "networks": ["existing"],
+      "read_only": true,
+      "tmpfs": ["/tmp", "/app/staticfiles"],
+      "profiles": ["ops"],
+      "restart": "no"
+    }
+  },
+  "networks": {"existing": {"external": true, "name": "${WTDW_NETWORK:?Existing database network required}"}}
+}

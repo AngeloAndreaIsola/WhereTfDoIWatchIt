@@ -33,7 +33,7 @@ from tracker.services.tmdb import TMDbItem
 def item(title, year=None, content_type="movie"):
     return ScrapedItem(
         title=title,
-        provider_slug="hydra",
+        provider_slug="nhk_world",
         year=year,
         content_type=content_type,
         source_url="https://hydra.example/watch",
@@ -84,12 +84,14 @@ class ConfidenceScoreTests(TestCase):
         self.assertLessEqual(score, 0.6)
 
 
+# Matching-policy regressions use the existing broadcaster path; unofficial
+# providers are independently blocked before this algorithm can run.
 class ConfirmedMappingTests(TestCase):
     """The acceptance gate: only identity-grade evidence becomes a mapping."""
 
     def setUp(self):
         self.provider, _ = Provider.objects.get_or_create(
-            slug="hydra",
+            slug="nhk_world",
             defaults={"name": "Hydra", "category": "scraper", "is_enabled": True},
         )
 

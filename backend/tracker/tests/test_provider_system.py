@@ -143,6 +143,7 @@ class ProviderSystemTests(TestCase):
             {
                 "id": 101,
                 "title": "Demon Slayer",
+                "type": "Movie",
                 "year": 2019,
                 "audio": ["Japanese"],
                 "subtitles": ["English"],
@@ -151,8 +152,9 @@ class ProviderSystemTests(TestCase):
         ]
 
         scraper = KissKHScraper()
-        items = scraper.run(query="Demon Slayer")
+        items = scraper._execute_run(query="Demon Slayer")
         self.assertEqual(len(items), 1)
+        self.assertSetEqual({item.content_type for item in items}, {"movie"})
         item = items[0]
         self.assertEqual(item.title, "Demon Slayer")
         self.assertEqual(item.year, 2019)
@@ -168,7 +170,7 @@ class ProviderSystemTests(TestCase):
 
         item = ScrapedItem(
             title="Fight Club",
-            provider_slug="kisskh",
+            provider_slug="nhk_world",
             year=1999,
             source_url="https://kisskh.co/Drama/550",
         )
@@ -183,7 +185,7 @@ class ProviderSystemTests(TestCase):
 
         # Check unconfirmed mapping saved
         mapping = ScrapedContentMapping.objects.get(
-            provider__slug="kisskh", scraped_title="Fight Club", scraped_year=1999
+            provider__slug="nhk_world", scraped_title="Fight Club", scraped_year=1999
         )
         self.assertEqual(mapping.movie.tmdb_id, 550)
         self.assertFalse(mapping.is_confirmed)
@@ -202,8 +204,10 @@ class ProviderSystemTests(TestCase):
         mock_fetch.side_effect = Exception("Network connection timeout")
 
         scraper = KissKHScraper()
-        items = scraper.run(query="Inception")
-        self.assertEqual(items, [])
+        from tracker.services.scraper_policy import ScraperExecutionIneligible
+        with self.assertRaises(ScraperExecutionIneligible):
+            scraper.run(query="Inception")
+        mock_fetch.assert_not_called()
 
     @patch("tracker.scrapers.base.TMDbClient.search", return_value=[])
     @patch("tracker.scrapers.adapters.KissKHScraper.fetch_url")
@@ -212,6 +216,7 @@ class ProviderSystemTests(TestCase):
             {
                 "id": 101,
                 "title": "Demon Slayer",
+                "type": "Movie",
                 "year": 2019,
                 "audio": ["Japanese"],
                 "subtitles": ["English"],
@@ -223,8 +228,8 @@ class ProviderSystemTests(TestCase):
             data={"url": "https://kisskh.co/Drama/Demon-Slayer"},
             content_type="application/json",
         )
-        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
-        data = resp.json()
-        self.assertEqual(data["provider"]["slug"], "kisskh")
-        self.assertEqual(data["count"], 1)
-        self.assertTrue(Subscription.objects.filter(user_id=1, provider__slug="kisskh").exists())
+        self.assertEqual(resp.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(resp.json()["code"], "source_permission_unverified")
+        mock_fetch.assert_not_called()
+        mock_search.assert_not_called()
+        self.assertFalse(Subscription.objects.filter(user_id=1, provider__slug="kisskh").exists())

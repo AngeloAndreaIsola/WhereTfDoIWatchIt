@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 from tracker.scrapers.base import BaseScraper, ScrapedItem, ContentMatcher
+from tracker.scrapers.altadefinizione import AltaDefinizioneScraper
+from tracker.scrapers.bilibili_tv import BilibiliTVScraper
+from tracker.scrapers.cineblog01 import CineBlog01Scraper
 from tracker.scrapers.nhk import NHKScraper
+from tracker.scrapers.ok_ru import OKRuScraper
 from tracker.scrapers.rai_play import RaiPlayScraper
+from tracker.scrapers.streamingcommunity import StreamingCommunityScraper
 from tracker.scrapers.adapters import (
     AnimeWorldScraper,
     GenericURLAdapter,
@@ -23,6 +28,9 @@ SCRAPER_REGISTRY = {
     "kisskh": "tracker.scrapers.adapters.KissKHScraper",
     "hydrahd": "tracker.scrapers.adapters.HydraHDScraper",
     "animeworld": "tracker.scrapers.adapters.AnimeWorldScraper",
+    "streamingcommunity": "tracker.scrapers.streamingcommunity.StreamingCommunityScraper",
+    "cineblog01": "tracker.scrapers.cineblog01.CineBlog01Scraper",
+    "altadefinizione": "tracker.scrapers.altadefinizione.AltaDefinizioneScraper",
 }
 
 __all__ = [
@@ -37,6 +45,9 @@ __all__ = [
     "HydraHDScraper",
     "AnimeWorldScraper",
     "GenericURLAdapter",
+    "StreamingCommunityScraper",
+    "CineBlog01Scraper",
+    "AltaDefinizioneScraper",
 ]
 
 

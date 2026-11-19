@@ -229,7 +229,7 @@ class MappingCorrectionImpactPlanner:
                 "year": None,
             }
             if content_type == ContentType.MOVIE:
-                m = Movie.objects.filter(tmdb_id=tmdb_id).first()
+                m = Movie.objects.filter(tmdb_id=tmdb_id, content_type=content_type).first()
                 if m:
                     info.update(
                         in_tracker_movies=True,

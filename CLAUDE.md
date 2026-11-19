@@ -30,9 +30,9 @@ Dev commands (run from repo root):
 
 ```
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build   # boot stack
-docker compose -f docker-compose.yml -f docker-compose.dev.yml exec backend python manage.py test tracker -v 2   # run tests
+./scripts/test-backend-isolated.sh tracker availability -v 2   # run tests against ephemeral PostgreSQL
 docker compose -f docker-compose.yml -f docker-compose.dev.yml exec backend python manage.py makemigrations tracker   # make migration
-docker compose -f docker-compose.yml -f docker-compose.dev.yml exec backend python manage.py migrate   # apply migrations
+# Apply migrations only through the confirmed `migrate` service; see docs/DEPLOYMENT.md.
 ```
 
 Frontend: http://localhost:3001 — backend health: http://localhost:8000/api/health/ — admin: http://localhost:8000/admin/

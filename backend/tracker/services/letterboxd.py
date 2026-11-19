@@ -739,6 +739,7 @@ def import_rows(
 
             movie, created = Movie.objects.get_or_create(
                 tmdb_id=pick.tmdb_id,
+            content_type=pick.content_type or "movie",
                 defaults={"title": pick.title, "year": pick.year, "poster_path": pick.poster_path or ""},
             )
             movie_created = created

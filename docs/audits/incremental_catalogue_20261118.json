@@ -1,0 +1,102 @@
+{
+  "status": "PASSED",
+  "branch": "feature/incremental-catalogue-reconciliation",
+  "base_commit": "a7ce47f",
+  "baseline_boundary": {
+    "max_record_id": 5095,
+    "updated_through": "2026-11-17T23:09:14.771940Z"
+  },
+  "tests": {
+    "focused_postgresql": 142,
+    "complete_isolated_backend": 3377,
+    "complete_command": "./scripts/test-backend-isolated.sh tracker availability -v 1",
+    "migrations_consistent": true,
+    "django_system_checks": "passed",
+    "compose_config": "passed",
+    "diff_check": "passed"
+  },
+  "clone_rehearsal": {
+    "database": "incremental_catalogue",
+    "http": "fixture interception only",
+    "scenarios": {
+      "new_hydra_and_replay": {
+        "discovery_requests": 1,
+        "tmdb_requests": 2,
+        "associations_added": 1,
+        "replay_selected": 0
+      },
+      "rss_missing_year": {
+        "guid_stable": true,
+        "classified_as": "series",
+        "state": "UNMATCHED",
+        "tmdb_requests": 0
+      },
+      "metadata_change": {
+        "state": "CONFLICTING",
+        "old_mapping_preserved": true,
+        "old_proof_preserved": true
+      },
+      "interruption_and_expired_lease": {
+        "first_commit_retained": true,
+        "only_remaining_record_resumed": true
+      },
+      "concurrent_jobs": {
+        "second_postgres_connection": "LOCKED"
+      },
+      "budget_and_cache_recovery": {
+        "first_requests": 1,
+        "resume_requests": 1,
+        "state": "ASSOCIATED"
+      },
+      "expired_evidence": {
+        "state": "CACHE_MISS",
+        "stale_proof_not_applied": true
+      },
+      "unresolved_candidates": {
+        "state": "AMBIGUOUS",
+        "immediate_retry_selected": 0
+      },
+      "atomic_commit_failure": {
+        "partial_evidence_and_outcome_rolled_back": true,
+        "cached_resume": "ASSOCIATED"
+      },
+      "rate_limit": {
+        "requests": 1,
+        "persisted_cooldown": true
+      }
+    },
+    "historical_checkpoint": {
+      "movies": 132,
+      "tv-shows": 77
+    },
+    "baseline": {
+      "discoveries": 5095,
+      "associations": 4769,
+      "unresolved_deferred": 326,
+      "legacy_mappings": 3300,
+      "offers": 0,
+      "eligible": 0
+    },
+    "offers_created": 0,
+    "rollback_preserved_all_application_tables": true,
+    "tables_verified": 50,
+    "status": "PASSED"
+  },
+  "live_preservation": {
+    "live_read_only": "on",
+    "old_application_tables_equal_to_restored_clone": 48,
+    "live_migration_leaves": {
+      "availability": "0016_contentmapping_match_evidence",
+      "tracker": "0056_movie_tmdb_content_type_identity"
+    },
+    "clone_migration_leaves": {
+      "availability": "0016_contentmapping_match_evidence",
+      "tracker": "0058_baseline_completed_catalogue"
+    }
+  },
+  "unattended_schedules_enabled": false,
+  "live_migrations_applied": false,
+  "live_catalogue_writes": false,
+  "remaining_blockers": [],
+  "deployment_pending": "Separate authorization for live migrations and any unattended schedules/network configuration"
+}

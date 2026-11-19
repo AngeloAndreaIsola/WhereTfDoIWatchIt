@@ -62,12 +62,15 @@ from availability.sources import DEFAULT_SOURCE_SLUG, source_registry
 from ..models import (
     CatalogueRefreshRequest,
     CatalogueRefreshStatus,
+    CatalogueDiscoveryState,
+    DiscoveredCatalogueRecord,
     Provider,
     ProviderCategory,
     RefreshRun,
     ScrapedContentMapping,
 )
 from ..scrapers import resolve_scraper_class
+from .scraper_policy import ScraperExecutionIneligible, require_legacy_execution
 
 CATALOGUE = "catalogue"
 SCRAPER = "scraper"
@@ -105,6 +108,10 @@ def refresh_target(
     if source_slug:
         return CATALOGUE, source_slug
     if resolve_scraper_class(provider.slug) or provider.category == ProviderCategory.SCRAPER:
+        try:
+            require_legacy_execution(provider)
+        except ScraperExecutionIneligible:
+            return None, None
         return SCRAPER, None
     return None, None
 
@@ -122,10 +129,12 @@ def minimal_card_status(provider: Provider) -> dict:
     return {
         "refresh_kind": refresh_kind,
         "source_slug": source_slug,
-        "last_run": provider.last_scraped_at if refresh_kind == SCRAPER else None,
+        "last_run": provider.last_scraped_at,
         "last_run_error": "",
         "available_items": 0,
         "refreshing": False,
+        "catalogue_sync_status": "IDLE",
+        "catalogue_sync_report": {},
     }
 
 
@@ -249,12 +258,47 @@ def provider_card_status(providers) -> dict[int, dict]:
             provider_id__in=provider_ids, is_available=True
         )
     )
+    discovery_rows = {
+        row.provider_id: row
+        for row in CatalogueDiscoveryState.objects.filter(provider_id__in=provider_ids)
+    }
+    discovered_counts: dict[int, dict[str, int]] = {}
+    for row in (
+        DiscoveredCatalogueRecord.objects.filter(provider_id__in=provider_ids)
+        .values("provider_id", "classification_state")
+        .annotate(n=Count("id"))
+    ):
+        counts = discovered_counts.setdefault(row["provider_id"], {})
+        counts[row["classification_state"]] = row["n"]
+
+    def discovery_summary(provider_id: int) -> dict:
+        discovery = discovery_rows.get(provider_id)
+        counts = discovered_counts.get(provider_id, {})
+        if discovery is None and not counts:
+            return {}
+        cursor = discovery.cursor if discovery else {}
+        report = discovery.report if discovery else {}
+        return {
+            "inventory_count": sum(counts.values()),
+            "pending_classification_count": counts.get("PENDING", 0),
+            "last_successful_sync": discovery.last_successful_checkpoint if discovery else None,
+            "historical_checkpoint": ((cursor.get("modes", {}).get("historical") or {}).get("parts", cursor.get("parts", {})) if isinstance(cursor, dict) else {}),
+            "incremental_checkpoint": ((cursor.get("modes", {}).get("incremental") or {}).get("parts", {}) if isinstance(cursor, dict) else {}),
+            "coverage_status": discovery.status if discovery else "UNKNOWN",
+            "last_success_at": discovery.last_success_at if discovery else None,
+            "error": (discovery.last_error or report.get("last_error", "")) if discovery else "",
+            "new_discoveries_last_run": report.get("new_unique_titles", report.get("items_inserted", 0)),
+            "duplicate_identities_last_run": report.get("duplicate_identities", 0),
+            "failed_pages_last_run": report.get("failed_pages", []),
+            "mode_reports": report.get("mode_reports", {}),
+        }
 
     status: dict[int, dict] = {}
     for provider in providers:
         kind, source_slug = targets[provider.id]
         if kind == CATALOGUE:
             run = run_status.get(source_slug, {})
+            discovery = discovery_rows.get(provider.id)
             status[provider.id] = {
                 "refresh_kind": CATALOGUE,
                 "source_slug": source_slug,
@@ -264,8 +308,12 @@ def provider_card_status(providers) -> dict[int, dict]:
                 or offer_counts.get(provider.id, 0),
                 "refreshing": bool(run.get("running"))
                 or source_slug in pending_sources,
+                "catalogue_sync_status": discovery.status if discovery else "IDLE",
+                "catalogue_sync_report": discovery.report if discovery else {},
+                "catalogue_discovery": discovery_summary(provider.id),
             }
         elif kind == SCRAPER:
+            discovery = discovery_rows.get(provider.id)
             status[provider.id] = {
                 "refresh_kind": SCRAPER,
                 "source_slug": None,
@@ -276,14 +324,20 @@ def provider_card_status(providers) -> dict[int, dict]:
                 # so pending state is tracked by the caller that pressed the
                 # button; there is no queue row to read here.
                 "refreshing": False,
+                "catalogue_sync_status": discovery.status if discovery else "IDLE",
+                "catalogue_sync_report": discovery.report if discovery else {},
+                "catalogue_discovery": discovery_summary(provider.id),
             }
         else:
             status[provider.id] = {
                 "refresh_kind": None,
                 "source_slug": None,
-                "last_run": default_last_runs.get(provider.id),
+                "last_run": provider.last_scraped_at or default_last_runs.get(provider.id),
                 "last_run_error": "",
-                "available_items": offer_counts.get(provider.id, 0),
+                "available_items": scraped_counts.get(provider.id, 0) or offer_counts.get(provider.id, 0),
                 "refreshing": False,
+                "catalogue_sync_status": "IDLE",
+                "catalogue_sync_report": {},
+                "catalogue_discovery": discovery_summary(provider.id),
             }
     return status

@@ -25,7 +25,9 @@ class Movie(models.Model):
         ("series", "Series"),
     ]
 
-    tmdb_id = models.IntegerField(unique=True, db_index=True)
+    # TMDb allocates movie and TV identifiers in separate namespaces.  The
+    # canonical identity must therefore include content_type.
+    tmdb_id = models.IntegerField(db_index=True)
     title = models.CharField(max_length=255)
     year = models.IntegerField(null=True, blank=True)
     content_type = models.CharField(
@@ -43,6 +45,14 @@ class Movie(models.Model):
     seasons_data = models.JSONField(default=list, blank=True)
     runtime_minutes = models.IntegerField(null=True, blank=True)
     tmdb_rating = models.FloatField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tmdb_id", "content_type"],
+                name="uniq_movie_tmdb_content_type",
+            )
+        ]
 
     def __str__(self):
         return f"{self.title} ({self.year})" if self.year else self.title
@@ -388,6 +398,15 @@ class ScrapedContentMapping(models.Model):
     )
     scraped_title = models.CharField(max_length=255)
     scraped_year = models.IntegerField(null=True, blank=True)
+    # Authoritative observation type for canonical projection and manual review;
+    # raw_payload metadata cannot override a valid stored value.
+    scraped_content_type = models.CharField(max_length=12, choices=[("movie", "Movie"), ("series", "Series")], default="movie")
+    provider_content_id = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text="Stable native ID supplied by the provider, when available.",
+    )
     scraped_url = models.URLField(max_length=500, blank=True, default="")
     country_code = models.CharField(max_length=2, blank=True, default="", help_text="Country this scrape result applies to.")
     movie = models.ForeignKey(
@@ -408,14 +427,184 @@ class ScrapedContentMapping(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["provider", "scraped_title", "scraped_year"],
-                name="uniq_scraped_content_mapping",
+                fields=["provider", "scraped_title", "scraped_year", "scraped_content_type"],
+                condition=models.Q(provider_content_id=""),
+                name="uniq_scraped_content_mapping_legacy",
+            ),
+            models.UniqueConstraint(
+                fields=["provider", "provider_content_id", "scraped_content_type"],
+                condition=~models.Q(provider_content_id=""),
+                name="uniq_scraped_content_mapping_native",
             )
         ]
 
     def __str__(self):
         status_str = "Confirmed" if self.is_confirmed else "Unconfirmed"
         return f"{self.provider.slug}: '{self.scraped_title}' -> {self.movie} ({status_str})"
+
+
+class CatalogueDiscoveryState(models.Model):
+    """Durable progress and honest coverage report for unofficial catalogues.
+
+    The cursor is traversal state only. Counts describe observations and never
+    imply playback availability or a TMDb match.
+    """
+    STATUS_CHOICES = [(v, v) for v in ("IDLE", "RUNNING", "PARTIAL", "COMPLETED", "BLOCKED", "FAILED")]
+    MODE_CHOICES = [(v, v) for v in ("full", "incremental", "targeted")]
+
+    provider = models.OneToOneField(Provider, on_delete=models.CASCADE, related_name="catalogue_discovery")
+    status = models.CharField(max_length=12, choices=STATUS_CHOICES, default="IDLE")
+    mode = models.CharField(max_length=12, choices=MODE_CHOICES, default="full")
+    cursor = models.JSONField(default=dict, blank=True)
+    report = models.JSONField(default=dict, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    heartbeat_at = models.DateTimeField(null=True, blank=True)
+    lease_expires_at = models.DateTimeField(null=True, blank=True)
+    lease_owner = models.CharField(max_length=100, blank=True, default="")
+    last_success_at = models.DateTimeField(null=True, blank=True)
+    last_successful_checkpoint = models.DateTimeField(null=True, blank=True)
+    last_error = models.TextField(blank=True, default="")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "catalogue discovery state"
+
+    def __str__(self):
+        return f"{self.provider.slug}: {self.status} ({self.mode})"
+
+
+class DiscoveredCatalogueRecord(models.Model):
+    """Raw provider listing observation, independent of movie/series mapping.
+
+    Discovery stores the source's evidence first. A later classification pass
+    may set ``classified_content_type`` and promote the record into canonical
+    catalogue structures.
+    """
+    CLASSIFICATION_CHOICES = [("PENDING", "Pending"), ("CLASSIFIED", "Classified")]
+    VERIFICATION_CHOICES = [("OBSERVED", "Observed in provider listing"), ("VERIFIED", "Verified")]
+    CONTENT_TYPE_CHOICES = [("movie", "Movie"), ("series", "Series")]
+
+    provider = models.ForeignKey(Provider, on_delete=models.CASCADE, related_name="discovered_catalogue_records")
+    provider_native_id = models.CharField(max_length=255, blank=True, default="")
+    title = models.CharField(max_length=255)
+    source_url = models.URLField(max_length=500)
+    identity_url = models.URLField(max_length=500, blank=True, default="")
+    source_urls_seen = models.JSONField(default=list, blank=True)
+    provenance_state = models.CharField(max_length=24, default="PROVENANCE_UNVERIFIED")
+    access_policy_state = models.CharField(max_length=16, default="UNKNOWN")
+    discovered_at = models.DateTimeField(auto_now_add=True)
+    original_metadata = models.JSONField(default=dict, blank=True)
+    classification_state = models.CharField(max_length=12, choices=CLASSIFICATION_CHOICES, default="PENDING")
+    classified_content_type = models.CharField(max_length=12, choices=CONTENT_TYPE_CHOICES, null=True, blank=True)
+    discovery_verification_state = models.CharField(max_length=12, choices=VERIFICATION_CHOICES, default="OBSERVED")
+    # Observation freshness is distinct from metadata/content mutation time.
+    last_seen_at = models.DateTimeField(default=timezone.now, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["provider", "provider_native_id"],
+                condition=~models.Q(provider_native_id=""),
+                name="uniq_discovered_provider_native_id",
+            ),
+            models.UniqueConstraint(
+                fields=["provider", "identity_url"],
+                condition=models.Q(("provider_native_id", ""), models.Q(("identity_url", ""), _negated=True)),
+                name="uniq_discovered_provider_identity_url",
+            ),
+        ]
+        indexes = [models.Index(fields=["provider", "classification_state"], name="idx_disc_catalog_class")]
+
+
+class CatalogueReconciliationRecord(models.Model):
+    """Durable eligibility and outcome, independent of observation freshness."""
+
+    STATUS_CHOICES = [(v, v) for v in (
+        "BASELINED", "ASSOCIATED", "AMBIGUOUS", "UNMATCHED", "CONFLICTING",
+        "ERROR", "CACHE_MISS", "BUDGET_EXHAUSTED", "BLOCKED",
+    )]
+    discovered_record = models.OneToOneField(
+        DiscoveredCatalogueRecord, on_delete=models.CASCADE, related_name="reconciliation",
+    )
+    input_fingerprint = models.CharField(max_length=64)
+    status = models.CharField(max_length=24, choices=STATUS_CHOICES)
+    attempts = models.PositiveIntegerField(default=0)
+    processed_at = models.DateTimeField(default=timezone.now)
+    next_attempt_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    result = models.JSONField(default=dict, blank=True)
+
+
+class CatalogueReconciliationRun(models.Model):
+    """Provider lease and successful checkpoint for the existing worker lane."""
+
+    provider = models.OneToOneField(Provider, on_delete=models.CASCADE)
+    status = models.CharField(max_length=24, default="IDLE")
+    lease_owner = models.CharField(max_length=100, blank=True, default="")
+    lease_expires_at = models.DateTimeField(null=True, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    cooldown_until = models.DateTimeField(null=True, blank=True)
+    last_successful_checkpoint = models.DateTimeField(null=True, blank=True)
+    last_completed_record_id = models.BigIntegerField(null=True, blank=True)
+    report = models.JSONField(default=dict, blank=True)
+    last_error = models.TextField(blank=True, default="")
+
+
+class CanonicalBootstrapEvidence(models.Model):
+    """Auditable proof for a canonical Movie bootstrapped from a discovery.
+
+    The canonical identity is ``(Movie.tmdb_id, Movie.content_type)``. This row only records
+    why one existing provider-native observation was sufficient to create or
+    associate that identity; it does not assert availability.
+    """
+
+    discovered_record = models.OneToOneField(
+        DiscoveredCatalogueRecord, on_delete=models.PROTECT,
+        related_name="canonical_bootstrap_evidence",
+    )
+    movie = models.ForeignKey(Movie, on_delete=models.PROTECT, related_name="bootstrap_evidence")
+    source_kind = models.CharField(max_length=32)
+    verification_method = models.CharField(max_length=32)
+    evidence = models.JSONField(default=dict, blank=True)
+    verified_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        indexes = [models.Index(fields=["movie", "verified_at"], name="idx_bootstrap_movie_verified")]
+
+
+class KissKHPendingClassification(models.Model):
+    """A real KissKH listing record whose movie/series type is unverified.
+
+    These observations intentionally do not enter ScrapedContentMapping or the
+    canonical catalogue until explicit detail metadata resolves their type.
+    """
+    STATUS_CHOICES = [("PENDING", "Pending"), ("RESOLVED", "Resolved")]
+    CONTENT_TYPE_CHOICES = [("movie", "Movie"), ("series", "Series")]
+
+    provider = models.ForeignKey(Provider, on_delete=models.CASCADE, related_name="kisskh_pending_classifications")
+    native_id = models.CharField(max_length=255)
+    title = models.CharField(max_length=255)
+    partition = models.CharField(max_length=16)
+    detail_url = models.URLField(max_length=500)
+    release_year = models.IntegerField(null=True, blank=True)
+    listing_observation = models.JSONField(default=dict, blank=True)
+    detail_enrichment = models.JSONField(default=dict, blank=True)
+    status = models.CharField(max_length=12, choices=STATUS_CHOICES, default="PENDING")
+    resolved_content_type = models.CharField(max_length=12, choices=CONTENT_TYPE_CHOICES, null=True, blank=True)
+    classification_reason = models.CharField(max_length=255, blank=True, default="")
+    detail_attempts = models.PositiveIntegerField(default=0)
+    last_detail_error = models.TextField(blank=True, default="")
+    first_seen = models.DateTimeField(auto_now_add=True)
+    last_seen = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["provider", "native_id", "partition"],
+                name="uniq_kisskh_pending_provider_id_partition",
+            )
+        ]
+        indexes = [models.Index(fields=["provider", "status"], name="idx_kisskh_pending_status")]
 
 
 class Subscription(models.Model):

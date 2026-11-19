@@ -66,6 +66,7 @@ class Command(BaseCommand):
         content_type = options["content_type"]
         movie, created = Movie.objects.get_or_create(
             tmdb_id=tmdb_id,
+            content_type=content_type,
             defaults={
                 "title": payload.get("title") or f"Movie {tmdb_id}",
                 "year": payload.get("releaseYear"),

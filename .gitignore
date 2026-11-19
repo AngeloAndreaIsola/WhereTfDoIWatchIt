@@ -38,3 +38,4 @@ yarn-error.log*
 # paths, host ports). Kept out of the repo so it cannot be committed as part of
 # unrelated work. Delete this line to share the recipe deliberately.
 .hermes/
+.catalogue-staging/

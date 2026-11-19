@@ -95,6 +95,7 @@ class CandidateDiscoveryBudget:
 class TMDbCandidateGateway:
     """Gateway for executing budgeted, cached, bounded-retry TMDb searches."""
 
+    stop_on_rate_limit: bool = False
     max_retries: int = 2
     max_backoff_seconds: float = 5.0
     positive_cache_ttl = timedelta(days=30)
@@ -290,6 +291,8 @@ class TMDbCandidateGateway:
                     timeout=self.client.timeout or DEFAULT_TIMEOUT,
                     allow_redirects=False,
                 )
+                if self.budget and resp.status_code >= 300 and resp.status_code != 404:
+                    self.budget.record_failure()
 
                 if 300 <= resp.status_code < 400:
                     logger.warning(
@@ -298,8 +301,6 @@ class TMDbCandidateGateway:
                         attempt + 1,
                         endpoint,
                     )
-                    if self.budget:
-                        self.budget.record_failure()
                     error = requests.HTTPError(f"Unexpected TMDb redirect: HTTP {resp.status_code}")
                     error.response = resp
                     raise error
@@ -317,8 +318,9 @@ class TMDbCandidateGateway:
                         resp.status_code,
                         endpoint,
                     )
-                    if self.budget:
-                        self.budget.record_failure()
+                    resp.raise_for_status()
+
+                if resp.status_code == 429 and self.stop_on_rate_limit:
                     resp.raise_for_status()
 
                 if resp.status_code == 429:
@@ -338,8 +340,6 @@ class TMDbCandidateGateway:
                         )
                         self.sleep_fn(backoff)
                         continue
-                    if self.budget:
-                        self.budget.record_failure()
                     resp.raise_for_status()
 
                 if resp.status_code in (500, 502, 503, 504):
@@ -355,8 +355,6 @@ class TMDbCandidateGateway:
                         backoff = min(0.5 * (2 ** attempt), self.max_backoff_seconds)
                         self.sleep_fn(backoff)
                         continue
-                    if self.budget:
-                        self.budget.record_failure()
                     resp.raise_for_status()
 
                 resp.raise_for_status()
@@ -367,6 +365,8 @@ class TMDbCandidateGateway:
 
             except requests.HTTPError as http_err:
                 status = getattr(http_err.response, "status_code", None)
+                if status == 429 and self.stop_on_rate_limit:
+                    raise http_err
                 if status and ((300 <= status < 400) or (400 <= status < 500 and status != 429)):
                     raise http_err
                 last_error = http_err
@@ -376,17 +376,17 @@ class TMDbCandidateGateway:
                     backoff = min(0.5 * (2 ** attempt), self.max_backoff_seconds)
                     self.sleep_fn(backoff)
                     continue
-                if self.budget:
-                    self.budget.record_failure()
                 raise http_err
 
             except requests.RequestException as exc:
+                if self.budget:
+                    self.budget.record_failure()
                 last_error = exc
                 logger.warning(
                     "tmdb_request_exception attempt=%d endpoint=%s error=%s",
                     attempt + 1,
                     endpoint,
-                    exc,
+                    type(exc).__name__,
                 )
                 if attempt < self.max_retries:
                     if self.budget:
@@ -394,12 +394,8 @@ class TMDbCandidateGateway:
                     backoff = min(0.5 * (2 ** attempt), self.max_backoff_seconds)
                     self.sleep_fn(backoff)
                     continue
-                if self.budget:
-                    self.budget.record_failure()
                 raise exc
 
-        if self.budget:
-            self.budget.record_failure()
         if last_error:
             raise last_error
         return None
@@ -498,6 +494,8 @@ class TMDbCandidateGateway:
                     timeout=self.client.timeout or DEFAULT_TIMEOUT,
                     allow_redirects=False,
                 )
+                if self.budget and resp.status_code >= 300:
+                    self.budget.record_failure()
 
                 # Reject redirects as a terminal failure: requests does not
                 # raise for 3xx, and retrying would conceal an unexpected host.
@@ -508,8 +506,6 @@ class TMDbCandidateGateway:
                         attempt + 1,
                         query,
                     )
-                    if self.budget:
-                        self.budget.record_failure()
                     error = requests.HTTPError(f"Unexpected TMDb redirect: HTTP {resp.status_code}")
                     error.response = resp
                     raise error
@@ -521,8 +517,9 @@ class TMDbCandidateGateway:
                         resp.status_code,
                         query,
                     )
-                    if self.budget:
-                        self.budget.record_failure()
+                    resp.raise_for_status()
+
+                if resp.status_code == 429 and self.stop_on_rate_limit:
                     resp.raise_for_status()
 
                 if resp.status_code == 429:
@@ -542,8 +539,6 @@ class TMDbCandidateGateway:
                         )
                         self.sleep_fn(backoff)
                         continue
-                    if self.budget:
-                        self.budget.record_failure()
                     resp.raise_for_status()
 
                 if resp.status_code in (500, 502, 503, 504):
@@ -559,8 +554,6 @@ class TMDbCandidateGateway:
                         backoff = min(0.5 * (2 ** attempt), self.max_backoff_seconds)
                         self.sleep_fn(backoff)
                         continue
-                    if self.budget:
-                        self.budget.record_failure()
                     resp.raise_for_status()
 
                 resp.raise_for_status()
@@ -568,10 +561,16 @@ class TMDbCandidateGateway:
                 raw_results = data.get("results", [])
                 if self.budget:
                     self.budget.record_success()
-                return [self._normalize_result(r, content_type) for r in raw_results]
+                normalized = [self._normalize_result(r, content_type) for r in raw_results]
+                if data.get("total_pages", 1) > 1:
+                    for result in normalized:
+                        result["search_truncated"] = True
+                return normalized
 
             except requests.HTTPError as http_err:
                 status = getattr(http_err.response, "status_code", None)
+                if status == 429 and self.stop_on_rate_limit:
+                    raise http_err
                 if status and ((300 <= status < 400) or (400 <= status < 500 and status != 429)):
                     raise http_err
                 last_error = http_err
@@ -581,17 +580,17 @@ class TMDbCandidateGateway:
                     backoff = min(0.5 * (2 ** attempt), self.max_backoff_seconds)
                     self.sleep_fn(backoff)
                     continue
-                if self.budget:
-                    self.budget.record_failure()
                 raise http_err
 
             except requests.RequestException as exc:
+                if self.budget:
+                    self.budget.record_failure()
                 last_error = exc
                 logger.warning(
                     "tmdb_request_exception attempt=%d query=%s error=%s",
                     attempt + 1,
                     query,
-                    exc,
+                    type(exc).__name__,
                 )
                 if attempt < self.max_retries:
                     if self.budget:
@@ -599,12 +598,8 @@ class TMDbCandidateGateway:
                     backoff = min(0.5 * (2 ** attempt), self.max_backoff_seconds)
                     self.sleep_fn(backoff)
                     continue
-                if self.budget:
-                    self.budget.record_failure()
                 raise exc
 
-        if self.budget:
-            self.budget.record_failure()
         if last_error:
             raise last_error
         return []

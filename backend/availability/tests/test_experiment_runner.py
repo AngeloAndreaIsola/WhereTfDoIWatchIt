@@ -40,7 +40,7 @@ from availability.sources.justwatch_client import SEARCH_TITLES_QUERY, JustWatch
 from tracker.models import Movie, RefreshRequest
 
 
-MANIFEST_PATH = Path(__file__).resolve().parents[3] / "docs/experiments/stage2e_manifest.example.json"
+MANIFEST_PATH = Path(__file__).resolve().parent / "fixtures/stage2e_manifest.example.json"
 
 
 def load_manifest():

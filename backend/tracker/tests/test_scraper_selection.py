@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
+from io import StringIO
 
 from django.test import TestCase
+from django.core.management import call_command
 from rest_framework.test import APIClient
 
 from tracker.models import Provider, Subscription
@@ -19,19 +21,85 @@ from tracker.services.scraper_selection import (
 
 
 class ScraperSelectionUnitTests(TestCase):
-    def test_current_registry_entries_remain_eligible(self):
+    def test_existing_broadcaster_paths_remain_eligible(self):
         expected = {
             "nhk_world": NHKScraper,
             "raiplay": RaiPlayScraper,
-            "kisskh": KissKHScraper,
-            "hydrahd": HydraHDScraper,
-            "animeworld": AnimeWorldScraper,
         }
         for slug, scraper_class in expected.items():
             with self.subTest(slug=slug):
-                selection = select_provider_scraper(Provider.objects.get(slug=slug))
+                provider, _ = Provider.objects.get_or_create(
+                    slug=slug,
+                    defaults={"name": slug, "category": "scraper"},
+                )
+                selection = select_provider_scraper(provider)
                 self.assertEqual(selection.kind, "registered")
                 self.assertIsInstance(selection.scraper, scraper_class)
+
+    def test_listing_parsers_are_registered_but_not_authorized(self):
+        from tracker.scrapers import (
+            AltaDefinizioneScraper,
+            CineBlog01Scraper,
+            StreamingCommunityScraper,
+        )
+
+        expected = {
+            "streamingcommunity": StreamingCommunityScraper,
+            "cineblog01": CineBlog01Scraper,
+            "altadefinizione": AltaDefinizioneScraper,
+        }
+        for slug, scraper_class in expected.items():
+            with self.subTest(slug=slug):
+                provider, _ = Provider.objects.get_or_create(
+                    slug=slug,
+                    defaults={"name": slug, "category": "scraper"},
+                )
+                from tracker.scrapers import resolve_scraper_class
+                self.assertIs(resolve_scraper_class(slug), scraper_class)
+                with self.assertRaisesMessage(ScraperExecutionIneligible, "source_permission_unverified"):
+                    select_provider_scraper(provider)
+
+    def test_metadata_importers_cannot_fall_through_to_generic_crawling(self):
+        for slug in ("bilibili_tv", "ok_ru"):
+            with self.subTest(slug=slug):
+                provider = Provider.objects.create(
+                    slug=slug,
+                    name=slug,
+                    category="scraper",
+                    domain=f"{slug}.example.test",
+                )
+                with self.assertRaises(ScraperExecutionIneligible) as ctx:
+                    select_provider_scraper(provider)
+                self.assertEqual(ctx.exception.code, "discovery_only_provider")
+
+    def test_unofficial_provider_seed_is_idempotent_and_preserves_existing_category(self):
+        Provider.objects.create(
+            slug="streamingcommunity", name="Existing source", category="bvod"
+        )
+        hydra, _ = Provider.objects.get_or_create(
+            slug="hydrahd",
+            defaults={"name": "HydraHD", "category": "scraper"},
+        )
+        hydra.category = "scraper"
+        hydra.domain = "hydrahd.org"
+        hydra.config = {"home_url": "https://hydrahd.org", "keep": True}
+        hydra.save()
+
+        call_command("seed_unofficial_providers", stdout=StringIO())
+        call_command("seed_unofficial_providers", stdout=StringIO())
+
+        for slug in (
+            "kisskh", "hydrahd", "animeworld", "streamingcommunity",
+            "cineblog01", "altadefinizione",
+        ):
+            with self.subTest(slug=slug):
+                self.assertEqual(Provider.objects.filter(slug=slug).count(), 1)
+        self.assertEqual(
+            Provider.objects.get(slug="streamingcommunity").category, "bvod"
+        )
+        hydra = Provider.objects.get(slug="hydrahd")
+        self.assertEqual(hydra.domain, "hydrahd.gd")
+        self.assertEqual(hydra.config, {"home_url": "https://hydrahd.gd", "keep": True})
 
     def test_retired_bbc_scraper_raises_canonical_catalogue_ineligible(self):
         provider = Provider.objects.get(slug="bbc_iplayer")
@@ -149,7 +217,7 @@ class ScraperSelectionEndpointTests(TestCase):
         )
         generic.assert_not_called()
 
-    def test_valid_import_uses_generic_adapter_and_keeps_import_contract(self):
+    def test_unknown_import_has_no_automation_grant(self):
         fake = MagicMock()
         fake.run.return_value = []
         with patch(
@@ -161,7 +229,6 @@ class ScraperSelectionEndpointTests(TestCase):
                 format="json",
             )
 
-        self.assertEqual(response.status_code, 201)
-        self.assertEqual(response.json()["provider"]["slug"], "custom-source")
-        generic.assert_called_once_with(provider_slug="custom-source", domain="custom-source.example")
-        self.assertTrue(Subscription.objects.filter(provider__slug="custom-source").exists())
+        self._assert_ineligible(response, code="source_permission_unverified", provider="custom-source")
+        generic.assert_not_called()
+        self.assertFalse(Subscription.objects.filter(provider__slug="custom-source").exists())

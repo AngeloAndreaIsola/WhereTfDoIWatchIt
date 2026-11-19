@@ -167,3 +167,57 @@ class CandidateGatewayTests(TestCase):
         self.assertEqual(budget.attempted, 1)
         self.assertEqual(self.session.get.call_count, 1)
         self.assertFalse(TmdbSearchCache.objects.filter(query="Fail Query").exists())
+
+    def test_retries_count_each_failed_http_attempt_once(self):
+        self.session.get.side_effect = [FakeResponse(503), FakeResponse(503), FakeResponse(200)]
+        budget = CandidateDiscoveryBudget(limit=3)
+        gateway = TMDbCandidateGateway(budget=budget, session=self.session, sleep_fn=self.sleep_fn)
+        gateway.search('Temporary outage', authorize_network=True)
+        self.assertEqual((budget.attempted, budget.succeeded, budget.failed, budget.retried), (3, 1, 2, 2))
+
+    def test_batch_restrictions_stop_both_endpoints_without_retry_or_cache(self):
+        from availability.models import TmdbDetailsCache
+        for status in (401, 403, 429):
+            for endpoint in ('search', 'details'):
+                with self.subTest(status=status, endpoint=endpoint):
+                    budget = CandidateDiscoveryBudget(limit=3)
+                    self.session.get.reset_mock(side_effect=True)
+                    self.session.get.return_value = FakeResponse(status, headers={'Retry-After': '3600'})
+                    gateway = TMDbCandidateGateway(budget=budget, session=self.session, sleep_fn=self.sleep_fn)
+                    gateway.stop_on_rate_limit = True
+                    with self.assertRaises(requests.HTTPError):
+                        if endpoint == 'search':
+                            gateway.search('Restricted', authorize_network=True)
+                        else:
+                            gateway.get_details(123, authorize_network=True)
+                    self.assertEqual(self.session.get.call_count, 1)
+                    self.assertEqual((budget.attempted, budget.failed, budget.retried), (1, 1, 0))
+        self.assertFalse(TmdbSearchCache.objects.exists())
+        self.assertFalse(TmdbDetailsCache.objects.exists())
+
+    def test_unicode_titles_have_distinct_search_cache_keys(self):
+        self.session.get.return_value = FakeResponse(200)
+        budget = CandidateDiscoveryBudget(limit=2)
+        gateway = TMDbCandidateGateway(budget=budget, session=self.session)
+        gateway.search('千と千尋の神隠し', authorize_network=True)
+        gateway.search('となりのトトロ', authorize_network=True)
+        self.assertEqual(TmdbSearchCache.objects.count(), 2)
+        self.assertEqual(budget.attempted, 2)
+
+    def test_ambiguous_cached_search_expires_and_can_be_refreshed(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        TmdbSearchCache.objects.create(query='ambiguous', content_type='movie', results=[{'tmdb_id': 1}, {'tmdb_id': 2}],
+                                       expires_at=timezone.now() - timedelta(seconds=1))
+        self.session.get.return_value = FakeResponse(200, {'results': []})
+        budget = CandidateDiscoveryBudget(limit=1)
+        gateway = TMDbCandidateGateway(budget=budget, session=self.session)
+        self.assertEqual(gateway.search('ambiguous', authorize_network=True), [])
+        self.assertEqual(gateway.search('ambiguous', authorize_network=True), [])
+        self.assertEqual((budget.attempted, budget.cache_hits), (1, 1))
+        self.assertTrue(TmdbSearchCache.objects.get(query='ambiguous').is_negative)
+
+    def test_incomplete_search_is_marked_for_review(self):
+        self.session.get.return_value = FakeResponse(200, {'total_pages': 2, 'results': [{'id': 1, 'title': 'Example'}]})
+        gateway = TMDbCandidateGateway(budget=CandidateDiscoveryBudget(1), session=self.session)
+        self.assertTrue(gateway.search('Example', authorize_network=True)[0]['search_truncated'])

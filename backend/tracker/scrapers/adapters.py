@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime
 from typing import Any, Optional
 from urllib.parse import urlencode, urljoin
 
@@ -70,15 +71,85 @@ def _content_type_from_url(url: Any, default: str = "movie") -> str:
 class KissKHScraper(BaseScraper):
     provider_slug = "kisskh"
 
+    # Both hosts serve the same API; keep a fallback so a domain move does not
+    # silently zero out the scraper.
+    API_BASES = ("https://kisskh.do", "https://kisskh.co")
+    # The API defaults to 10 rows per page. `pageSize` is accepted and lets a
+    # single request return hundreds of titles instead of ten.
+    PAGE_SIZE = 200
+    PAGES_PER_TYPE = 3
+    DISCOVERY_PAGE_SIZE = 20
+
+    def _fetch_api(self, path: str):
+        for base in self.API_BASES:
+            data = self.fetch_url(f"{base}{path}")
+            if data:
+                return data
+        return None
+
+    def fetch_detail(self, native_id: str | int):
+        """Fetch optional title metadata through KissKH's public detail API."""
+        from urllib.parse import quote
+
+        return self._fetch_api(f"/api/DramaList/Drama/{quote(str(native_id), safe='')}?isq=false")
+
+    @staticmethod
+    def extract_detail_metadata(detail: Any, *, native_id: str | None = None) -> dict[str, Any]:
+        """Return only explicit detail fields; episode counts never imply type."""
+        if not isinstance(detail, dict):
+            return {}
+        provider_id = detail.get("id")
+        if native_id is not None and provider_id is not None and str(provider_id) != str(native_id):
+            return {}
+        release = detail.get("releaseDate") or detail.get("release_date")
+        year = detail.get("year") or detail.get("releaseYear")
+        if not year and release:
+            try:
+                year = datetime.fromisoformat(str(release).replace("Z", "+00:00")).year
+            except ValueError:
+                year = None
+        try:
+            year = int(year) if year else None
+        except (TypeError, ValueError):
+            year = None
+        if year is not None and not 1900 <= year <= 2100:
+            year = None
+        episodes = detail.get("episodes")
+        episode_ids = []
+        if isinstance(episodes, list):
+            for episode in episodes:
+                if isinstance(episode, dict):
+                    episode_id = episode.get("id") or episode.get("episodeId") or episode.get("episodeID")
+                    if episode_id is not None:
+                        episode_ids.append(str(episode_id))
+        try:
+            episode_count = int(detail.get("episodesCount"))
+        except (TypeError, ValueError):
+            episode_count = len(episodes) if isinstance(episodes, list) else None
+        return {
+            "native_id": str(provider_id if provider_id is not None else native_id or ""),
+            "title": str(detail.get("title") or detail.get("name") or ""),
+            "original_title": str(detail.get("originalTitle") or detail.get("original_title") or ""),
+            "release_date": str(release or ""),
+            "release_year": year,
+            "source_media_type": str(detail.get("type") or ""),
+            "episode_count": episode_count,
+            "episode_ids": episode_ids,
+            "detail_url": f"https://kisskh.do/Drama/{provider_id if provider_id is not None else native_id}",
+            "raw": detail,
+        }
+
     # KissKH's API `type` parameter is the site's own structured content flag and
-    # the only reliable signal it exposes (payload rows carry no per-item type):
-    # 2 = films, 1 = drama series, 3 = anime series. `type=0` (mixed) is avoided
-    # because it yields no usable classification, so each type is fetched on its own
-    # and the response type stamps every item parsed from it.
+    # 2 = movie partition, 1 = TV-series partition, 3 = anime partition. `type=0`
+    # is avoided because it carries no partition signal. The anime partition is
+    # mixed and single-episode anime remains unclassified unless detail metadata
+    # provides an explicit `Movie` or `TVSeries` type.
     BROWSE_TYPES: tuple[tuple[str, str], ...] = (
         ("2", "movie"),
         ("1", "series"),
-        ("3", "series"),
+        # The provider calls this partition "Anime". It contains both films
+        # and multi-episode works, so it is not itself a movie/series signal.
+        ("3", "anime"),
     )
 
     def _execute_run(self, query: Optional[str] = None) -> list[ScrapedItem]:
@@ -87,13 +158,13 @@ class KissKHScraper(BaseScraper):
         if not query:
             logger.info("KissKH scraper: no query provided, scraping recently added...")
             for type_code, content_type in self.BROWSE_TYPES:
-                for page in range(1, 3):
-                    url = (
-                        f"https://kisskh.do/api/DramaList/List?page={page}"
-                        f"&type={type_code}&sub=0&country=0&status=0&order=1"
+                for page in range(1, self.PAGES_PER_TYPE + 1):
+                    path = (
+                        f"/api/DramaList/List?page={page}&type={type_code}"
+                        f"&sub=0&country=0&status=0&order=1&pageSize={self.PAGE_SIZE}"
                     )
-                    logger.info("KissKH scraper: fetching %s", url)
-                    resp_data = self.fetch_url(url)
+                    logger.info("KissKH scraper: fetching %s", path)
+                    resp_data = self._fetch_api(path)
                     if not resp_data or not isinstance(resp_data, dict):
                         break
                     data = resp_data.get("data")
@@ -103,6 +174,8 @@ class KissKHScraper(BaseScraper):
                     if not page_items:
                         break
                     items.extend(page_items)
+                    if len(data) < self.PAGE_SIZE:
+                        break  # Last page for this type
             return self._dedupe(items)
 
         for type_code, content_type in self.BROWSE_TYPES:
@@ -134,7 +207,11 @@ class KissKHScraper(BaseScraper):
         for item in items:
             payload = item.raw_payload
             entry_id = payload.get("id") if isinstance(payload, dict) else None
-            key = entry_id if entry_id is not None else (item.title, item.year)
+            key = (
+                (str(entry_id), item.content_type)
+                if entry_id is not None
+                else (item.title, item.year, item.content_type)
+            )
             if key in seen:
                 continue
             seen.add(key)
@@ -143,17 +220,43 @@ class KissKHScraper(BaseScraper):
 
     def parse_items(self, raw_data: Any, content_type: str = "movie") -> list[ScrapedItem]:
         items: list[ScrapedItem] = []
-        for entry in raw_data or []:
+        if not isinstance(raw_data, list):
+            return items
+        for entry in raw_data:
             if not isinstance(entry, dict):
                 continue
             title = entry.get("title") or entry.get("name")
-            if not title:
+            native_id = entry.get("id")
+            if not title or native_id is None or isinstance(native_id, (dict, list, bool)):
+                continue
+            native_id = str(native_id).strip()
+            if not native_id:
                 continue
             year = entry.get("year") or entry.get("releaseYear")
+            if not year and entry.get("releaseDate"):
+                try:
+                    year = datetime.fromisoformat(
+                        str(entry["releaseDate"]).replace("Z", "+00:00")
+                    ).year
+                except ValueError:
+                    year = None
             try:
                 year_int = int(year) if year else None
             except (ValueError, TypeError):
                 year_int = None
+            if year_int is not None and not 1900 <= year_int <= 2100:
+                year_int = None
+            provider_type = str(entry.get("type") or "").strip().casefold().replace(" ", "")
+            detail_types = {
+                "movie": "movie", "tvseries": "series", "tv_series": "series",
+                "tv-series": "series", "series": "series",
+            }
+            item_type = detail_types.get(provider_type)
+            if item_type is None:
+                # Partition membership and episode counts are not title-level
+                # classification evidence. The discovery path stores these
+                # rows as pending until detail metadata supplies Movie/TVSeries.
+                continue
 
             # Missing fields mean the provider did not report metadata.  Do
             # not turn that absence into an English/1080p claim: ranking treats
@@ -161,14 +264,14 @@ class KissKHScraper(BaseScraper):
             audio = entry.get("audio_languages") or entry.get("audio") or []
             subs = entry.get("subtitle_languages") or entry.get("subtitles") or []
             quality = entry.get("quality")
-            url_path = entry.get("url") or f"https://kisskh.do/Drama/{entry.get('id')}"
+            url_path = entry.get("url") or f"https://kisskh.do/Drama/{native_id}"
 
             items.append(
                 ScrapedItem(
                     title=str(title),
                     provider_slug=self.provider_slug,
                     year=year_int,
-                    content_type=content_type,
+                    content_type=item_type,
                     source_url=str(url_path),
                     audio_languages=audio if isinstance(audio, list) else [str(audio)],
                     subtitle_languages=subs if isinstance(subs, list) else [str(subs)],
@@ -178,6 +281,24 @@ class KissKHScraper(BaseScraper):
                 )
             )
         return items
+
+    def parse_catalogue_rows(self, rows: Any) -> tuple[list[ScrapedItem], list[dict[str, Any]]]:
+        """Split listing records into explicitly typed items and pending rows."""
+        if not isinstance(rows, list):
+            return [], []
+        classified, pending = [], []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            items = self.parse_items([row])
+            if items:
+                classified.extend(items)
+            else:
+                title = row.get("title") or row.get("name")
+                native_id = row.get("id")
+                if title and native_id is not None and not isinstance(native_id, (dict, list, bool)) and str(native_id).strip():
+                    pending.append(row)
+        return self._dedupe(classified), pending
 
 
 class GenericURLAdapter(BaseScraper):
@@ -240,11 +361,17 @@ class GenericURLAdapter(BaseScraper):
 class HydraHDScraper(BaseScraper):
     provider_slug = "hydrahd"
 
+    # hydrahd.ws now redirects to hydrahd.gd; list the canonical host first and
+    # keep the old one as a fallback. hydrahd.ru serves a stub page, so it is
+    # deliberately excluded.
+    DOMAINS = ("hydrahd.gd", "hydrahd.ws")
+    PAGES_PER_CATEGORY = 10
+
     HEADERS = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://hydrahd.ws/",
+        "Referer": "https://hydrahd.gd/",
     }
 
     def _execute_run(self, query: Optional[str] = None) -> list[ScrapedItem]:
@@ -255,24 +382,26 @@ class HydraHDScraper(BaseScraper):
                 # The browse category only acts as the fallback signal; the item URL
                 # itself is authoritative for classification.
                 default_content_type = "series" if category == "tv-shows" else "movie"
-                for page in range(1, 2):  # Scrape first page per category
-                    for domain in ["hydrahd.ws", "hydrahd.ru"]:
+                for page in range(1, self.PAGES_PER_CATEGORY + 1):
+                    for domain in self.DOMAINS:
                         url = f"https://{domain}/{category}/date/{page}"
                         logger.info("HydraHD scraper: fetching %s", url)
                         resp_data = self.fetch_url(url, headers=self.HEADERS)
                         if resp_data and isinstance(resp_data, str):
                             page_items = self.parse_html(
-                                resp_data, default_content_type=default_content_type
+                                resp_data,
+                                default_content_type=default_content_type,
+                                base_url=f"https://{domain}",
                             )
                             if page_items:
                                 items.extend(page_items)
-                                break  # Break domain loop
-            return items
+                                break  # This domain worked for this page
+            return self._dedupe(items)
 
-        # Try the current domain first, fall back to old domain
+        # Try the current domain first, fall back to the old one
         urls_to_try = [
-            _query_url("https://hydrahd.ws/index.php", menu="search", query=query),
-            _query_url("https://hydrahd.ru/index.php", menu="search", query=query),
+            _query_url(f"https://{domain}/index.php", menu="search", query=query)
+            for domain in self.DOMAINS
         ]
 
         for url in urls_to_try:
@@ -327,9 +456,23 @@ class HydraHDScraper(BaseScraper):
             )
         return items
 
+    @staticmethod
+    def _dedupe(items: list[ScrapedItem]) -> list[ScrapedItem]:
+        """Drop titles repeated across browse pages."""
+        seen: set[str] = set()
+        deduped: list[ScrapedItem] = []
+        for item in items:
+            if item.source_url in seen:
+                continue
+            seen.add(item.source_url)
+            deduped.append(item)
+        return deduped
 
     def parse_html(
-        self, html_content: str, default_content_type: str = "movie"
+        self,
+        html_content: str,
+        default_content_type: str = "movie",
+        base_url: Optional[str] = None,
     ) -> list[ScrapedItem]:
         r"""Pair each result's link with its own title, never a neighbour's.
 
@@ -357,7 +500,7 @@ class HydraHDScraper(BaseScraper):
                 )
                 continue
             year_int = self._result_year(anchor)
-            source_url = urljoin("https://hydrahd.ws/", href)
+            source_url = urljoin(base_url or "https://hydrahd.ws/", href)
             items.append(
                 ScrapedItem(
                     title=title,
@@ -419,6 +562,41 @@ class HydraHDScraper(BaseScraper):
 
 class AnimeWorldScraper(BaseScraper):
     provider_slug = "animeworld"
+
+    def parse_rss(self, xml_content: str) -> list[ScrapedItem]:
+        """Parse AnimeWorld's first-party, intentionally published RSS feed."""
+        import xml.etree.ElementTree as ET
+
+        try:
+            root = ET.fromstring(xml_content or "")
+        except ET.ParseError:
+            return []
+        self.feed_last_build_date = next((n.text.strip() for n in root.iter() if n.tag.rsplit("}", 1)[-1] == "lastBuildDate" and n.text), None)
+        items = []
+        for node in root.findall(".//item"):
+            values = {child.tag.rsplit("}", 1)[-1]: child for child in list(node)}
+            def value(name):
+                child = values.get(name)
+                return (child.text or "").strip() if child is not None else ""
+            title = value("name") or value("title")
+            url = value("link")
+            if not title or not url:
+                continue
+            guid = values.get("guid")
+            media_type = value("type").lower()
+            items.append(ScrapedItem(
+                title=title, provider_slug=self.provider_slug,
+                content_type="series" if media_type == "anime" else "movie",
+                source_url=urljoin("https://www.animeworld.ac/", url),
+                raw_payload={
+                    "guid": (guid.text or "").strip() if guid is not None else "",
+                    "pubDate": value("pubDate"), "anime_type": media_type,
+                    "original_title": value("name"), "feed_title": value("title"),
+                    "source_kind": "official_rss",
+                    "provenance_state": "VERIFIED", "access_policy_state": "PERMITTED",
+                },
+            ))
+        return items
 
     def _execute_run(self, query: Optional[str] = None) -> list[ScrapedItem]:
         if not query:
@@ -492,7 +670,7 @@ class AnimeWorldScraper(BaseScraper):
                 )
                 continue
             year_int = self._result_year(anchor)
-            source_url = urljoin("https://animeworld.ac/", href)
+            source_url = urljoin("https://www.animeworld.ac/", href)
 
             items.append(
                 ScrapedItem(
@@ -549,9 +727,9 @@ class AnimeWorldScraper(BaseScraper):
             except (ValueError, TypeError):
                 year_int = None
 
-            audio = entry.get("dub") or ["JA"]
-            subs = entry.get("sub") or ["EN"]
-            source_url = entry.get("link") or f"https://animeworld.ac/play/{entry.get('id')}"
+            audio = entry.get("dub") or []
+            subs = entry.get("sub") or []
+            source_url = entry.get("link") or f"https://www.animeworld.ac/play/{entry.get('id')}"
 
             items.append(
                 ScrapedItem(
@@ -561,9 +739,9 @@ class AnimeWorldScraper(BaseScraper):
                     source_url=str(source_url),
                     audio_languages=audio if isinstance(audio, list) else [str(audio)],
                     subtitle_languages=subs if isinstance(subs, list) else [str(subs)],
-                    quality="1080p",
+                    quality=str(entry.get("quality")) if entry.get("quality") else None,
                     availability=True,
-                    raw_payload=entry,
+                    raw_payload={**entry, "unverified_discovery": True},
                 )
             )
         return items

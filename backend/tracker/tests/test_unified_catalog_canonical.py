@@ -57,6 +57,37 @@ class UnifiedCatalogCanonicalTestCase(TestCase):
 
 
 class UnifiedCatalogContractTests(UnifiedCatalogCanonicalTestCase):
+    def test_unverified_listing_discovery_is_visible_but_not_a_title_offer(self):
+        movie = Movie.objects.create(tmdb_id=9182, title="Possible Match", year=2024)
+        row = ScrapedContentMapping.objects.create(
+            provider=self.hydra,
+            scraped_title="Possible Match",
+            scraped_year=2024,
+            scraped_url="https://hydra.example/possible-match",
+            movie=movie,
+            is_available=True,
+            raw_payload={
+                "content_type": "movie",
+                "unverified_discovery": True,
+            },
+        )
+        ingest_scraped_mapping(row)
+
+        self.assertTrue(
+            ProviderContent.objects.filter(
+                provider=self.hydra, provider_content_id=f"legacy-{row.pk}"
+            ).exists()
+        )
+        self.assertFalse(ContentMapping.objects.filter(provider=self.hydra).exists())
+        self.assertEqual(
+            self._results("?providers=hydra")["results"][0]["tmdb_id"], None
+        )
+        offers = self.client.get(
+            f"/api/v2/unofficial/movie/{movie.tmdb_id}/offers/"
+        )
+        self.assertEqual(offers.status_code, 200)
+        self.assertEqual(offers.json()["offers"], [])
+
     def test_scraper_item_matches_the_response_contract(self):
         self._scrape(raw_payload={
             "content_type": "movie",
@@ -127,6 +158,33 @@ class UnifiedCatalogContractTests(UnifiedCatalogCanonicalTestCase):
         self.assertEqual(item["content_type"], "movie")
         self.assertTrue(item["unofficial_details"]["is_confirmed"])
         self.assertEqual(item["unofficial_details"]["confidence_score"], 1.0)
+
+    def test_movie_number_does_not_hide_unrelated_series_or_lend_watched_state(self):
+        from availability.models import Source
+        movie = Movie.objects.create(tmdb_id=811811, title="Watched Movie", year=2015,
+                                     content_type="movie", poster_path="/movie-only.jpg")
+        UserMovieData.objects.create(user_id=1, movie=movie, is_watched=True)
+        content = ProviderContent.objects.create(
+            provider=self.hydra, provider_content_id="unrelated-series", content_type="series",
+            title="Unwatched Series", metadata={},
+        )
+        source = Source.objects.first()
+        ContentMapping.objects.create(
+            provider=self.hydra, source=source, content=content,
+            provider_content_id=content.provider_content_id, content_type="series",
+            tmdb_id=movie.tmdb_id, match_method=MatchMethod.MANUAL,
+        )
+        data = self._results("?watched=all")
+        rows = {item["content_type"]: item for item in data["results"]}
+        self.assertEqual(set(rows), {"movie", "series"})
+        self.assertTrue(rows["movie"]["is_watched"])
+        self.assertFalse(rows["series"]["is_watched"])
+        self.assertEqual(rows["series"]["title"], "Unwatched Series")
+        self.assertNotEqual(rows["series"]["poster_path"], "/movie-only.jpg")
+        self.assertEqual(self._results("?watched=watched")["count"], 1)
+        unwatched = self._results("?watched=unwatched")
+        self.assertEqual(unwatched["count"], 1)
+        self.assertEqual(unwatched["results"][0]["content_type"], "series")
 
     def test_unresolved_rows_are_not_deduplicated_against_official(self):
         movie = Movie.objects.create(tmdb_id=700, title="Dup", year=2015)
@@ -313,7 +371,7 @@ class UnifiedCatalogWriteHookTests(UnifiedCatalogCanonicalTestCase):
         )
         matcher = ContentMatcher(tmdb_client=MagicMock())
         item = ScrapedItem(
-            title="Local Exact", provider_slug="hydra", year=2011
+            title="Local Exact", provider_slug="nhk_world", year=2011
         )
 
         matched, score, _candidates, _confirmed = matcher.match_item(item)
@@ -322,14 +380,14 @@ class UnifiedCatalogWriteHookTests(UnifiedCatalogCanonicalTestCase):
         self.assertEqual(score, 1.0)
         matcher.tmdb_client.search.assert_not_called()
 
-        legacy = ScrapedContentMapping.objects.get(provider=self.hydra)
+        legacy = ScrapedContentMapping.objects.get(provider=Provider.objects.get(slug="nhk_world"))
         self.assertEqual(legacy.movie, movie)
         content = ProviderContent.objects.get(
-            provider=self.hydra,
+            provider=Provider.objects.get(slug="nhk_world"),
             provider_content_id=f"legacy-{legacy.pk}",
         )
         self.assertEqual(content.title, "Local Exact")
-        mapping = ContentMapping.objects.get(provider=self.hydra)
+        mapping = ContentMapping.objects.get(provider=Provider.objects.get(slug="nhk_world"))
         self.assertEqual(mapping.tmdb_id, 800)
         self.assertEqual(mapping.match_method, MatchMethod.TITLE_YEAR)
         self.assertEqual(mapping.confidence, 1.0)
@@ -338,18 +396,18 @@ class UnifiedCatalogWriteHookTests(UnifiedCatalogCanonicalTestCase):
         matcher = ContentMatcher(tmdb_client=MagicMock())
         matcher.tmdb_client.search.return_value = []
         item = ScrapedItem(
-            title="No Match Film", provider_slug="hydra", year=2012
+            title="No Match Film", provider_slug="nhk_world", year=2012
         )
 
         matched, score, _candidates, _confirmed = matcher.match_item(item)
 
         self.assertIsNone(matched)
         self.assertEqual(score, 0.0)
-        legacy = ScrapedContentMapping.objects.get(provider=self.hydra)
+        legacy = ScrapedContentMapping.objects.get(provider=Provider.objects.get(slug="nhk_world"))
         self.assertIsNone(legacy.movie)
         self.assertTrue(
             ProviderContent.objects.filter(
-                provider=self.hydra,
+                provider=Provider.objects.get(slug="nhk_world"),
                 provider_content_id=f"legacy-{legacy.pk}",
             ).exists()
         )
@@ -358,32 +416,32 @@ class UnifiedCatalogWriteHookTests(UnifiedCatalogCanonicalTestCase):
     @patch("tracker.views.TMDbClient")
     def test_confirm_match_bridges_the_manual_resolution(self, mock_client):
         row = ScrapedContentMapping.objects.create(
-            provider=self.hydra,
-            scraped_title="Confirm Me",
+            provider=Provider.objects.get(slug="nhk_world"),
+            scraped_title="Confirmed Film",
             scraped_year=2013,
             scraped_url="https://hydra.example/confirm",
             is_available=True,
         )
-        mock_client.return_value.details.return_value = TMDbItem(
-            tmdb_id=31337, title="Confirmed Film", year=2013,
-            content_type="movie", overview="", poster_path="",
-            genres=[], genre_ids=[], cast=[], seasons_data=[],
-            rating=0.0, director=[],
-        )
+        ingest_scraped_mapping(row)
+        from availability.models import TmdbDetailsCache
+        TmdbDetailsCache.objects.create(tmdb_id=31337, content_type="movie", details={
+            "tmdb_id": 31337, "title": "Confirmed Film", "year": 2013, "content_type": "movie",
+        })
 
         resp = self.client.post(
             "/api/scrapers/confirm-match/",
             {"mapping_id": row.pk, "tmdb_id": 31337},
-            format="json",
+            content_type="application/json",
         )
         self.assertEqual(resp.status_code, 200)
+        mock_client.assert_not_called()
 
-        mapping = ContentMapping.objects.get(provider=self.hydra)
+        mapping = ContentMapping.objects.get(provider=Provider.objects.get(slug="nhk_world"))
         self.assertEqual(mapping.tmdb_id, 31337)
         self.assertEqual(mapping.match_method, MatchMethod.MANUAL)
         self.assertEqual(mapping.confidence, 1.0)
 
-        data = self._results("?providers=hydra")
+        data = self._results("?providers=nhk_world,hydra")
         [item] = data["results"]
         self.assertEqual(item["title"], "Confirmed Film")
         self.assertEqual(item["year"], 2013)
@@ -397,7 +455,7 @@ class UnifiedCatalogWriteHookTests(UnifiedCatalogCanonicalTestCase):
     ):
         item = ScrapedItem(
             title="Run Film",
-            provider_slug="hydra",
+            provider_slug="nhk_world",
             year=2023,
             source_url="https://hydra.example/run",
             availability=True,
@@ -411,15 +469,15 @@ class UnifiedCatalogWriteHookTests(UnifiedCatalogCanonicalTestCase):
         )
 
         resp = self.client.post(
-            "/api/scrapers/run/", {"provider_slug": "hydra"}, format="json"
+            "/api/scrapers/run/", {"provider_slug": "nhk_world"}, format="json"
         )
         self.assertEqual(resp.status_code, 200)
 
         legacy = ScrapedContentMapping.objects.get(
-            provider=self.hydra, scraped_title="Run Film"
+            provider=Provider.objects.get(slug="nhk_world"), scraped_title="Run Film"
         )
         content = ProviderContent.objects.get(
-            provider=self.hydra,
+            provider=Provider.objects.get(slug="nhk_world"),
             provider_content_id=f"legacy-{legacy.pk}",
         )
         self.assertTrue(content.currently_available)

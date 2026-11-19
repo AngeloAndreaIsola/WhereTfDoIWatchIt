@@ -195,7 +195,7 @@ describe("Subscriptions page", () => {
 
     const card = await waitFor(() => cardFor("KissKH"));
     expect(card).toHaveAttribute("aria-pressed", "false");
-    expect(screen.getByText("61 available")).toBeInTheDocument();
+    expect(screen.getByText("61 active mappings")).toBeInTheDocument();
     expect(screen.getByText("Last run 10d ago")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Refresh KissKH" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Remove KissKH" })).toBeInTheDocument();

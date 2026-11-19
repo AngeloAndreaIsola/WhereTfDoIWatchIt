@@ -78,10 +78,49 @@ Run Docker Compose to build images and launch the stack in detached mode:
 docker compose up -d --build
 ```
 
-### Automatic Initializations
-The `backend` entrypoint script (`entrypoint.sh`) will automatically execute:
-1. `python manage.py migrate` — Applies all PostgreSQL database migrations.
-2. `python manage.py collectstatic --noinput` — Collects Django Admin static files for WhiteNoise static file serving.
+### Schema migrations
+
+Runtime startup never applies schema changes. The backend entrypoint runs
+`migrate --check` and fails closed if the configured database is behind; the
+worker only waits for that check to pass. Apply changes through the gated
+`migrate` service after confirming the target database and host:
+
+```bash
+docker compose --profile ops run --rm --no-deps \
+  -e EXPECTED_DATABASE_NAME=tracker \
+  -e EXPECTED_DATABASE_HOST=db \
+  -e CONFIRM_MIGRATION_TARGET=tracker@db \
+  migrate
+```
+
+Replace `tracker` and `db` with the exact `POSTGRES_DB` and `POSTGRES_HOST` in
+the selected Compose configuration. To stop at a particular migration, append
+both `--app-label tracker --target 0050` (or the intended app and target).
+The command refuses a mismatch or missing confirmation. Do not use a routine
+backend `run` command to apply migrations.
+
+The backend service selects the runtime guard from the checked-out Compose
+configuration and bind-mounts it read-only. This also protects against an old
+image whose baked entrypoint may predate the guard. When updating an existing
+stack, recreate the backend from the current Compose configuration; `docker
+compose restart backend` only restarts the old container configuration and
+does not apply a new entrypoint or mount:
+
+```bash
+docker compose up -d --build --force-recreate backend
+docker inspect "$(docker compose ps -q backend)" \
+  --format '{{json .Config.Entrypoint}} {{range .Mounts}}{{.Destination}} {{.RW}} {{end}}'
+```
+
+Confirm the entrypoint invokes `/bin/sh /runtime-guard-entrypoint.sh`, mounted
+read-only from `backend/entrypoint.sh`, before reopening application writes. A
+missing guard mount must leave the backend stopped. Do not run `manage.py migrate`
+through `exec`, `run`, or the runtime entrypoint; use only the separately
+confirmed migration service above.
+
+The backend host port defaults to 8002 and can be changed with `BACKEND_PORT`
+when another local Compose project owns that port; it remains bound to
+`127.0.0.1`.
 
 ### One-off legacy scraper backfill (first deploy after the read-path migration)
 Databases that predate the canonical read path store scraper rows only in `tracker.ScrapedContentMapping`. Project them once so the unified catalogue serves them:
@@ -93,7 +132,7 @@ docker compose exec -T backend python manage.py ingest_legacy_scraper_catalogue
 The command is idempotent (re-running upserts the same `legacy-<pk>` identities) and local-only — no network, no TMDb, no offers written. New scraper rows are bridged automatically on save, so this never needs re-running.
 
 ### Event-driven availability refresh (Phase B)
-Watchlist adds, imports and detail views only queue `tracker.RefreshRequest` rows (migration `tracker.0029_refreshrequest`, applied automatically by the entrypoint above) — they never perform network I/O. The queue is consumed by the dedicated **`worker` service** in `docker-compose.yml`, which runs `python manage.py refresh_worker`: a loop that drains pending requests in priority order (the `RefreshPriority` ladder), through the same `RateLimiter`/daily budget and `RefreshRun` audit row as the scheduled sweep, but never runs the sweep itself (that stays with the `refresh_availability` cron). The worker entrypoint (`worker-entrypoint.sh`) waits for `migrate --check` instead of migrating, so the `backend` container remains the only migrator.
+Watchlist adds, imports and detail views only queue `tracker.RefreshRequest` rows (including migration `tracker.0029_refreshrequest`) — they never perform network I/O. The queue is consumed by the dedicated **`worker` service** in `docker-compose.yml`, which runs `python manage.py refresh_worker`: a loop that drains pending requests in priority order (the `RefreshPriority` ladder), through the same `RateLimiter`/daily budget and `RefreshRun` audit row as the scheduled sweep, but never runs the sweep itself (that stays with the `refresh_availability` cron). The worker entrypoint waits for `migrate --check` and never migrates.
 
 Because the drain is asynchronous, the prime detail payload reports `refresh_pending`; while it is `true` and no offers exist yet, the frontend shows "Checking availability…" and polls until the worker lands offers (or the request settles). Detail views of an already-attempted title are left alone for `RECENT_ATTEMPT_WINDOW` (10 minutes) by the enqueue guard, so polling never re-spends API budget on a settled observation.
 

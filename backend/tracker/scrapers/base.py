@@ -12,8 +12,15 @@ from django.conf import settings
 from tracker.languages import normalize_language_code
 from tracker.models import Movie, Provider, ScrapedContentMapping
 from tracker.services.tmdb import TMDbClient, TMDbMovie
+from tracker.services.scraper_policy import ScraperExecutionIneligible, require_legacy_execution
 
 logger = logging.getLogger(__name__)
+
+# Several providers WAF-block the default `python-requests` user agent.
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
 
 QUALITY_MAPPINGS = {
     "2160p": "4K",
@@ -85,6 +92,22 @@ class ScrapedItem:
         self.quality = normalize_quality(self.quality)
 
 
+class _LegacyScraperSession(requests.Session):
+    """Cover direct request/send calls as well as the fetch convenience method."""
+
+    def __init__(self, scraper):
+        super().__init__()
+        self.scraper = scraper
+
+    def request(self, *args, **kwargs):
+        require_legacy_execution(self.scraper.provider_slug)
+        return super().request(*args, **kwargs)
+
+    def send(self, *args, **kwargs):
+        require_legacy_execution(self.scraper.provider_slug)
+        return super().send(*args, **kwargs)
+
+
 class BaseScraper:
     provider_slug: str = ""
     timeout: int = 10
@@ -93,13 +116,17 @@ class BaseScraper:
     def __init__(self, timeout: Optional[int] = None):
         if timeout:
             self.timeout = timeout
-        self.session = requests.Session()
+        self.session = _LegacyScraperSession(self)
 
     def fetch_url(self, url: str, headers: Optional[dict] = None) -> Optional[dict | str]:
         """Fetch URL with retries, timeout, and error handling."""
+        require_legacy_execution(self.provider_slug)
+        request_headers = {"User-Agent": DEFAULT_USER_AGENT}
+        if headers:
+            request_headers.update(headers)
         for attempt in range(1 + self.max_retries):
             try:
-                resp = self.session.get(url, timeout=self.timeout, headers=headers)
+                resp = self.session.get(url, timeout=self.timeout, headers=request_headers)
                 resp.raise_for_status()
                 try:
                     return resp.json()
@@ -121,8 +148,11 @@ class BaseScraper:
 
     def run(self, query: Optional[str] = None) -> list[ScrapedItem]:
         """Execute scraper run, catching failures gracefully."""
+        require_legacy_execution(self.provider_slug)
         try:
             return self._execute_run(query)
+        except ScraperExecutionIneligible:
+            raise
         except Exception as exc:
             logger.exception("Scraper %s failed during run: %s", self.provider_slug, exc)
             return []
@@ -145,6 +175,7 @@ class ContentMatcher:
         Returns: (movie, confidence_score, candidates, is_confirmed)
         """
         provider = Provider.objects.filter(slug=item.provider_slug).first()
+        require_legacy_execution(provider or item.provider_slug)
         if not provider:
             logger.warning("Provider with slug %s not found", item.provider_slug)
             return None, 0.0, [], False
@@ -154,6 +185,7 @@ class ContentMatcher:
             provider=provider,
             scraped_title__iexact=item.title,
             scraped_year=item.year,
+            scraped_content_type=item.content_type,
         ).first()
 
         if existing and existing.movie:
@@ -164,8 +196,7 @@ class ContentMatcher:
         # type is treated as "not found" and falls through to the TMDb search for
         # the declared type.
         exact_qs = Movie.objects.filter(title__iexact=item.title, year=item.year)
-        if item.content_type == "series":
-            exact_qs = exact_qs.filter(content_type="series")
+        exact_qs = exact_qs.filter(content_type=item.content_type)
         exact_movie = exact_qs.first()
         if exact_movie:
             self._upsert_mapping(provider, item, movie=exact_movie, confidence=1.0)
@@ -224,6 +255,7 @@ class ContentMatcher:
         ):
             matched_movie_obj, _ = Movie.objects.get_or_create(
                 tmdb_id=best_movie.tmdb_id,
+                content_type=best_movie.content_type or "movie",
                 defaults={
                     "title": best_movie.title,
                     "year": best_movie.year,
@@ -248,9 +280,8 @@ class ContentMatcher:
     def _upsert_mapping(provider, item, movie=None, confidence=0.0):
         """Safely update-or-create a ScrapedContentMapping, deduping on conflict.
 
-        The mapping table has no ``content_type`` column, so the item's type is
-        stamped into ``raw_payload`` — it is what the unresolved-review flow reads
-        back to search TMDb in the right type.
+        The item's type is persisted in ``scraped_content_type`` (the
+        authoritative projection/review type) and echoed in ``raw_payload``.
 
         Every write is projected onto the canonical availability models through
         the legacy ingestion bridge, so ``ScrapedContentMapping`` and
@@ -262,6 +293,7 @@ class ContentMatcher:
         # package during Django app initialization.
         from tracker.services.scraped_mapping import persist_scraped_item
 
+        require_legacy_execution(provider)
         persist_scraped_item(
             provider=provider,
             item=item,

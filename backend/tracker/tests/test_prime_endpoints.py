@@ -713,6 +713,7 @@ class PrimeScrapedBvodBlockTests(TestCase):
         row = ScrapedContentMapping.objects.create(
             provider=self.provider,
             movie=target,
+            scraped_content_type=target.content_type,
             scraped_title=target.title,
             scraped_year=target.year,
             scraped_url="https://bvod-ione.example/watch",

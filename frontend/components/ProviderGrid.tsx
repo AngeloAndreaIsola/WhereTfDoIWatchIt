@@ -32,6 +32,21 @@ export interface ProviderItem {
   available_items?: number;
   /** Queue/worker state read server-side — the card must not guess it. */
   refreshing?: boolean;
+  catalogue_sync_status?: string;
+  catalogue_sync_report?: { pages_scanned?: number; pages_remaining?: number | null; items_unique?: number; last_error?: string };
+  /** Pending discovery observations, separate from canonical availability. */
+  catalogue_discovery?: {
+    inventory_count?: number;
+    pending_classification_count?: number;
+    last_successful_sync?: string | null;
+    historical_checkpoint?: Record<string, number>;
+    incremental_checkpoint?: Record<string, number>;
+    coverage_status?: string;
+    error?: string;
+    new_discoveries_last_run?: number;
+    duplicate_identities_last_run?: number;
+    failed_pages_last_run?: Array<{ partition?: string; page?: number; status?: number; evidence?: string }>;
+  };
   /** Site host used to fetch this card's favicon. Absent for catalogue providers, which use the brand badges. */
   favicon_domain?: string;
   /** True when this service is an add-on channel sold through a base platform. */
@@ -222,7 +237,7 @@ export default function ProviderGrid({
                 {/* Operational meta: counts and last run come batched with the
                     list response, so the card never fetches its own data. */}
                 <span className="mt-2 text-[10px] text-gray-500 dark:text-gray-400">
-                  {provider.available_items ?? 0} available
+                  {provider.available_items ?? 0} {(provider.category === "scraper" || provider.refresh_kind === "scraper" || (!provider.refresh_kind && provider.has_scraper)) ? "active mappings" : "available"}
                 </span>
                 <span className="text-[10px] text-gray-400 dark:text-gray-500">
                   {isRefreshing ? (
@@ -237,6 +252,63 @@ export default function ProviderGrid({
                     <>Last run {formatRelativeTime(provider.last_run)}</>
                   )}
                 </span>
+                {provider.catalogue_sync_status && provider.catalogue_sync_status !== "IDLE" && (
+                  <span className="text-[10px] text-gray-400 dark:text-gray-500" role="status">
+                    Catalogue {provider.catalogue_sync_status.toLowerCase()}
+                    {provider.catalogue_sync_report?.pages_scanned != null &&
+                      ` · ${provider.catalogue_sync_report.pages_scanned} pages scanned`}
+                    {provider.catalogue_sync_report?.pages_remaining != null &&
+                      ` · ${provider.catalogue_sync_report.pages_remaining} remaining`}
+                  </span>
+                )}
+                {provider.catalogue_discovery &&
+                  (provider.catalogue_discovery.inventory_count != null ||
+                    provider.catalogue_discovery.coverage_status) && (
+                  <span className="text-[10px] text-amber-700 dark:text-amber-400" role="status">
+                    Pending classification {provider.catalogue_discovery.pending_classification_count ?? 0}
+                    {provider.catalogue_discovery.inventory_count != null &&
+                      ` · ${provider.catalogue_discovery.inventory_count} discovered`}
+                  </span>
+                )}
+                {provider.catalogue_discovery?.historical_checkpoint &&
+                  Object.keys(provider.catalogue_discovery.historical_checkpoint).length > 0 && (
+                    <span className="text-[10px] text-gray-400 dark:text-gray-500">
+                      Historical {Object.entries(provider.catalogue_discovery.historical_checkpoint)
+                        .map(([partition, page]) => `${partition} ${page}`)
+                        .join(" · ")}
+                    </span>
+                  )}
+                {provider.catalogue_discovery?.incremental_checkpoint &&
+                  Object.keys(provider.catalogue_discovery.incremental_checkpoint).length > 0 && (
+                    <span className="text-[10px] text-gray-400 dark:text-gray-500">
+                      Incremental {Object.entries(provider.catalogue_discovery.incremental_checkpoint)
+                        .map(([partition, page]) => `${partition} ${page}`)
+                        .join(" · ")}
+                    </span>
+                  )}
+                {(provider.catalogue_discovery?.new_discoveries_last_run != null ||
+                  provider.catalogue_discovery?.duplicate_identities_last_run != null) && (
+                  <span className="text-[10px] text-gray-400 dark:text-gray-500">
+                    Last run +{provider.catalogue_discovery.new_discoveries_last_run ?? 0}
+                    {` · ${provider.catalogue_discovery.duplicate_identities_last_run ?? 0} repeated identities`}
+                    {` · ${provider.catalogue_discovery.failed_pages_last_run?.length ?? 0} failed pages`}
+                  </span>
+                )}
+                {provider.catalogue_discovery?.last_successful_sync && (
+                  <span className="text-[10px] text-gray-400 dark:text-gray-500">
+                    Last successful checkpoint {formatRelativeTime(provider.catalogue_discovery.last_successful_sync)}
+                  </span>
+                )}
+                {provider.catalogue_discovery?.coverage_status && (
+                  <span className="text-[10px] text-gray-400 dark:text-gray-500">
+                    Coverage {provider.catalogue_discovery.coverage_status.toLowerCase()}
+                  </span>
+                )}
+                {provider.catalogue_discovery?.error && (
+                  <span className="text-[10px] font-medium text-amber-700 dark:text-amber-400" role="status">
+                    {provider.catalogue_discovery.error}
+                  </span>
+                )}
 
                 {errorText && !isRefreshing && (
                   <span

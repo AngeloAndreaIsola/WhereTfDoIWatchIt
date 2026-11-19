@@ -1,0 +1,524 @@
+{
+  "verdict": "OFFLINE_ADAPTER_READY_PERMISSION_PENDING",
+  "branch": "prototype/catalogue-only-offline",
+  "base_sha": "a8a0d1670e3d9f6c26f0a849e028e3e70852347a",
+  "tests": {
+    "focused": 269,
+    "new_bridge_regressions": 23,
+    "backend": 3446,
+    "deployment_safeguards": 21,
+    "exit_codes": {
+      "focused-verified": 0,
+      "full-verified": 0,
+      "makemigrations": 0,
+      "migrate-check": 0,
+      "system-check": 0,
+      "adapter-rehearsal": 0,
+      "discovery-compatibility": 0,
+      "incremental-compatibility": 0
+    },
+    "compose": [
+      "base",
+      "base+dev",
+      "test"
+    ],
+    "git_diff_check": "PASS",
+    "not_run": []
+  },
+  "live": {
+    "runtime": {
+      "/new-sources-backend-1": {
+        "id": "6f1e5ad04f02c0156cdc2ae66ebe0389d666ec26f2e75d71d12d4651d00eb16f",
+        "image": "sha256:5ac32c0066a33187345092c3119241df5af8c68f4937f9667100e9a1a5c1592a",
+        "started_at": "2026-11-18T13:32:52.614176796Z",
+        "restarts": 0,
+        "health": "healthy",
+        "mounts": [],
+        "revision": "09684bae89cf20908ddb4a382452b0efb4a6045e",
+        "schedules": [
+          "UNOFFICIAL_CATALOGUE_DISCOVERY_SCHEDULES="
+        ]
+      },
+      "/new-sources-db-1": {
+        "id": "af8fb719fc7bdfc5c2ad192399e50d24d2a5715eaa0fba289dfc65be28e78ae5",
+        "image": "sha256:ef738a34a8651d11b2bace81c55c7e2187f786b484add6c83070884340074368",
+        "started_at": "2026-11-18T10:13:15.296162586Z",
+        "restarts": 0,
+        "health": "healthy",
+        "mounts": [
+          {
+            "Type": "volume",
+            "Name": "new-sources_pgdata",
+            "Source": "/var/lib/docker/volumes/new-sources_pgdata/_data",
+            "Destination": "/var/lib/postgresql/data",
+            "Driver": "local",
+            "Mode": "rw",
+            "RW": true,
+            "Propagation": ""
+          }
+        ],
+        "revision": null,
+        "schedules": []
+      }
+    },
+    "all_tables_unchanged": true,
+    "tables": 60,
+    "application_tables": 50,
+    "sequences_unchanged": true,
+    "sequences": 57,
+    "schema_unchanged": true,
+    "schema_sha256": "6b195fcf174a808194f636512a870d240f48a64632112dcf14a8da23c84c0f70",
+    "migration_leaves": {
+      "availability": "0016_contentmapping_match_evidence",
+      "tracker": "0058_baseline_completed_catalogue"
+    },
+    "outcomes": {
+      "ASSOCIATED": 4769,
+      "BASELINED": 326
+    },
+    "discoveries": 5095,
+    "legacy_mappings": 3300,
+    "offers": 0,
+    "reconciliation_runs": 0,
+    "unexpected_attempt_or_retry_rows": 0,
+    "provider_settings_and_checkpoints_unchanged": true
+  },
+  "adapter_rehearsal": {
+    "database": "incremental_catalogue_only",
+    "host": "wtdw-catalogue-only-db",
+    "external_http_requests": 0,
+    "tmdb_http_requests": 0,
+    "evidence_kind": "retained collector HTML, synthetic bounded XML and TMDb cache fixtures",
+    "request_accounting": {
+      "http": {
+        "limit": 5,
+        "attempted": 5,
+        "counts": {
+          "robots": 1,
+          "redirects": 1,
+          "retries": 0,
+          "metadata": 2,
+          "listing": 2
+        },
+        "min_interval": 2.0,
+        "events": [
+          {
+            "attempt": 1,
+            "kind": "robots",
+            "redirect_hop": 0,
+            "retry": false,
+            "started": 0.0,
+            "status": 200
+          },
+          {
+            "attempt": 2,
+            "kind": "metadata",
+            "redirect_hop": 0,
+            "retry": false,
+            "started": 2.0,
+            "status": 200
+          },
+          {
+            "attempt": 3,
+            "kind": "metadata",
+            "redirect_hop": 0,
+            "retry": false,
+            "started": 4.0,
+            "status": 200
+          },
+          {
+            "attempt": 4,
+            "kind": "listing",
+            "redirect_hop": 0,
+            "retry": false,
+            "started": 6.0,
+            "status": 302
+          },
+          {
+            "attempt": 5,
+            "kind": "listing",
+            "redirect_hop": 1,
+            "retry": false,
+            "started": 8.0,
+            "status": 200
+          }
+        ]
+      },
+      "pages_attempted": 1,
+      "page_limit": 1
+    },
+    "scenarios": {
+      "exact_preview": "VERIFIED",
+      "ambiguous": {
+        "preview": "AMBIGUOUS",
+        "apply": "AMBIGUOUS"
+      },
+      "unmatched": {
+        "preview": "UNMATCHED",
+        "apply": "UNMATCHED"
+      },
+      "mapping_conflict": {
+        "preview": "CONFLICTING",
+        "apply": "CONFLICTING",
+        "mapping_preserved": true
+      }
+    },
+    "checkpoint": {
+      "cursor": "{\"cycle\":0,\"queues\":{\"https://tubitv.com/sitemaps/movies-1.xml\":\"https://tubitv.com/movies/578912/i-robot\"},\"v\":1}",
+      "source": "tubi",
+      "country": "US",
+      "batch_digest": "fef724d47d5726428d57abb3b62d95b00974f50e01f349740fbb62f8f1e58eac",
+      "input_cursor": null
+    },
+    "import_preview_read_only": true,
+    "reconciliation_previews_read_only": true,
+    "interrupted_import_rolled_back": true,
+    "replay_selected": 0,
+    "offers_written": 0,
+    "fixture_associations_added": 1,
+    "all_original_deferred_preserved": true,
+    "status": "OFFLINE_ADAPTER_PASSED",
+    "tables_preserved": 60,
+    "application_tables_preserved": 50,
+    "sequences_preserved": 57
+  },
+  "incremental_compatibility": {
+    "database": "incremental_catalogue_only",
+    "http": "fixture interception only",
+    "scenarios": {
+      "new_hydra_and_replay": {
+        "discovery_requests": 1,
+        "tmdb_requests": 2,
+        "associations_added": 1,
+        "replay_selected": 0
+      },
+      "rss_missing_year": {
+        "guid_stable": true,
+        "classified_as": "series",
+        "state": "UNMATCHED",
+        "tmdb_requests": 0
+      },
+      "rss_verified_and_media_identity_separation": {
+        "state": "ASSOCIATED",
+        "tmdb_requests": 2,
+        "replay_selected": 0,
+        "shared_numeric_id_distinct_movie_and_series": true
+      },
+      "metadata_change": {
+        "state": "CONFLICTING",
+        "old_mapping_preserved": true,
+        "old_proof_preserved": true
+      },
+      "interruption_and_expired_lease": {
+        "first_commit_retained": true,
+        "only_remaining_record_resumed": true
+      },
+      "concurrent_jobs": {
+        "second_postgres_connection": "LOCKED"
+      },
+      "budget_and_cache_recovery": {
+        "first_requests": 1,
+        "resume_requests": 1,
+        "state": "ASSOCIATED"
+      },
+      "expired_evidence": {
+        "state": "CACHE_MISS",
+        "stale_proof_not_applied": true
+      },
+      "unresolved_candidates": {
+        "state": "AMBIGUOUS",
+        "immediate_retry_selected": 0
+      },
+      "atomic_commit_failure": {
+        "partial_evidence_and_outcome_rolled_back": true,
+        "cached_resume": "ASSOCIATED"
+      },
+      "rate_limit": {
+        "requests": 1,
+        "persisted_cooldown": true
+      }
+    },
+    "historical_checkpoint": {
+      "movies": 132,
+      "tv-shows": 77
+    },
+    "baseline": {
+      "discoveries": 5095,
+      "associations": 4769,
+      "unresolved_deferred": 326,
+      "legacy_mappings": 3300,
+      "offers": 0,
+      "eligible": 0
+    },
+    "offers_created": 0,
+    "rollback_preserved_all_application_tables": true,
+    "tables_verified": 50,
+    "status": "PASSED"
+  },
+  "discovery_compatibility": {
+    "status": "OFFLINE_DISCOVERY_CANARY_PASSED",
+    "rollback_preserved_all_tables": true,
+    "tables_verified": 60,
+    "application_tables_verified": 50,
+    "sequences_restored_and_verified": 57
+  },
+  "permission": {
+    "selected_technical_provider": "tubi",
+    "status": "INSUFFICIENT_EVIDENCE",
+    "applicable_grant_established": false,
+    "runtime_grants_added": 0,
+    "live_request_budget": 0,
+    "live_canary_technically_eligible": false,
+    "live_canary_contractually_eligible": false
+  },
+  "table_digests": {
+    "auth_group": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "auth_group_permissions": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "auth_permission": {
+      "count": 224,
+      "sha256": "7d7e227cdd7c73730c1f4d6398d821ed08f1f4e5d1d8dc5b9eef2164e367c64d"
+    },
+    "auth_user": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "auth_user_groups": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "auth_user_user_permissions": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "availability_availabilityexperiment": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "availability_availabilityexperimentattempt": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "availability_availabilityexperimentattemptoutcome": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "availability_availabilityexperimentscope": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "availability_candidatereviewaudit": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "availability_contentmapping": {
+      "count": 4769,
+      "sha256": "ecaebf2e04932c0ac8d47c11baf113272ba91f5913dabd9af0bee0f61d73bd57"
+    },
+    "availability_country": {
+      "count": 34,
+      "sha256": "715658bc6c55ba987647352910e2bd6edf009b8d86670ad13bfd285b9f5c969b"
+    },
+    "availability_offer": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "availability_offerevidence": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "availability_offerprice": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "availability_providercontent": {
+      "count": 4769,
+      "sha256": "48ea6261c9e1f32775e64295f9a7385397cd08f0c794b83a660c21dbf30d1bad"
+    },
+    "availability_providercontentcandidate": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "availability_source": {
+      "count": 3,
+      "sha256": "42363ba5af71ddd45ba83ba77d51143fcfbffd188dd97885c1147c96565b93fc"
+    },
+    "availability_synccursor": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "availability_syncrun": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "availability_tmdbdetailscache": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "availability_tmdbsearchcache": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "django_admin_log": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "django_content_type": {
+      "count": 56,
+      "sha256": "0b8c152e98d5ee11d7c6c6c74c26dfb638a5701a7944349b3ea0c58cc6559893"
+    },
+    "django_migrations": {
+      "count": 94,
+      "sha256": "a5a8efebcce7408f6ad05ac53f6b3c26487dbd4629531d18b6fa1cf5a5b02b81"
+    },
+    "django_session": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "tracker_apicallcounter": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "tracker_apicallledger": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "tracker_availability": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "tracker_availabilityrefresh": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "tracker_availabilityrefreshsource": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "tracker_canonicalbootstrapevidence": {
+      "count": 4769,
+      "sha256": "9294cd6ff6e901c37eb5fdd40f8dcf81210e51dc7c0b04ab209d6c8773596f97"
+    },
+    "tracker_cataloguediscoverystate": {
+      "count": 5,
+      "sha256": "96181e1e77a4adda6ccc7a5f55ba8f14ec98b49b9c0e2fb1010aaf03aa723cd7"
+    },
+    "tracker_cataloguereconciliationrecord": {
+      "count": 5095,
+      "sha256": "d810636e3635c6af16d3d317ef76efd326a38e4c42d67dcbb1ff8f7f026f044c"
+    },
+    "tracker_cataloguereconciliationrun": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "tracker_cataloguerefreshavailabilityrefresh": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "tracker_cataloguerefreshrequest": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "tracker_discoveredcataloguerecord": {
+      "count": 5095,
+      "sha256": "aa59208657bbc3d37abe52420c9d06259629ee5aa1f6002089e1d57edbe14df7"
+    },
+    "tracker_extensioncapability": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "tracker_extensionhandshakechallenge": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "tracker_extensionplaybackrecord": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "tracker_externalprovidermapping": {
+      "count": 82,
+      "sha256": "87ae236cf84e25f7af9e56514ab4f6d6a4139529db3dc7d2f1217d522f5ca94e"
+    },
+    "tracker_kisskhpendingclassification": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "tracker_languageentry": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "tracker_languageinfo": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "tracker_movie": {
+      "count": 4769,
+      "sha256": "d468bf9983cf105206e96f857c08832efd6e3f872a4b7b312238fc624f081893"
+    },
+    "tracker_moviewatchevent": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "tracker_preference": {
+      "count": 1,
+      "sha256": "ded9f7190561d7179f7500110486520832270f2832c2d6ab2f7e85286a85b865"
+    },
+    "tracker_provider": {
+      "count": 50,
+      "sha256": "d505b6a5ba1e116a2a0403ae7a677d8ae61f6b4859c44dbc19c50bab4aaf8ff0"
+    },
+    "tracker_providercataloguepackage": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "tracker_refreshrequest": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "tracker_refreshrun": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "tracker_refreshrunavailabilityrefresh": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "tracker_region": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "tracker_scrapedcontentmapping": {
+      "count": 3300,
+      "sha256": "c4a377f7eb0f66f4fd7a20c0400607e88c53c22017fd39355a07c8346124e891"
+    },
+    "tracker_subscription": {
+      "count": 16,
+      "sha256": "f0c9b6c812aeca5badf1a26450f041a94f2dcb98c245021395a540144e582172"
+    },
+    "tracker_syncrunavailabilityrefresh": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "tracker_usermoviedata": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "tracker_watchlistitem": {
+      "count": 0,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    }
+  },
+  "tested_files_sha256": {
+    "backend/tracker/services/catalogue_only.py": "dd8e1a2ca6f03a7058e5c1100989ae1cb0a67fe681a245e7de3cd2283b62c732",
+    "backend/tracker/services/catalogue_reconciliation.py": "f71bc3cde44c3b6d9eb6b50aa22afa6d70daf57259271991d98d3b9fe80f4e1b",
+    "backend/tracker/services/incremental_catalogue_reconciliation.py": "4bc912e3ac2a52eb0a6c84e565a09949337d2cbcf4845c410f3d2b02cb7d99eb",
+    "backend/tracker/tests/catalogue_only_fixtures.py": "5447663a4e00d28ab238484735501a3c608cb10b3664c31a5299f81c3034282a",
+    "backend/tracker/tests/test_catalogue_only.py": "def304ad609857053cfeb2e2f28b8c6f7cd78af1192be746b9a6e32e70ebccfd",
+    "scripts/validate_catalogue_only_adapter.py": "f18c210c8f334eed676b0ae9f63c574091d3772a8293c1b63a566454833d5bf9"
+  }
+}

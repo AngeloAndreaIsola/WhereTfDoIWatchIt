@@ -23,6 +23,7 @@ from django.utils import timezone
 from ..models import Provider
 from .scraped_mapping import persist_scraped_item
 from .scraper_selection import select_provider_scraper
+from .scraper_policy import require_legacy_execution
 
 
 def run_provider_scraper(provider: Provider, query: str | None = None) -> list:
@@ -32,6 +33,7 @@ def run_provider_scraper(provider: Provider, query: str | None = None) -> list:
     the URL-derived title); ``None`` runs the scraper's default full pass.
     """
     scraper = select_provider_scraper(provider).scraper
+    require_legacy_execution(provider)
 
     items = scraper.run(query=query)
 
