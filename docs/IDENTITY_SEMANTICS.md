@@ -11,25 +11,19 @@ otherwise); guessing is forbidden.
 
 | Field | Meaning | Written by |
 |---|---|---|
-| `Movie.title` | Display title shown to the user. | Creation, enrichment (when not overridden), manual edit, relink. |
-| `Movie.canonical_title` | Last **trusted** TMDb title evidence. Never shown instead of `title`; used to detect drift. | Enrichment/sync from TMDb details, verified candidate acceptance, relink. |
-| `Movie.title_is_override` | `True` when `title` is a deliberate user display choice (e.g. a localized alias). | Manual title edit (`PATCH /api/movie/<tmdb_id>/`), relink with explicit `title`. |
+| `Movie.title` | Display title shown to the user. | Creation, manual edit, relink, guarded repair. Verified candidate acceptance can also fill an empty title. |
+| `Movie.canonical_title` | Latest trusted TMDb title evidence for review. | Enrichment from TMDb details, verified candidate acceptance, relink, guarded repair. |
+| `Movie.title_is_override` | `True` records an explicit display choice. `False` also covers older titles with unknown provenance. | Manual title edit (`PATCH /api/movie/<tmdb_id>/`), explicit relink. |
 
-Rules:
-
-1. **Enrichment heals unflagged drift.** `sync_movie_fields` updates
-   `canonical_title` from trusted TMDb details and, when
-   `title_is_override=False`, corrects `title` to match. A historically wrong
-   title (issue #112's PK 830 pattern: "Natural Born Killers" on TMDb 164,
-   whose real title is "Breakfast at Tiffany's") is therefore corrected on the
-   next enrichment instead of persisting forever.
-2. **Legitimate overrides survive.** A flagged override is never silently
-   overwritten by enrichment or re-resolution. It is cleared only by an
-   explicit relink without a title override, or by verified candidate
-   acceptance filling an empty title.
-3. **Manual edits are labeled, not canonical.** `update_movie` stores a manual
-   title as an override; it does not change `tmdb_id`, `year`, or
-   `canonical_title`, so display preference can never masquerade as identity.
+1. Enrichment and re-resolution preserve every existing display title and the
+   override flag. They refresh canonical evidence and other TMDb metadata, so
+   opening PK 830 (TMDb 164) can record “Breakfast at Tiffany's” as evidence
+   while its display title remains “Natural Born Killers” pending repair.
+2. A manual title edit sets the override flag and changes only display fields.
+   An explicit relink without an override selects the linked TMDb title and
+   clears the flag.
+3. Historical corrections use the guarded repair command after review and
+   approval. The command refuses a confirmed override.
 
 ## Conflict validation
 
@@ -47,16 +41,17 @@ Rules:
 
 ## Audit trail
 
-`MovieIdentityAudit` is append-only: every manual edit (`operation="update"`,
-`provenance="manual_api"`) and relink (`operation="link"`,
-`provenance="manual_link"`) records `{field: {old, new}}` for changed identity
-and display fields, with a timestamp. No application code updates or deletes
-audit rows. Verified candidate acceptance keeps its own `CandidateReviewAudit`
-trail and additionally records `canonical_title` evidence.
+`MovieIdentityAudit` records `{field: {old, new}}`, provenance, timestamp,
+and the original local `movie_pk` for manual edits, relinks, and guarded
+repairs. Deleting a movie clears the live foreign key and preserves the audit
+entry and its original `movie_pk`. Verified candidate acceptance records
+`canonical_title` evidence and keeps its own `CandidateReviewAudit` trail.
 
 ## Historical data
 
-Existing corrupted/synthetic rows are **not** rewritten by these guards.
-Remediation is a separate, gated, dry-run-first operation with per-record
-approval (see the issue #112/#113 remediation plans). Migration `0059` is
-additive only: two defaulted columns plus the audit table; no data backfill.
+Historical display titles remain in place during normal enrichment.
+Remediation is a gated, dry-run-first operation with per-record approval
+(see the issue #112/#113 remediation plans). Migration `0059` adds the title
+fields and audit table. Migration `0060` copies the local PK from each
+existing audit's movie relationship and makes that relationship nullable.
+Both migrations leave existing display titles and override flags intact.

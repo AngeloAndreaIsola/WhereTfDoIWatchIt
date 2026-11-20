@@ -16,6 +16,7 @@ from django.test import TestCase, TransactionTestCase
 from django.test.utils import CaptureQueriesContext
 
 from tracker.models import Movie, MovieIdentityAudit, RefreshRequest, RefreshRequestStatus
+from tracker.services.enrichment import sync_movie_fields
 from tracker.services.tmdb import TMDbItem
 
 CMD = "tracker.management.commands.repair_canonical_title.TMDbClient"
@@ -103,6 +104,18 @@ class RepairCanonicalTitleTests(TestCase):
             self._run("--apply", "--confirm-target", _target_token())
             payload = json.loads(self._run("--apply", "--confirm-target", _target_token()))
         self.assertEqual(payload["status"], "already_correct")
+        self.assertEqual(MovieIdentityAudit.objects.count(), 1)
+
+    def test_stale_enrichment_preserves_guarded_repair(self):
+        with patch(CMD) as mock_cls:
+            mock_cls.return_value.details.return_value = _tmdb_details()
+            self._run("--apply", "--confirm-target", _target_token())
+
+        self.assertTrue(sync_movie_fields(self.movie, _tmdb_details(overview="Updated overview")))
+        self.movie.refresh_from_db()
+        self.assertEqual(self.movie.title, "Breakfast at Tiffany's")
+        self.assertEqual(self.movie.canonical_title, "Breakfast at Tiffany's")
+        self.assertEqual(self.movie.overview, "Updated overview")
         self.assertEqual(MovieIdentityAudit.objects.count(), 1)
 
     def test_override_row_refused(self):

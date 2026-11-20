@@ -2,8 +2,8 @@
 
 Reproduces the original failure pattern (wrong title persisted on a trusted
 TMDb identity, PK 830 / TMDb 164) and pins the preventive semantics:
-typed lookups, override labeling, enrichment self-heal, relink conflict
-validation, and the append-only identity audit trail. Offline fixtures only.
+typed lookups, override labeling, display title preservation, relink conflict
+validation, and durable identity audits. Offline fixtures only.
 """
 
 from unittest.mock import patch
@@ -24,11 +24,11 @@ def _details(tmdb_id, title, year, content_type="movie", overview=""):
 
 
 class EnrichmentIdentityTests(TestCase):
-    def test_unflagged_wrong_title_is_healed_nbk_pattern(self):
+    def test_enrichment_leaves_pk_830_display_title_for_guarded_repair(self):
         # The reported corruption: TMDb 164 (Breakfast at Tiffany's) carrying
         # the title "Natural Born Killers" while other metadata is correct.
         movie = Movie.objects.create(
-            tmdb_id=164, title="Natural Born Killers", year=1961, content_type="movie",
+            pk=830, tmdb_id=164, title="Natural Born Killers", year=1961, content_type="movie",
             overview="Holly Golightly is an eccentric New York City playgirl...",
         )
         changed = sync_movie_fields(
@@ -36,9 +36,10 @@ class EnrichmentIdentityTests(TestCase):
         )
         self.assertTrue(changed)
         movie.refresh_from_db()
-        self.assertEqual(movie.title, "Breakfast at Tiffany's")
+        self.assertEqual(movie.title, "Natural Born Killers")
         self.assertEqual(movie.canonical_title, "Breakfast at Tiffany's")
         self.assertFalse(movie.title_is_override)
+        self.assertFalse(MovieIdentityAudit.objects.exists())
 
     def test_flagged_override_survives_enrichment(self):
         movie = Movie.objects.create(
@@ -67,6 +68,24 @@ class EnrichmentIdentityTests(TestCase):
         self.assertEqual(resolved.pk, movie.pk)
         self.assertEqual(resolved.title, "My Pulp Fiction")
         self.assertEqual(resolved.canonical_title, "Pulp Fiction")
+
+    @patch("tracker.services.enrichment.TMDbClient")
+    def test_reresolution_preserves_legacy_titles_with_unknown_provenance(self, mock_cls):
+        mock_cls.return_value.details.return_value = _details(164, "Breakfast at Tiffany's", 1961)
+        for legacy_title in ("My Audrey Hepburn Pick", "Diamants sur canapé"):
+            with self.subTest(legacy_title=legacy_title):
+                movie, _ = Movie.objects.update_or_create(
+                    tmdb_id=164, content_type="movie",
+                    defaults={"title": legacy_title, "canonical_title": "", "year": 1961},
+                )
+                self.assertFalse(movie.title_is_override)
+                for _ in range(2):
+                    resolved = resolve_or_create_movie(164)
+                    resolved.refresh_from_db()
+                    self.assertEqual(resolved.pk, movie.pk)
+                    self.assertEqual(resolved.title, legacy_title)
+                    self.assertEqual(resolved.canonical_title, "Breakfast at Tiffany's")
+                    self.assertFalse(resolved.title_is_override)
 
 
 class UpdateMovieGuardTests(TestCase):
@@ -106,6 +125,22 @@ class UpdateMovieGuardTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         audit = MovieIdentityAudit.objects.get()
         self.assertEqual(audit.changes["poster_path"]["new"], "/new.jpg")
+
+    def test_identity_audit_survives_movie_deletion(self):
+        response = self.client.patch("/api/movie/164/", data={"title": "Local Alias"}, format="json")
+        self.assertEqual(response.status_code, 200)
+        movie_pk = self.movie.pk
+        audit = MovieIdentityAudit.objects.get(movie=self.movie)
+        audit_id = audit.pk
+        self.movie.delete()
+
+        retained = MovieIdentityAudit.objects.get(movie_pk=movie_pk)
+        self.assertEqual(retained.pk, audit_id)
+        self.assertIsNone(retained.movie_id)
+        self.assertEqual(retained.operation, "update")
+        self.assertEqual(retained.provenance, "manual_api")
+        self.assertEqual(retained.changes, audit.changes)
+        self.assertEqual(retained.created_at, audit.created_at)
 
     def test_ambiguous_tmdb_id_requires_content_type(self):
         Movie.objects.create(tmdb_id=164, title="TV Side", content_type="series")

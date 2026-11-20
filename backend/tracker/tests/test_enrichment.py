@@ -178,7 +178,7 @@ class EnrichMovieFromTmdbTests(TestCase):
         self.assertEqual(result.title, "Now A Series")
 
     @patch("tracker.services.enrichment.TMDbClient")
-    def test_resolve_or_create_movie_updates_existing(self, MockClient):
+    def test_resolve_or_create_movie_updates_existing_metadata(self, MockClient):
         details = _details(tmdb_id=30, title="Updated Title", year=2023, poster_path="/new-poster.jpg")
         instance = MockClient.return_value
         instance.details.return_value = details
@@ -188,7 +188,9 @@ class EnrichMovieFromTmdbTests(TestCase):
             overview="", genres=[], genre_ids=[], cast=[], director=[], tmdb_rating=None, seasons_data=[],
         )
         result = resolve_or_create_movie(30)
-        self.assertEqual(result.title, "Updated Title")
+        self.assertEqual(result.pk, movie.pk)
+        self.assertEqual(result.title, "Old Title")
+        self.assertEqual(result.canonical_title, "Updated Title")
         self.assertEqual(result.year, 2023)
         self.assertEqual(result.poster_path, "/new-poster.jpg")
         instance.details.assert_called_once_with(30, content_type="movie")

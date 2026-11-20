@@ -3332,10 +3332,9 @@ def link_tmdb(request, pk: int):
         movie.year = details.year
         movie.content_type = new_type
         sync_movie_fields(movie, details)
-        # tmdb_id / title / year / content_type are set above but may not
-        # trigger a save inside sync_movie_fields (those fields aren't tracked
-        # there). Force a save so the full set of changes lands atomically.
-        movie.save()
+        movie.save(update_fields=[
+            "tmdb_id", "content_type", "title", "title_is_override", "canonical_title", "year",
+        ])
 
         changes = {}
         for field, old in old_identity.items():
@@ -3346,6 +3345,7 @@ def link_tmdb(request, pk: int):
             changes["title_override"] = {"old": False, "new": True}
         MovieIdentityAudit.objects.create(
             movie=movie,
+            movie_pk=movie.pk,
             operation="link",
             changes=changes,
             provenance="manual_link",
@@ -3412,6 +3412,7 @@ def _update_movie_impl(request, tmdb_id: int):
             movie.save()
             MovieIdentityAudit.objects.create(
                 movie=movie,
+                movie_pk=movie.pk,
                 operation="update",
                 changes=changes,
                 provenance="manual_api",

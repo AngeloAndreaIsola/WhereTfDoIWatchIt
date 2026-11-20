@@ -23,48 +23,42 @@ def sync_movie_fields(movie: Movie, details: TMDbItem) -> bool:
 
     Returns True if at least one field was updated.
     """
-    needs_update = False
-    # Identity semantics (#112): record trusted canonical title evidence and
-    # heal unflagged title drift, but never overwrite a deliberate user
-    # override. A wrong title left by a historical edit (issue #112's PK 830
-    # pattern) is corrected on the next enrichment unless flagged as override.
-    if details.title:
-        if movie.canonical_title != details.title:
-            movie.canonical_title = details.title
-            needs_update = True
-        if not movie.title_is_override and movie.title != details.title:
-            movie.title = details.title
-            needs_update = True
+    updated_fields = []
+    # Capture canonical evidence while preserving existing display titles.
+    # Legacy titles have unknown provenance, and correcting them requires review.
+    if details.title and movie.canonical_title != details.title:
+        movie.canonical_title = details.title
+        updated_fields.append("canonical_title")
     if details.overview and movie.overview != details.overview:
         movie.overview = details.overview
-        needs_update = True
+        updated_fields.append("overview")
     if details.poster_path and movie.poster_path != details.poster_path:
         movie.poster_path = details.poster_path
-        needs_update = True
+        updated_fields.append("poster_path")
     if details.genres and movie.genres != details.genres:
         movie.genres = details.genres
-        needs_update = True
+        updated_fields.append("genres")
     if details.genre_ids and movie.genre_ids != details.genre_ids:
         movie.genre_ids = details.genre_ids
-        needs_update = True
+        updated_fields.append("genre_ids")
     if details.cast and movie.cast != details.cast:
         movie.cast = details.cast
-        needs_update = True
+        updated_fields.append("cast")
     if details.director is not None and movie.director != details.director:
         movie.director = details.director
-        needs_update = True
+        updated_fields.append("director")
     if details.rating is not None and movie.tmdb_rating != details.rating:
         movie.tmdb_rating = details.rating
-        needs_update = True
+        updated_fields.append("tmdb_rating")
     if details.year and movie.year != details.year:
         movie.year = details.year
-        needs_update = True
+        updated_fields.append("year")
     if details.seasons_data and movie.seasons_data != details.seasons_data:
         movie.seasons_data = details.seasons_data
-        needs_update = True
-    if needs_update:
-        movie.save()
-    return needs_update
+        updated_fields.append("seasons_data")
+    if updated_fields:
+        movie.save(update_fields=updated_fields)
+    return bool(updated_fields)
 
 
 def enrich_movie_from_tmdb(movie: Movie) -> bool:
@@ -98,7 +92,7 @@ def resolve_or_create_movie(tmdb_id: int, content_type: str = "movie") -> Movie:
     """
     client = TMDbClient(settings.TMDB_API_KEY)
     details = client.details(tmdb_id, content_type=content_type)
-    movie, created = Movie.objects.get_or_create(
+    movie, _ = Movie.objects.get_or_create(
         tmdb_id=details.tmdb_id,
         content_type=details.content_type or content_type,
         defaults={
@@ -107,14 +101,5 @@ def resolve_or_create_movie(tmdb_id: int, content_type: str = "movie") -> Movie:
             "content_type": details.content_type,
         },
     )
-    if not created:
-        if details.content_type and movie.content_type != details.content_type:
-            movie.content_type = details.content_type
-            movie.save()
-        # Title drift is handled by sync_movie_fields below with override
-        # awareness (#112) — no unconditional title overwrite here.
-        if details.poster_path and not movie.poster_path:
-            movie.poster_path = details.poster_path
-            movie.save()
     sync_movie_fields(movie, details)
     return movie

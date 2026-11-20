@@ -34,6 +34,8 @@ availability 0016, backend healthy, 828 movies, identity digest
   - watchlist / user_data / watch_events / legacy availability: **0 rows**.
 - **Required update:** `title` → verified TMDb title; `canonical_title` →
   same; audit row `operation="repair"`, `provenance="guarded_repair"`.
+  Ordinary enrichment can populate `canonical_title` as evidence before
+  approval. The existing display title remains in place pending repair.
 - **Tool:** `python manage.py repair_canonical_title --movie-id 830`
   (dry-run by default; `--apply --confirm-target tracker@db` performs the
   live TMDb check + guarded write on the confirmed database alias; refuses

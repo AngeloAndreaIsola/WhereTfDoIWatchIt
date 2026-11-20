@@ -125,6 +125,7 @@ class Command(BaseCommand):
             current.save(using=alias, update_fields=changes)
             MovieIdentityAudit.objects.using(alias).create(
                 movie=current,
+                movie_pk=current.pk,
                 operation="repair",
                 changes=changes,
                 provenance="guarded_repair",

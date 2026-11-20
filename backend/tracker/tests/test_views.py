@@ -1031,10 +1031,9 @@ class MovieDetailEndpointTests(TestCase):
         )
         resp = self.client.get(f"/api/movie/{movie.id}/")
         self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["movie"]["title"], "Old Title")
         movie.refresh_from_db()
-        # #112 contract: unflagged title drift is healed by enrichment; the
-        # trusted TMDb title is also recorded as canonical evidence.
-        self.assertEqual(movie.title, "Same Title")
+        self.assertEqual(movie.title, "Old Title")
         self.assertEqual(movie.canonical_title, "Same Title")
         self.assertFalse(movie.title_is_override)
         self.assertEqual(movie.poster_path, "/new-poster.jpg")
