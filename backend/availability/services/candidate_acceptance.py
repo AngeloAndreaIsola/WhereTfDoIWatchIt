@@ -107,7 +107,12 @@ def safe_enrich_or_create_movie(
     if existing:
         # Enrich without overwriting user state or downgrading quality fields
         update_fields = []
-        if not existing.title and details.get("title"):
+        # Verified acceptance is trusted canonical evidence (#112): record it
+        # separately; never clobber a flagged user display override.
+        if details.get("title") and existing.canonical_title != details["title"]:
+            existing.canonical_title = details["title"]
+            update_fields.append("canonical_title")
+        if not existing.title and not existing.title_is_override and details.get("title"):
             existing.title = details["title"]
             update_fields.append("title")
         if existing.year is None and details.get("year") is not None:
@@ -149,6 +154,7 @@ def safe_enrich_or_create_movie(
     return Movie.objects.create(
         tmdb_id=tmdb_id,
         title=details.get("title") or "",
+        canonical_title=details.get("title") or "",
         year=details.get("year"),
         content_type=verified_type,
         poster_path=details.get("poster_path") or "",
@@ -355,13 +361,6 @@ class CandidateAcceptanceService:
                     },
                 )
 
-            # Safe local tracker.Movie creation or enrichment
-            movie = safe_enrich_or_create_movie(
-                tmdb_id=verified_tmdb_id,
-                verified_type=verified_content_type,
-                details=details,
-            )
-
             # Idempotency check: if mapping already points to identical TMDb target and is already verified
             is_already_accepted = (
                 existing_mapping is not None
@@ -372,7 +371,13 @@ class CandidateAcceptanceService:
             )
 
             if is_already_accepted:
-                # Return 200 idempotently without creating duplicate audit record
+                # Return 200 idempotently without creating duplicate audit
+                # record — and without re-enriching: repeating a saved
+                # decision must change nothing (#112), including canonical
+                # title evidence, which is recorded at acceptance time only.
+                movie = Movie.objects.filter(
+                    tmdb_id=verified_tmdb_id, content_type=verified_content_type
+                ).first()
                 return {
                     "status": "already_accepted",
                     "mapping": {
@@ -394,8 +399,15 @@ class CandidateAcceptanceService:
                         "tmdb_id": movie.tmdb_id,
                         "title": movie.title,
                         "content_type": movie.content_type,
-                    },
+                    } if movie is not None else None,
                 }
+
+            # Safe local tracker.Movie creation or enrichment
+            movie = safe_enrich_or_create_movie(
+                tmdb_id=verified_tmdb_id,
+                verified_type=verified_content_type,
+                details=details,
+            )
 
             prev_review_state = locked_cand.review_state
 

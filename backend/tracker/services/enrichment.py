@@ -24,6 +24,17 @@ def sync_movie_fields(movie: Movie, details: TMDbItem) -> bool:
     Returns True if at least one field was updated.
     """
     needs_update = False
+    # Identity semantics (#112): record trusted canonical title evidence and
+    # heal unflagged title drift, but never overwrite a deliberate user
+    # override. A wrong title left by a historical edit (issue #112's PK 830
+    # pattern) is corrected on the next enrichment unless flagged as override.
+    if details.title:
+        if movie.canonical_title != details.title:
+            movie.canonical_title = details.title
+            needs_update = True
+        if not movie.title_is_override and movie.title != details.title:
+            movie.title = details.title
+            needs_update = True
     if details.overview and movie.overview != details.overview:
         movie.overview = details.overview
         needs_update = True
@@ -100,9 +111,8 @@ def resolve_or_create_movie(tmdb_id: int, content_type: str = "movie") -> Movie:
         if details.content_type and movie.content_type != details.content_type:
             movie.content_type = details.content_type
             movie.save()
-        if details.title and movie.title != details.title:
-            movie.title = details.title
-            movie.save()
+        # Title drift is handled by sync_movie_fields below with override
+        # awareness (#112) — no unconditional title overwrite here.
         if details.poster_path and not movie.poster_path:
             movie.poster_path = details.poster_path
             movie.save()
