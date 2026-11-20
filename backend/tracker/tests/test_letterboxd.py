@@ -115,11 +115,28 @@ class ImportTests(TestCase):
         self.assertEqual(WatchlistItem.objects.count(), 1)
         self.assertTrue(Movie.objects.filter(tmdb_id=603).exists())
 
-    def test_missing_year_with_multiple_matches_is_ambiguous(self):
+    def test_missing_year_with_unique_exact_title_resolves_over_sequel(self):
+        # #108 contract update: a unique exact-title candidate is identity
+        # evidence even when a similarly named sequel appears in results.
         client = self._mock_client({
             "Avatar": [
                 TMDbMovie(tmdb_id=19995, title="Avatar", year=2009),
                 TMDbMovie(tmdb_id=76600, title="Avatar: The Way of Water", year=2022),
+            ],
+        })
+        rows = [LetterboxdRow(title="Avatar", year=None, uri="https://letterboxd.com/film/avatar/")]
+        result = import_rows(rows, client=client)
+        self.assertEqual(len(result.resolved), 1)
+        self.assertEqual(len(result.ambiguous), 0)
+        self.assertEqual(result.resolved[0].movie.tmdb_id, 19995)
+
+    def test_missing_year_with_identical_titles_is_ambiguous(self):
+        # #108: genuinely identical titles without a distinguishing year stay
+        # reviewable; the ambiguity structure is unchanged.
+        client = self._mock_client({
+            "Avatar": [
+                TMDbMovie(tmdb_id=19995, title="Avatar", year=2009),
+                TMDbMovie(tmdb_id=76600, title="Avatar", year=2022),
             ],
         })
         rows = [LetterboxdRow(title="Avatar", year=None, uri="https://letterboxd.com/film/avatar/")]
@@ -130,7 +147,7 @@ class ImportTests(TestCase):
         self.assertEqual(amb["title"], "Avatar")
         self.assertIsNone(amb["year"])
         self.assertEqual(amb["uri"], "https://letterboxd.com/film/avatar/")
-        self.assertEqual(amb["reason"], "multiple_matches")
+        self.assertEqual(amb["reason"], "multiple_exact_titles")
         self.assertEqual(len(amb["candidates"]), 2)
         self.assertEqual(
             amb["candidates"][0],
@@ -822,9 +839,11 @@ class LetterboxdUrlImportBehaviourTests(TestCase):
         rows = parse_watchlist_page(WATCHLIST_PAGE_HTML, "url")
         client = self._mock_client(
             {
+                # #108: identical-title candidates remain genuinely ambiguous;
+                # a unique exact title would now resolve instead.
                 "Inception": [
                     TMDbMovie(tmdb_id=1, title="Inception", year=2010),
-                    TMDbMovie(tmdb_id=2, title="Inception Returns", year=2010),
+                    TMDbMovie(tmdb_id=2, title="Inception", year=2010),
                 ],
                 "The Matrix": [],
             }
