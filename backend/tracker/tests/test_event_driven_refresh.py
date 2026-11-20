@@ -827,7 +827,7 @@ class LetterboxdImportEnqueueTests(TestCase):
 
     def _client_resolving(self, title, tmdb_movie):
         client = MagicMock()
-        client.search.side_effect = lambda query, year=None: (
+        client.search.side_effect = lambda query, year=None, content_type=None: (
             [tmdb_movie] if query == title else []
         )
         return client

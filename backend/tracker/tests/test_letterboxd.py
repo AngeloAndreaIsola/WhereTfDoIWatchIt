@@ -86,7 +86,7 @@ class ImportTests(TestCase):
     def _mock_client(self, results_by_title):
         client = MagicMock()
 
-        def _search(query, year=None):
+        def _search(query, year=None, content_type=None):
             return results_by_title.get(query, [])
 
         client.search.side_effect = _search
@@ -264,7 +264,7 @@ class ImportTests(TestCase):
 class ExtendedLetterboxdImportTests(TestCase):
     def _mock_client(self, results_by_title):
         client = MagicMock()
-        def _search(query, year=None):
+        def _search(query, year=None, content_type=None):
             return results_by_title.get(query, [])
         client.search.side_effect = _search
         return client
@@ -800,7 +800,7 @@ class LetterboxdUrlImportBehaviourTests(TestCase):
 
     def _mock_client(self, results_by_title):
         client = MagicMock()
-        client.search.side_effect = lambda query, year=None: results_by_title.get(query, [])
+        client.search.side_effect = lambda query, year=None, content_type=None: results_by_title.get(query, [])
         return client
 
     def test_watchlist_rows_create_watchlist_items(self):
@@ -896,7 +896,7 @@ class LetterboxdUrlImportViewTests(TestCase):
 
     def _tmdb_client(self, results_by_title):
         client = MagicMock()
-        client.search.side_effect = lambda query, year=None: results_by_title.get(query, [])
+        client.search.side_effect = lambda query, year=None, content_type=None: results_by_title.get(query, [])
         return client
 
     def test_missing_url_returns_400(self):
