@@ -1229,7 +1229,7 @@ def drain_refresh_requests(
             raise RefreshDrainLockUnavailable(
                 "another process owns the availability refresh drain"
             )
-        return _drain_refresh_requests_locked(
+        identities = _drain_refresh_requests_locked(
             summary=summary,
             service=service,
             limiter=limiter,
@@ -1237,6 +1237,7 @@ def drain_refresh_requests(
             quota_circuit=quota_circuit,
             source_configurations=source_configurations,
         )
+        return {tmdb_id for tmdb_id, _ in identities}
 
 
 def _drain_refresh_requests_locked(
@@ -1247,7 +1248,7 @@ def _drain_refresh_requests_locked(
     represented_batches=None,
     quota_circuit: SourceQuotaCircuit | None = None,
     source_configurations=None,
-) -> set[int]:
+) -> set[tuple[int, str]]:
     """Process pending refresh requests in priority order, budget permitting.
 
     Called by ``process_watchlist_refresh`` before its background stale
@@ -1280,13 +1281,13 @@ def _drain_refresh_requests_locked(
     fully respected among *executable* requests, and a tick reads at most a
     few bounded pages, never the whole table.
 
-    Returns every ``tmdb_id`` the request queue owns this run — settled
+    Returns every typed TMDb identity the request queue owns this run — settled
     (``done``/``failed``) **and** still-pending requests — so the caller's
     stale sweep neither re-attempts nor double-counts those titles (a pending
     request left for the next run is the queue's responsibility, not the
     sweep's).
     """
-    excluded: set[int] = set()
+    excluded: set[tuple[int, str]] = set()
     if source_configurations is None:
         source_configurations = source_configuration_snapshot()
     quota_circuit = quota_circuit or SourceQuotaCircuit()
@@ -1382,7 +1383,7 @@ def _drain_refresh_requests_locked(
                 blocked.add(source)
 
         for request in strict:
-            excluded.add(request.movie.tmdb_id)
+            excluded.add((request.movie.tmdb_id, request.movie.content_type))
             _drain(request)
 
         if reserved is not None:
@@ -1391,7 +1392,7 @@ def _drain_refresh_requests_locked(
             # spendable again — only by this one request, and only under the
             # same guards.
             summary.remaining_budget += 1
-            excluded.add(reserved.movie.tmdb_id)
+            excluded.add((reserved.movie.tmdb_id, reserved.movie.content_type))
             _drain(reserved)
 
         if summary.remaining_budget <= 0:
