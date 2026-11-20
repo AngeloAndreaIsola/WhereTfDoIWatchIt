@@ -244,7 +244,7 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
     setPollTimedOut(false);
     setRefreshing(true);
     try {
-      const result = await requestAvailabilityRefresh(tmdbId);
+      const result = await requestAvailabilityRefresh(tmdbId, "movie");
       setData((prev) =>
         prev
           ? {

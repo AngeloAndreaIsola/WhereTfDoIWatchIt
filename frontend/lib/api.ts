@@ -481,9 +481,11 @@ export interface RefreshAvailabilityResponse {
 }
 
 export async function requestAvailabilityRefresh(
-  tmdbId: number
+  tmdbId: number,
+  contentType?: "movie" | "series"
 ): Promise<RefreshAvailabilityResponse> {
-  const res = await fetch(`/api/movie/${tmdbId}/refresh/`, {
+  const query = contentType ? `?content_type=${contentType}` : "";
+  const res = await fetch(`/api/movie/${tmdbId}/refresh/${query}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({}),

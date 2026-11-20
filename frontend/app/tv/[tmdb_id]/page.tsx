@@ -266,7 +266,7 @@ export default function SeriesDetailPage({ params }: SeriesDetailPageProps) {
     setPollTimedOut(false);
     setRefreshing(true);
     try {
-      const result = await requestAvailabilityRefresh(tmdbId);
+      const result = await requestAvailabilityRefresh(tmdbId, "series");
       setData((prev) =>
         prev
           ? {

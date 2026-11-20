@@ -807,6 +807,26 @@ class ExplicitRefreshEndpointTests(TestCase):
         self.assertEqual(request.priority, RefreshPriority.EXPLICIT)
         self.assertEqual(resp.data["content_type"], "series")
 
+    def test_explicit_refresh_is_deduplicated_per_typed_identity(self):
+        movie = Movie.objects.create(tmdb_id=555, title="A film", content_type="movie")
+        series = Movie.objects.create(tmdb_id=555, title="A series", content_type="series")
+
+        with patch(REFRESH_CONTENT, side_effect=AssertionError("endpoint fetched")) as fetch:
+            self.assertEqual(self._post(555).status_code, 409)
+            self.assertFalse(RefreshRequest.objects.exists())
+            for title in (movie, series):
+                url = f"/api/movie/555/refresh/?content_type={title.content_type}"
+                for _ in range(2):
+                    response = self.client.post(url)
+                    self.assertEqual(response.status_code, 202, response.content)
+                    self.assertEqual(response.data["content_type"], title.content_type)
+            fetch.assert_not_called()
+
+        self.assertCountEqual(
+            RefreshRequest.objects.values_list("movie_id", "priority"),
+            [(movie.pk, RefreshPriority.EXPLICIT), (series.pk, RefreshPriority.EXPLICIT)],
+        )
+
     def test_unknown_title_returns_404(self):
         resp = self._post(999999)
         self.assertEqual(resp.status_code, 404)

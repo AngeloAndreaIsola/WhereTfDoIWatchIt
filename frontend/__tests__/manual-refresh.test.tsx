@@ -155,7 +155,7 @@ describe("Manual refresh availability button", () => {
     clickRefresh();
     await flush();
 
-    const posts = callsMatching(fetchMock, "/api/movie/550/refresh/");
+    const posts = callsMatching(fetchMock, "/api/movie/550/refresh/?content_type=movie");
     expect(posts).toHaveLength(1);
     expect(posts[0][1]).toMatchObject({ method: "POST" });
 
@@ -277,7 +277,7 @@ describe("Manual refresh availability button", () => {
     clickRefresh();
 
     expect(await screen.findByRole("button", { name: "Refreshing…" })).toBeDisabled();
-    const posts = callsMatching(fetchMock, "/api/movie/1396/refresh/");
+    const posts = callsMatching(fetchMock, "/api/movie/1396/refresh/?content_type=series");
     expect(posts).toHaveLength(1);
     expect(posts[0][1]).toMatchObject({ method: "POST" });
     expect(screen.getByText("Netflix")).toBeInTheDocument();

@@ -645,7 +645,8 @@ def refresh_availability(request, tmdb_id: int):
     The backend for the manual "Refresh availability" button on the
     movie/series detail pages. One endpoint serves both pages: movies and
     series are the same tracked title row and share the canonical
-    availability pipeline, so the refresh mechanism is identical.
+    availability pipeline, so the refresh mechanism is identical. Specify
+    content_type=movie|series when the numeric TMDb ID is shared.
 
     Enqueue-only by contract — the HTTP request never contacts a provider.
     It creates (or upgrades, preserving deduplication) at most one pending
@@ -657,9 +658,9 @@ def refresh_availability(request, tmdb_id: int):
     read as fresh — the whole point of a manual refresh — while the partial
     unique constraint keeps repeated clicks on the same pending row.
     """
-    movie = _unique_movie_for_tmdb(tmdb_id)
-    if movie is None:
-        return Response({"error": "movie identity absent or ambiguous"}, status=404)
+    movie, error = _resolve_movie_typed(tmdb_id, request.query_params.get("content_type"))
+    if error is not None:
+        return error
 
     refresh_request = request_availability_refresh(
         movie,
