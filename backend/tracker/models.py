@@ -45,6 +45,12 @@ class Movie(models.Model):
     seasons_data = models.JSONField(default=list, blank=True)
     runtime_minutes = models.IntegerField(null=True, blank=True)
     tmdb_rating = models.FloatField(null=True, blank=True)
+    # Identity semantics (#112): canonical_title records the last trusted TMDb
+    # title; title_is_override marks ``title`` as a deliberate user display
+    # choice. False can also mean unknown provenance for a legacy title.
+    # See docs/IDENTITY_SEMANTICS.md.
+    canonical_title = models.CharField(max_length=255, blank=True, default="")
+    title_is_override = models.BooleanField(default=False)
 
     class Meta:
         constraints = [
@@ -56,6 +62,29 @@ class Movie(models.Model):
 
     def __str__(self):
         return f"{self.title} ({self.year})" if self.year else self.title
+
+
+class MovieIdentityAudit(models.Model):
+    """Durable trail of identity-changing operations (#112).
+
+    Records old/new values for manual edits, TMDb relinks and guarded repairs.
+    Deletion clears the live relationship and retains the original local PK.
+    """
+
+    movie = models.ForeignKey(
+        Movie, on_delete=models.SET_NULL, null=True, related_name="identity_audits"
+    )
+    movie_pk = models.BigIntegerField(db_index=True)
+    operation = models.CharField(max_length=32)  # update | link | repair
+    changes = models.JSONField(default=dict)  # {field: {"old": ..., "new": ...}}
+    provenance = models.CharField(max_length=64, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+    def __str__(self):
+        return f"{self.operation} movie={self.movie_pk} at {self.created_at}"
 
 
 class Region(models.Model):

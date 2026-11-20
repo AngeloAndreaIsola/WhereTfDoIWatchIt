@@ -29,6 +29,7 @@ from .models import (
     LanguageEntry,
     LanguageInfo,
     Movie,
+    MovieIdentityAudit,
     MovieWatchEvent,
     Preference,
     Provider,
@@ -3190,9 +3191,17 @@ def watch_redirect(request, tmdb_id: int):
     )
 
 
-@api_view(["GET"])
+@api_view(["GET", "PATCH"])
 def movie_detail(request, pk: int):
-    """GET /api/movie/<int:pk>/ — full movie detail with TMDB metadata, availability, and user data."""
+    """GET /api/movie/<int:pk>/ — full movie detail with TMDB metadata, availability, and user data.
+
+    PATCH on the same path is the manual-edit contract (#112): the frontend
+    sends PATCH /api/movie/<tmdb_id>/, which the URLconf otherwise shadows
+    with this GET-only detail route (HTTP 405). Delegate PATCH to
+    update_movie with tmdb_id semantics; GET keeps local-pk semantics.
+    """
+    if request.method == "PATCH":
+        return _update_movie_impl(request, tmdb_id=pk)
     try:
         movie = Movie.objects.get(pk=pk)
     except Movie.DoesNotExist:
@@ -3230,6 +3239,32 @@ def movie_detail(request, pk: int):
     )
 
 
+def _resolve_movie_typed(tmdb_id: int, content_type):
+    """Resolve a Movie by canonical identity (tmdb_id, content_type) (#112).
+
+    Movie and TV TMDb IDs live in separate namespaces. When both types exist
+    for one numeric ID the caller must disambiguate; guessing is forbidden.
+    Returns (movie, error_response).
+    """
+    qs = Movie.objects.filter(tmdb_id=tmdb_id)
+    if content_type in ("movie", "series"):
+        qs = qs.filter(content_type=content_type)
+    elif content_type not in (None, ""):
+        return None, Response({"error": "content_type must be 'movie' or 'series'"}, status=400)
+    matches = list(qs[:2])
+    if not matches:
+        return None, Response({"error": "movie not found"}, status=404)
+    if len(matches) > 1:
+        return None, Response(
+            {
+                "error": "content_type is required: multiple titles share this TMDb ID",
+                "content_types": sorted({m.content_type for m in qs}),
+            },
+            status=409,
+        )
+    return matches[0], None
+
+
 @api_view(["POST"])
 def link_tmdb(request, pk: int):
     """POST /api/movie/<int:pk>/link-tmdb/ — manually link a TMDB movie to an existing DB movie.
@@ -3257,21 +3292,81 @@ def link_tmdb(request, pk: int):
 
     override_title = (data.get("title") or "").strip()
     new_title = override_title or details.title
+    new_type = details.content_type or movie.content_type
+
+    # Conflict validation (#112): a relink must not silently clobber another
+    # row that already owns the target canonical identity, and must not flip
+    # the content type of a row that carries availability evidence without
+    # explicit confirmation.
+    conflict = (
+        Movie.objects.filter(tmdb_id=details.tmdb_id, content_type=new_type)
+        .exclude(pk=movie.pk)
+        .first()
+    )
+    if conflict is not None:
+        return Response(
+            {
+                "error": "target identity already exists on another record",
+                "existing_movie_id": conflict.pk,
+                "tmdb_id": details.tmdb_id,
+                "content_type": new_type,
+            },
+            status=409,
+        )
+    if new_type != movie.content_type:
+        from availability.models import Offer
+
+        has_evidence = (
+            Availability.objects.filter(movie=movie).exists()
+            or Offer.objects.filter(
+                tmdb_id=movie.tmdb_id, content_type=movie.content_type
+            ).exists()
+        )
+        if has_evidence and data.get("confirm_type_change") is not True:
+            return Response(
+                {
+                    "error": "content_type change requires confirm_type_change=true: record has availability evidence",
+                    "current_content_type": movie.content_type,
+                    "requested_content_type": new_type,
+                },
+                status=409,
+            )
 
     with transaction.atomic():
-        old_tmdb_id = movie.tmdb_id
+        old_identity = {
+            "tmdb_id": movie.tmdb_id,
+            "content_type": movie.content_type,
+            "title": movie.title,
+            "year": movie.year,
+        }
         movie.tmdb_id = details.tmdb_id
         movie.title = new_title
+        movie.title_is_override = bool(override_title)
+        movie.canonical_title = details.title or movie.canonical_title
         movie.year = details.year
-        movie.content_type = details.content_type
+        movie.content_type = new_type
         sync_movie_fields(movie, details)
-        # tmdb_id / title / year / content_type are set above but may not
-        # trigger a save inside sync_movie_fields (those fields aren't tracked
-        # there). Force a save so the full set of changes lands atomically.
-        movie.save()
+        movie.save(update_fields=[
+            "tmdb_id", "content_type", "title", "title_is_override", "canonical_title", "year",
+        ])
+
+        changes = {}
+        for field, old in old_identity.items():
+            new = getattr(movie, field)
+            if old != new:
+                changes[field] = {"old": old, "new": new}
+        if override_title:
+            changes["title_override"] = {"old": False, "new": True}
+        MovieIdentityAudit.objects.create(
+            movie=movie,
+            movie_pk=movie.pk,
+            operation="link",
+            changes=changes,
+            provenance="manual_link",
+        )
 
         # Invalidate cached availability for the old tmdb_id if it differs
-        if old_tmdb_id != details.tmdb_id:
+        if old_identity["tmdb_id"] != details.tmdb_id:
             Availability.objects.filter(movie=movie).delete()
             # The canonical offers now key on a TMDb id that has likely never
             # been fetched — request a refresh (local insert, async drain).
@@ -3283,33 +3378,73 @@ def link_tmdb(request, pk: int):
     }, status=status.HTTP_200_OK)
 
 
-@api_view(["PATCH"])
-def update_movie(request, tmdb_id: int):
-    """PATCH /api/movie/<tmdb_id>/ — update title and/or poster_path."""
-    try:
-        movie = Movie.objects.get(tmdb_id=tmdb_id)
-    except (Movie.DoesNotExist, Movie.MultipleObjectsReturned):
-        return Response({"error": "movie not found"}, status=404)
+def _update_movie_impl(request, tmdb_id: int):
+    """PATCH /api/movie/<tmdb_id>/ — update title and/or poster_path.
 
+    Identity-safe (#112): lookup is typed when movie/series share a TMDb ID
+    (``content_type`` query param or body field); a title edit is stored as a
+    flagged user override (never confused with the canonical TMDb title) and
+    every change is recorded in MovieIdentityAudit.
+    """
     data = request.data if isinstance(request.data, dict) else {}
+    content_type = request.GET.get("content_type") or data.get("content_type")
+    movie, err = _resolve_movie_typed(tmdb_id, content_type)
+    if err is not None:
+        return err
+    assert movie is not None  # err/movie are mutually exclusive
+
     title = data.get("title")
     poster_path = data.get("poster_path")
     tmdb_rating = data.get("tmdb_rating")
 
+    changes = {}
     if title is not None:
-        movie.title = title.strip()
+        if not isinstance(title, str) or not title.strip():
+            return Response({"error": "title must be a non-empty string"}, status=400)
+        new_title = title.strip()
+        if new_title != movie.title:
+            changes["title"] = {"old": movie.title, "new": new_title}
+            movie.title = new_title
+            # A manual title is a display override, distinct from canonical
+            # TMDb identity; enrichment preserves it until explicitly relinked.
+            if not movie.title_is_override:
+                changes["title_override"] = {"old": False, "new": True}
+            movie.title_is_override = True
     if poster_path is not None:
-        movie.poster_path = poster_path.strip()
+        new_poster = poster_path.strip()
+        if new_poster != movie.poster_path:
+            changes["poster_path"] = {"old": movie.poster_path, "new": new_poster}
+            movie.poster_path = new_poster
     if tmdb_rating is not None:
-        movie.tmdb_rating = float(tmdb_rating)
+        new_rating = float(tmdb_rating)
+        if new_rating != movie.tmdb_rating:
+            changes["tmdb_rating"] = {"old": movie.tmdb_rating, "new": new_rating}
+            movie.tmdb_rating = new_rating
 
-    movie.save()
+    if changes:
+        with transaction.atomic():
+            movie.save()
+            MovieIdentityAudit.objects.create(
+                movie=movie,
+                movie_pk=movie.pk,
+                operation="update",
+                changes=changes,
+                provenance="manual_api",
+            )
     return Response({
         "tmdb_id": movie.tmdb_id,
+        "content_type": movie.content_type,
         "title": movie.title,
+        "title_is_override": movie.title_is_override,
         "poster_path": movie.poster_path,
         "tmdb_rating": movie.tmdb_rating,
     })
+
+
+@api_view(["PATCH"])
+def update_movie(request, tmdb_id: int):
+    """Direct PATCH route (also reachable via movie_detail's PATCH dispatch)."""
+    return _update_movie_impl(request, tmdb_id)
 
 
 # ---------------------------------------------------------------------------
@@ -3619,12 +3754,13 @@ def remove_from_watchlist(request, tmdb_id: int):
     """DELETE /api/watchlist/remove/<int:tmdb_id>/ — remove a movie from the watchlist.
 
     This only removes wishlist/watchlist membership. Watched state, ratings,
-    reviews, and watch history are intentionally preserved.
+    reviews, and watch history are intentionally preserved. Lookup is typed
+    when movie/series share a TMDb ID (#112).
     """
-    try:
-        movie = Movie.objects.get(tmdb_id=tmdb_id)
-    except (Movie.DoesNotExist, Movie.MultipleObjectsReturned):
-        return Response({"error": "Movie not found"}, status=404)
+    movie, err = _resolve_movie_typed(tmdb_id, request.GET.get("content_type"))
+    if err is not None:
+        return err
+    assert movie is not None  # err/movie are mutually exclusive
 
     try:
         with transaction.atomic():

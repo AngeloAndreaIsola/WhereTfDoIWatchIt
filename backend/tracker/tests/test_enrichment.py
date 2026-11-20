@@ -36,9 +36,10 @@ class SyncMovieFieldsTests(TestCase):
             tmdb_id=1, title="A", year=2020, content_type="movie",
             overview="old", poster_path="p.jpg", genres=[], genre_ids=[],
             cast=[], director=[], tmdb_rating=7.0, seasons_data=[],
+            canonical_title="A",
         )
         details = _details(
-            overview="old", poster_path="p.jpg", year=2020, rating=7.0,
+            title="A", overview="old", poster_path="p.jpg", year=2020, rating=7.0,
         )
         self.assertFalse(sync_movie_fields(movie, details))
         movie.refresh_from_db()
@@ -60,9 +61,9 @@ class SyncMovieFieldsTests(TestCase):
             tmdb_id=3, title="C", year=2020, content_type="movie",
             overview="existing", poster_path="existing.jpg", genres=[],
             genre_ids=[], cast=[], director=[], tmdb_rating=5.0,
-            seasons_data=[],
+            seasons_data=[], canonical_title="C",
         )
-        details = _details(overview=None, poster_path=None, rating=None)
+        details = _details(title="C", overview=None, poster_path=None, rating=None)
         self.assertFalse(sync_movie_fields(movie, details))
         movie.refresh_from_db()
         self.assertEqual(movie.overview, "existing")
@@ -177,7 +178,7 @@ class EnrichMovieFromTmdbTests(TestCase):
         self.assertEqual(result.title, "Now A Series")
 
     @patch("tracker.services.enrichment.TMDbClient")
-    def test_resolve_or_create_movie_updates_existing(self, MockClient):
+    def test_resolve_or_create_movie_updates_existing_metadata(self, MockClient):
         details = _details(tmdb_id=30, title="Updated Title", year=2023, poster_path="/new-poster.jpg")
         instance = MockClient.return_value
         instance.details.return_value = details
@@ -187,7 +188,9 @@ class EnrichMovieFromTmdbTests(TestCase):
             overview="", genres=[], genre_ids=[], cast=[], director=[], tmdb_rating=None, seasons_data=[],
         )
         result = resolve_or_create_movie(30)
-        self.assertEqual(result.title, "Updated Title")
+        self.assertEqual(result.pk, movie.pk)
+        self.assertEqual(result.title, "Old Title")
+        self.assertEqual(result.canonical_title, "Updated Title")
         self.assertEqual(result.year, 2023)
         self.assertEqual(result.poster_path, "/new-poster.jpg")
         instance.details.assert_called_once_with(30, content_type="movie")

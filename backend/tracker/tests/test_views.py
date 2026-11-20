@@ -1031,9 +1031,11 @@ class MovieDetailEndpointTests(TestCase):
         )
         resp = self.client.get(f"/api/movie/{movie.id}/")
         self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["movie"]["title"], "Old Title")
         movie.refresh_from_db()
-        # Title is not auto-updated by detail view; only media/metadata fields are
         self.assertEqual(movie.title, "Old Title")
+        self.assertEqual(movie.canonical_title, "Same Title")
+        self.assertFalse(movie.title_is_override)
         self.assertEqual(movie.poster_path, "/new-poster.jpg")
         self.assertEqual(movie.overview, "New synopsis")
         self.assertEqual(movie.tmdb_rating, 8.0)
