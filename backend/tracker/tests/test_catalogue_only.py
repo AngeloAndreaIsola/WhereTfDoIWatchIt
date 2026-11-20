@@ -11,7 +11,7 @@ from availability.domain.models import DiscoveredContent
 from availability.models import Country, ContentMapping, Offer, ProviderContent, Source, TmdbDetailsCache, TmdbSearchCache
 from availability.sources.base import SourceFetchResult
 from availability.services.candidate_gateway import TMDbCandidateGateway
-from availability.tests.tubi_fixtures import BLUE_WATER_HIGH, I_ROBOT
+from availability.tests.tubi_fixtures import BLUE_WATER_HIGH, I_ROBOT, MOVIES_1, PERMISSION
 from tracker.models import (
     CanonicalBootstrapEvidence, CatalogueDiscoveryState, CatalogueReconciliationRecord,
     CatalogueReconciliationRun, DiscoveredCatalogueRecord, Movie, Provider,
@@ -23,7 +23,8 @@ from tracker.services.catalogue_reconciliation_inputs import fingerprint_v1
 from tracker.services.discovery_http import RequestBudgetReached
 from tracker.services.discovery_policy import DiscoveryPolicyError
 from tracker.services.incremental_catalogue_reconciliation import eligible_records, run_incremental_reconciliation
-from tracker.tests.catalogue_only_fixtures import PERMISSION_FIXTURE, one_page
+from tracker.services.catalogue_only_requester import collect_tubi_catalogue_page
+from tracker.tests.catalogue_only_fixtures import INDEX, PERMISSION_FIXTURE, ROBOTS, one_page
 from tracker.tests.test_discovery_controls import response
 
 MODULE = "tracker.services.catalogue_only"
@@ -75,6 +76,50 @@ class BoundedCollectorTests(SimpleTestCase):
             one_page(send=send)
         self.assertEqual(calls, ["https://tubitv.com/robots.txt"])
 
+    def test_robots_rule_is_applied_to_each_redirect(self):
+        calls = []
+        def send(url, *_):
+            calls.append(url)
+
+        robots = f"User-agent: *\nDisallow: {I_ROBOT.removeprefix('https://tubitv.com')}/\n"
+        with self.assertRaisesRegex(DiscoveryPolicyError, "catalogue_robots_disallowed"):
+            one_page(robots=robots, redirect=True, send=send)
+        self.assertEqual(calls, [ROBOTS, INDEX, MOVIES_1, I_ROBOT])
+
+    def test_status_failure_is_terminal_with_no_retry(self):
+        calls = []
+        def send(url, *_):
+            calls.append(url)
+            if url == INDEX:
+                return response(429)
+
+        with self.assertLogs("tracker.services.catalogue_only_requester", level="INFO") as audit:
+            with self.assertRaisesRegex(DiscoveryPolicyError, "catalogue_http_status_429"):
+                one_page(send=send)
+        self.assertEqual(calls, [ROBOTS, INDEX])
+        self.assertIn("'attempted': 2", audit.output[0])
+        self.assertIn("'status': 429", audit.output[0])
+
+    def test_grant_is_rechecked_before_each_dispatch(self):
+        calls = []
+        def send(url, *_):
+            calls.append(url)
+
+        permission_checks = [(None, PERMISSION_FIXTURE)] * 2
+        permission_checks.append(DiscoveryPolicyError("source_permission_denied"))
+        with self.assertRaisesRegex(DiscoveryPolicyError, "source_permission_denied"):
+            one_page(send=send, permission_check=permission_checks)
+        self.assertEqual(calls, [ROBOTS])
+
+    def test_scoped_cursor_resumes_next_title_and_produces_no_offers(self):
+        result, _ = one_page()
+        resumed, _ = one_page(cursor=result.cursor)
+        self.assertEqual(resumed.contents[0].url, PERMISSION)
+        self.assertEqual(result.offers, [])
+        self.assertEqual(resumed.offers, [])
+        with self.assertRaisesRegex(ValueError, "different catalogue scope"):
+            one_page(cursor=result.cursor.replace(MOVIES_1, INDEX))
+
 
 class CatalogueOnlyTests(TestCase):
     def setUp(self):
@@ -109,6 +154,29 @@ class CatalogueOnlyTests(TestCase):
 
     def reconcile(self, record, **kwargs):
         return reconcile_catalogue_records("tubi", record_ids=[record.pk], **kwargs)
+
+    def test_runtime_without_reviewed_grant_never_dispatches(self):
+        self.permission.stop()
+        with patch("tracker.services.discovery_http.DiscoveryHTTP._send") as send:
+            with self.assertRaisesRegex(DiscoveryPolicyError, "source_permission_unverified"):
+                collect_tubi_catalogue_page(MOVIES_1)
+            send.assert_not_called()
+
+    def test_interrupted_fetch_keeps_committed_coverage_and_can_resume(self):
+        self.record()
+        before = table_rows()
+
+        def interrupt(url, *_):
+            if url == PERMISSION:
+                raise KeyboardInterrupt()
+
+        with self.assertRaises(KeyboardInterrupt):
+            one_page(cursor=self.result.cursor, send=interrupt)
+        self.assertEqual(table_rows(), before)
+        result, _ = one_page(cursor=self.result.cursor)
+        self.import_batch(result, apply=True, expected_cursor=self.result.cursor)
+        self.assertEqual(DiscoveredCatalogueRecord.objects.filter(provider=self.provider).count(), 2)
+        self.assertFalse(Offer.objects.exists())
 
     def test_import_preview_changes_no_application_table(self):
         before = table_rows()

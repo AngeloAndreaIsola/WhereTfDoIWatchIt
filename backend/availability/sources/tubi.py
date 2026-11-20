@@ -352,10 +352,11 @@ class TubiSource:
     )
 
     def __init__(self, client=None, max_contents=DEFAULT_MAX_CONTENTS,
-                 max_priority=DEFAULT_MAX_PRIORITY):
+                 max_priority=DEFAULT_MAX_PRIORITY, *, catalogue_only_sitemap=None):
         self.client = client or TubiClient()
         self.max_contents = max_contents
         self.max_priority = max_priority
+        self.catalogue_only_sitemap = catalogue_only_sitemap
 
     def fetch(self, content=None, *, provider=None, country=None, cursor=None,
               priority=None) -> SourceFetchResult:
@@ -507,6 +508,10 @@ class TubiSource:
         sitemaps = list(dict.fromkeys(
             url for url in index if TITLE_SITEMAP_RE.match(url)
         ))
+        if self.catalogue_only_sitemap is not None:
+            if self.catalogue_only_sitemap not in sitemaps:
+                raise SourceFetchError("Selected Tubi title sitemap is absent from the index")
+            sitemaps = [self.catalogue_only_sitemap]
         if not sitemaps:
             raise SourceFetchError("Tubi sitemap index lists no movie/series sitemaps")
 
@@ -568,6 +573,8 @@ class TubiSource:
             return None
 
         content = self._content(provider_content_id, entry, url, detailed_type)
+        if self.catalogue_only_sitemap is not None:
+            return content, []
         if detailed_type == "movie":
             offer = self._offer(
                 provider_content_id=provider_content_id,

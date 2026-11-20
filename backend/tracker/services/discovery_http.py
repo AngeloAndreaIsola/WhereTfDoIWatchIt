@@ -57,7 +57,7 @@ def public_addresses(host):
 
 class DiscoveryHTTP:
     def __init__(self, permission, *, request_budget, interval=2, max_redirects=3,
-                 clock=None, resolver=None, timeout=10):
+                 clock=None, resolver=None, timeout=10, authorize=None):
         if (type(request_budget) is not int or not 1 <= request_budget <= 500
                 or type(max_redirects) is not int or not 0 <= max_redirects <= 5
                 or not math.isfinite(interval) or not 0 <= interval <= 60):
@@ -67,6 +67,7 @@ class DiscoveryHTTP:
         self.interval = max(2.0, interval, permission.min_interval)
         self.max_redirects, self.timeout = max_redirects, timeout
         self.clock, self.resolver = clock or SystemClock(), resolver or public_addresses
+        self.authorize = authorize
         self.attempted, self.last_started = 0, None
         self.counts, self.events = Counter(), []
         self.page_resource = None
@@ -96,6 +97,14 @@ class DiscoveryHTTP:
         finally:
             pool.close()
 
+    def wait_for_spacing(self):
+        if self.last_started is None:
+            return
+        remaining = self.last_started + self.interval - self.clock.monotonic()
+        while remaining > 0:
+            self.clock.sleep(remaining)
+            remaining = self.last_started + self.interval - self.clock.monotonic()
+
     def get(self, url, *, headers=None, kind="listing", retry=False, **kwargs):
         self.permission.require(self.permission.provider)
         if kind not in {"robots", "listing", "metadata"}:
@@ -123,15 +132,13 @@ class DiscoveryHTTP:
             if url in seen:
                 raise DiscoveryPolicyError("discovery_redirect_loop")
             seen.add(url)
+            self.wait_for_spacing()
+            if self.authorize is not None:
+                self.authorize(url, kind)
             addresses = self.resolver(parts.hostname)
             # Validate injected resolver answers too; never trust private peers.
             if not addresses or any(not is_public_destination(a) for a in addresses):
                 raise DiscoveryPolicyError("discovery_network_destination_prohibited")
-            if self.last_started is not None:
-                remaining = self.last_started + self.interval - self.clock.monotonic()
-                while remaining > 0:
-                    self.clock.sleep(remaining)
-                    remaining = self.last_started + self.interval - self.clock.monotonic()
             self.last_started = self.clock.monotonic()
             self.attempted += 1  # reserve before every potentially failing send
             self.counts[kind] += 1
