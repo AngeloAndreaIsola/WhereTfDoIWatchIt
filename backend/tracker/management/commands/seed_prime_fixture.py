@@ -14,6 +14,9 @@ import json
 from pathlib import Path
 
 from django.core.management.base import BaseCommand, CommandError
+from django.db import connection, transaction
+
+from config.test_database import require_disposable_database
 
 from ...models import Movie
 from ...services.cache import AvailabilityCache
@@ -55,6 +58,7 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        require_disposable_database(connection)
         fixture_path = Path(options["fixture"])
         if not fixture_path.exists():
             raise CommandError(f"Fixture not found: {fixture_path}")
@@ -64,25 +68,22 @@ class Command(BaseCommand):
 
         tmdb_id = _tmdb_id_from_payload(payload)
         content_type = options["content_type"]
-        movie, created = Movie.objects.get_or_create(
-            tmdb_id=tmdb_id,
-            content_type=content_type,
-            defaults={
-                "title": payload.get("title") or f"Movie {tmdb_id}",
-                "year": payload.get("releaseYear"),
-                "content_type": content_type,
-            },
-        )
-        if not created and movie.content_type != content_type:
-            movie.content_type = content_type
-            movie.save()
-
         offers = StreamingAvailabilityClient._parse_offers(payload)
         result = StreamingResult(tmdb_id=tmdb_id, offers=offers)
 
-        # Write directly through the cache — this bypasses the live client and
-        # the rate limiter entirely, so it is safe to run any number of times.
-        written = AvailabilityCache()._write_result(movie, result)
+        with transaction.atomic():
+            movie, created = Movie.objects.get_or_create(
+                tmdb_id=tmdb_id,
+                content_type=content_type,
+                defaults={
+                    "title": payload.get("title") or f"Movie {tmdb_id}",
+                    "year": payload.get("releaseYear"),
+                    "content_type": content_type,
+                },
+            )
+            # Write directly through the cache — this bypasses the live client and
+            # the rate limiter entirely, so it is safe to run any number of times.
+            written = AvailabilityCache()._write_result(movie, result)
 
         self.stdout.write(
             self.style.SUCCESS(

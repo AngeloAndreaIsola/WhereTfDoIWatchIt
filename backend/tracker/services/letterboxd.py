@@ -689,13 +689,13 @@ def import_rows(
     local_movies_by_title_year: dict[tuple[str, Optional[int]], Movie] = {}
     local_movies_by_uri: dict[str, Movie] = {}
 
-    for m in Movie.objects.all():
+    for m in Movie.objects.visible():
         if m.title:
             local_movies_by_title_year[(m.title.lower().strip(), m.year)] = m
             if m.year is not None:
                 local_movies_by_title_year[(m.title.lower().strip(), None)] = m
 
-    for umd in UserMovieData.objects.select_related("movie").filter(user_id=user_id):
+    for umd in UserMovieData.objects.select_related("movie").filter(user_id=user_id, movie__is_quarantined=False):
         if umd.letterboxd_uri:
             local_movies_by_uri[umd.letterboxd_uri] = umd.movie
 
@@ -812,10 +812,16 @@ def import_rows(
                 content_type=pick.content_type or expected_type,
                 defaults={"title": pick.title, "year": pick.year, "poster_path": pick.poster_path or ""},
             )
+            if movie.is_quarantined:
+                result.skipped.append({
+                    "title": row.title, "year": row.year, "uri": row.uri,
+                    "reason": "quarantined_identity",
+                })
+                continue
             movie_created = created
             if not created and pick.poster_path and not movie.poster_path:
                 movie.poster_path = pick.poster_path
-                movie.save()
+                movie.save(update_fields=["poster_path"])
 
             local_movies_by_title_year[(movie.title.lower().strip(), movie.year)] = movie
             if row.uri:

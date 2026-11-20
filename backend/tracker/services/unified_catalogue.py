@@ -151,6 +151,9 @@ def unofficial_catalogue_items(
             if identity_key(entry.tmdb_id, entry.content_type) not in exclude_identities
         ]
     movies = _movies_by_identity(entries)
+    quarantined = {key for key, movie in movies.items() if movie.is_quarantined}
+    entries = [entry for entry in entries
+               if identity_key(entry.tmdb_id, entry.content_type) not in quarantined]
 
     def resolved_movie(entry):
         key = identity_key(entry.tmdb_id, entry.content_type)
@@ -244,7 +247,7 @@ def _movies_by_identity(entries) -> dict[tuple[int, str], Movie]:
         return {}
     movies = Movie.objects.filter(
         tmdb_id__in={key[0] for key in keys}
-    ).only("tmdb_id", "title", "year", "poster_path", "content_type", "cast")
+    ).only("tmdb_id", "title", "year", "poster_path", "content_type", "cast", "is_quarantined")
     resolved: dict[tuple[int, str], Movie] = {}
     for movie in movies:
         media_type = identity_media_type(movie.content_type)

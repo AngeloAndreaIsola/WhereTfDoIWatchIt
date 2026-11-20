@@ -105,6 +105,11 @@ def safe_enrich_or_create_movie(
     """
     existing = Movie.objects.filter(tmdb_id=tmdb_id, content_type=verified_type).first()
     if existing:
+        if existing.is_quarantined:
+            raise CandidateAcceptanceError(
+                "Candidate resolves to a quarantined movie.",
+                code="MOVIE_QUARANTINED", status_code=409,
+            )
         # Enrich without overwriting user state or downgrading quality fields
         update_fields = []
         # Verified acceptance is trusted canonical evidence (#112): record it
@@ -147,7 +152,14 @@ def safe_enrich_or_create_movie(
             update_fields.append("tmdb_rating")
 
         if update_fields:
-            existing.save(update_fields=update_fields)
+            updated = Movie.objects.visible().filter(pk=existing.pk).update(
+                **{field: getattr(existing, field) for field in update_fields}
+            )
+            if not updated:
+                raise CandidateAcceptanceError(
+                    "Candidate resolves to a quarantined movie.",
+                    code="MOVIE_QUARANTINED", status_code=409,
+                )
         return existing
 
     # Create new Movie row
