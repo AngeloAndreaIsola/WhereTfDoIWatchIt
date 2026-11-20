@@ -200,6 +200,38 @@ class ImportExactTitleTests(TestCase):
         self.assertEqual([item.movie_id for item in result.resolved], [preferred.pk])
         client.search.assert_not_called()
 
+    def test_conflicting_typed_uri_associations_are_reviewable(self):
+        uri = "https://letterboxd.com/film/equal-title/"
+        movies = [Movie.objects.create(tmdb_id=pk, title="Equal Title", year=2001) for pk in (1081, 1082)]
+        for movie in movies:
+            UserMovieData.objects.create(movie=movie, letterboxd_uri=uri, is_watched=True, rating=4.0)
+        client = _client([])
+
+        result = import_rows([LetterboxdRow("Equal Title", 2001, uri=uri)], client=client)
+
+        self.assertFalse(result.resolved)
+        [review] = result.ambiguous
+        self.assertEqual(review["decision"], "multiple_local_uri_identities")
+        self.assertEqual(review["uri"], uri)
+        self.assertEqual([item["tmdb_id"] for item in review["candidates"]], [1081, 1082])
+        self.assertFalse(WatchlistItem.objects.exists())
+        self.assertEqual(UserMovieData.objects.filter(is_watched=True, rating=4.0).count(), 2)
+        client.search.assert_not_called()
+
+    def test_uri_associations_remain_separate_across_media_types(self):
+        uri = "https://letterboxd.com/film/equal-title/"
+        movie = Movie.objects.create(tmdb_id=1081, title="Equal Title", year=2001)
+        series = Movie.objects.create(tmdb_id=1081, title="Equal Title", year=2001, content_type="series")
+        for item in (movie, series):
+            UserMovieData.objects.create(movie=item, letterboxd_uri=uri)
+        client = _client([])
+
+        result = import_rows([LetterboxdRow("Equal Title", 2001, uri=uri)], client=client)
+
+        self.assertFalse(result.ambiguous)
+        self.assertEqual([item.movie_id for item in result.resolved], [movie.pk])
+        client.search.assert_not_called()
+
     def test_single_exact_wrong_type_candidate_is_reviewable(self):
         client = _client([_item(1081, "A Distinct Title", 2020, "movie")])
         result = import_rows(

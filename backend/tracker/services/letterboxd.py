@@ -698,7 +698,7 @@ def import_rows(
             local_titles[(title, movie.year, content_type)][movie.pk] = movie
             local_titles[(title, None, content_type)][movie.pk] = movie
 
-    local_movies_by_uri: dict[str, Movie] = {}
+    local_movies_by_uri: dict[tuple[str, str], dict[int, Movie]] = defaultdict(dict)
 
     for m in Movie.objects.visible():
         if m.title:
@@ -706,7 +706,8 @@ def import_rows(
 
     for umd in UserMovieData.objects.select_related("movie").filter(user_id=user_id, movie__is_quarantined=False):
         if umd.letterboxd_uri:
-            local_movies_by_uri[umd.letterboxd_uri] = umd.movie
+            key = (umd.letterboxd_uri, umd.movie.content_type)
+            local_movies_by_uri[key][umd.movie_id] = umd.movie
 
     for row in rows:
         movie: Optional[Movie] = None
@@ -717,22 +718,26 @@ def import_rows(
         item_created = False
 
         expected_type = _search_content_type(row)
-        if row.uri and row.uri in local_movies_by_uri:
-            movie = _typed_cache_hit(local_movies_by_uri[row.uri], expected_type)
-        if movie is None:
-            title_key = (_normalize_title(row.title), row.year, expected_type)
-            candidates = local_titles.get(title_key, {})
-            if len(candidates) > 1:
-                result.ambiguous.append({
-                    "title": row.title,
-                    "year": row.year,
-                    "uri": row.uri,
-                    "candidates": [_candidate_dict(candidates[pk]) for pk in sorted(candidates)[:5]],
-                    "reason": "multiple_exact_titles",
-                    "decision": "multiple_local_exact_titles",
-                })
-                continue
-            movie = next(iter(candidates.values()), None)
+        uri_candidates = local_movies_by_uri.get((row.uri, expected_type), {}) if row.uri else {}
+        if uri_candidates:
+            candidates = uri_candidates
+            reason = "conflicting_uri_identity"
+            decision = "multiple_local_uri_identities"
+        else:
+            candidates = local_titles.get((_normalize_title(row.title), row.year, expected_type), {})
+            reason = "multiple_exact_titles"
+            decision = "multiple_local_exact_titles"
+        if len(candidates) > 1:
+            result.ambiguous.append({
+                "title": row.title,
+                "year": row.year,
+                "uri": row.uri,
+                "candidates": [_candidate_dict(candidates[pk]) for pk in sorted(candidates)[:5]],
+                "reason": reason,
+                "decision": decision,
+            })
+            continue
+        movie = next(iter(candidates.values()), None)
 
         if movie is None:
             try:
@@ -839,8 +844,6 @@ def import_rows(
                 movie.save(update_fields=["poster_path"])
 
             remember_title(movie)
-            if row.uri:
-                local_movies_by_uri[row.uri] = movie
 
         if row.file_type == "watchlist":
             item_source = getattr(row, "source", None) or source
@@ -865,6 +868,10 @@ def import_rows(
             result.reviews_count += 1
 
         if row.uri:
+            previous_uri = user_data.letterboxd_uri
+            if previous_uri and previous_uri != row.uri:
+                local_movies_by_uri[(previous_uri, movie.content_type)].pop(movie.pk, None)
+            local_movies_by_uri[(row.uri, movie.content_type)][movie.pk] = movie
             user_data.letterboxd_uri = row.uri
 
         user_data.save()
@@ -927,19 +934,6 @@ def _search_content_type(row: LetterboxdRow) -> str:
     if row.source == "myanimelist":
         return "series"
     return "movie"
-
-
-def _typed_cache_hit(candidate: Optional[Movie], expected_type: str) -> Optional[Movie]:
-    """A local-cache hit must match the row's declared media type (#107).
-
-    Movie and series TMDb IDs live in separate namespaces; reusing a cached
-    movie for a series row (or vice versa) would link the wrong identity.
-    """
-    if candidate is None:
-        return None
-    if (candidate.content_type or "movie") != expected_type:
-        return None
-    return candidate
 
 
 def _normalize_title(value: str) -> str:
