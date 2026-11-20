@@ -198,7 +198,7 @@ describe("Watched page cards", () => {
     });
 
     await userEvent.click(button);
-    expect(unmarkMovieWatched).toHaveBeenCalledWith(603);
+    expect(unmarkMovieWatched).toHaveBeenCalledWith(603, "movie");
     expect(await screen.findByRole("button", { name: "Removing…" })).toBeDisabled();
 
     await act(async () => resolveUnmark({} as UnmarkResult));
