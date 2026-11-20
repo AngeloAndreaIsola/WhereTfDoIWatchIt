@@ -21,7 +21,8 @@ from io import StringIO
 from unittest.mock import patch
 
 from django.core.management import call_command
-from django.test import TestCase
+from django.db import connection
+from django.test import TestCase, TransactionTestCase
 from django.utils import timezone
 
 from availability.models import Source, SyncRun
@@ -37,7 +38,8 @@ from tracker.models import (
 import importlib
 
 MODULE = "tracker.management.commands.cleanup_availability_history"
-ABANDONED_ERROR = importlib.import_module(MODULE).ABANDONED_ERROR
+command = importlib.import_module(MODULE)
+ABANDONED_ERROR = command.ABANDONED_ERROR
 
 
 @contextmanager
@@ -271,3 +273,38 @@ class IdempotencyTests(TestCase):
 
         stale.refresh_from_db()
         self.assertEqual(stale.error, "genuine completion")
+
+
+class ScheduledCleanupConcurrencyTests(TransactionTestCase):
+    def test_worker_starting_after_preview_defers_apply(self):
+        stale = _run(age_minutes=600, finished=False)
+        output = StringIO()
+        with patch(f"{MODULE}.held_advisory_locks", side_effect=[0, 1]):
+            call_command("cleanup_availability_history", "--apply", "--min-age-minutes", "120", stdout=output)
+        stale.refresh_from_db()
+        self.assertIsNone(stale.finished_at)
+        self.assertIn("A worker advisory lock is held", output.getvalue())
+
+    def test_competing_connections_cannot_apply_the_schedule_twice(self):
+        stale = _run(age_minutes=600, finished=False)
+        other = connection.copy()
+        try:
+            with other.cursor() as cursor:
+                cursor.execute("SELECT pg_advisory_lock(%s)", [command._CLEANUP_LOCK_KEY])
+            # Represent the race where both invocations passed preview before
+            # one got the cleanup lock.
+            output = StringIO()
+            with patch(f"{MODULE}.held_advisory_locks", return_value=0):
+                call_command("cleanup_availability_history", "--apply", "--min-age-minutes", "120", stdout=output)
+            self.assertIn("Another cleanup invocation is active", output.getvalue())
+            stale.refresh_from_db()
+            self.assertIsNone(stale.finished_at)
+        finally:
+            other.close()
+
+        output = StringIO()
+        call_command("cleanup_availability_history", "--apply", "--min-age-minutes", "120", stdout=output)
+        self.assertIn("Reconciled 1", output.getvalue())
+        stale.refresh_from_db()
+        self.assertEqual(stale.error, ABANDONED_ERROR)
+        self.assertIsNotNone(stale.abandoned_at)

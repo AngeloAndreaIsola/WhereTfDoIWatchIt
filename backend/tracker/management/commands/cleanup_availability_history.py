@@ -71,6 +71,9 @@ from tracker.models import RefreshRun
 #: catalogue runtime, and far below the ages of genuinely abandoned rows.
 DEFAULT_MIN_AGE_MINUTES = 120
 
+# Single-bigint advisory key, shared by all cleanup invocations for this DB.
+_CLEANUP_LOCK_KEY = 0x426A_C104
+
 #: Written into ``error``. Records that the row was reconciled by an operator
 #: command rather than completed by the worker, so the reason is never confused
 #: with a source-level failure the worker actually observed.
@@ -81,11 +84,22 @@ ABANDONED_ERROR = (
 
 
 def held_advisory_locks() -> int:
-    """Count advisory locks currently held, i.e. work in progress right now."""
+    """Count granted advisory locks other than the caller's cleanup lock."""
     with connection.cursor() as cursor:
         cursor.execute(
-            "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory'"
+            """
+            SELECT count(*) FROM pg_locks
+            WHERE locktype = 'advisory' AND granted
+              AND NOT (pid = pg_backend_pid() AND classid = 0 AND objid = %s AND objsubid = 1)
+            """,
+            [_CLEANUP_LOCK_KEY],
         )
+        return cursor.fetchone()[0]
+
+
+def try_cleanup_lock():
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT pg_try_advisory_xact_lock(%s)", [_CLEANUP_LOCK_KEY])
         return cursor.fetchone()[0]
 
 
@@ -99,13 +113,14 @@ class Command(BaseCommand):
         # Dry run is the default, but the flag is also accepted explicitly so
         # the safe invocation can be spelled out in a script or a runbook
         # instead of relying on the absence of --apply.
-        parser.add_argument(
+        mode = parser.add_mutually_exclusive_group()
+        mode.add_argument(
             "--dry-run",
             action="store_true",
             help="Preview only. This is the default; the flag is accepted for "
                  "explicit scripts and runbooks.",
         )
-        parser.add_argument(
+        mode.add_argument(
             "--apply",
             action="store_true",
             help="Perform the reconciliation. Without it nothing is written.",
@@ -186,21 +201,20 @@ class Command(BaseCommand):
             return
 
         with transaction.atomic():
-            # Re-check under the transaction so a run that finished between the
-            # listing and the write is left alone.
-            stale_ids = [
-                run.id
-                for run in RefreshRun.objects.filter(
-                    id__in=[r.id for r in candidates], finished_at__isnull=True
-                )
-            ]
+            if not try_cleanup_lock():
+                self.stdout.write("Another cleanup invocation is active. Deferring reconciliation.")
+                return
+            # A worker can start while the preview is being displayed. Recheck
+            # immediately before writing, with the cleanup lock already held.
+            if held_advisory_locks():
+                self.stdout.write("A worker advisory lock is held. Deferring reconciliation.")
+                return
+            now = timezone.now()
             changed = RefreshRun.objects.filter(
-                id__in=stale_ids, finished_at__isnull=True
-            ).update(
-                finished_at=timezone.now(),
-                error=ABANDONED_ERROR,
-                abandoned_at=timezone.now(),
-            )
+                id__in=[run.pk for run in candidates],
+                finished_at__isnull=True,
+                started_at__lt=cutoff,
+            ).update(finished_at=now, error=ABANDONED_ERROR, abandoned_at=now)
 
         self.stdout.write(
             self.style.SUCCESS(f"\nReconciled {changed} abandoned RefreshRun(s).")
