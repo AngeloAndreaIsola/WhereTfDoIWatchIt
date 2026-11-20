@@ -279,3 +279,28 @@ on this page feed it:
   reconciliation diagnostics (`failed_syncs`). It never hides an offer — the
   scheduled jobs above are what create those runs, so a source that is down
   for a cycle degrades to a diagnostic, not to missing results.
+
+## Abandoned refresh-run reconciliation
+
+Preview with `docker compose exec -T backend python manage.py
+cleanup_availability_history --dry-run`. The default 120-minute threshold is
+well above the previously measured 31-minute collector run. Recheck the
+threshold against the current slowest expected job before enabling a schedule.
+The command defers if a worker holds a PostgreSQL advisory lock, including a
+worker that acquires the lock while the candidate preview is being written.
+
+After separate approval, add one daily entry away from the title and catalogue
+refresh windows. Run it on a host using the reviewed Compose project and
+environment for the intended database.
+
+```cron
+43 5 * * * cd /path/to/WhereTfDoIWatchIt && docker compose -p wheretfdoiwatchit exec -T backend python manage.py cleanup_availability_history --apply --min-age-minutes 120 >> ./logs/refresh-history-cleanup.log 2>&1
+```
+
+Keep the dry-run report before enabling the entry. Review the reconciled
+count, no-op message, lock deferral, or nonzero exit in the log. Duplicate
+invocations serialize through a transaction-scoped PostgreSQL advisory lock.
+The command records abandoned runs as errors and preserves completed runs,
+offers and checkpoints. It uses no external requests. Disable future runs by
+removing the single cron entry. Keep command logs and existing audit rows
+available for separately reviewed corrections if a row was misclassified.
