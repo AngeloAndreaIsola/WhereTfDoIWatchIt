@@ -513,13 +513,9 @@ def _process_watchlist_refresh_locked(
     rate_limit_hit = summary.rate_limited
     default_limiter_spent = _is_spent(limiter)
     for movie_id, tmdb_id in pairs:
-        if tmdb_id in queue_owned:
-            # The request drain owns this title this run (settled, or still
-            # queued for a later run) — one title, one attempt per run.
-            continue
-
         movie = movies_by_id.get(movie_id)
-        if not movie:
+        if not movie or (tmdb_id, movie.content_type) in queue_owned:
+            # The request drain owns this typed identity for this run.
             continue
 
         # The only run-wide bail-out left is the caller's *default* limiter
