@@ -689,7 +689,6 @@ def import_rows(
     # Index each typed identity under its title and optional release year.
     # A title can have several exact local matches in the same namespace.
     local_titles: dict[tuple[str, Optional[int], str], dict[int, Movie]] = defaultdict(dict)
-    local_movies_by_uri: dict[str, Movie] = {}
 
     def remember_title(movie: Movie):
         title = _normalize_title(movie.title)
@@ -697,6 +696,8 @@ def import_rows(
             content_type = movie.content_type or "movie"
             local_titles[(title, movie.year, content_type)][movie.pk] = movie
             local_titles[(title, None, content_type)][movie.pk] = movie
+
+    local_movies_by_uri: dict[str, Movie] = {}
 
     for m in Movie.objects.all():
         if m.title:
