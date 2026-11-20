@@ -210,6 +210,20 @@ class QuarantineVisibilityTests(TestCase):
         self.assertEqual(response.status_code, 404)
         tmdb.assert_not_called()
 
+    def test_watched_lists_hide_quarantine_without_changing_personal_data(self):
+        hidden = UserMovieData.objects.create(movie=self.quarantined, is_watched=True, rating=4.0)
+        UserMovieData.objects.create(movie=self.series, is_watched=True, rating=5.0)
+
+        for url, field in (("/api/watched/", "results"), ("/api/watched/report/", "report")):
+            response = self.client.get(url)
+            self.assertEqual(response.status_code, 200)
+            [row] = response.json()[field]
+            self.assertEqual(row["movie"]["content_type"], "series")
+            self.assertEqual(row["user_data"]["rating"], 5.0)
+        hidden.refresh_from_db()
+        self.assertTrue(hidden.is_watched)
+        self.assertEqual(hidden.rating, 4.0)
+
     def test_import_ignores_quarantined_title_and_uri_cache_hits(self):
         self.legitimate.title = "Different title"
         self.legitimate.save(update_fields=["title"])

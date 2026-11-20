@@ -1687,7 +1687,9 @@ def watched_report(request):
         .order_by().values("movie_id")
         .annotate(watch_count=Count("pk"), last_watched_at=Max("watched_date"))
     )
-    watched_qs = UserMovieData.objects.filter(user_id=1, is_watched=True).select_related("movie")
+    watched_qs = UserMovieData.objects.filter(
+        user_id=1, is_watched=True, movie__is_quarantined=False
+    ).select_related("movie")
     if (request.GET.get("watched") or request.GET.get("watched_status") or "").strip().lower() == "unwatched":
         watched_qs = watched_qs.none()
     watched_qs = watched_qs.annotate(
@@ -3543,7 +3545,9 @@ def watched_list(request):
     page = positive_int("page", 1)
     page_size = min(positive_int("page_size", 24), 100)
 
-    qs = UserMovieData.objects.filter(user_id=user_id, is_watched=True).select_related("movie")
+    qs = UserMovieData.objects.filter(
+        user_id=user_id, is_watched=True, movie__is_quarantined=False
+    ).select_related("movie")
 
     # This endpoint is already scoped to watched rows. Keep the shared
     # watched selector semantics: "watched" and "all" are equivalent here,
