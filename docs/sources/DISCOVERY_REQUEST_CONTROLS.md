@@ -82,3 +82,30 @@ fixture-only permission and deterministic HTTP/clock, simulates discovery,
 eligibility and reconciliation preview/conflicts, verifies every dry-run is
 read only, then rolls back scenario rows and restores clone sequence values.
 Fixture permission is not included in the runtime approval registry.
+
+## Bounded Tubi catalogue requester
+
+`tracker.services.catalogue_only_requester.collect_tubi_catalogue_page` is
+an internal entry point. It requires the same enabled provider and reviewed,
+unexpired grant as the catalogue-only importer, including after each wait and
+before each redirect dispatch. The checked-in registry has no Tubi grant.
+There is no command, worker or scheduler binding for this entry point.
+
+A future approved canary must name a single title sitemap that is present
+in the index and within the reviewed URL scope. Each invocation reads robots,
+the index, that sitemap, and one title page, with at most five HTTP attempts
+including redirects. All attempts share a minimum two-second gap. Robots
+can tighten the gap or block individual URLs, including redirect targets.
+The requester holds the existing provider lock through the final cooldown.
+Transport or parse errors, a denied redirect, and an unobservable title
+stop the run before it can advance the checkpoint. Every invocation uses
+zero retries and returns attempt accounting with successful observations.
+
+Use the exact returned cursor and the previously committed cursor with
+`import_catalogue_batch`. The returned cursor is scoped to the selected
+sitemap. Import validates the grant again and commits the observations and
+cursor together. The result contains title records only. Use only the
+existing cache-only `reconcile_catalogue_records` to resolve those recorded
+IDs. The requester does not publish playback offers or mark a source
+catalogue complete. The offline regression uses retained detail pages and
+synthetic sitemap/robots transport, with no provider or TMDb requests.
