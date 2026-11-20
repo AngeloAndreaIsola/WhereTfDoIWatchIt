@@ -46,13 +46,13 @@ function AmbiguousClient() {
   const items = itemsParam ? queryItems : stashedItems ?? [];
   const ready = Boolean(itemsParam) || stashedItems !== null;
 
-  // selections map: itemIndex -> selected tmdb_id (or null if skip)
+  // Store the candidate position so a movie and series can share a TMDb ID.
   const [selections, setSelections] = useState<Record<number, number | null>>({});
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
 
-  const handleRadioChange = (itemIndex: number, tmdbId: number | null) => {
-    setSelections((prev) => ({ ...prev, [itemIndex]: tmdbId }));
+  const handleRadioChange = (itemIndex: number, candidateIndex: number | null) => {
+    setSelections((prev) => ({ ...prev, [itemIndex]: candidateIndex }));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -63,12 +63,15 @@ function AmbiguousClient() {
     // Build payload of selected items
     const selectedPayload = items
       .map((item, index) => {
-        const selectedId = selections[index];
-        if (selectedId === null || selectedId === undefined) return null;
+        const selectedIndex = selections[index];
+        if (selectedIndex === null || selectedIndex === undefined) return null;
+        const candidate = item.candidates[selectedIndex];
+        if (!candidate) return null;
         return {
           original_title: item.title,
           year: item.year,
-          tmdb_id: selectedId,
+          tmdb_id: candidate.tmdb_id,
+          content_type: candidate.content_type,
         };
       })
       .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
@@ -199,12 +202,12 @@ function AmbiguousClient() {
               </label>
 
               {/* Candidates */}
-              {item.candidates.map((cand) => (
+              {item.candidates.map((cand, candidateIndex) => (
                 <AmbiguousMatchCard
-                  key={cand.tmdb_id}
+                  key={`${cand.content_type ?? "movie"}:${cand.tmdb_id}`}
                   candidate={cand}
-                  selected={selectedValue === cand.tmdb_id}
-                  onSelect={() => handleRadioChange(itemIdx, cand.tmdb_id)}
+                  selected={selectedValue === candidateIndex}
+                  onSelect={() => handleRadioChange(itemIdx, candidateIndex)}
                   name={`item-${itemIdx}`}
                 />
               ))}

@@ -11,8 +11,10 @@ from django.test import SimpleTestCase, TestCase, TransactionTestCase
 
 from availability.services.legacy_ingest import ingest_scraped_mapping
 from config.test_database import require_disposable_database
-from tracker.models import Movie, MovieIdentityAudit, Provider, RefreshRequest, Region, ScrapedContentMapping, WatchlistItem
+from tracker.models import Movie, MovieIdentityAudit, Provider, RefreshRequest, Region, ScrapedContentMapping, UserMovieData, WatchlistItem
 from tracker.services.enrichment import enrich_movie_from_tmdb, resolve_or_create_movie, sync_movie_fields
+from tracker.services.letterboxd import LetterboxdRow, import_rows
+from tracker.services.tmdb import TMDbItem
 from tracker.services.refresh_requests import _candidate_batch, request_availability_refresh
 
 
@@ -181,6 +183,44 @@ class QuarantineVisibilityTests(TestCase):
             response = self.client.post("/api/watchlist/add/", {"tmdb_id": 875001}, content_type="application/json")
         self.assertEqual(response.status_code, 404)
         tmdb.assert_not_called()
+
+    def test_import_ignores_quarantined_title_and_uri_cache_hits(self):
+        self.legitimate.title = "Different title"
+        self.legitimate.save(update_fields=["title"])
+        uri = "https://letterboxd.com/film/neg/"
+        UserMovieData.objects.create(movie=self.quarantined, letterboxd_uri=uri, is_watched=True)
+        tmdb = Mock()
+        tmdb.search.return_value = [
+            TMDbItem(tmdb_id=self.quarantined.tmdb_id, title="Neg", year=None,
+                     poster_path="/new.jpg"),
+        ]
+
+        result = import_rows([LetterboxdRow("Neg", None, uri=uri)], client=tmdb)
+
+        tmdb.search.assert_called_once_with("Neg", year=None, content_type="movie")
+        self.assertFalse(result.resolved)
+        self.assertEqual([item["reason"] for item in result.skipped], ["quarantined_identity"])
+        self.quarantined.refresh_from_db()
+        self.assertTrue(self.quarantined.is_quarantined)
+        self.assertEqual(self.quarantined.poster_path, "")
+        self.assertTrue(UserMovieData.objects.get(movie=self.quarantined).is_watched)
+        self.assertFalse(WatchlistItem.objects.filter(movie=self.quarantined).exists())
+
+    def test_review_can_resolve_series_with_same_id_as_quarantined_movie(self):
+        response = self.client.post(
+            "/api/watchlist/resolve/",
+            {"selections": [
+                {"tmdb_id": self.quarantined.tmdb_id, "original_title": "Neg"},
+                {"tmdb_id": self.series.tmdb_id, "content_type": "series", "original_title": "Neg"},
+            ]},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["resolved_count"], 1)
+        item = WatchlistItem.objects.get()
+        self.assertEqual(item.movie_id, self.series.pk)
+        self.assertEqual(item.source, "letterboxd_resolved")
 
     def test_enrichment_and_pending_refresh_stay_inactive(self):
         pending = RefreshRequest.objects.create(movie=self.quarantined, status="pending")
