@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useMemo, Suspense } from "react";
 import Link from "next/link";
+import TitlePoster from "@/components/TitlePoster";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { FilterBar, FilterState } from "@/components/FilterBar";
 import { VpnWatchModal } from "@/components/VpnWatchModal";
@@ -446,21 +447,12 @@ function CatalogPageClient() {
                       }
                     >
                       <div className="aspect-[2/3] bg-gray-100 dark:bg-gray-800 relative">
-                        {item.poster_path ? (
-                          <img
-                            src={
-                              item.poster_path.startsWith("http")
-                                ? item.poster_path
-                                : `https://image.tmdb.org/t/p/w500${item.poster_path}`
-                            }
-                            alt={item.title}
-                            className="w-full h-full object-cover"
-                          />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center text-gray-400 text-xs">
-                            No Poster
-                          </div>
-                        )}
+                        <TitlePoster
+                          tmdbId={item.tmdb_id}
+                          contentType={item.content_type}
+                          posterPath={item.poster_path}
+                          title={item.title}
+                        />
                         <div className="absolute top-2 left-2 pointer-events-none z-10">
                           <span className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded-md bg-gray-900/80 text-white backdrop-blur-xs">
                             {item.content_type === "series" ? "SERIES" : "MOVIE"}
@@ -486,21 +478,12 @@ function CatalogPageClient() {
                     </Link>
                   ) : (
                     <div className="aspect-[2/3] bg-gray-100 dark:bg-gray-800 relative">
-                      {item.poster_path ? (
-                        <img
-                          src={
-                            item.poster_path.startsWith("http")
-                              ? item.poster_path
-                              : `https://image.tmdb.org/t/p/w500${item.poster_path}`
-                          }
-                          alt={item.title}
-                          className="w-full h-full object-cover"
-                        />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center text-gray-400 text-xs">
-                          No Poster
-                        </div>
-                      )}
+                      <TitlePoster
+                        tmdbId={item.tmdb_id}
+                        contentType={item.content_type}
+                        posterPath={item.poster_path}
+                        title={item.title}
+                      />
                       <div className="absolute top-2 left-2 pointer-events-none z-10">
                         <span className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded-md bg-gray-900/80 text-white backdrop-blur-xs">
                           {item.content_type === "series" ? "SERIES" : "MOVIE"}
