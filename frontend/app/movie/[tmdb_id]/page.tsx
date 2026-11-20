@@ -244,7 +244,7 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
     setPollTimedOut(false);
     setRefreshing(true);
     try {
-      const result = await requestAvailabilityRefresh(tmdbId);
+      const result = await requestAvailabilityRefresh(tmdbId, "movie");
       setData((prev) =>
         prev
           ? {
@@ -284,7 +284,7 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
     try {
       const result = await markMovieWatched(tmdbId, {
         watched_date: new Date().toISOString().split('T')[0],
-      });
+      }, "movie");
       setData((prev) => prev ? { ...prev, user_data: result.user_data ?? { is_watched: true } } : prev);
       reloadMovie();
     } catch (err) {
@@ -294,7 +294,7 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
 
   const handleUnmarkWatched = async () => {
     try {
-      const result = await unmarkMovieWatched(tmdbId);
+      const result = await unmarkMovieWatched(tmdbId, "movie");
       setData((prev) => prev ? { ...prev, user_data: result.user_data ?? { ...(prev.user_data ?? {}), is_watched: false } } : prev);
       reloadMovie();
     } catch (err) {
@@ -304,7 +304,7 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
 
   const handleRemoveFromWatchlist = async () => {
     try {
-      await removeWatchlistItem(tmdbId);
+      await removeWatchlistItem(tmdbId, "movie");
       setData((prev) => prev ? { ...prev, is_in_watchlist: false } : prev);
       reloadMovie();
     } catch (err) {

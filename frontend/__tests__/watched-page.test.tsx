@@ -314,7 +314,7 @@ describe("Watched page", () => {
     const user = userEvent.setup();
     await screen.findByRole("link", { name: /Seen Film/ });
     await user.click(screen.getByRole("button", { name: /Remove from Watched/ }));
-    await waitFor(() => expect(unmarkMovieWatched).toHaveBeenCalledWith(603));
+    await waitFor(() => expect(unmarkMovieWatched).toHaveBeenCalledWith(603, "movie"));
     expect(screen.queryByRole("link", { name: /Seen Film/ })).not.toBeInTheDocument();
   });
 });

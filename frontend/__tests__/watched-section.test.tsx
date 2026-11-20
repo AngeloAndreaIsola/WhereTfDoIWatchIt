@@ -331,10 +331,14 @@ describe("Watched section", () => {
     expect(hrefs).toContain("/tv/1396");
   });
 
-  it("removes an item from Watched using the existing unmark action", async () => {
+  it("removes only the selected movie when a watched series shares its TMDb ID", async () => {
+    const collidingSeries = {
+      ...watchedSeriesRow,
+      movie: { ...watchedSeriesRow.movie, tmdb_id: watchedMovieRow.movie.tmdb_id },
+    };
     const fetchMock = mockRoutes([
-      ...reportRoute([watchedMovieRow, watchedSeriesRow]),
-      route("/api/unwatched/603/", {
+      ...reportRoute([watchedMovieRow, collidingSeries]),
+      route("/api/unwatched/603/?content_type=movie", {
         body: { message: "Movie unmarked as watched" },
       }),
     ]);
@@ -351,7 +355,7 @@ describe("Watched section", () => {
 
     await waitFor(() => {
       expect(
-        fetchMock.mock.calls.some((call) => call[0] === "/api/unwatched/603/")
+        fetchMock.mock.calls.some((call) => call[0] === "/api/unwatched/603/?content_type=movie")
       ).toBe(true);
     });
 
@@ -366,7 +370,7 @@ describe("Watched section", () => {
   it("surfaces an error when the unmark request fails and keeps the row", async () => {
     mockRoutes([
       ...reportRoute([watchedMovieRow]),
-      route("/api/unwatched/603/", {
+      route("/api/unwatched/603/?content_type=movie", {
         ok: false,
         status: 502,
         body: { error: "Failed to unmark as watched: boom" },

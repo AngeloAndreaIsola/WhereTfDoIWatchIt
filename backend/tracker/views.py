@@ -645,7 +645,8 @@ def refresh_availability(request, tmdb_id: int):
     The backend for the manual "Refresh availability" button on the
     movie/series detail pages. One endpoint serves both pages: movies and
     series are the same tracked title row and share the canonical
-    availability pipeline, so the refresh mechanism is identical.
+    availability pipeline, so the refresh mechanism is identical. Specify
+    content_type=movie|series when the numeric TMDb ID is shared.
 
     Enqueue-only by contract — the HTTP request never contacts a provider.
     It creates (or upgrades, preserving deduplication) at most one pending
@@ -657,9 +658,9 @@ def refresh_availability(request, tmdb_id: int):
     read as fresh — the whole point of a manual refresh — while the partial
     unique constraint keeps repeated clicks on the same pending row.
     """
-    movie = _unique_movie_for_tmdb(tmdb_id)
-    if movie is None:
-        return Response({"error": "movie identity absent or ambiguous"}, status=404)
+    movie, error = _resolve_movie_typed(tmdb_id, request.query_params.get("content_type"))
+    if error is not None:
+        return error
 
     refresh_request = request_availability_refresh(
         movie,
@@ -3648,16 +3649,17 @@ def watched_list(request):
 def mark_movie_watched(request, tmdb_id: int):
     """POST /api/watched/<int:tmdb_id>/ — mark a movie as watched.
 
+    Use content_type=movie|series to identify the title when IDs collide.
+
     Request body (optional):
         watched_date (str, optional): ISO date string (e.g., "2024-01-15")
         rating (float, optional): rating 1-10
         review (str, optional): review text
         rewatch (bool, optional): whether this is a rewatch (default false)
     """
-    try:
-        movie = Movie.objects.visible().get(tmdb_id=tmdb_id)
-    except (Movie.DoesNotExist, Movie.MultipleObjectsReturned):
-        return Response({"error": "Movie not found"}, status=404)
+    movie, error = _resolve_movie_typed(tmdb_id, request.query_params.get("content_type"))
+    if error is not None:
+        return error
 
     data = request.data if isinstance(request.data, dict) else {}
     watched_date = data.get("watched_date")
@@ -3750,11 +3752,11 @@ def unmark_movie_watched(request, tmdb_id: int):
     """POST /api/unwatched/<int:tmdb_id>/ — unmark a movie as watched (remove from watched list).
 
     This removes the movie from the watched status but keeps it in watchlist.
+    Use content_type=movie|series to identify the title when IDs collide.
     """
-    try:
-        movie = Movie.objects.visible().get(tmdb_id=tmdb_id)
-    except (Movie.DoesNotExist, Movie.MultipleObjectsReturned):
-        return Response({"error": "Movie not found"}, status=404)
+    movie, error = _resolve_movie_typed(tmdb_id, request.query_params.get("content_type"))
+    if error is not None:
+        return error
 
     try:
         with transaction.atomic():

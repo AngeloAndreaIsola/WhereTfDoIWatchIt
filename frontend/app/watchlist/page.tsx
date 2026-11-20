@@ -128,7 +128,7 @@ export default function WatchlistPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [pendingWatched, setPendingWatched] = useState<number | null>(null);
+  const [pendingWatched, setPendingWatched] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
   const fetchGenerationRef = useRef(0);
@@ -324,13 +324,13 @@ export default function WatchlistPage() {
   // they are how an unwatched row used to survive an Unwatched filter.
   const revalidateWatchedMutation = () => setRefreshKey((key) => key + 1);
 
-  const handleMarkWatched = async (tmdbId: number) => {
+  const handleMarkWatched = async (tmdbId: number, contentType: "movie" | "series") => {
     setActionError(null);
-    setPendingWatched(tmdbId);
+    setPendingWatched(`${contentType}:${tmdbId}`);
     try {
       await markMovieWatched(tmdbId, {
         watched_date: new Date().toISOString().split("T")[0],
-      });
+      }, contentType);
       revalidateWatchedMutation();
     } catch (err) {
       // Preserve the previous rows; only report the failure.
@@ -342,11 +342,11 @@ export default function WatchlistPage() {
     }
   };
 
-  const handleUnmarkWatched = async (tmdbId: number) => {
+  const handleUnmarkWatched = async (tmdbId: number, contentType: "movie" | "series") => {
     setActionError(null);
-    setPendingWatched(tmdbId);
+    setPendingWatched(`${contentType}:${tmdbId}`);
     try {
-      await unmarkMovieWatched(tmdbId);
+      await unmarkMovieWatched(tmdbId, contentType);
       revalidateWatchedMutation();
     } catch (err) {
       setActionError(
@@ -456,6 +456,8 @@ export default function WatchlistPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
             {items.map((row, idx) => {
               const movie = row.movie || {};
+              const contentType = movie.content_type === "series" ? "series" : "movie";
+              const savingWatched = pendingWatched === `${contentType}:${movie.tmdb_id}`;
               const watchRes = row.watchability || {};
               const bestOffer = watchRes.best_offer;
               const status = watchRes.status || "unknown";
@@ -566,13 +568,13 @@ export default function WatchlistPage() {
                             <button
                               onClick={() => {
                                 if (movie.tmdb_id) {
-                                  handleUnmarkWatched(movie.tmdb_id);
+                                  handleUnmarkWatched(movie.tmdb_id, contentType);
                                 }
                               }}
-                              disabled={pendingWatched === movie.tmdb_id}
+                              disabled={savingWatched}
                               className="w-full py-2 text-xs font-medium rounded-lg border border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-800/30 transition-colors disabled:opacity-50"
                             >
-                              {pendingWatched === movie.tmdb_id
+                              {savingWatched
                                 ? "Saving…"
                                 : "✓ Watched — Click to Unmark"}
                             </button>
@@ -580,13 +582,13 @@ export default function WatchlistPage() {
                             <button
                               onClick={() => {
                                 if (movie.tmdb_id) {
-                                  handleMarkWatched(movie.tmdb_id);
+                                  handleMarkWatched(movie.tmdb_id, contentType);
                                 }
                               }}
-                              disabled={pendingWatched === movie.tmdb_id}
+                              disabled={savingWatched}
                               className="w-full py-2 text-xs font-medium rounded-lg border border-purple-300 dark:border-purple-700 text-purple-700 dark:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-800/30 transition-colors disabled:opacity-50"
                             >
-                              {pendingWatched === movie.tmdb_id
+                              {savingWatched
                                 ? "Saving…"
                                 : "✓ Mark as Watched"}
                             </button>
@@ -594,7 +596,7 @@ export default function WatchlistPage() {
                           <button
                             onClick={() => {
                               if (movie.tmdb_id) {
-                                removeWatchlistItem(movie.tmdb_id)
+                                removeWatchlistItem(movie.tmdb_id, contentType)
                                   .then(() => refreshWatchlistData())
                                   .catch(err => console.error('Failed to remove from watchlist:', err));
                               }
