@@ -511,7 +511,8 @@ def import_interests(
 
     Uses the same TMDb search + ambiguity logic as the Letterboxd importer.
     """
-    from tracker.models import Movie, RefreshPriority, WatchlistItem
+    from tracker.models import Movie, RefreshPriority
+    from tracker.services.membership import get_or_create_watchlist_membership
     from availability.freshness import source_configuration_snapshot
     from availability.sources import DEFAULT_SOURCE_SLUG
     from tracker.services.refresh_requests import request_import_refresh
@@ -611,10 +612,8 @@ def import_interests(
             local_movies_by_title_year[(movie.title.lower().strip(), movie.year)] = movie
 
         item_source = getattr(row, "source", None) or "google_interests"
-        watchlist_item, item_created = WatchlistItem.objects.get_or_create(
-            movie=movie,
-            source=item_source,
-            defaults={"user_id": user_id},
+        watchlist_item, item_created = get_or_create_watchlist_membership(
+            movie, user_id=user_id, source=item_source
         )
         result.resolved.append(watchlist_item)
         result.watchlist_count += 1
