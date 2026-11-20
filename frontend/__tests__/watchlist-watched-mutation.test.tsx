@@ -181,21 +181,25 @@ describe("Watchlist watched mutation consistency", () => {
     );
     expect(calls.length).toBeGreaterThan(1);
     expect(lastReportParams().get("watched")).toBe("unwatched");
+    expect(markMovieWatched).toHaveBeenCalledWith(1, expect.objectContaining({ watched_date: expect.any(String) }), "movie");
   });
 
   it("unmarking watched while filtering Watched removes the row", async () => {
     navigation.params = new URLSearchParams("watched=watched");
-    installServer([row(2, true, "Seen Film")]);
+    const series = row(2, true, "Seen Series");
+    series.movie.content_type = "series";
+    installServer([series]);
     render(<WatchlistPage />);
-    expect(await screen.findByText("Seen Film")).toBeInTheDocument();
+    expect(await screen.findByText("Seen Series")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: /Click to Unmark/ }));
 
     await waitFor(() =>
-      expect(screen.queryByText("Seen Film")).not.toBeInTheDocument()
+      expect(screen.queryByText("Seen Series")).not.toBeInTheDocument()
     );
     expect(screen.getByText(/Your wishlist is empty/)).toBeInTheDocument();
     expect(lastReportParams().get("watched")).toBe("watched");
+    expect(unmarkMovieWatched).toHaveBeenCalledWith(2, "series");
   });
 
   it("refreshes the label from the server when no watched filter is active", async () => {

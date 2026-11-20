@@ -128,7 +128,7 @@ export default function WatchedPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [pendingTmdbId, setPendingTmdbId] = useState<number | null>(null);
+  const [pendingTitle, setPendingTitle] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   // A filter is "active" whenever anything other than the default All type is set.
@@ -230,12 +230,14 @@ export default function WatchedPage() {
   const detailHref = (r: WatchedRow) =>
     r.movie.content_type === "series" ? `/tv/${r.movie.tmdb_id}` : `/movie/${r.movie.tmdb_id}`;
 
-  const handleUnwatch = async (tmdbId: number) => {
+  const handleUnwatch = async (tmdbId: number, contentType: "movie" | "series") => {
     setActionError(null);
-    setPendingTmdbId(tmdbId);
+    setPendingTitle(`${contentType}:${tmdbId}`);
     try {
-      await unmarkMovieWatched(tmdbId);
-      setItems((prev) => prev.filter((row) => row.movie?.tmdb_id !== tmdbId));
+      await unmarkMovieWatched(tmdbId, contentType);
+      setItems((prev) => prev.filter(({ movie }) =>
+        movie.tmdb_id !== tmdbId || movie.content_type !== contentType
+      ));
       setCount((prev) => Math.max(0, prev - 1));
     } catch (err) {
       // Keep the card visible: an action failure is not a load failure.
@@ -243,7 +245,7 @@ export default function WatchedPage() {
         err instanceof Error ? err.message : "Failed to remove from Watched"
       );
     } finally {
-      setPendingTmdbId(null);
+      setPendingTitle(null);
     }
   };
 
@@ -343,6 +345,8 @@ export default function WatchedPage() {
               const symbol = watchRes.status_symbol || "⚪";
               const label = watchRes.status_label || "Unknown";
               const isSeries = movie.content_type === "series";
+              const contentType = isSeries ? "series" : "movie";
+              const removing = pendingTitle === `${contentType}:${movie.tmdb_id}`;
               const isWatched = !!(
                 row.user_data?.is_watched ?? row.is_watched ?? true
               );
@@ -405,11 +409,11 @@ export default function WatchedPage() {
 
                     <button
                       type="button"
-                      onClick={() => handleUnwatch(movie.tmdb_id as number)}
-                      disabled={pendingTmdbId === movie.tmdb_id}
+                      onClick={() => handleUnwatch(movie.tmdb_id as number, contentType)}
+                      disabled={removing}
                       className="w-full py-2 text-xs font-medium rounded-lg border border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-800/30 transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
                     >
-                      {pendingTmdbId === movie.tmdb_id
+                      {removing
                         ? "Removing…"
                         : "✓ Remove from Watched"}
                     </button>

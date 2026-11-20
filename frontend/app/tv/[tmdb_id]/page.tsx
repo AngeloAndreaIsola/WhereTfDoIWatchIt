@@ -315,7 +315,7 @@ export default function SeriesDetailPage({ params }: SeriesDetailPageProps) {
     try {
       const result = await markMovieWatched(tmdbId, {
         watched_date: new Date().toISOString().split('T')[0],
-      });
+      }, "series");
       setData((prev) => prev ? { ...prev, user_data: result.user_data ?? { is_watched: true } } : prev);
       reloadSeries();
     } catch (err) {
@@ -325,7 +325,7 @@ export default function SeriesDetailPage({ params }: SeriesDetailPageProps) {
 
   const handleUnmarkWatched = async () => {
     try {
-      const result = await unmarkMovieWatched(tmdbId);
+      const result = await unmarkMovieWatched(tmdbId, "series");
       setData((prev) => prev ? { ...prev, user_data: result.user_data ?? { ...(prev.user_data ?? {}), is_watched: false } } : prev);
       reloadSeries();
     } catch (err) {
@@ -335,7 +335,7 @@ export default function SeriesDetailPage({ params }: SeriesDetailPageProps) {
 
   const handleRemoveFromWatchlist = async () => {
     try {
-      await removeWatchlistItem(tmdbId);
+      await removeWatchlistItem(tmdbId, "series");
       setData((prev) => prev ? { ...prev, is_in_watchlist: false } : prev);
       reloadSeries();
     } catch (err) {

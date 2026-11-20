@@ -1,4 +1,4 @@
-"""Idempotent one-shot re-seed of all providers.
+"""Restore missing official provider metadata without changing existing rows.
 
 Replays the canonical provider inserts from migrations/commands:
 - migration 0007 (MAJOR_PROVIDERS + initial SCRAPER_PROVIDERS)
@@ -7,15 +7,18 @@ Replays the canonical provider inserts from migrations/commands:
 - migration 0018 (NHK -> free)
 - migration 0032 (youtube -> free)
 - migration 0040 (rakuten_tv -> avod, JustWatch ``wuaki``)
-- seed_unofficial_providers command (kisskh, hydrahd, animeworld)
 
 The alias providers from migration 0012 (rai-play, bbc, nhk) are deliberately
 NOT replayed: they were duplicates of raiplay / bbc_iplayer / nhk_world and
 were merged away by migration 0033, which also makes sharing a domain root
 between two provider rows impossible.
 
-Safe to run multiple times — uses get_or_create and preserves existing rows.
+The separate seed_unofficial_providers command owns unofficial metadata.
+Provider writes run only on explicit command invocation.
 """
+from django.core.management.base import BaseCommand
+from django.db import transaction
+
 from tracker.models import Provider, ProviderCategory, ExternalProviderMapping
 
 MAJOR_PROVIDERS = [
@@ -67,15 +70,6 @@ FREE_PROVIDERS = [
     {"slug": "youtube", "name": "YouTube", "icon": "youtube", "domain": "youtube.com", "country": ""},
 ]
 
-UNOFFICIAL_PROVIDERS = [
-    {"slug": "kisskh", "name": "KissKH", "domain": "kisskh.co"},
-    {"slug": "hydrahd", "name": "HydraHD", "domain": "hydrahd.gd"},
-    {"slug": "animeworld", "name": "AnimeWorld", "domain": "www.animeworld.ac"},
-    {"slug": "streamingcommunity", "name": "StreamingCommunity", "domain": "streaming-community.army"},
-    {"slug": "cineblog01", "name": "CineBlog01", "domain": "cineblog001.run"},
-    {"slug": "altadefinizione", "name": "AltaDefinizione", "domain": "altadefinizionex.ink"},
-]
-
 AVOD_PROVIDERS = [
     {"slug": "rakuten_tv", "name": "Rakuten TV", "icon": "rakuten_tv", "domain": "rakuten.tv", "country": ""},
 ]
@@ -86,49 +80,44 @@ def upsert(slug, defaults):
     return obj
 
 
-created = updated = 0
-for m in MAJOR_PROVIDERS:
-    p = upsert(m["slug"], {
-        "name": m["name"],
-        "category": ProviderCategory.OFFICIAL,
-        "is_major": True,
-        "is_enabled": True,
-        "icon_name": m["icon"],
-    })
-    ExternalProviderMapping.objects.get_or_create(
-        provider=p,
-        integration_name="streaming_availability",
-        defaults={"external_id": m["sa_id"]},
-    )
+class Command(BaseCommand):
+    help = "Restore missing official provider metadata and Streaming Availability mappings."
 
-for f in FREE_PROVIDERS:
-    upsert(f["slug"], {
-        "name": f["name"],
-        "category": ProviderCategory.BVOD,
-        "domain": f["domain"],
-        "country_code": f["country"],
-    })
+    @transaction.atomic
+    def handle(self, *args, **options):
+        for m in MAJOR_PROVIDERS:
+            p = upsert(m["slug"], {
+                "name": m["name"],
+                "category": ProviderCategory.OFFICIAL,
+                "is_major": True,
+                "is_enabled": True,
+                "icon_name": m["icon"],
+            })
+            ExternalProviderMapping.objects.get_or_create(
+                provider=p,
+                integration_name="streaming_availability",
+                defaults={"external_id": m["sa_id"]},
+            )
 
-for s in UNOFFICIAL_PROVIDERS:
-    upsert(s["slug"], {
-        "name": s["name"],
-        "category": ProviderCategory.SCRAPER,
-        "is_major": False,
-        "is_enabled": True,
-        "domain": s["domain"],
-    })
+        for f in FREE_PROVIDERS:
+            upsert(f["slug"], {
+                "name": f["name"],
+                "category": ProviderCategory.BVOD,
+                "domain": f["domain"],
+                "country_code": f["country"],
+            })
 
-for a in AVOD_PROVIDERS:
-    upsert(a["slug"], {
-        "name": a["name"],
-        "category": ProviderCategory.AVOD,
-        "is_major": False,
-        "is_enabled": True,
-        "icon_name": a["icon"],
-        "domain": a["domain"],
-        "country_code": a["country"],
-    })
+        for a in AVOD_PROVIDERS:
+            upsert(a["slug"], {
+                "name": a["name"],
+                "category": ProviderCategory.AVOD,
+                "is_major": False,
+                "is_enabled": True,
+                "icon_name": a["icon"],
+                "domain": a["domain"],
+                "country_code": a["country"],
+            })
 
-print("total_providers", Provider.objects.count())
-for p in Provider.objects.order_by("category", "id"):
-    print(f"{p.id:3d} {p.category:10s} major={int(p.is_major)} enabled={int(p.is_enabled)} {p.slug:14s} {p.name}")
+        self.stdout.write(f"total_providers {Provider.objects.count()}")
+        for p in Provider.objects.order_by("category", "id"):
+            self.stdout.write(f"{p.id:3d} {p.category:10s} major={int(p.is_major)} enabled={int(p.is_enabled)} {p.slug:14s} {p.name}")

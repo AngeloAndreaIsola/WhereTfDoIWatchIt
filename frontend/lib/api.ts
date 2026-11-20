@@ -1535,9 +1535,11 @@ export async function addToWatchlist(
 
 export async function markMovieWatched(
   tmdbId: number,
-  data: MarkWatchedRequest = {}
+  data: MarkWatchedRequest = {},
+  contentType?: "movie" | "series"
 ): Promise<MarkWatchedResponse> {
-  const res = await fetch(`/api/watched/${tmdbId}/`, {
+  const query = contentType ? `?content_type=${contentType}` : "";
+  const res = await fetch(`/api/watched/${tmdbId}/${query}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
@@ -1550,9 +1552,11 @@ export async function markMovieWatched(
 }
 
 export async function unmarkMovieWatched(
-  tmdbId: number
+  tmdbId: number,
+  contentType?: "movie" | "series"
 ): Promise<MarkWatchedResponse> {
-  const res = await fetch(`/api/unwatched/${tmdbId}/`, {
+  const query = contentType ? `?content_type=${contentType}` : "";
+  const res = await fetch(`/api/unwatched/${tmdbId}/${query}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
   });
@@ -1564,9 +1568,11 @@ export async function unmarkMovieWatched(
 }
 
 export async function removeWatchlistItem(
-  tmdbId: number
+  tmdbId: number,
+  contentType?: "movie" | "series"
 ): Promise<{ message: string }> {
-  const res = await fetch(`/api/watchlist/remove/${tmdbId}/`, {
+  const query = contentType ? `?content_type=${contentType}` : "";
+  const res = await fetch(`/api/watchlist/remove/${tmdbId}/${query}`, {
     method: "DELETE",
     headers: { "Content-Type": "application/json" },
   });
