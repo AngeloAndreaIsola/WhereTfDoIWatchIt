@@ -240,7 +240,7 @@ def homepage_feed(request):
     curr_country = _active_country(request)
     pref = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
 
-    movies = Movie.objects.all().order_by("-id")
+    movies = Movie.objects.visible().order_by("-id")
     # The resolver builds the access map from ``Subscription`` rows, exactly as
     # the detail page does. Passing the legacy flat slug set here would route
     # list surfaces through ``build_explicit_access``, which ignores
@@ -303,7 +303,7 @@ def unified_catalog(request):
 
     # 1. Fetch Official Catalog Items
     if include_official:
-        movies = Movie.objects.all().order_by("-id")
+        movies = Movie.objects.visible().order_by("-id")
         evaluated, _ = apply_composable_filters(
             movies,
             request.GET,
@@ -607,7 +607,7 @@ def search(request):
 def movie_availability(request, tmdb_id: int):
     """Return ranked, cached availability for a movie."""
     try:
-        movie = Movie.objects.get(tmdb_id=tmdb_id)
+        movie = Movie.objects.visible().get(tmdb_id=tmdb_id)
     except (Movie.DoesNotExist, Movie.MultipleObjectsReturned):
         return Response({"error": "movie not tracked yet"}, status=404)
 
@@ -1258,7 +1258,7 @@ def catalog_list(request):
     curr_country = _active_country(request)
     pref = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
 
-    movies = Movie.objects.all().order_by("-id")
+    movies = Movie.objects.visible().order_by("-id")
     evaluated, _ = apply_composable_filters(
         movies,
         request.GET,
@@ -1400,7 +1400,7 @@ def watchlist(request):
         try:
             items = (
                 WatchlistItem.objects.select_related("movie")
-                .filter(user_id=1)
+                .filter(user_id=1, movie__is_quarantined=False)
                 .order_by("-added_at")
             )
             return Response(WatchlistItemSerializer(items, many=True).data)
@@ -1504,6 +1504,8 @@ def watchlist_resolve(request):
                 "poster_path": sel.get("poster_path") or "",
             },
         )
+        if movie.is_quarantined:
+            continue
         if not created and sel.get("poster_path") and not movie.poster_path:
             movie.poster_path = sel.get("poster_path")
             movie.save()
@@ -1542,7 +1544,7 @@ def watchlist_report(request):
 
     items = (
         WatchlistItem.objects.select_related("movie")
-        .filter(user_id=1)
+        .filter(user_id=1, movie__is_quarantined=False)
         .order_by("-added_at")
     )
     watchlist_movies = [item.movie for item in items]
@@ -1948,7 +1950,7 @@ def _canonical_provider(provider: str) -> str:
 def movie_language_info(request, tmdb_id: int):
     """Read or update LanguageInfo for a movie/region pair (show-level)."""
     try:
-        movie = Movie.objects.get(tmdb_id=tmdb_id)
+        movie = Movie.objects.visible().get(tmdb_id=tmdb_id)
     except (Movie.DoesNotExist, Movie.MultipleObjectsReturned):
         return Response({"error": "movie not tracked yet"}, status=404)
 
@@ -2714,7 +2716,7 @@ def prime_popular_series(request):
         data = cached
     else:
         # Fetch series in DB across active providers
-        db_series_qs = Movie.objects.filter(content_type="series").order_by("-id")[:limit_int]
+        db_series_qs = Movie.objects.visible().filter(content_type="series").order_by("-id")[:limit_int]
         results = [
             _popular_movie_dict(
                 TMDbItem(
@@ -2812,7 +2814,7 @@ def _load_content_item(tmdb_id: int, content_type: str) -> Movie | None:
     are resolved through the matching TMDb endpoint.
     """
     try:
-        item = Movie.objects.get(tmdb_id=tmdb_id, content_type=content_type)
+        item = Movie.objects.visible().get(tmdb_id=tmdb_id, content_type=content_type)
     except (Movie.DoesNotExist, Movie.MultipleObjectsReturned):
         item = None
 
@@ -3095,11 +3097,14 @@ def _resolve_watch_item(tmdb_id: int) -> Movie | None:
     None when nothing could be resolved (each failure is logged).
     """
     try:
-        return Movie.objects.get(tmdb_id=tmdb_id)
+        return Movie.objects.visible().get(tmdb_id=tmdb_id)
     except Movie.MultipleObjectsReturned:
         return None
     except Movie.DoesNotExist:
         pass
+
+    if Movie.objects.filter(tmdb_id=tmdb_id, is_quarantined=True).exists():
+        return None
 
     try:
         return resolve_or_create_movie(tmdb_id)
@@ -3203,7 +3208,7 @@ def movie_detail(request, pk: int):
     if request.method == "PATCH":
         return _update_movie_impl(request, tmdb_id=pk)
     try:
-        movie = Movie.objects.get(pk=pk)
+        movie = Movie.objects.visible().get(pk=pk)
     except Movie.DoesNotExist:
         return Response({"error": "movie not found"}, status=404)
 
@@ -3246,7 +3251,7 @@ def _resolve_movie_typed(tmdb_id: int, content_type):
     for one numeric ID the caller must disambiguate; guessing is forbidden.
     Returns (movie, error_response).
     """
-    qs = Movie.objects.filter(tmdb_id=tmdb_id)
+    qs = Movie.objects.visible().filter(tmdb_id=tmdb_id)
     if content_type in ("movie", "series"):
         qs = qs.filter(content_type=content_type)
     elif content_type not in (None, ""):
@@ -3274,7 +3279,7 @@ def link_tmdb(request, pk: int):
         title (str, optional): override title (if omitted, uses TMDb title)
     """
     try:
-        movie = Movie.objects.get(pk=pk)
+        movie = Movie.objects.visible().get(pk=pk)
     except Movie.DoesNotExist:
         return Response({"error": "movie not found"}, status=404)
 
@@ -3476,6 +3481,8 @@ def add_to_watchlist(request):
 
     try:
         movie = resolve_or_create_movie(tmdb_id, content_type=content_type)
+    except Movie.DoesNotExist:
+        return Response({"error": "Movie not found"}, status=404)
     except Exception as exc:
         logger.exception("Failed to resolve/create movie for tmdb_id=%s", tmdb_id)
         return Response({"error": f"Movie lookup failed: {exc}"}, status=502)
@@ -3627,7 +3634,7 @@ def mark_movie_watched(request, tmdb_id: int):
         rewatch (bool, optional): whether this is a rewatch (default false)
     """
     try:
-        movie = Movie.objects.get(tmdb_id=tmdb_id)
+        movie = Movie.objects.visible().get(tmdb_id=tmdb_id)
     except (Movie.DoesNotExist, Movie.MultipleObjectsReturned):
         return Response({"error": "Movie not found"}, status=404)
 
@@ -3724,7 +3731,7 @@ def unmark_movie_watched(request, tmdb_id: int):
     This removes the movie from the watched status but keeps it in watchlist.
     """
     try:
-        movie = Movie.objects.get(tmdb_id=tmdb_id)
+        movie = Movie.objects.visible().get(tmdb_id=tmdb_id)
     except (Movie.DoesNotExist, Movie.MultipleObjectsReturned):
         return Response({"error": "Movie not found"}, status=404)
 
@@ -3983,5 +3990,5 @@ def letterboxd_url_import(request):
 
 def _unique_movie_for_tmdb(tmdb_id):
     """Numeric-only legacy reads fail closed when media namespaces overlap."""
-    candidates = list(Movie.objects.filter(tmdb_id=tmdb_id)[:2])
+    candidates = list(Movie.objects.visible().filter(tmdb_id=tmdb_id)[:2])
     return candidates[0] if len(candidates) == 1 else None

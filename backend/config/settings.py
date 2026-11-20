@@ -115,6 +115,8 @@ else:
         }
     }
 
+TEST_RUNNER = "config.test_database.DisposableDatabaseRunner"
+
 AUTH_PASSWORD_VALIDATORS = [
     {
         "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",

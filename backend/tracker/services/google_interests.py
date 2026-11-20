@@ -525,7 +525,7 @@ def import_interests(
 
     # Fast in-memory cache of local movies to prevent repeated TMDb calls.
     local_movies_by_title_year: dict[tuple[str, Optional[int]], Movie] = {}
-    for m in Movie.objects.all():
+    for m in Movie.objects.visible():
         if m.title:
             key = (m.title.lower().strip(), m.year)
             local_movies_by_title_year[key] = m
@@ -597,6 +597,12 @@ def import_interests(
                     "poster_path": pick.poster_path or "",
                 },
             )
+            if movie.is_quarantined:
+                result.skipped.append({
+                    "title": row.title, "year": row.year, "source_url": row.source_url,
+                    "reason": "quarantined_identity",
+                })
+                continue
             movie_created = created
             if not created and pick.poster_path and not movie.poster_path:
                 movie.poster_path = pick.poster_path

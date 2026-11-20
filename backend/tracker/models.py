@@ -19,6 +19,11 @@ else:
     from django.contrib.postgres.fields import ArrayField
 
 
+class MovieQuerySet(models.QuerySet):
+    def visible(self):
+        return self.filter(is_quarantined=False)
+
+
 class Movie(models.Model):
     CONTENT_TYPES = [
         ("movie", "Movie"),
@@ -51,6 +56,9 @@ class Movie(models.Model):
     # See docs/IDENTITY_SEMANTICS.md.
     canonical_title = models.CharField(max_length=255, blank=True, default="")
     title_is_override = models.BooleanField(default=False)
+    is_quarantined = models.BooleanField(default=False)
+
+    objects = MovieQuerySet.as_manager()
 
     class Meta:
         constraints = [
@@ -75,7 +83,7 @@ class MovieIdentityAudit(models.Model):
         Movie, on_delete=models.SET_NULL, null=True, related_name="identity_audits"
     )
     movie_pk = models.BigIntegerField(db_index=True)
-    operation = models.CharField(max_length=32)  # update | link | repair
+    operation = models.CharField(max_length=32)  # update | link | repair | quarantine | restore
     changes = models.JSONField(default=dict)  # {field: {"old": ..., "new": ...}}
     provenance = models.CharField(max_length=64, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)

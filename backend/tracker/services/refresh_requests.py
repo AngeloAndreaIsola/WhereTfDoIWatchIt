@@ -195,6 +195,9 @@ def request_availability_refresh(
     Never raises: an enqueue failure is logged and swallowed so it cannot
     break the user action that triggered it.
     """
+    if movie.is_quarantined:
+        return None
+
     # A missing request-specific country inherits the selected user market;
     # an explicit empty value remains unknown evidence rather than guessing.
     country = (
@@ -1185,7 +1188,9 @@ def _candidate_batch(
     if default_source in blocked_slugs:
         blocked_slugs.add("")  # legacy spelling of the same scope
 
-    queryset = RefreshRequest.objects.filter(status=RefreshRequestStatus.PENDING)
+    queryset = RefreshRequest.objects.filter(
+        status=RefreshRequestStatus.PENDING, movie__is_quarantined=False,
+    )
     if blocked_slugs:
         queryset = queryset.exclude(source__in=blocked_slugs)
     if cursor is not None:
@@ -1499,7 +1504,7 @@ def process_refresh_queue(
 ) -> dict | None:
     """Run one queue-only worker tick under the shared drain lock."""
     if not RefreshRequest.objects.filter(
-        status=RefreshRequestStatus.PENDING
+        status=RefreshRequestStatus.PENDING, movie__is_quarantined=False,
     ).exists():
         return None
 
@@ -1509,7 +1514,7 @@ def process_refresh_queue(
         # Recheck under the lock: the previous owner may have settled the
         # queue between the initial fast-path read and lock acquisition.
         if not RefreshRequest.objects.filter(
-            status=RefreshRequestStatus.PENDING
+            status=RefreshRequestStatus.PENDING, movie__is_quarantined=False,
         ).exists():
             return None
         return _process_refresh_queue_locked(
@@ -1541,7 +1546,9 @@ def _process_refresh_queue_locked(
     blocked sources are reported. Requests belonging to other sources are
     still executable, so they are drained as usual.
     """
-    pending = RefreshRequest.objects.filter(status=RefreshRequestStatus.PENDING)
+    pending = RefreshRequest.objects.filter(
+        status=RefreshRequestStatus.PENDING, movie__is_quarantined=False,
+    )
     if not pending.exists():
         return None
 
