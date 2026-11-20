@@ -22,19 +22,23 @@ availability 0016, backend healthy, 828 movies, identity digest
   - `tracker_refreshrequest`: 14 rows (historical; some predate the provider
     observations and carry the wrong title in request-keyed evidence — they
     are **not** independent identity proof; preserve untouched).
+  - `availability_providercontent`: 24701 and 24702, created after refresh
+    history already carried the incorrect title. Preserve both observations.
   - `availability_contentmapping`: 4602 (provider 7), 4603 (provider 5),
     both `native=164`, `match_method=external_id`, confidence 0.95 —
     request-keyed Streaming Availability mappings; per Stage 2Q policy these
     are not independent provider confirmation. **Preserve; do not re-key.**
-  - `availability_offer`: 7 rows keyed `tmdb_id=164` (provider 7). These
-    belong to the canonical TMDb-164 identity, not to the local title;
-    **preserve untouched**.
+  - `availability_offer`: 7 rows keyed `tmdb_id=164` (provider 7).
+    Preserve the evidence and existing keys. Offer entitlement still
+    requires an independent provenance review.
   - watchlist / user_data / watch_events / legacy availability: **0 rows**.
 - **Required update:** `title` → verified TMDb title; `canonical_title` →
   same; audit row `operation="repair"`, `provenance="guarded_repair"`.
 - **Tool:** `python manage.py repair_canonical_title --movie-id 830`
   (dry-run by default; `--apply --confirm-target tracker@db` performs the
-  live TMDb check + guarded write; refuses override-flagged rows; idempotent).
+  live TMDb check + guarded write on the confirmed database alias; refuses
+  override-flagged rows and changes to the reviewed row during verification;
+  idempotent).
 - **Rollback:** the audit row records old/new; reverse with a reviewed
   restore of the pre-repair backup, or a guarded inverse edit (also audited).
 - **Preserved separate record:** pk 187 (`tmdb_id=241`, genuine Natural Born
@@ -58,7 +62,10 @@ No cross-type duplicate `(tmdb_id, content_type)` identities exist (verified).
 ## Execution gate (per record)
 
 1. Fresh `pg_dump -Fc` + SHA-256; restore rehearsal into a disposable clone.
-2. Dry-run output reviewed (row-level before evidence + reference counts).
+2. Review dry-run output (row-level before evidence + reference counts) and
+   capture exact refresh request and offer PKs for comparison after repair.
+   Review offer and mapping provenance independently of the copied request
+   title and request-keyed TMDb ID.
 3. Independent TMDb identity check (performed by the command at apply time).
 4. Explicit per-record operator authorization.
 5. Apply via the guarded command; verify after-evidence + audit row.
