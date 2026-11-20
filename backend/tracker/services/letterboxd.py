@@ -41,6 +41,7 @@ from django.conf import settings
 from availability.freshness import source_configuration_snapshot
 from availability.sources import DEFAULT_SOURCE_SLUG
 from ..models import Movie, MovieWatchEvent, RefreshPriority, UserMovieData, WatchlistItem
+from .membership import get_or_create_watchlist_membership
 from .refresh_requests import request_import_refresh
 from .tmdb import TMDbClient, TMDbMovie
 
@@ -822,15 +823,10 @@ def import_rows(
                 local_movies_by_uri[row.uri] = movie
 
         if row.file_type == "watchlist":
-            # Reuse an existing item for this movie regardless of its original
-            # source so re-importing an exported backup (whatever source the
-            # item was first created with) never duplicates the movie.
-            item = WatchlistItem.objects.filter(user_id=user_id, movie=movie).first()
-            if item is None:
-                item_source = getattr(row, "source", None) or source
-                item, item_created = WatchlistItem.objects.get_or_create(
-                    movie=movie, source=item_source, defaults={"user_id": user_id}
-                )
+            item_source = getattr(row, "source", None) or source
+            item, item_created = get_or_create_watchlist_membership(
+                movie, user_id=user_id, source=item_source
+            )
             result.resolved.append(item)
 
         # Update UserMovieData

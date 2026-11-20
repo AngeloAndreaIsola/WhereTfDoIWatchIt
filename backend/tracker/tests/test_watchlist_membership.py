@@ -6,13 +6,18 @@ and concurrent inserts on real PostgreSQL (TransactionTestCase).
 """
 
 import threading
+from concurrent.futures import ThreadPoolExecutor
+from queue import Queue
+from time import monotonic, sleep
 from unittest.mock import MagicMock, patch
 
-from django.db import connections
-from django.test import TestCase, TransactionTestCase
+from django.contrib.auth import get_user_model
+from django.db import connection, connections, transaction
+from django.test import TestCase, TransactionTestCase, override_settings
 from rest_framework.test import APIClient
 
-from tracker.models import Movie, WatchlistItem
+from tracker.models import Movie, UserMovieData, WatchlistItem
+from tracker.services.google_interests import GoogleInterestRow, import_interests
 from tracker.services.letterboxd import LetterboxdRow, import_rows
 from tracker.services.membership import get_or_create_watchlist_membership
 from tracker.services.tmdb import TMDbItem
@@ -41,6 +46,19 @@ class MembershipServiceTests(TestCase):
             self.assertEqual(item.pk, original.pk)
             self.assertEqual(item.source, "letterboxd")
         self.assertEqual(WatchlistItem.objects.count(), 1)
+
+    def test_existing_duplicate_rows_and_watched_state_are_preserved(self):
+        movie = Movie.objects.create(tmdb_id=680, title="Pulp Fiction", year=1994)
+        first = WatchlistItem.objects.create(movie=movie, source="letterboxd")
+        duplicate = WatchlistItem.objects.create(movie=movie, source="manual")
+        watched = UserMovieData.objects.create(movie=movie, is_watched=True, rating=4)
+        result = import_rows([LetterboxdRow(movie.title, movie.year)], client=MagicMock())
+
+        self.assertEqual([item.pk for item in result.resolved], [first.pk])
+        self.assertCountEqual(WatchlistItem.objects.values_list("pk", flat=True), [first.pk, duplicate.pk])
+        watched.refresh_from_db()
+        self.assertTrue(watched.is_watched)
+        self.assertEqual(watched.rating, 4)
 
     def test_movie_and_series_with_same_tmdb_id_are_distinct_memberships(self):
         movie = Movie.objects.create(tmdb_id=100, title="Same ID Movie", content_type="movie")
@@ -152,6 +170,26 @@ class AddResolveIdempotencyTests(TestCase):
         self.assertEqual(len(resp.json()), 2)
 
 
+@override_settings(STORAGES={
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+})
+class WatchlistMembershipAdminTests(TestCase):
+    def test_admin_add_refuses_duplicate_and_keeps_initial_provenance(self):
+        self.client.force_login(get_user_model().objects.create_superuser(
+            username="watchlist-admin", password="temporary-test-password",
+        ))
+        movie = Movie.objects.create(tmdb_id=680, title="Pulp Fiction")
+        original = WatchlistItem.objects.create(movie=movie, source="manual")
+        response = self.client.post("/admin/tracker/watchlistitem/add/", {
+            "user_id": 1, "movie": movie.pk, "source": "letterboxd",
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "This user already has this title on their watchlist.")
+        self.assertEqual(WatchlistItem.objects.get().pk, original.pk)
+        self.assertEqual(WatchlistItem.objects.get().source, "manual")
+
+
 class ConcurrentMembershipTests(TransactionTestCase):
     """Real-commit concurrency on disposable PostgreSQL (no SQLite shim)."""
 
@@ -185,6 +223,57 @@ class ConcurrentMembershipTests(TransactionTestCase):
         self.assertEqual(WatchlistItem.objects.count(), 1)
         self.assertEqual(len({pk for pk, _ in results}), 1)
         self.assertEqual(sum(1 for _, created in results if created), 1)
+
+    def test_importers_wait_for_overlapping_manual_add(self):
+        importers = (
+            (import_rows, LetterboxdRow, "letterboxd"),
+            (import_rows, LetterboxdRow, "myanimelist"),
+            (import_interests, GoogleInterestRow, "google_interests"),
+        )
+        for offset, (importer, row_type, source) in enumerate(importers, 1):
+            with self.subTest(source=source):
+                movie = Movie.objects.create(
+                    tmdb_id=680 + offset, title=source, year=2020,
+                    content_type="series" if source == "myanimelist" else "movie",
+                )
+                backend_pids = Queue()
+
+                def worker():
+                    try:
+                        with connection.cursor() as cursor:
+                            cursor.execute("SELECT pg_backend_pid()")
+                            backend_pids.put(cursor.fetchone()[0])
+                        return importer(
+                            [row_type(movie.title, movie.year, source=source)], client=MagicMock(),
+                        )
+                    finally:
+                        connections.close_all()
+
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    with transaction.atomic():
+                        Movie.objects.select_for_update().get(pk=movie.pk)
+                        future = executor.submit(worker)
+                        importer_pid = backend_pids.get(timeout=10)
+                        with connection.cursor() as cursor:
+                            cursor.execute("SELECT pg_backend_pid()")
+                            manual_pid = cursor.fetchone()[0]
+                            deadline = monotonic() + 10
+                            while True:
+                                cursor.execute("SELECT pg_blocking_pids(%s)", [importer_pid])
+                                if manual_pid in cursor.fetchone()[0]:
+                                    break
+                                if future.done():
+                                    future.result()
+                                    self.fail("Importer completed while the manual transaction held the movie lock")
+                                if monotonic() >= deadline:
+                                    self.fail("Importer did not wait on the manual transaction")
+                                sleep(0.02)
+                        manual, created = get_or_create_watchlist_membership(movie, source="manual")
+                        self.assertTrue(created)
+                    result = future.result(timeout=10)
+
+                self.assertEqual([item.pk for item in result.resolved], [manual.pk])
+                self.assertEqual(WatchlistItem.objects.get(movie=movie).source, "manual")
 
     def test_concurrent_resolve_endpoint_creates_single_row(self):
         barrier = threading.Barrier(4)

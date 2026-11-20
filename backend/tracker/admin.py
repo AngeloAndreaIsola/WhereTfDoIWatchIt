@@ -5,6 +5,7 @@ from django.urls import path
 from django.utils.html import format_html
 from django.shortcuts import render
 
+from .services.membership import locked_watchlist_memberships
 from .models import (
     ApiCallCounter,
     CanonicalBootstrapEvidence,
@@ -179,8 +180,27 @@ class PreferenceAdmin(admin.ModelAdmin):
         return field
 
 
+class WatchlistMembershipForm(forms.ModelForm):
+    def clean(self):
+        data = super().clean()
+        movie = data.get("movie")
+        user_id = data.get("user_id")
+        if movie is None or user_id is None:
+            return data
+        if (movie.pk, user_id) == (self.instance.movie_id, self.instance.user_id):
+            return data
+
+        # Django wraps the admin POST, including form validation and save,
+        # in one transaction. Hold the same movie lock used by API writers.
+        memberships = locked_watchlist_memberships(movie, user_id=user_id)
+        if memberships.exclude(pk=self.instance.pk).exists():
+            raise forms.ValidationError("This user already has this title on their watchlist.")
+        return data
+
+
 @admin.register(WatchlistItem)
 class WatchlistItemAdmin(admin.ModelAdmin):
+    form = WatchlistMembershipForm
     list_display = ("movie", "source", "added_at")
     search_fields = ("movie__title",)
 
