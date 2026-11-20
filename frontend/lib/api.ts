@@ -1369,7 +1369,12 @@ export interface AmbiguousMatchItem {
   title: string;
   year: number | null;
   uri?: string | null;
-  candidates: Array<{ tmdb_id: number; title: string; year: number | null }>;
+  candidates: Array<{
+    tmdb_id: number;
+    content_type?: "movie" | "series";
+    title: string;
+    year: number | null;
+  }>;
   reason?: string;
 }
 

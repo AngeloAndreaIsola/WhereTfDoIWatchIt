@@ -4,6 +4,7 @@ import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import WatchlistPage from "@/app/watchlist/page";
 import WatchlistImportPage from "@/app/watchlist/import/page";
+import AmbiguousPage from "@/app/watchlist/ambiguous/page";
 
 const routerPush = vi.fn();
 const routerReplace = vi.fn();
@@ -417,5 +418,36 @@ describe("watchlist import IA refactor", () => {
       await user.click(reviewLink);
       expect(routerPush).toHaveBeenCalledWith("/watchlist/ambiguous");
     });
+  });
+});
+
+describe("typed import review", () => {
+  it("submits the selected series when a movie shares its TMDb ID", async () => {
+    searchParamsString = new URLSearchParams({
+      items: JSON.stringify([{
+        title: "Same Name",
+        year: 2020,
+        candidates: [
+          { tmdb_id: 108, title: "Same Name", year: 2020, content_type: "movie" },
+          { tmdb_id: 108, title: "Same Name", year: 2020, content_type: "series" },
+        ],
+      }]),
+    }).toString();
+    const fetchMock = mockRoutes([["/api/watchlist/resolve/", { body: { resolved_count: 1 } }]]);
+    const user = userEvent.setup();
+
+    render(<AmbiguousPage />);
+    await user.click(screen.getByRole("radio", { name: /TV series/ }));
+    expect(screen.getByRole("radio", { name: /Movie/ })).not.toBeChecked();
+    await user.click(screen.getByRole("button", { name: "Confirm & Save Selections" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/watchlist/resolve/",
+      expect.objectContaining({
+        body: JSON.stringify({
+          selections: [{ original_title: "Same Name", year: 2020, tmdb_id: 108, content_type: "series" }],
+        }),
+      }),
+    ));
   });
 });

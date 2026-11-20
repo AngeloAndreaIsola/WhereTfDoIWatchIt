@@ -132,7 +132,7 @@ class ImportTests(TestCase):
 
     def test_missing_year_with_identical_titles_is_ambiguous(self):
         # #108: genuinely identical titles without a distinguishing year stay
-        # reviewable; the ambiguity structure is unchanged.
+        # reviewable; the candidate carries its media type.
         client = self._mock_client({
             "Avatar": [
                 TMDbMovie(tmdb_id=19995, title="Avatar", year=2009),
@@ -153,6 +153,7 @@ class ImportTests(TestCase):
             amb["candidates"][0],
             {
                 "tmdb_id": 19995,
+                "content_type": "movie",
                 "title": "Avatar",
                 "year": 2009,
                 "overview": None,
@@ -207,6 +208,7 @@ class ImportTests(TestCase):
             [
                 {
                     "tmdb_id": 1,
+                    "content_type": "movie",
                     "title": "Thing One",
                     "year": 1999,
                     "overview": None,
@@ -214,6 +216,7 @@ class ImportTests(TestCase):
                 },
                 {
                     "tmdb_id": 2,
+                    "content_type": "movie",
                     "title": "Thing Two",
                     "year": 1999,
                     "overview": None,
@@ -405,7 +408,7 @@ class MyAnimeListImportTests(TestCase):
     def test_import_rows_preserves_myanimelist_source(self):
         client = MagicMock()
         client.search.return_value = [
-            TMDbMovie(tmdb_id=123, title="3-gatsu no Lion", year=2016)
+            TMDbMovie(tmdb_id=123, title="3-gatsu no Lion", year=2016, content_type="series")
         ]
         rows = [
             LetterboxdRow(

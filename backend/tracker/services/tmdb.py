@@ -34,6 +34,7 @@ class TMDbItem:
     director: list[str] | None = None  # [{'id': 1234, 'name': 'Denis Villeneuve'}] or creators for series
     seasons_data: list[dict] | None = None # [{'season_number': 1, 'episode_count': 10, 'name': 'Season 1'}]
     rating: float | None = None  # TMDb vote_average
+    original_title: str = ""
 
     def __post_init__(self):
         if self.genre_ids is None:
@@ -248,7 +249,8 @@ class TMDbClient:
 
     @staticmethod
     def _parse_search_result(raw: dict, content_type: str = "movie") -> TMDbItem:
-        title = raw.get("title") or raw.get("name") or raw.get("original_title") or raw.get("original_name") or ""
+        original_title = raw.get("original_title") or raw.get("original_name") or ""
+        title = raw.get("title") or raw.get("name") or original_title
         release_date = raw.get("release_date") or raw.get("first_air_date")
         return TMDbItem(
             tmdb_id=raw["id"],
@@ -258,6 +260,7 @@ class TMDbClient:
             overview=raw.get("overview"),
             poster_path=raw.get("poster_path"),
             genre_ids=raw.get("genre_ids") or [],
+            original_title=original_title,
         )
 
     @staticmethod
