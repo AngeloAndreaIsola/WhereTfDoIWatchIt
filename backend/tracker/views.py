@@ -3446,6 +3446,23 @@ def _update_movie_impl(request, tmdb_id: int):
     })
 
 
+@api_view(["POST"])
+def movie_poster(request, tmdb_id: int):
+    """Hydrate a title card using typed poster metadata only."""
+    from tracker.services.posters import hydrate_poster
+
+    params = request.data
+    if not isinstance(params, dict):
+        return Response({"error": "Expected a JSON object"}, status=400)
+    kind = params.get("content_type")
+    observed = params.get("poster_path", "")
+    if kind not in ("movie", "series") or not isinstance(observed, str) or len(observed) > 500:
+        return Response({"error": "Invalid poster identity or path"}, status=400)
+    poster, status_code, retry_after = hydrate_poster(tmdb_id, kind, observed)
+    headers = {"Retry-After": str(retry_after)} if retry_after else {}
+    return Response({"poster_path": poster}, status=status_code, headers=headers)
+
+
 @api_view(["PATCH"])
 def update_movie(request, tmdb_id: int):
     """Direct PATCH route (also reachable via movie_detail's PATCH dispatch)."""

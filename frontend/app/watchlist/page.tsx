@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import TitlePoster from "@/components/TitlePoster";
 import { useSearchParams, useRouter } from "next/navigation";
 import { FilterBar, FilterState } from "@/components/FilterBar";
 import { useCurrentLocation } from "@/components/CurrentLocationProvider";
@@ -487,17 +488,12 @@ export default function WatchlistPage() {
                     }
                   >
                     <div className="aspect-[2/3] bg-gray-100 dark:bg-gray-800 relative">
-                      {movie.poster_path ? (
-                        <img
-                          src={`https://image.tmdb.org/t/p/w500${movie.poster_path}`}
-                          alt={movie.title || "Poster"}
-                          className="w-full h-full object-cover"
-                        />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center text-gray-400 text-xs">
-                          No Poster
-                        </div>
-                      )}
+                      <TitlePoster
+                        tmdbId={movie.tmdb_id}
+                        contentType={movie.content_type}
+                        posterPath={movie.poster_path}
+                        title={movie.title || "Poster"}
+                      />
                       <span className="absolute top-2 right-2 px-2 py-1 rounded-md text-xs font-bold bg-black/70 text-white backdrop-blur-sm">
                         {symbol} {label}
                       </span>

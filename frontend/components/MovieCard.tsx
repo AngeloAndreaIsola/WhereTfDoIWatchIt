@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import Image from "next/image";
+import TitlePoster from "@/components/TitlePoster";
 import LanguageBadge from "@/components/LanguageBadge";
 
 export interface MovieCardData {
@@ -27,12 +27,6 @@ interface MovieCardProps {
 }
 
 export default function MovieCard({ movie }: MovieCardProps) {
-  const posterUrl = movie.poster_path
-    ? (movie.poster_path.startsWith("http")
-        ? movie.poster_path
-        : `https://image.tmdb.org/t/p/w500${movie.poster_path}`)
-    : null;
-
   const prefAudioSet = new Set(
     (movie.preferred_audio || []).map((c) => c.toUpperCase())
   );
@@ -53,20 +47,13 @@ export default function MovieCard({ movie }: MovieCardProps) {
     >
       {/* Poster Image */}
       <div className="relative aspect-[2/3] w-full overflow-hidden bg-gray-200 dark:bg-gray-700">
-        {posterUrl ? (
-          <Image
-            src={posterUrl}
-            alt={movie.title}
-            fill
-            sizes="(max-width: 640px) 50vw, (max-width: 768px) 33vw, (max-width: 1024px) 25vw, 20vw"
-            className="object-cover transition-transform duration-300 group-hover:scale-105"
-          />
-        ) : (
-          <div className="flex h-full w-full flex-col items-center justify-center p-2 text-center text-xs text-gray-400 dark:text-gray-500">
-            <span className="mb-1 text-2xl">🎬</span>
-            <span>No Image</span>
-          </div>
-        )}
+        <TitlePoster
+          tmdbId={movie.tmdb_id}
+          contentType={movie.content_type || "movie"}
+          posterPath={movie.poster_path}
+          title={movie.title}
+          optimized
+        />
 
         {/* Top Badges Overlay */}
         <div className="absolute top-2 left-2 right-2 flex flex-wrap justify-between gap-1 pointer-events-none">
