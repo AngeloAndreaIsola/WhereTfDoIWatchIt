@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 from django.test import TestCase
 
-from tracker.models import Movie, WatchlistItem
+from tracker.models import Movie, UserMovieData, WatchlistItem
 from tracker.services.letterboxd import (
     LetterboxdRow,
     _exact_title_decision,
@@ -154,6 +154,51 @@ class ImportExactTitleTests(TestCase):
         self.assertEqual(result.resolved, [])
         self.assertEqual(result.ambiguous[0]["reason"], "multiple_matches")
         self.assertIn("decision", result.ambiguous[0])
+
+    def test_same_type_local_title_collision_is_reviewable(self):
+        Movie.objects.create(tmdb_id=1081, title="Amélie", year=2001)
+        Movie.objects.create(tmdb_id=1082, title="Amelie", year=2001)
+        Movie.objects.create(tmdb_id=1081, title="Amelie", year=2001, content_type="series")
+        client = _client([])
+
+        result = import_rows([LetterboxdRow("Amelie", 2001)], client=client)
+
+        self.assertEqual(result.resolved, [])
+        [review] = result.ambiguous
+        self.assertEqual(review["decision"], "multiple_local_exact_titles")
+        self.assertEqual(
+            [(candidate["tmdb_id"], candidate["content_type"]) for candidate in review["candidates"]],
+            [(1081, "movie"), (1082, "movie")],
+        )
+        self.assertFalse(WatchlistItem.objects.exists())
+        client.search.assert_not_called()
+
+    def test_local_year_disambiguates_and_missing_year_defers(self):
+        older = Movie.objects.create(tmdb_id=1081, title="Equal Title", year=2001)
+        Movie.objects.create(tmdb_id=1082, title="Equal Title", year=2020)
+        client = _client([])
+
+        result = import_rows(
+            [LetterboxdRow("Equal Title", None), LetterboxdRow("Equal Title", 2001)],
+            client=client,
+        )
+
+        self.assertEqual(result.ambiguous[0]["decision"], "multiple_local_exact_titles")
+        self.assertEqual([item.movie_id for item in result.resolved], [older.pk])
+        client.search.assert_not_called()
+
+    def test_existing_typed_uri_association_disambiguates_local_titles(self):
+        Movie.objects.create(tmdb_id=1081, title="Equal Title", year=2001)
+        preferred = Movie.objects.create(tmdb_id=1082, title="Equal Title", year=2001)
+        uri = "https://letterboxd.com/film/equal-title/"
+        UserMovieData.objects.create(movie=preferred, letterboxd_uri=uri)
+        client = _client([])
+
+        result = import_rows([LetterboxdRow("Equal Title", 2001, uri=uri)], client=client)
+
+        self.assertFalse(result.ambiguous)
+        self.assertEqual([item.movie_id for item in result.resolved], [preferred.pk])
+        client.search.assert_not_called()
 
     def test_single_exact_wrong_type_candidate_is_reviewable(self):
         client = _client([_item(1081, "A Distinct Title", 2020, "movie")])

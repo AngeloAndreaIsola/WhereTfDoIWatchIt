@@ -30,6 +30,7 @@ import re
 import unicodedata
 import xml.etree.ElementTree as ET
 import zipfile
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Callable, Iterable, Optional
 from urllib.parse import urljoin, urlparse
@@ -685,22 +686,27 @@ def import_rows(
         DEFAULT_SOURCE_SLUG, {}
     )
 
-    # Fast in-memory cache of local movies to prevent repeated TMDb API calls
-    local_movies_by_title_year: dict[tuple[str, Optional[int]], Movie] = {}
+    # Index each typed identity under its title and optional release year.
+    # A title can have several exact local matches in the same namespace.
+    local_titles: dict[tuple[str, Optional[int], str], dict[int, Movie]] = defaultdict(dict)
     local_movies_by_uri: dict[str, Movie] = {}
+
+    def remember_title(movie: Movie):
+        title = _normalize_title(movie.title)
+        if title:
+            content_type = movie.content_type or "movie"
+            local_titles[(title, movie.year, content_type)][movie.pk] = movie
+            local_titles[(title, None, content_type)][movie.pk] = movie
 
     for m in Movie.objects.all():
         if m.title:
-            local_movies_by_title_year[(m.title.lower().strip(), m.year)] = m
-            if m.year is not None:
-                local_movies_by_title_year[(m.title.lower().strip(), None)] = m
+            remember_title(m)
 
     for umd in UserMovieData.objects.select_related("movie").filter(user_id=user_id):
         if umd.letterboxd_uri:
             local_movies_by_uri[umd.letterboxd_uri] = umd.movie
 
     for row in rows:
-        title_key = (row.title.lower().strip(), row.year)
         movie: Optional[Movie] = None
         # Whether this row introduces new content / a new watchlist item —
         # the gate that decides if the row may request an availability
@@ -711,13 +717,20 @@ def import_rows(
         expected_type = _search_content_type(row)
         if row.uri and row.uri in local_movies_by_uri:
             movie = _typed_cache_hit(local_movies_by_uri[row.uri], expected_type)
-        if movie is None and title_key in local_movies_by_title_year:
-            movie = _typed_cache_hit(local_movies_by_title_year[title_key], expected_type)
-        if movie is None and row.year is None:
-            movie = _typed_cache_hit(
-                local_movies_by_title_year.get((row.title.lower().strip(), None)),
-                expected_type,
-            )
+        if movie is None:
+            title_key = (_normalize_title(row.title), row.year, expected_type)
+            candidates = local_titles.get(title_key, {})
+            if len(candidates) > 1:
+                result.ambiguous.append({
+                    "title": row.title,
+                    "year": row.year,
+                    "uri": row.uri,
+                    "candidates": [_candidate_dict(candidates[pk]) for pk in sorted(candidates)[:5]],
+                    "reason": "multiple_exact_titles",
+                    "decision": "multiple_local_exact_titles",
+                })
+                continue
+            movie = next(iter(candidates.values()), None)
 
         if movie is None:
             try:
@@ -817,7 +830,7 @@ def import_rows(
                 movie.poster_path = pick.poster_path
                 movie.save()
 
-            local_movies_by_title_year[(movie.title.lower().strip(), movie.year)] = movie
+            remember_title(movie)
             if row.uri:
                 local_movies_by_uri[row.uri] = movie
 
@@ -1002,7 +1015,7 @@ def _is_ambiguous(matches: list[TMDbMovie], year: Optional[int]) -> bool:
     return len(matches) > 1
 
 
-def _candidate_dict(movie: TMDbMovie) -> dict:
+def _candidate_dict(movie: TMDbMovie | Movie) -> dict:
     return {
         "tmdb_id": movie.tmdb_id,
         "content_type": movie.content_type,
