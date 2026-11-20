@@ -16,7 +16,7 @@ from tracker.services.letterboxd import (
     _normalize_title,
     import_rows,
 )
-from tracker.services.tmdb import TMDbItem
+from tracker.services.tmdb import TMDbClient, TMDbItem
 
 
 def _item(tmdb_id, title, year, content_type="movie"):
@@ -154,6 +154,52 @@ class ImportExactTitleTests(TestCase):
         self.assertEqual(result.resolved, [])
         self.assertEqual(result.ambiguous[0]["reason"], "multiple_matches")
         self.assertIn("decision", result.ambiguous[0])
+
+    def test_single_exact_wrong_type_candidate_is_reviewable(self):
+        client = _client([_item(1081, "A Distinct Title", 2020, "movie")])
+        result = import_rows(
+            [LetterboxdRow("A Distinct Title", 2020, source="myanimelist")],
+            client=client,
+        )
+        client.search.assert_called_once_with("A Distinct Title", year=2020, content_type="series")
+        self.assertEqual(result.resolved, [])
+        [review] = result.ambiguous
+        self.assertEqual(review["reason"], "candidate_type_conflict")
+        self.assertEqual(review["expected_content_type"], "series")
+        self.assertEqual(review["candidates"][0]["content_type"], "movie")
+        self.assertFalse(Movie.objects.exists())
+
+    def test_legacy_fallback_also_requires_matching_type(self):
+        result = import_rows(
+            [LetterboxdRow("Some Film", 2020)],
+            client=_client([_item(1082, "Some Film Extended", 2020, "series")]),
+        )
+        self.assertEqual(result.resolved, [])
+        self.assertEqual(result.ambiguous[0]["reason"], "candidate_type_conflict")
+
+    def test_original_name_counts_as_exact_evidence_without_replacing_display_title(self):
+        candidate = TMDbClient._parse_search_result({
+            "id": 1083, "name": "Spirited Detective", "original_name": "Tantei",
+            "first_air_date": "2020-04-01",
+        }, content_type="series")
+        result = import_rows(
+            [LetterboxdRow("Tantei", 2020, source="myanimelist")],
+            client=_client([candidate, _item(1084, "Tantei Returns", 2020, "series")]),
+        )
+        self.assertEqual(result.ambiguous, [])
+        self.assertEqual(result.resolved[0].movie.title, "Spirited Detective")
+
+    def test_original_title_and_localized_title_collision_is_reviewable(self):
+        candidate = TMDbClient._parse_search_result({
+            "id": 1085, "title": "Farewell", "original_title": "Adieu",
+            "release_date": "2020-04-01",
+        })
+        result = import_rows(
+            [LetterboxdRow("Adieu", 2020)],
+            client=_client([candidate, _item(1086, "Adieu", 2020)]),
+        )
+        self.assertEqual(result.resolved, [])
+        self.assertEqual(result.ambiguous[0]["reason"], "multiple_exact_titles")
 
     def test_diacritic_exact_match_resolves(self):
         result = import_rows(

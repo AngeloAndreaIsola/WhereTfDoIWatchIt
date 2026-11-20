@@ -5,6 +5,7 @@ import React, { useState } from "react";
 
 export interface Candidate {
   tmdb_id: number;
+  content_type?: "movie" | "series";
   title: string;
   year: number | null;
   poster_path?: string | null;
@@ -83,6 +84,11 @@ export default function AmbiguousMatchCard({
           {candidate.year && (
             <span className="text-xs text-gray-500 dark:text-gray-400">
               ({candidate.year})
+            </span>
+          )}
+          {candidate.content_type && (
+            <span className="text-xs text-gray-500 dark:text-gray-400">
+              {candidate.content_type === "series" ? "TV series" : "Movie"}
             </span>
           )}
           <span className="font-mono text-xs text-gray-400 dark:text-gray-500">

@@ -785,6 +785,19 @@ def import_rows(
                 )
                 continue
 
+            if pick.content_type and pick.content_type != expected_type:
+                review_matches = [pick] + [candidate for candidate in matches if candidate is not pick]
+                result.ambiguous.append({
+                    "title": row.title,
+                    "year": row.year,
+                    "uri": row.uri,
+                    "candidates": [_candidate_dict(candidate) for candidate in review_matches[:5]],
+                    "reason": "candidate_type_conflict",
+                    "decision": "candidate_type_conflict",
+                    "expected_content_type": expected_type,
+                })
+                continue
+
             logger.info(
                 "import_match_decision title=%r tmdb_id=%s decision=%s",
                 row.title,
@@ -920,7 +933,9 @@ def _normalize_title(value: str) -> str:
     whitespace. Deliberately conservative: no article stripping, no fuzzy
     similarity — this is identity evidence, not a ranking signal.
     """
-    text = unicodedata.normalize("NFKD", value or "")
+    if not isinstance(value, str):
+        return ""
+    text = unicodedata.normalize("NFKD", value)
     text = "".join(ch for ch in text if not unicodedata.combining(ch))
     text = text.casefold()
     text = re.sub(r"[\u2018\u2019\u02bc]", "'", text)
@@ -948,7 +963,11 @@ def _exact_title_decision(
     target = _normalize_title(row_title)
     if not target:
         return None, "no_title"
-    exact = [m for m in matches if _normalize_title(m.title) == target]
+    exact = [
+        candidate for candidate in matches
+        if target in (_normalize_title(candidate.title),
+                      _normalize_title(getattr(candidate, "original_title", "")))
+    ]
     if not exact:
         return None, "no_exact_title"
     if len({m.content_type or "movie" for m in exact}) > 1:
@@ -986,6 +1005,7 @@ def _is_ambiguous(matches: list[TMDbMovie], year: Optional[int]) -> bool:
 def _candidate_dict(movie: TMDbMovie) -> dict:
     return {
         "tmdb_id": movie.tmdb_id,
+        "content_type": movie.content_type,
         "title": movie.title,
         "year": movie.year,
         "overview": movie.overview,
