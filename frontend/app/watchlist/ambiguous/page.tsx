@@ -71,7 +71,7 @@ function AmbiguousClient() {
           original_title: item.title,
           year: item.year,
           tmdb_id: candidate.tmdb_id,
-          content_type: candidate.content_type ?? "movie",
+          content_type: candidate.content_type,
         };
       })
       .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
