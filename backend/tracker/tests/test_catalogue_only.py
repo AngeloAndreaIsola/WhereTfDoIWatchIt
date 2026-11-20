@@ -93,9 +93,12 @@ class BoundedCollectorTests(SimpleTestCase):
             if url == INDEX:
                 return response(429)
 
-        with self.assertRaisesRegex(DiscoveryPolicyError, "catalogue_http_status_429"):
-            one_page(send=send)
+        with self.assertLogs("tracker.services.catalogue_only_requester", level="INFO") as audit:
+            with self.assertRaisesRegex(DiscoveryPolicyError, "catalogue_http_status_429"):
+                one_page(send=send)
         self.assertEqual(calls, [ROBOTS, INDEX])
+        self.assertIn("'attempted': 2", audit.output[0])
+        self.assertIn("'status': 429", audit.output[0])
 
     def test_grant_is_rechecked_before_each_dispatch(self):
         calls = []

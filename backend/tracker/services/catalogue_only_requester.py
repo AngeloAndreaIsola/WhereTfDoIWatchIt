@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 import json
+import logging
 import re
 from urllib.robotparser import RobotFileParser
 
@@ -11,6 +12,8 @@ from tracker.services.catalogue_only import require_collector_permission
 from tracker.services.discovery_http import DiscoveryHTTP, RequestBudgetReached
 from tracker.services.discovery_policy import DiscoveryPolicyError
 
+
+logger = logging.getLogger(__name__)
 
 PROVIDER = "tubi"
 USER_AGENT = "WTDW-Catalogue"
@@ -136,6 +139,10 @@ def collect_tubi_catalogue_page(sitemap_url, *, cursor=None, request_budget=5, p
                 "permission_evidence": permission.evidence,
             }
         finally:
+            logger.info(
+                "catalogue_only_requester provider=%s sitemap=%s pages_attempted=%d accounting=%s",
+                PROVIDER, sitemap_url, requester.pages_attempted, requester.http.report(),
+            )
             # Keep the lock through the cooldown so another invocation does
             # not dispatch immediately after this one releases the provider.
             requester.http.wait_for_spacing()
