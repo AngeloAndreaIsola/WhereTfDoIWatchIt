@@ -265,6 +265,7 @@ def _candidate_pairs(user_id: int, content_types) -> list[tuple[int, int]]:
     items = WatchlistItem.objects.filter(
         user_id=user_id,
         movie__content_type__in=list(content_types),
+        movie__is_quarantined=False,
     ).select_related("movie")
 
     pairs: list[tuple[int, int]] = []
@@ -278,7 +279,7 @@ def _candidate_pairs(user_id: int, content_types) -> list[tuple[int, int]]:
         return pairs
 
     # Fallback to querying catalog movies and series directly
-    for movie_id, tmdb_id in Movie.objects.filter(
+    for movie_id, tmdb_id in Movie.objects.visible().filter(
         content_type__in=list(content_types)
     ).values_list("id", "tmdb_id"):
         if movie_id not in seen:
@@ -498,7 +499,7 @@ def _process_watchlist_refresh_locked(
     pairs = _order_candidates(_candidate_pairs(user_id, content_types))
     summary.attempted = len(pairs)
     movies_by_id = {
-        m.id: m for m in Movie.objects.filter(id__in=[movie_id for movie_id, _ in pairs])
+        m.id: m for m in Movie.objects.visible().filter(id__in=[movie_id for movie_id, _ in pairs])
     }
 
     # Read after draining: an explicit answer in this tick can supersede an
