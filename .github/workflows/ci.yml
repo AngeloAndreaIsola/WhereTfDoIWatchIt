@@ -18,9 +18,9 @@ jobs:
       postgres:
         image: postgres:16
         env:
-          POSTGRES_DB: tracker_test
-          POSTGRES_USER: tracker
-          POSTGRES_PASSWORD: tracker_dev
+          POSTGRES_DB: wtdwi_test
+          POSTGRES_USER: wtdwi_test
+          POSTGRES_PASSWORD: wtdwi_test
         ports:
           - 5432:5432
         options: >-
@@ -30,10 +30,11 @@ jobs:
           --health-retries 5
 
     env:
-      POSTGRES_DB: tracker_test
-      POSTGRES_USER: tracker
-      POSTGRES_PASSWORD: tracker_dev
+      POSTGRES_DB: wtdwi_test
+      POSTGRES_USER: wtdwi_test
+      POSTGRES_PASSWORD: wtdwi_test
       POSTGRES_HOST: localhost
+      WTDWI_DISPOSABLE_TEST_DB: "1"
       POSTGRES_PORT: 5432
       DJANGO_SECRET_KEY: ci-secret-key-testing
       DJANGO_DEBUG: "1"

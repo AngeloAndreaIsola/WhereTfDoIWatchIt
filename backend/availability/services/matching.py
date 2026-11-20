@@ -67,7 +67,7 @@ def match_local_catalog(content) -> Optional[MatchCandidate]:
         return None
 
     year = content.release_date.year if content.release_date else None
-    candidates = Movie.objects.filter(content_type=content.content_type, title__iexact=title)
+    candidates = Movie.objects.visible().filter(content_type=content.content_type, title__iexact=title)
 
     if year is not None:
         same_year = set(candidates.filter(year=year).values_list("tmdb_id", flat=True))

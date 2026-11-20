@@ -23,6 +23,8 @@ def sync_movie_fields(movie: Movie, details: TMDbItem) -> bool:
 
     Returns True if at least one field was updated.
     """
+    if movie.is_quarantined:
+        return False
     updated_fields = []
     # Capture canonical evidence while preserving existing display titles.
     # Legacy titles have unknown provenance, and correcting them requires review.
@@ -56,9 +58,10 @@ def sync_movie_fields(movie: Movie, details: TMDbItem) -> bool:
     if details.seasons_data and movie.seasons_data != details.seasons_data:
         movie.seasons_data = details.seasons_data
         updated_fields.append("seasons_data")
-    if updated_fields:
-        movie.save(update_fields=updated_fields)
-    return bool(updated_fields)
+    if not updated_fields:
+        return False
+    changes = {field: getattr(movie, field) for field in updated_fields}
+    return bool(Movie.objects.using(movie._state.db).visible().filter(pk=movie.pk).update(**changes))
 
 
 def enrich_movie_from_tmdb(movie: Movie) -> bool:
@@ -67,7 +70,7 @@ def enrich_movie_from_tmdb(movie: Movie) -> bool:
     No-op (returns False) if TMDb is unconfigured or the fetch fails.
     Callers that already fetched details should use sync_movie_fields instead.
     """
-    if not TMDbClient.is_configured():
+    if movie.is_quarantined or not TMDbClient.is_configured():
         return False
     client = TMDbClient(settings.TMDB_API_KEY)
     try:
@@ -90,6 +93,8 @@ def resolve_or_create_movie(tmdb_id: int, content_type: str = "movie") -> Movie:
 
     Returns the Movie instance. Raises exceptions on TMDb fetch failure.
     """
+    if Movie.objects.filter(tmdb_id=tmdb_id, content_type=content_type, is_quarantined=True).exists():
+        raise Movie.DoesNotExist("Movie is quarantined")
     client = TMDbClient(settings.TMDB_API_KEY)
     details = client.details(tmdb_id, content_type=content_type)
     movie, _ = Movie.objects.get_or_create(
@@ -101,5 +106,7 @@ def resolve_or_create_movie(tmdb_id: int, content_type: str = "movie") -> Movie:
             "content_type": details.content_type,
         },
     )
+    if movie.is_quarantined:
+        raise Movie.DoesNotExist("Movie is quarantined")
     sync_movie_fields(movie, details)
     return movie

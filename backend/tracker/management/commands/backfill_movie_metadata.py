@@ -72,7 +72,7 @@ class Command(BaseCommand):
             )
             return
 
-        qs = Movie.objects.all().order_by("id")
+        qs = Movie.objects.visible().order_by("id")
         if not process_all:
             # Empty JSON arrays are stored as exactly `[]`; match that plus NULLs
             # (the JSONField `__len` lookup misbehaves on Postgres for this case).

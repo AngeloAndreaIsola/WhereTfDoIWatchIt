@@ -23,6 +23,7 @@ services:
       POSTGRES_PASSWORD: wtdwi_test
       POSTGRES_DB: wtdwi_test
       POSTGRES_HOST: db-test
+      WTDWI_DISPOSABLE_TEST_DB: "1"
       POSTGRES_PORT: 5432
       DJANGO_SECRET_KEY: wtdwi-test-only
       DJANGO_DEBUG: "1"
