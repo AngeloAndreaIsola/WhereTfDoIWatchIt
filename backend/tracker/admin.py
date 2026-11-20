@@ -6,6 +6,7 @@ from django.utils.html import format_html
 from django.shortcuts import render
 
 from .services.membership import locked_watchlist_memberships
+
 from .models import (
     ApiCallCounter,
     CanonicalBootstrapEvidence,
@@ -13,6 +14,7 @@ from .models import (
     LanguageEntry,
     LanguageInfo,
     Movie,
+    MovieIdentityAudit,
     Preference,
     Provider,
     RefreshRequest,
@@ -56,14 +58,30 @@ class LanguageInfoAdmin(admin.ModelAdmin):
         return f"{count} language(s)"
 
 
+@admin.register(MovieIdentityAudit)
+class MovieIdentityAuditAdmin(admin.ModelAdmin):
+    list_display = ("movie_pk", "operation", "provenance", "created_at")
+    list_filter = ("operation", "provenance")
+    search_fields = ("=movie_pk",)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
 @admin.register(Movie)
 class MovieAdmin(admin.ModelAdmin):
-    list_display = ("id", "tmdb_id", "title", "year", "content_type", "tmdb_rating", "has_poster")
-    list_filter = ("content_type",)
+    list_display = ("id", "tmdb_id", "title", "year", "content_type", "tmdb_rating", "has_poster", "is_quarantined")
+    list_filter = ("content_type", "is_quarantined")
     search_fields = ("title", "tmdb_id")
-    readonly_fields = ("id",)
+    readonly_fields = ("id", "is_quarantined")
     fieldsets = (
-        ("Basic", {"fields": ("tmdb_id", "title", "year", "content_type")}),
+        ("Basic", {"fields": ("tmdb_id", "title", "year", "content_type", "is_quarantined")}),
         ("Media", {"fields": ("poster_path", "overview")}),
         ("Metadata", {"fields": ("genres", "genre_ids", "cast", "seasons_data", "runtime_minutes", "tmdb_rating")}),
     )
