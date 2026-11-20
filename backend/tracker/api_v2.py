@@ -177,6 +177,8 @@ def _serialize_unofficial_entries(entries) -> list[dict]:
     for entry in entries:
         pdata = provider_data.get(entry.provider) or {}
         movie = movies.get((entry.tmdb_id, entry.content_type)) if entry.tmdb_id else None
+        if movie is not None and movie.is_quarantined:
+            continue
         raw_payload: dict[str, Any] = {
             "audio_languages": entry.audio_languages,
             "subtitle_languages": entry.subtitle_languages,
@@ -394,15 +396,23 @@ def unofficial_movie_offers(request, tmdb_id: int):
     """GET /api/v2/unofficial/movie/<tmdb_id>/offers/
 
     Return scraper source offers for a movie, filtered by user preferences
-    and ranked by: audio match → subtitle match → quality.
+    and ranked by: audio match → subtitle match → quality. For an ID
+    shared by movie and series records, pass ``?content_type=movie`` or
+    ``?content_type=series`` to select the intended identity.
 
     ``?season=N`` (series rows only) suppresses those show-level scraper
     offers: scraper rows carry no season signal, so a season-filtered request
     answers ``offers: []`` with the season echoed in ``selected_season``.
     Non-integer values are ignored, and movie rows ignore the parameter.
     """
+    movies = Movie.objects.visible().filter(tmdb_id=tmdb_id)
+    content_type = request.query_params.get("content_type")
+    if content_type:
+        if content_type not in ("movie", "series"):
+            return Response({"error": "content_type must be 'movie' or 'series'"}, status=400)
+        movies = movies.filter(content_type=content_type)
     try:
-        movie = Movie.objects.get(tmdb_id=tmdb_id)
+        movie = movies.get()
     except (Movie.DoesNotExist, Movie.MultipleObjectsReturned):
         return Response({"error": "movie not tracked yet"}, status=404)
 
