@@ -174,6 +174,32 @@ class QuarantineVisibilityTests(TestCase):
             [row["id"] for row in response.json()["results"]], [self.legitimate.pk, self.series.pk],
         )
         self.assertEqual(self.client.get(f"/api/movie/{self.quarantined.pk}/").status_code, 404)
+        legacy = self.client.get("/api/v2/unofficial/?provider=fixture-catalogue")
+        self.assertEqual(legacy.status_code, 200)
+        [observation] = legacy.json()["results"]
+        self.assertEqual(observation["scraped_url"], "https://example.invalid/unresolved")
+        self.assertIsNone(observation["movie"])
+
+    def test_unofficial_offers_exclude_quarantine_and_allow_the_visible_series(self):
+        url = f"/api/v2/unofficial/movie/{self.quarantined.tmdb_id}/offers/"
+        self.assertEqual(self.client.get(url, {"content_type": "movie"}).status_code, 404)
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["movie"]["content_type"], "series")
+        self.series.delete()
+        self.assertEqual(self.client.get(url).status_code, 404)
+
+    def test_unofficial_offers_resolve_legitimate_collisions_by_type(self):
+        self.quarantined.is_quarantined = False
+        self.quarantined.save(update_fields=["is_quarantined"])
+        url = f"/api/v2/unofficial/movie/{self.series.tmdb_id}/offers/"
+        self.assertEqual(self.client.get(url).status_code, 404)
+        self.assertEqual(self.client.get(url, {"content_type": "episode"}).status_code, 400)
+        for kind in ("movie", "series"):
+            with self.subTest(kind=kind):
+                response = self.client.get(url, {"content_type": kind})
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json()["movie"]["content_type"], kind)
 
     def test_watchlist_hides_quarantined_movie_and_blocks_resolution(self):
         WatchlistItem.objects.create(movie=self.quarantined)
@@ -183,6 +209,20 @@ class QuarantineVisibilityTests(TestCase):
             response = self.client.post("/api/watchlist/add/", {"tmdb_id": 875001}, content_type="application/json")
         self.assertEqual(response.status_code, 404)
         tmdb.assert_not_called()
+
+    def test_watched_lists_hide_quarantine_without_changing_personal_data(self):
+        hidden = UserMovieData.objects.create(movie=self.quarantined, is_watched=True, rating=4.0)
+        UserMovieData.objects.create(movie=self.series, is_watched=True, rating=5.0)
+
+        for url, field in (("/api/watched/", "results"), ("/api/watched/report/", "report")):
+            response = self.client.get(url)
+            self.assertEqual(response.status_code, 200)
+            [row] = response.json()[field]
+            self.assertEqual(row["movie"]["content_type"], "series")
+            self.assertEqual(row["user_data"]["rating"], 5.0)
+        hidden.refresh_from_db()
+        self.assertTrue(hidden.is_watched)
+        self.assertEqual(hidden.rating, 4.0)
 
     def test_import_ignores_quarantined_title_and_uri_cache_hits(self):
         self.legitimate.title = "Different title"

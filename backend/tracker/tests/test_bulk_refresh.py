@@ -63,6 +63,22 @@ class BulkRefreshServiceTests(TestCase):
 
         http_get.assert_not_called()
 
+    def test_quarantined_movie_is_excluded_from_watchlist_and_catalogue_sweeps(self):
+        self.movie1.is_quarantined = True
+        self.movie1.save(update_fields=["is_quarantined"])
+        for watched_candidates in (True, False):
+            with self.subTest(watched_candidates=watched_candidates):
+                self.refresh_service.reset_mock()
+                with patch("tracker.services.bulk_refresh.stale_refresh_scopes",
+                           return_value=["streaming_availability"]):
+                    result = self._run()
+                self.assertEqual(result["attempted"], 2)
+                self.assertCountEqual(
+                    [call.args[0].pk for call in self.refresh_service.refresh_content.call_args_list],
+                    [self.movie2.pk, self.movie3.pk],
+                )
+                WatchlistItem.objects.all().delete()
+
     def test_fresh_canonical_offers_are_skipped(self):
         # Fresh canonical availability for every movie; nothing to refresh.
         local_offer(self.movie1)
