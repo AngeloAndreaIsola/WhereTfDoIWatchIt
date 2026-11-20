@@ -27,6 +27,7 @@ import gzip
 import io
 import logging
 import re
+import unicodedata
 import xml.etree.ElementTree as ET
 import zipfile
 from dataclasses import dataclass, field
@@ -712,7 +713,23 @@ def import_rows(
                 )
                 continue
 
-            pick = _select_match(matches, row.year)
+            # Unique exact-title evidence first (#108); conflicting exact
+            # evidence defers to review, never to arbitrary year-only picks.
+            pick, decision = _exact_title_decision(matches, row.year, row.title)
+            if pick is None and decision in _EXACT_TITLE_CONFLICT_REASONS:
+                result.ambiguous.append(
+                    {
+                        "title": row.title,
+                        "year": row.year,
+                        "uri": row.uri,
+                        "candidates": [_candidate_dict(m) for m in matches[:5]],
+                        "reason": decision,
+                        "decision": decision,
+                    }
+                )
+                continue
+            if pick is None:
+                pick = _select_match(matches, row.year)
             if pick is None:
                 result.ambiguous.append(
                     {
@@ -721,11 +738,16 @@ def import_rows(
                         "uri": row.uri,
                         "candidates": [_candidate_dict(m) for m in matches[:5]],
                         "reason": "year_mismatch",
+                        "decision": decision,
                     }
                 )
                 continue
 
-            if len(matches) > 1 and _is_ambiguous(matches, row.year):
+            if (
+                decision not in ("exact_title_unique", "exact_title_unique_year")
+                and len(matches) > 1
+                and _is_ambiguous(matches, row.year)
+            ):
                 result.ambiguous.append(
                     {
                         "title": row.title,
@@ -733,9 +755,19 @@ def import_rows(
                         "uri": row.uri,
                         "candidates": [_candidate_dict(m) for m in matches[:5]],
                         "reason": "multiple_matches",
+                        "decision": decision,
                     }
                 )
                 continue
+
+            logger.info(
+                "import_match_decision title=%r tmdb_id=%s decision=%s",
+                row.title,
+                pick.tmdb_id,
+                decision
+                if decision in ("exact_title_unique", "exact_title_unique_year")
+                else "legacy_year_match",
+            )
 
             movie, created = Movie.objects.get_or_create(
                 tmdb_id=pick.tmdb_id,
@@ -826,6 +858,58 @@ def import_rows(
             )
 
     return result
+
+
+def _normalize_title(value: str) -> str:
+    """Deterministic exact-title normalization (#108).
+
+    Casefold, strip diacritics, unify apostrophe variants and collapse
+    whitespace. Deliberately conservative: no article stripping, no fuzzy
+    similarity — this is identity evidence, not a ranking signal.
+    """
+    text = unicodedata.normalize("NFKD", value or "")
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = text.casefold()
+    text = re.sub(r"[\u2018\u2019\u02bc]", "'", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+#: Exact-title decisions that must defer to manual review instead of falling
+#: back to year-only selection: exact evidence exists but is contradictory.
+_EXACT_TITLE_CONFLICT_REASONS = frozenset(
+    {"multiple_exact_titles", "exact_title_year_conflict", "exact_title_type_collision"}
+)
+
+
+def _exact_title_decision(
+    matches: list[TMDbMovie], year: Optional[int], row_title: str
+) -> tuple[Optional[TMDbMovie], str]:
+    """Prefer a unique exact normalized-title candidate (#108).
+
+    Returns ``(pick, reason)``. A single exact-title candidate wins over
+    fuzzy/sequel/edition search results when no year or media-type evidence
+    contradicts it. Multiple exact-title candidates stay ambiguous unless the
+    row year isolates exactly one. Conflicting exact evidence never falls back
+    to arbitrary year-only acceptance.
+    """
+    target = _normalize_title(row_title)
+    if not target:
+        return None, "no_title"
+    exact = [m for m in matches if _normalize_title(m.title) == target]
+    if not exact:
+        return None, "no_exact_title"
+    if len({m.content_type or "movie" for m in exact}) > 1:
+        return None, "exact_title_type_collision"
+    if len(exact) > 1:
+        if year is not None:
+            same_year = [m for m in exact if m.year == year]
+            if len(same_year) == 1:
+                return same_year[0], "exact_title_unique_year"
+        return None, "multiple_exact_titles"
+    cand = exact[0]
+    if year is not None and cand.year is not None and cand.year != year:
+        return None, "exact_title_year_conflict"
+    return cand, "exact_title_unique"
 
 
 def _select_match(matches: list[TMDbMovie], year: Optional[int]) -> Optional[TMDbMovie]:
