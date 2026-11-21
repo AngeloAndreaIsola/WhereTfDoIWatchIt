@@ -45,6 +45,10 @@ class RankedOffer:
     is_scraped_source: bool = False
     source_category: str = ""
     territorial_scope: str = ""
+    available_from: Optional[str] = None
+    available_until: Optional[str] = None
+    season_number: Optional[int] = None
+    episode_number: Optional[int] = None
 
     def to_dict(self) -> dict:
         ranking_dict = {
@@ -58,7 +62,7 @@ class RankedOffer:
         }
         if self.ranking_explanation:
             ranking_dict["explanation"] = self.ranking_explanation
-        return {
+        payload = {
             "country": self.country,
             "service": self.service,
             "offer_type": self.offer_type,
@@ -76,6 +80,13 @@ class RankedOffer:
                 self.country, self.territorial_scope
             ),
         }
+        # Ranked offers also serve the legacy scraper API, where windows and
+        # season/episode scope are absent from the response contract.
+        for field_name in ("available_from", "available_until", "season_number", "episode_number"):
+            value = getattr(self, field_name)
+            if value is not None:
+                payload[field_name] = value
+        return payload
 
 
 def compute_source_rank(
@@ -286,6 +297,10 @@ def rank_offers(
                     or ("unofficial" if is_scraped else "official")
                 ),
                 territorial_scope=territorial_scope,
+                available_from=offer.available_from,
+                available_until=offer.available_until,
+                season_number=offer.season_number,
+                episode_number=offer.episode_number,
             )
         )
 

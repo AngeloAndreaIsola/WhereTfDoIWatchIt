@@ -106,6 +106,12 @@ export interface PrimeOffer {
   availability_evidence?: AvailabilityEvidence;
   /** ISO timestamp of the newest positive observation behind this offer. */
   last_seen_at?: string | null;
+  /** Reconciled source-declared window, in UTC ISO 8601. Missing or null means unknown. */
+  available_from?: string | null;
+  /** End of the reported window. A confirmed catalogue departure requires separate evidence. */
+  available_until?: string | null;
+  season_number?: number | null;
+  episode_number?: number | null;
 }
 
 export type AvailabilityEvidence = "verified" | "stale" | "unknown";

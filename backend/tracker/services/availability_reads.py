@@ -16,9 +16,11 @@ recheck") without counting them as watchable now.
 """
 from __future__ import annotations
 
-from typing import NamedTuple, Optional
+from datetime import UTC
+from typing import Literal, NamedTuple, Optional
 
 from availability.domain.enums import AvailabilityEvidence
+from availability.domain.reconciliation import ReconciledOffer
 from availability.services.query import AvailabilityQueryService
 
 from .offers import Offer
@@ -102,7 +104,7 @@ def _split(offers) -> OfferEvidence:
     return OfferEvidence(current, last_known)
 
 
-def _tracker_offer(offer) -> Offer:
+def _tracker_offer(offer: ReconciledOffer) -> Offer:
     last_seen = offer.last_verified_at or offer.last_seen_available_at
     return Offer(
         country=offer.country,
@@ -119,7 +121,29 @@ def _tracker_offer(offer) -> Offer:
         prices=[_price_dict(price) for price in offer.prices],
         availability_evidence=str(offer.evidence),
         last_seen_at=last_seen.isoformat() if last_seen else None,
+        available_from=_window_timestamp(offer, "available_from"),
+        available_until=_window_timestamp(offer, "available_until"),
+        season_number=offer.season_number,
+        episode_number=offer.episode_number,
     )
+
+
+def _window_timestamp(
+    offer: ReconciledOffer, field_name: Literal["available_from", "available_until"]
+) -> str | None:
+    value = getattr(offer, field_name)
+    if value is None:
+        return None
+    # Keep the reconciled value only when supported by an observation for
+    # this title. JustWatch's availableTo has unverified expiry semantics.
+    if not any(
+        getattr(observation, field_name) == value
+        and not observation.mapping_doubt
+        and (field_name != "available_until" or observation.source != "justwatch")
+        for observation in offer.observations
+    ):
+        return None
+    return value.astimezone(UTC).isoformat()
 
 
 def _as_list(values):
