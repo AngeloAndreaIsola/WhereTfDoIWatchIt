@@ -524,6 +524,10 @@ class RankedOfferSerializer(serializers.Serializer):
     #: or ``unknown`` (uncorroborated). ``offers`` only ever holds verified rows.
     availability_evidence = serializers.CharField(required=False, default="verified")
     last_seen_at = serializers.CharField(required=False, allow_null=True, default=None)
+    available_from = serializers.CharField(required=False, allow_null=True, default=None)
+    available_until = serializers.CharField(required=False, allow_null=True, default=None)
+    season_number = serializers.IntegerField(required=False, allow_null=True)
+    episode_number = serializers.IntegerField(required=False, allow_null=True)
 
 
 class CountrySummarySerializer(serializers.Serializer):

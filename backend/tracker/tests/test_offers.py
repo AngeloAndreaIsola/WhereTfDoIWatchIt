@@ -58,6 +58,8 @@ class OfferFromDictTests(TestCase):
         self.assertEqual(o.audio_languages, [])
         self.assertEqual(o.subtitle_languages, [])
         self.assertFalse(o.is_scraped_source)
+        self.assertIsNone(o.available_from)
+        self.assertIsNone(o.available_until)
 
     def test_to_dict_roundtrip(self):
         original = Offer(
@@ -69,6 +71,8 @@ class OfferFromDictTests(TestCase):
             audio_languages=["EN"],
             subtitle_languages=["EN"],
             is_scraped_source=False,
+            available_from="2026-11-20T12:00:00+00:00",
+            available_until=None,
         )
         d = original.to_dict()
         restored = Offer.from_dict(d)
@@ -80,6 +84,8 @@ class OfferFromDictTests(TestCase):
         self.assertEqual(restored.audio_languages, original.audio_languages)
         self.assertEqual(restored.subtitle_languages, original.subtitle_languages)
         self.assertEqual(restored.is_scraped_source, original.is_scraped_source)
+        self.assertEqual(restored.available_from, original.available_from)
+        self.assertIsNone(restored.available_until)
 
     def test_inconsistent_source_keys_audio_first(self):
         o = Offer.from_dict({"audio": ["EN"], "audio_languages": ["FR"]})

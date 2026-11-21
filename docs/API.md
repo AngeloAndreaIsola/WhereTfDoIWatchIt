@@ -375,6 +375,8 @@ This document provides the complete API contract specification for the **WhereTf
 
 ### 9. Prime Video Movie Offers (Detail Page)
 
+Offer windows use optional, nullable `available_from` and `available_until` fields in UTC ISO 8601. They describe the reconciled source-declared window for the offer's country and any `season_number` or `episode_number` recorded on that offer. The same fields are available on ranked availability and watchability offers. Missing or disputed dates are unknown. A JustWatch `availableTo` alone leaves `available_until` unknown. Confirming a catalogue departure requires separate evidence, including freshness of the date itself.
+
 #### `GET /api/prime/movie/<tmdb_id>/`
 - **Purpose**: Return ranked Prime Video (provider=`amazon`) availability offers for a single movie, filtered to `subscription`/`free` offer types only, ranked by strict priority: audio language match (JA > EN) → subtitle language match (EN > JA) → quality (4K > HDR > HD > SD) → country code (alphabetical tiebreak).
 - **Path Parameters**:

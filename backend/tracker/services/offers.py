@@ -54,6 +54,11 @@ class Offer:
     availability_evidence: str = "verified"
     #: ISO timestamp of the newest positive observation behind this offer.
     last_seen_at: Optional[str] = None
+    #: Source-declared availability window, serialized as UTC ISO 8601.
+    available_from: Optional[str] = None
+    available_until: Optional[str] = None
+    season_number: Optional[int] = None
+    episode_number: Optional[int] = None
 
     def get(self, key: str, default: Any = None) -> Any:
         """Dict-like access for backward compatibility."""
@@ -88,6 +93,10 @@ class Offer:
             prices=list(d.get("prices") or []),
             availability_evidence=d.get("availability_evidence") or "verified",
             last_seen_at=d.get("last_seen_at") or None,
+            available_from=d.get("available_from"),
+            available_until=d.get("available_until"),
+            season_number=d.get("season_number"),
+            episode_number=d.get("episode_number"),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -111,4 +120,8 @@ class Offer:
             "prices": self.prices,
             "availability_evidence": self.availability_evidence,
             "last_seen_at": self.last_seen_at,
+            "available_from": self.available_from,
+            "available_until": self.available_until,
+            "season_number": self.season_number,
+            "episode_number": self.episode_number,
         }

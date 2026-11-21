@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import SeriesDetailPage from "@/app/tv/[tmdb_id]/page";
 import WatchPage from "@/app/watch/[tmdb_id]/page";
 import MovieCard from "@/components/MovieCard";
-import { fetchPrimeSeriesOffers } from "@/lib/api";
+import { fetchPrimeSeriesOffers, type PrimeOffer } from "@/lib/api";
 
 vi.mock("next/link", () => ({
   default: ({ href, children, ...props }: { href: string; children: React.ReactNode; [key: string]: unknown }) =>
@@ -85,10 +85,13 @@ describe("TV series detail flow", () => {
     vi.unstubAllGlobals();
   });
 
-  it("renders the series detail page with offers and series metadata", async () => {
+  it.each<[string, Pick<PrimeOffer, "available_from" | "available_until">]>([
+    ["omitted", {}],
+    ["null", { available_from: null, available_until: null }],
+  ])("renders series metadata and offers with %s window dates", async (_label, dates) => {
     mockFetch([
       { body: preferencesBody },
-      { body: seriesBody },
+      { body: { ...seriesBody, offers: [{ ...seriesBody.offers[0], ...dates }] } },
       { body: { offers: [] } },
     ]);
 

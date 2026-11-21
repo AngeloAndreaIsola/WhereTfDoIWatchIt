@@ -489,6 +489,10 @@ class ClassifiedOffer:
     #: a rent/buy offer would cost, which is orthogonal to access.
     price: Optional[dict] = None
     prices: list[dict] = field(default_factory=list)
+    available_from: Optional[str] = None
+    available_until: Optional[str] = None
+    season_number: Optional[int] = None
+    episode_number: Optional[int] = None
 
     @property
     def is_qualifying_offer_type(self) -> bool:
@@ -530,6 +534,10 @@ class ClassifiedOffer:
             "availability_evidence": self.availability_evidence,
             "price": self.price,
             "prices": self.prices,
+            "available_from": self.available_from,
+            "available_until": self.available_until,
+            "season_number": self.season_number,
+            "episode_number": self.episode_number,
         }
 
 
@@ -562,6 +570,10 @@ def _coerce_offer(raw: Any) -> Offer:
         price=getattr(raw, "price", None),
         prices=list(getattr(raw, "prices", None) or []),
         availability_evidence=getattr(raw, "availability_evidence", "verified"),
+        available_from=getattr(raw, "available_from", None),
+        available_until=getattr(raw, "available_until", None),
+        season_number=getattr(raw, "season_number", None),
+        episode_number=getattr(raw, "episode_number", None),
     )
 
 
@@ -709,6 +721,10 @@ def classify_offer(
         availability_evidence=getattr(raw, "availability_evidence", "verified"),
         price=raw.price,
         prices=list(raw.prices or []),
+        available_from=raw.available_from,
+        available_until=raw.available_until,
+        season_number=raw.season_number,
+        episode_number=raw.episode_number,
     )
 
 

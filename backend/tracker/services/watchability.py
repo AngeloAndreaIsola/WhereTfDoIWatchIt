@@ -117,6 +117,10 @@ class EvaluatedOffer:
     is_entitled: bool = False
     requires_payment: bool = False
     source_indicator: str = ""
+    available_from: Optional[str] = None
+    available_until: Optional[str] = None
+    season_number: Optional[int] = None
+    episode_number: Optional[int] = None
 
     @classmethod
     def from_classified(cls, c: ClassifiedOffer) -> "EvaluatedOffer":
@@ -145,6 +149,10 @@ class EvaluatedOffer:
             is_entitled=c.is_entitled,
             requires_payment=c.requires_payment,
             source_indicator=c.source_indicator,
+            available_from=c.available_from,
+            available_until=c.available_until,
+            season_number=c.season_number,
+            episode_number=c.episode_number,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -170,6 +178,10 @@ class EvaluatedOffer:
             "locality": self.locality,
             "is_accessible": self.is_accessible,
             "requires_payment": self.requires_payment,
+            "available_from": self.available_from,
+            "available_until": self.available_until,
+            "season_number": self.season_number,
+            "episode_number": self.episode_number,
         }
 
 
