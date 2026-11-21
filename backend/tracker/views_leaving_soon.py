@@ -15,8 +15,9 @@ from django.utils import timezone
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from availability.domain.enums import AvailabilityEvidence, ConflictKind
+from availability.domain.enums import AvailabilityEvidence, ConflictKind, ContentType
 from availability.services.query import AvailabilityQueryService
+from tracker.management.commands.seed_catalog import ALL_ISO_COUNTRIES
 from tracker.models import Provider, WatchlistItem
 from tracker.services.access import (
     build_reach,
@@ -37,6 +38,16 @@ UNSAFE_CONFLICTS = frozenset({
 
 def _utc_iso(value: datetime) -> str:
     return value.astimezone(dt_timezone.utc).isoformat()
+
+
+def _source_declares_window(source, content_type):
+    # PBS computes group windows from asset dates. Tubi copies the series
+    # date to season rows. Neither declares an expiry at those scopes.
+    if source == "pbs":
+        return content_type == ContentType.EPISODE
+    if source == "tubi" and content_type == ContentType.SEASON:
+        return False
+    return bool(source) and not source.startswith("justwatch")
 
 
 def _confirmed_expiry(offer, now: datetime):
@@ -62,7 +73,7 @@ def _confirmed_expiry(offer, now: datetime):
         if observation.available_until == expiry
         and observation.evidence == AvailabilityEvidence.VERIFIED
         and not observation.mapping_doubt
-        and not observation.source.lower().startswith("justwatch")
+        and _source_declares_window(observation.source.lower(), offer.content_type)
     )
     return (expiry, supporters) if supporters else (None, ())
 
@@ -77,7 +88,10 @@ def _legacy_or_authenticated_owner(request) -> int:
     principal = getattr(request, "user", None)
     if getattr(principal, "is_authenticated", False):
         return int(principal.pk)
-    return int(getattr(settings, "WTDW_LEGACY_OWNER_ID", 1))
+    legacy_owner = getattr(settings, "WTDW_LEGACY_OWNER_ID", None)
+    if legacy_owner is None:
+        legacy_owner = WatchlistItem._meta.get_field("user_id").get_default()
+    return int(legacy_owner)
 
 
 def build_leaving_soon(*, user_id: int, country: str, days: int = 30, now=None) -> dict:
@@ -92,19 +106,25 @@ def build_leaving_soon(*, user_id: int, country: str, days: int = 30, now=None) 
     ).select_related("movie").order_by("movie_id", "id")
     movies_by_pk = {row.movie_id: row.movie for row in rows}
     movies = list(movies_by_pk.values())
-    pairs = [(movie.tmdb_id, movie.content_type) for movie in movies]
+    keys_by_movie = {}
+    for movie in movies:
+        kinds = (movie.content_type,)
+        if movie.content_type == ContentType.SERIES:
+            kinds = (ContentType.SERIES, ContentType.SEASON, ContentType.EPISODE)
+        keys_by_movie[movie.pk] = [(movie.tmdb_id, kind) for kind in kinds]
+    pairs = [key for keys in keys_by_movie.values() for key in keys]
     reconciled = AvailabilityQueryService().get_reconciled_for_contents(pairs, now=now)
 
     preference = build_preference(user_id)
     access = build_user_access(user_id)
-    reach = build_reach(preference, current_country=country)
+    reach = build_reach(preference, current_country=preference.current_country or country)
     providers = {provider.slug: provider for provider in Provider.objects.all()}
 
     items = []
     confirmed_offer_count = 0
     confirmed_title_count = 0
     for movie in movies:
-        raw = reconciled.get((movie.tmdb_id, movie.content_type), ())
+        raw = (offer for key in keys_by_movie[movie.pk] for offer in reconciled.get(key, ()))
         accessible = []
         for offer in raw:
             if (
@@ -133,8 +153,14 @@ def build_leaving_soon(*, user_id: int, country: str, days: int = 30, now=None) 
 
             # A missing, disputed or unsupported expiration on an alternate
             # accessible offer means we cannot claim this is the last option.
+            # Unnumbered offers can overlap the departing scope. Two distinct
+            # numbered seasons or episodes cannot substitute for each other.
             alternatives_later = any(
-                other is not offer and (other_expiry is None or other_expiry > expiry)
+                (other_expiry is None or other_expiry > expiry)
+                and (other.season_number is None or offer.season_number is None
+                     or other.season_number == offer.season_number)
+                and (other.episode_number is None or offer.episode_number is None
+                     or other.episode_number == offer.episode_number)
                 for other, _class, other_expiry, _support in accessible
             )
             departure_kind = "leaving_provider" if alternatives_later else "last_option"
@@ -158,6 +184,7 @@ def build_leaving_soon(*, user_id: int, country: str, days: int = 30, now=None) 
             departures.sort(key=lambda row: (
                 row["available_until"], row["provider"],
                 -1 if row["season_number"] is None else row["season_number"],
+                -1 if row["episode_number"] is None else row["episode_number"],
             ))
             items.append({
                 "movie": {
@@ -201,11 +228,12 @@ def build_leaving_soon(*, user_id: int, country: str, days: int = 30, now=None) 
 def leaving_soon(request):
     raw_country = request.query_params.get("country", "")
     country = raw_country.strip().upper()
-    if not re.fullmatch(r"[A-Z]{2}", country):
+    if (len(request.query_params.getlist("country")) != 1
+            or not raw_country.isascii() or country not in ALL_ISO_COUNTRIES):
         return Response({"error": "country must be an explicit ISO 3166-1 alpha-2 code"}, status=400)
 
     raw_days = request.query_params.get("days", "30")
-    if not re.fullmatch(r"[1-9][0-9]*", raw_days or "") or int(raw_days) > 90:
+    if not re.fullmatch(r"[1-9][0-9]?", raw_days or "") or int(raw_days) > 90:
         return Response({"error": "days must be an integer between 1 and 90"}, status=400)
 
     owner_id = _legacy_or_authenticated_owner(request)
