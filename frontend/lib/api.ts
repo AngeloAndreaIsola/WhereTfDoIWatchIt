@@ -360,10 +360,11 @@ export interface UnifiedCatalogResponse {
 }
 
 export async function fetchUnifiedCatalog(
-  params: Record<string, string> = {}
+  params: Record<string, string> = {},
+  signal?: AbortSignal
 ): Promise<UnifiedCatalogResponse> {
   const searchParams = new URLSearchParams(params);
-  const res = await fetch(`/api/catalog/unified/?${searchParams.toString()}`);
+  const res = await fetch(`/api/catalog/unified/?${searchParams.toString()}`, { signal });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(

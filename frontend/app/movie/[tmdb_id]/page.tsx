@@ -14,6 +14,7 @@ import CastList from "@/components/CastList";
 import type { PrimeOffer, PrimeMovieResponse } from "@/lib/api";
 import { fetchPrimeMovieOffers, addToWatchlist, markMovieWatched, unmarkMovieWatched, removeWatchlistItem, requestAvailabilityRefresh } from "@/lib/api";
 import type { LinkTmdbResponse } from "@/lib/api";
+import { invalidateCatalogCache, invalidateWatchlistCache } from "@/lib/navigationCache";
 
 interface UnofficialOffer {
   country: string;
@@ -275,6 +276,8 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
       );
       setData((prev) => prev ? { ...prev, is_in_watchlist: true } : prev);
       reloadMovie();
+      invalidateCatalogCache();
+      invalidateWatchlistCache();
     } catch (err) {
       console.error("Failed to add to watchlist:", err);
     }
@@ -287,6 +290,8 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
       }, "movie");
       setData((prev) => prev ? { ...prev, user_data: result.user_data ?? { is_watched: true } } : prev);
       reloadMovie();
+      invalidateCatalogCache();
+      invalidateWatchlistCache();
     } catch (err) {
       console.error("Failed to mark as watched:", err);
     }
@@ -297,6 +302,8 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
       const result = await unmarkMovieWatched(tmdbId, "movie");
       setData((prev) => prev ? { ...prev, user_data: result.user_data ?? { ...(prev.user_data ?? {}), is_watched: false } } : prev);
       reloadMovie();
+      invalidateCatalogCache();
+      invalidateWatchlistCache();
     } catch (err) {
       console.error("Failed to unmark as watched:", err);
     }
@@ -307,6 +314,8 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
       await removeWatchlistItem(tmdbId, "movie");
       setData((prev) => prev ? { ...prev, is_in_watchlist: false } : prev);
       reloadMovie();
+      invalidateCatalogCache();
+      invalidateWatchlistCache();
     } catch (err) {
       console.error("Failed to remove from watchlist:", err);
     }
