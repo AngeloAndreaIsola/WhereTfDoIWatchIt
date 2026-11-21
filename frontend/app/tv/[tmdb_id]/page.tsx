@@ -11,6 +11,7 @@ import AvailabilityState from "@/components/AvailabilityState";
 import LastKnownOffers from "@/components/LastKnownOffers";
 import CastList from "@/components/CastList";
 import type { PrimeOffer, PrimeSeriesResponse } from "@/lib/api";
+import { invalidateCatalogCache, invalidateWatchlistCache } from "@/lib/navigationCache";
 import { fetchPrimeSeriesOffers, addToWatchlist, markMovieWatched, unmarkMovieWatched, removeWatchlistItem, requestAvailabilityRefresh } from "@/lib/api";
 
 interface UnofficialOffer {
@@ -306,6 +307,8 @@ export default function SeriesDetailPage({ params }: SeriesDetailPageProps) {
       await addToWatchlist(tmdbId, "series");
       setData((prev) => prev ? { ...prev, is_in_watchlist: true } : prev);
       reloadSeries();
+      invalidateCatalogCache();
+      invalidateWatchlistCache();
     } catch (err) {
       console.error("Failed to add to watchlist:", err);
     }
@@ -318,6 +321,8 @@ export default function SeriesDetailPage({ params }: SeriesDetailPageProps) {
       }, "series");
       setData((prev) => prev ? { ...prev, user_data: result.user_data ?? { is_watched: true } } : prev);
       reloadSeries();
+      invalidateCatalogCache();
+      invalidateWatchlistCache();
     } catch (err) {
       console.error("Failed to mark as watched:", err);
     }
@@ -328,6 +333,8 @@ export default function SeriesDetailPage({ params }: SeriesDetailPageProps) {
       const result = await unmarkMovieWatched(tmdbId, "series");
       setData((prev) => prev ? { ...prev, user_data: result.user_data ?? { ...(prev.user_data ?? {}), is_watched: false } } : prev);
       reloadSeries();
+      invalidateCatalogCache();
+      invalidateWatchlistCache();
     } catch (err) {
       console.error("Failed to unmark as watched:", err);
     }
@@ -338,6 +345,8 @@ export default function SeriesDetailPage({ params }: SeriesDetailPageProps) {
       await removeWatchlistItem(tmdbId, "series");
       setData((prev) => prev ? { ...prev, is_in_watchlist: false } : prev);
       reloadSeries();
+      invalidateCatalogCache();
+      invalidateWatchlistCache();
     } catch (err) {
       console.error("Failed to remove from watchlist:", err);
     }

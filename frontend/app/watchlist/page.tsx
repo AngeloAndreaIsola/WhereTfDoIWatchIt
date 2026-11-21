@@ -6,6 +6,7 @@ import TitlePoster from "@/components/TitlePoster";
 import { useSearchParams, useRouter } from "next/navigation";
 import { FilterBar, FilterState } from "@/components/FilterBar";
 import { useCurrentLocation } from "@/components/CurrentLocationProvider";
+import { watchlistPageCache, invalidateWatchlistCache, invalidateCatalogCache } from "@/lib/navigationCache";
 import { VpnWatchModal } from "@/components/VpnWatchModal";
 import { WhyCantIWatchModal, ExcludedOffer } from "@/components/WhyCantIWatchModal";
 import { Pagination } from "@/components/Pagination";
@@ -114,24 +115,49 @@ export default function WatchlistPage() {
     };
   };
 
-  const [filters, setFilters] = useState<FilterState>(() =>
-    parseFiltersFromURL(new URLSearchParams(searchParams?.toString() || ""))
+  const initialWatchlistFilters = parseFiltersFromURL(
+    new URLSearchParams(searchParams?.toString() || "")
   );
+  const initialWatchlistPage =
+    Number(new URLSearchParams(searchParams?.toString() || "").get("page") || "1") || 1;
 
-  const [items, setItems] = useState<WatchlistItemRow[]>([]);
-  const [page, setPage] = useState(1);
-  const [paginationInfo, setPaginationInfo] = useState({
-    totalPages: 1,
-    hasNext: false,
-    hasPrevious: false,
+  const watchlistCacheKey = JSON.stringify({
+    filters: initialWatchlistFilters,
+    page: initialWatchlistPage,
+    country: currentCountry,
   });
-  const [loading, setLoading] = useState(true);
+
+  const cachedWatchlist = watchlistPageCache.get(watchlistCacheKey) as
+    | {
+        items: WatchlistItemRow[];
+        page: number;
+        paginationInfo: { totalPages: number; hasNext: boolean; hasPrevious: boolean };
+        filters: FilterState;
+        scrollY: number;
+      }
+    | undefined;
+
+  const [filters, setFilters] = useState<FilterState>(
+    (cachedWatchlist?.filters as FilterState) ?? initialWatchlistFilters
+  );
+  const [items, setItems] = useState<WatchlistItemRow[]>(cachedWatchlist?.items ?? []);
+  const [page, setPage] = useState<number>(cachedWatchlist?.page ?? initialWatchlistPage);
+  const [paginationInfo, setPaginationInfo] = useState({
+    totalPages: cachedWatchlist?.paginationInfo?.totalPages ?? 1,
+    hasNext: cachedWatchlist?.paginationInfo?.hasNext ?? false,
+    hasPrevious: cachedWatchlist?.paginationInfo?.hasPrevious ?? false,
+  });
+  const [loading, setLoading] = useState(!cachedWatchlist);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [pendingWatched, setPendingWatched] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
   const fetchGenerationRef = useRef(0);
+  const watchlistCacheKeyRef = useRef(watchlistCacheKey);
+  watchlistCacheKeyRef.current = watchlistCacheKey;
+  const restoredScrollRef = useRef(false);
+  const skipInitialWatchlistFetchRef = useRef(!!cachedWatchlist);
 
   const [vpnModalState, setVpnModalState] = useState<{
     isOpen: boolean;
@@ -165,6 +191,8 @@ export default function WatchlistPage() {
   }, [filters, page, router]);
 
   const refreshWatchlistData = () => {
+    invalidateWatchlistCache();
+    invalidateCatalogCache();
     setPage(1);
     setFilters({ ...filters });
   };
@@ -179,6 +207,13 @@ export default function WatchlistPage() {
   // newer request (or after a mutation) is discarded instead of overwriting
   // fresher rows.
   useEffect(() => {
+    if (skipInitialWatchlistFetchRef.current) {
+      skipInitialWatchlistFetchRef.current = false;
+      return;
+    }
+
+    const key = JSON.stringify({ filters, page, country: currentCountry });
+
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -253,6 +288,20 @@ export default function WatchlistPage() {
           hasNext: !!p.has_next,
           hasPrevious: !!p.has_previous,
         });
+        watchlistPageCache.set({
+          key,
+          items: reportList,
+          page,
+          paginationInfo: {
+            totalPages,
+            hasNext: !!p.has_next,
+            hasPrevious: !!p.has_previous,
+          },
+          filters,
+          scrollY: typeof window !== "undefined" ? window.scrollY : 0,
+          cachedAt: Date.now(),
+          extra: { refreshKey },
+        });
       })
       .catch((err: Error) => {
         if (
@@ -275,6 +324,28 @@ export default function WatchlistPage() {
       });
     return () => controller.abort();
   }, [page, filters, currentCountry, refreshKey]);
+
+  // Restore scroll position when a cached page is rendered immediately.
+  useEffect(() => {
+    if (restoredScrollRef.current) return;
+    if (loading) return;
+    const key = JSON.stringify({ filters, page, country: currentCountry });
+    const cached = watchlistPageCache.get(key) as { scrollY: number } | undefined;
+    if (cached) {
+      window.scrollTo(0, cached.scrollY || 0);
+      restoredScrollRef.current = true;
+    }
+  }, [loading, filters, page, currentCountry]);
+
+  // Persist scroll position for the cached entry on unmount.
+  useEffect(() => {
+    return () => {
+      watchlistPageCache.updateScroll(
+        watchlistCacheKeyRef.current,
+        window.scrollY
+      );
+    };
+  }, []);
 
   const handleWatchClick = (
     bestOffer: { country: string; service: string; url: string; is_current_country: boolean }
@@ -310,6 +381,8 @@ export default function WatchlistPage() {
     try {
       const result = await addToWatchlist(tmdbId, contentType);
       console.log("Added to watchlist:", result);
+      invalidateWatchlistCache();
+      invalidateCatalogCache();
       // Refresh watchlist data
       refreshWatchlistData();
     } catch (err) {
@@ -322,7 +395,11 @@ export default function WatchlistPage() {
   // the page renders. Re-running it also refreshes pagination counts, the
   // summary and the empty state. Local row edits are deliberately avoided:
   // they are how an unwatched row used to survive an Unwatched filter.
-  const revalidateWatchedMutation = () => setRefreshKey((key) => key + 1);
+  const revalidateWatchedMutation = () => {
+    invalidateWatchlistCache();
+    invalidateCatalogCache();
+    setRefreshKey((key) => key + 1);
+  };
 
   const handleMarkWatched = async (tmdbId: number, contentType: "movie" | "series") => {
     setActionError(null);
@@ -597,7 +674,11 @@ export default function WatchlistPage() {
                             onClick={() => {
                               if (movie.tmdb_id) {
                                 removeWatchlistItem(movie.tmdb_id, contentType)
-                                  .then(() => refreshWatchlistData())
+                                  .then(() => {
+                                    invalidateWatchlistCache();
+                                    invalidateCatalogCache();
+                                    refreshWatchlistData();
+                                  })
                                   .catch(err => console.error('Failed to remove from watchlist:', err));
                               }
                             }}

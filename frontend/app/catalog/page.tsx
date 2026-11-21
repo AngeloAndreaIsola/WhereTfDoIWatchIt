@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo, Suspense } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef, Suspense } from "react";
 import Link from "next/link";
 import TitlePoster from "@/components/TitlePoster";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
@@ -11,6 +11,7 @@ import { Pagination } from "@/components/Pagination";
 import LanguageBadge from "@/components/LanguageBadge";
 import { formatLastSeen } from "@/lib/time";
 import { extractViewerLanguages, useViewerPreferences } from "@/components/ViewerPreferencesProvider";
+import { catalogPageCache, invalidateCatalogCache, getCatalogCacheEpoch } from "@/lib/navigationCache";
 import { useCurrentLocation } from "@/components/CurrentLocationProvider";
 import type {
   UnifiedCatalogItem,
@@ -96,15 +97,51 @@ function CatalogPageClient() {
     };
   }, [searchParams]);
 
-  const [filters, setFilters] = useState<FilterState>(initialUrlState.filters);
-  const [items, setItems] = useState<UnifiedCatalogItem[]>([]);
-  const [page, setPage] = useState(initialUrlState.page);
+  const initialCatalogCacheKey = useMemo(
+    () =>
+      JSON.stringify({
+        filters: initialUrlState.filters,
+        page: initialUrlState.page,
+        country: currentCountry,
+      }),
+    [initialUrlState, currentCountry]
+  );
+
+  const cachedCatalog = catalogPageCache.get(initialCatalogCacheKey) as
+    | {
+        items: UnifiedCatalogItem[];
+        page: number;
+        paginationInfo: { totalPages: number; hasNext: boolean; hasPrevious: boolean };
+        filters: FilterState;
+        scrollY: number;
+      }
+    | undefined;
+
+  const [filters, setFilters] = useState<FilterState>(
+    (cachedCatalog?.filters as FilterState) ?? initialUrlState.filters
+  );
+  const [items, setItems] = useState<UnifiedCatalogItem[]>(
+    cachedCatalog?.items ?? []
+  );
+  const [page, setPage] = useState<number>(cachedCatalog?.page ?? initialUrlState.page);
   const [paginationInfo, setPaginationInfo] = useState({
-    totalPages: 1,
-    hasNext: false,
-    hasPrevious: false,
+    totalPages: cachedCatalog?.paginationInfo?.totalPages ?? 1,
+    hasNext: cachedCatalog?.paginationInfo?.hasNext ?? false,
+    hasPrevious: cachedCatalog?.paginationInfo?.hasPrevious ?? false,
   });
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!cachedCatalog);
+
+  const catalogCacheKey = useMemo(
+    () => JSON.stringify({ filters, page, country: currentCountry }),
+    [filters, page, currentCountry]
+  );
+
+  const catalogCacheKeyRef = useRef(catalogCacheKey);
+  catalogCacheKeyRef.current = catalogCacheKey;
+  const restoredScrollRef = useRef(false);
+  const skipInitialCatalogFetchRef = useRef(!!cachedCatalog);
+  const abortRef = useRef<AbortController | null>(null);
+  const fetchGenerationRef = useRef(0);
 
   // Unofficial scrape panel state
   const [providers, setProviders] = useState<UnofficialProvider[]>([]);
@@ -195,56 +232,118 @@ function CatalogPageClient() {
   };
 
   const loadCatalog = useCallback(() => {
-    setLoading(true);
-    const params: Record<string, string> = {
-      page: page.toString(),
-      page_size: "24",
-    };
-    if (filters.q) params.q = filters.q;
-    if (filters.content_type !== "all") params.content_type = filters.content_type;
-    if (filters.genre) params.genre = filters.genre;
-    if (filters.year_min) params.year_min = filters.year_min;
-    if (filters.year_max) params.year_max = filters.year_max;
-    if (filters.providers && filters.providers.length > 0) {
-      params.providers = filters.providers.join(",");
-    }
-    if (filters.status) params.status = filters.status;
-    if (filters.quality) params.quality = filters.quality;
-    if (filters.score_min) params.score_min = filters.score_min;
-    if (filters.sort_by) params.sort_by = filters.sort_by;
-    if (filters.watched && filters.watched !== "all") {
-      params.watched = filters.watched;
-    }
-    if (filters.audio_languages) params.audio_languages = filters.audio_languages;
-    if (filters.subtitle_languages) params.subtitle_languages = filters.subtitle_languages;
-    if (filters.provider_categories.length > 0) {
-      params.provider_categories = filters.provider_categories.join(",");
-    }
-    if (filters.access) params.access = filters.access;
-    if (filters.duration_min) params.duration_min = filters.duration_min;
-    if (filters.duration_max) params.duration_max = filters.duration_max;
-    if (filters.country) params.country = filters.country;
-    if (filters.actors && filters.actors.length > 0) {
-      params.actor_id = filters.actors.map((a) => a.id).join(",");
-    }
-    if (currentCountry) params.current_country = currentCountry;
+      const key = catalogCacheKey;
+      const requestEpoch = getCatalogCacheEpoch();
 
-    fetchUnifiedCatalog(params)
-      .then((data) => {
-        setItems(data.results || []);
-        setPaginationInfo({
-          totalPages: data.total_pages || 1,
-          hasNext: !!data.has_next,
-          hasPrevious: !!data.has_previous,
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+      const generation = ++fetchGenerationRef.current;
+
+      setLoading(true);
+      const params: Record<string, string> = {
+        page: page.toString(),
+        page_size: "24",
+      };
+      if (filters.q) params.q = filters.q;
+      if (filters.content_type !== "all") params.content_type = filters.content_type;
+      if (filters.genre) params.genre = filters.genre;
+      if (filters.year_min) params.year_min = filters.year_min;
+      if (filters.year_max) params.year_max = filters.year_max;
+      if (filters.providers && filters.providers.length > 0) {
+        params.providers = filters.providers.join(",");
+      }
+      if (filters.status) params.status = filters.status;
+      if (filters.quality) params.quality = filters.quality;
+      if (filters.score_min) params.score_min = filters.score_min;
+      if (filters.sort_by) params.sort_by = filters.sort_by;
+      if (filters.watched && filters.watched !== "all") {
+        params.watched = filters.watched;
+      }
+      if (filters.audio_languages) params.audio_languages = filters.audio_languages;
+      if (filters.subtitle_languages) params.subtitle_languages = filters.subtitle_languages;
+      if (filters.provider_categories.length > 0) {
+        params.provider_categories = filters.provider_categories.join(",");
+      }
+      if (filters.access) params.access = filters.access;
+      if (filters.duration_min) params.duration_min = filters.duration_min;
+      if (filters.duration_max) params.duration_max = filters.duration_max;
+      if (filters.country) params.country = filters.country;
+      if (filters.actors && filters.actors.length > 0) {
+        params.actor_id = filters.actors.map((a) => a.id).join(",");
+      }
+      if (currentCountry) params.current_country = currentCountry;
+
+      fetchUnifiedCatalog(params, controller.signal)
+        .then((data) => {
+          if (
+            controller.signal.aborted ||
+            generation !== fetchGenerationRef.current ||
+            requestEpoch !== getCatalogCacheEpoch()
+          ) {
+            return;
+          }
+          const nextItems = data.results || [];
+          const nextPagination = {
+            totalPages: data.total_pages || 1,
+            hasNext: !!data.has_next,
+            hasPrevious: !!data.has_previous,
+          };
+          setItems(nextItems);
+          setPaginationInfo(nextPagination);
+          catalogPageCache.set({
+            key,
+            items: nextItems,
+            page,
+            paginationInfo: nextPagination,
+            filters,
+            scrollY: typeof window !== "undefined" ? window.scrollY : 0,
+            cachedAt: Date.now(),
+          });
+        })
+        .catch(() => {
+          if (controller.signal.aborted || generation !== fetchGenerationRef.current) {
+            return;
+          }
+          setItems([]);
+        })
+        .finally(() => {
+          if (!controller.signal.aborted && generation === fetchGenerationRef.current) {
+            setLoading(false);
+          }
         });
-      })
-      .catch(() => setItems([]))
-      .finally(() => setLoading(false));
-  }, [filters, page]);
+    },
+    [filters, page, currentCountry, catalogCacheKey]
+  );
 
   useEffect(() => {
+    if (skipInitialCatalogFetchRef.current) {
+      skipInitialCatalogFetchRef.current = false;
+      return;
+    }
     loadCatalog();
+    return () => {
+      abortRef.current?.abort();
+    };
   }, [loadCatalog]);
+
+  // Restore scroll position when a cached page is rendered immediately.
+  useEffect(() => {
+    if (restoredScrollRef.current) return;
+    if (loading) return;
+    const cached = catalogPageCache.get(catalogCacheKey) as { scrollY: number } | undefined;
+    if (cached) {
+      window.scrollTo(0, cached.scrollY || 0);
+      restoredScrollRef.current = true;
+    }
+  }, [loading, catalogCacheKey]);
+
+  // Persist scroll position for the cached entry on unmount.
+  useEffect(() => {
+    return () => {
+      catalogPageCache.updateScroll(catalogCacheKeyRef.current, window.scrollY);
+    };
+  }, []);
 
   const handleWatchClick = (bestOffer: BestOffer) => {
     if (!bestOffer) return;
@@ -280,6 +379,7 @@ function CatalogPageClient() {
         scrapeQuery || undefined
       );
       setScrapeResult(`Scraped ${data.count} item(s) from ${scrapeProvider}`);
+      invalidateCatalogCache();
       loadCatalog();
     } catch (err) {
       setScrapeResult(
