@@ -72,10 +72,23 @@ export const watchlistPageCache = new BoundedPageCache<unknown>(
   WATCHLIST_CACHE_TTL_MS
 );
 
+let catalogCacheEpoch = 0;
+let watchlistCacheEpoch = 0;
+
 export function invalidateCatalogCache(): void {
   catalogPageCache.clear();
+  catalogCacheEpoch += 1;
 }
 
 export function invalidateWatchlistCache(): void {
   watchlistPageCache.clear();
+  watchlistCacheEpoch += 1;
+}
+
+export function getCatalogCacheEpoch(): number {
+  return catalogCacheEpoch;
+}
+
+export function getWatchlistCacheEpoch(): number {
+  return watchlistCacheEpoch;
 }

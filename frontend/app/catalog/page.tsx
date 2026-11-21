@@ -11,7 +11,7 @@ import { Pagination } from "@/components/Pagination";
 import LanguageBadge from "@/components/LanguageBadge";
 import { formatLastSeen } from "@/lib/time";
 import { extractViewerLanguages, useViewerPreferences } from "@/components/ViewerPreferencesProvider";
-import { catalogPageCache, invalidateCatalogCache } from "@/lib/navigationCache";
+import { catalogPageCache, invalidateCatalogCache, getCatalogCacheEpoch } from "@/lib/navigationCache";
 import { useCurrentLocation } from "@/components/CurrentLocationProvider";
 import type {
   UnifiedCatalogItem,
@@ -97,7 +97,7 @@ function CatalogPageClient() {
     };
   }, [searchParams]);
 
-  const catalogCacheKey = useMemo(
+  const initialCatalogCacheKey = useMemo(
     () =>
       JSON.stringify({
         filters: initialUrlState.filters,
@@ -107,7 +107,7 @@ function CatalogPageClient() {
     [initialUrlState, currentCountry]
   );
 
-  const cachedCatalog = catalogPageCache.get(catalogCacheKey) as
+  const cachedCatalog = catalogPageCache.get(initialCatalogCacheKey) as
     | {
         items: UnifiedCatalogItem[];
         page: number;
@@ -130,6 +130,11 @@ function CatalogPageClient() {
     hasPrevious: cachedCatalog?.paginationInfo?.hasPrevious ?? false,
   });
   const [loading, setLoading] = useState(!cachedCatalog);
+
+  const catalogCacheKey = useMemo(
+    () => JSON.stringify({ filters, page, country: currentCountry }),
+    [filters, page, currentCountry]
+  );
 
   const catalogCacheKeyRef = useRef(catalogCacheKey);
   catalogCacheKeyRef.current = catalogCacheKey;
@@ -227,7 +232,8 @@ function CatalogPageClient() {
   };
 
   const loadCatalog = useCallback(() => {
-      const key = catalogCacheKeyRef.current;
+      const key = catalogCacheKey;
+      const requestEpoch = getCatalogCacheEpoch();
 
       abortRef.current?.abort();
       const controller = new AbortController();
@@ -270,7 +276,11 @@ function CatalogPageClient() {
 
       fetchUnifiedCatalog(params, controller.signal)
         .then((data) => {
-          if (controller.signal.aborted || generation !== fetchGenerationRef.current) {
+          if (
+            controller.signal.aborted ||
+            generation !== fetchGenerationRef.current ||
+            requestEpoch !== getCatalogCacheEpoch()
+          ) {
             return;
           }
           const nextItems = data.results || [];
@@ -303,7 +313,7 @@ function CatalogPageClient() {
           }
         });
     },
-    [filters, page, currentCountry]
+    [filters, page, currentCountry, catalogCacheKey]
   );
 
   useEffect(() => {
@@ -312,6 +322,9 @@ function CatalogPageClient() {
       return;
     }
     loadCatalog();
+    return () => {
+      abortRef.current?.abort();
+    };
   }, [loadCatalog]);
 
   // Restore scroll position when a cached page is rendered immediately.
