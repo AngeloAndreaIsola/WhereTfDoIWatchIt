@@ -1,5 +1,5 @@
 from django.urls import path, re_path
-from . import views, api_v2
+from . import views, api_v2, views_leaving_soon
 from . import extension_views
 
 urlpatterns = [
@@ -48,6 +48,7 @@ urlpatterns = [
         views.watchlist_refresh_status,
         name="watchlist-refresh-status",
     ),
+    path("leaving-soon/", views_leaving_soon.leaving_soon, name="leaving-soon"),
     path("watchlist/report/", views.watchlist_report, name="watchlist-report"),
     path("watchlist/resolve/", views.watchlist_resolve, name="watchlist-resolve"),
     # --- Source-first availability observability (Phase 1/2) ---
