@@ -272,8 +272,9 @@ def leaving_soon(request):
             or not raw_country.isascii() or country not in ALL_ISO_COUNTRIES):
         return Response({"error": "country must be an explicit ISO 3166-1 alpha-2 code"}, status=400)
 
-    raw_days = request.query_params.get("days", "30")
-    if not re.fullmatch(r"[1-9][0-9]?", raw_days or "") or int(raw_days) > 90:
+    days_values = request.query_params.getlist("days")
+    raw_days = days_values[0] if days_values else "30"
+    if len(days_values) > 1 or not re.fullmatch(r"[1-9][0-9]?", raw_days) or int(raw_days) > 90:
         return Response({"error": "days must be an integer between 1 and 90"}, status=400)
 
     owner_id = _legacy_or_authenticated_owner(request)

@@ -7,7 +7,7 @@ Status: contract documented for ChatGPT Web review; **not formally accepted** un
 `GET /api/leaving-soon/?country=NL&days=30`
 
 - `country`: required, stripped, uppercased, ASCII ISO-3166-1 alpha-2, exactly one occurrence. Duplicate/invalid/missing -> 400. No default market.
-- `days`: optional, default 30, regex `[1-9][0-9]?` and <= 90 -> else 400. **Known gap:** duplicate `days` parameters are not rejected (first value wins).
+- `days` is optional and defaults to 30. A supplied value must match `[1-9][0-9]?` and be at most 90. Invalid values and repeated `days` parameters return 400.
 - Owner: authenticated principal's `pk`; otherwise `settings.WTDW_LEGACY_OWNER_ID` or, if unset, the `WatchlistItem.user_id` field default (currently `1`). No literal owner ID in the view; caller-supplied IDs ignored. `owner_id <= 0` -> 403. Local QA classifies the "no configured legacy owner -> 403" expectation as a test-expectation error against the documented single-owner compatibility contract.
 
 ## Response 200
@@ -72,7 +72,6 @@ Full response typing; disjoint local-time 0–7 / 8–14 / 15–30 buckets sorte
 ## Known risks / unresolved
 
 - Conflicting dates overwritten by upsert cannot be distinguished from an undated-then-dated history; persistence follow-up requiring ingestion/schema change, out of scope this wave.
-- Duplicate `days` parameters accepted.
 - `last_verified_at` semantics must not be described as "expiry confirmed at".
 - Bounded query counts measured to 48 titles / 288 offers (10 -> 11 SELECTs with the fix, constant from 1 title onward); no database-plan profiling at larger scale.
 - API contract acceptance belongs to ChatGPT Web; #176 implementation must wait for that acceptance.

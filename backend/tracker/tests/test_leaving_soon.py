@@ -527,6 +527,17 @@ class LeavingSoonDatabaseTests(TestCase):
                 _, count = self.get(query, status=400)
                 self.assertEqual(count, 0)
 
+    def test_duplicate_days_returns_bad_request(self):
+        for query in (
+            "country=NL&days=7&days=7",
+            "country=NL&days=7&days=14",
+            "country=NL&days=14&days=7",
+            "country=NL&days=&days=7",
+            "country=NL&days=7&days=",
+        ):
+            with self.subTest(query=query):
+                self.get(query, status=400)
+
     @override_settings()
     def test_anonymous_without_configured_owner_uses_watchlist_model_default(self):
         del settings.WTDW_LEGACY_OWNER_ID
