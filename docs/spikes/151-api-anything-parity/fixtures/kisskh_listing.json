@@ -1,0 +1,38 @@
+{
+  "page": 1,
+  "pageSize": 20,
+  "totalCount": 4,
+  "data": [
+    {
+      "id": 1001,
+      "title": "Typed Movie",
+      "type": "Movie",
+      "year": 2021,
+      "audio": ["ITA"],
+      "subtitles": ["ENG"],
+      "quality": "1080p",
+      "url": "https://kisskh.do/Drama/1001"
+    },
+    {
+      "id": 1002,
+      "title": "Typed Series",
+      "type": "TVSeries",
+      "year": 2020,
+      "audio": [],
+      "subtitles": [],
+      "url": "https://kisskh.do/Drama/1002"
+    },
+    {
+      "id": 1003,
+      "title": "Pending Anime",
+      "type": "Anime",
+      "year": 2019,
+      "episodes": [{"id": 1}]
+    },
+    {
+      "id": 1004,
+      "title": "Missing Type",
+      "year": 2018
+    }
+  ]
+}

@@ -1,0 +1,461 @@
+{
+  "meta": {
+    "issue": 151,
+    "mode": "offline-fixture-probe",
+    "django": "5.2.19",
+    "network": "disabled (--network none)",
+    "database": "in-memory sqlite, never queried",
+    "provider_set": [
+      "altadefinizione",
+      "animeworld",
+      "cineblog01",
+      "hydrahd",
+      "kisskh",
+      "streamingcommunity"
+    ],
+    "unofficial_permission_set": [
+      "altadefinizione",
+      "animeworld",
+      "cineblog01",
+      "hydrahd",
+      "kisskh",
+      "streamingcommunity"
+    ],
+    "scheduled_discovery_providers": [
+      "animeworld",
+      "hydrahd"
+    ],
+    "provenance_blocked": {
+      "cineblog01": "PROVENANCE_UNVERIFIED: current .run candidate is not linked to the historical AGCOM domains",
+      "altadefinizione": "PROVENANCE_UNVERIFIED: current .ink candidate is not linked to the provider; the cited AGCOM host is distinct",
+      "streamingcommunity": "PROVENANCE_UNVERIFIED: current .army candidate has no corroborated provider-domain linkage"
+    }
+  },
+  "contract": {
+    "altadefinizione": {
+      "legacy_execution": "source_permission_unverified",
+      "permission": {
+        "status": "UNVERIFIED",
+        "hostname": null,
+        "request_limit": 40,
+        "page_limit": 10,
+        "min_interval_seconds": 2.0
+      },
+      "discovery_parts": [
+        "/",
+        "/film/",
+        "/serie-tv/",
+        "/archivio/"
+      ],
+      "provenance_blocked": true
+    },
+    "animeworld": {
+      "legacy_execution": "source_permission_unverified",
+      "permission": {
+        "status": "UNVERIFIED",
+        "hostname": "www.animeworld.ac",
+        "request_limit": 40,
+        "page_limit": 10,
+        "min_interval_seconds": 2.0
+      },
+      "discovery_parts": [
+        "rss-animes"
+      ],
+      "provenance_blocked": false
+    },
+    "cineblog01": {
+      "legacy_execution": "source_permission_unverified",
+      "permission": {
+        "status": "UNVERIFIED",
+        "hostname": null,
+        "request_limit": 40,
+        "page_limit": 10,
+        "min_interval_seconds": 2.0
+      },
+      "discovery_parts": [
+        "/film/",
+        "/serie-tv/"
+      ],
+      "provenance_blocked": true
+    },
+    "hydrahd": {
+      "legacy_execution": "source_permission_unverified",
+      "permission": {
+        "status": "UNVERIFIED",
+        "hostname": "hydrahd.gd",
+        "request_limit": 40,
+        "page_limit": 10,
+        "min_interval_seconds": 2.0
+      },
+      "discovery_parts": [
+        "movies",
+        "tv-shows"
+      ],
+      "provenance_blocked": false
+    },
+    "kisskh": {
+      "legacy_execution": "source_permission_unverified",
+      "permission": {
+        "status": "UNVERIFIED",
+        "hostname": null,
+        "request_limit": 40,
+        "page_limit": 10,
+        "min_interval_seconds": 2.0
+      },
+      "discovery_parts": [
+        "2",
+        "1",
+        "3"
+      ],
+      "provenance_blocked": false
+    },
+    "streamingcommunity": {
+      "legacy_execution": "source_permission_unverified",
+      "permission": {
+        "status": "UNVERIFIED",
+        "hostname": null,
+        "request_limit": 40,
+        "page_limit": 10,
+        "min_interval_seconds": 2.0
+      },
+      "discovery_parts": [
+        "/",
+        "/film/",
+        "/series/",
+        "/archivio/"
+      ],
+      "provenance_blocked": true
+    },
+    "raiplay_control": {
+      "legacy_execution": "ALLOWED"
+    },
+    "nhk_world_control": {
+      "legacy_execution": "ALLOWED"
+    }
+  },
+  "providers": {
+    "kisskh": {
+      "returned": 2,
+      "unique_source_urls": 2,
+      "unique_native_ids": 2,
+      "duplicate_source_urls": 0,
+      "content_type_counts": {
+        "movie": 1,
+        "series": 1
+      },
+      "year_known": 2,
+      "audio_language_rows": 1,
+      "subtitle_language_rows": 1,
+      "sample": [
+        {
+          "title": "Typed Movie",
+          "year": 2021,
+          "content_type": "movie",
+          "source_url": "https://kisskh.do/Drama/1001",
+          "native_id": "1001",
+          "audio": [
+            "IT"
+          ],
+          "subs": [
+            "EN"
+          ]
+        },
+        {
+          "title": "Typed Series",
+          "year": 2020,
+          "content_type": "series",
+          "source_url": "https://kisskh.do/Drama/1002",
+          "native_id": "1002",
+          "audio": [],
+          "subs": []
+        }
+      ],
+      "fixture": "kisskh_listing.json",
+      "fetch_calls": 3,
+      "raw_parsed_upper_bound": 6,
+      "parse_catalogue_rows": {
+        "classified": 2,
+        "pending": 2,
+        "pending_titles": [
+          "Pending Anime",
+          "Missing Type"
+        ]
+      },
+      "detail_enrichment": {
+        "native_id": "1003",
+        "title": "Pending Anime",
+        "original_title": "",
+        "release_date": "2019-04-01T00:00:00Z",
+        "release_year": 2019,
+        "source_media_type": "TVSeries",
+        "episode_count": 1,
+        "episode_ids": [
+          "1"
+        ],
+        "detail_url": "https://kisskh.do/Drama/1003",
+        "raw": {
+          "id": 1003,
+          "title": "Pending Anime",
+          "type": "TVSeries",
+          "releaseDate": "2019-04-01T00:00:00Z",
+          "episodes": [
+            {
+              "id": 1
+            }
+          ]
+        }
+      }
+    },
+    "hydrahd": {
+      "returned": 2,
+      "unique_source_urls": 2,
+      "unique_native_ids": 0,
+      "duplicate_source_urls": 0,
+      "content_type_counts": {
+        "movie": 1,
+        "series": 1
+      },
+      "year_known": 2,
+      "audio_language_rows": 0,
+      "subtitle_language_rows": 0,
+      "sample": [
+        {
+          "title": "Alpha",
+          "year": 2020,
+          "content_type": "movie",
+          "source_url": "https://hydrahd.gd/movie/1-alpha",
+          "native_id": null,
+          "audio": [],
+          "subs": []
+        },
+        {
+          "title": "Beta",
+          "year": 2021,
+          "content_type": "series",
+          "source_url": "https://hydrahd.gd/watchseries/2-beta",
+          "native_id": null,
+          "audio": [],
+          "subs": []
+        }
+      ],
+      "fixture": "hydrahd_listing.html",
+      "fetch_calls": 20,
+      "raw_parsed_upper_bound": 40
+    },
+    "animeworld": {
+      "returned": 8,
+      "unique_source_urls": 2,
+      "unique_native_ids": 0,
+      "duplicate_source_urls": 6,
+      "content_type_counts": {
+        "movie": 4,
+        "series": 4
+      },
+      "year_known": 8,
+      "audio_language_rows": 0,
+      "subtitle_language_rows": 0,
+      "sample": [
+        {
+          "title": "Naruto",
+          "year": 2002,
+          "content_type": "movie",
+          "source_url": "https://www.animeworld.ac/play/naruto-1",
+          "native_id": null,
+          "audio": [],
+          "subs": []
+        },
+        {
+          "title": "Naruto Shippuden",
+          "year": 2007,
+          "content_type": "movie",
+          "source_url": "https://www.animeworld.ac/play/naruto-shippuden",
+          "native_id": null,
+          "audio": [],
+          "subs": []
+        },
+        {
+          "title": "Naruto",
+          "year": 2002,
+          "content_type": "movie",
+          "source_url": "https://www.animeworld.ac/play/naruto-1",
+          "native_id": null,
+          "audio": [],
+          "subs": []
+        }
+      ],
+      "fixture": "animeworld_search.html",
+      "fetch_calls": 4,
+      "raw_parsed_upper_bound": 8,
+      "rss_snapshot": {
+        "returned": 2,
+        "unique_source_urls": 2,
+        "unique_native_ids": 2,
+        "duplicate_source_urls": 0,
+        "content_type_counts": {
+          "movie": 1,
+          "series": 1
+        },
+        "year_known": 0,
+        "audio_language_rows": 0,
+        "subtitle_language_rows": 0,
+        "sample": [
+          {
+            "title": "Original Series",
+            "year": null,
+            "content_type": "series",
+            "source_url": "https://www.animeworld.ac/play/original-series",
+            "native_id": "7214",
+            "audio": [],
+            "subs": []
+          },
+          {
+            "title": "Original Movie",
+            "year": null,
+            "content_type": "movie",
+            "source_url": "https://www.animeworld.ac/play/original-movie",
+            "native_id": "7215",
+            "audio": [],
+            "subs": []
+          }
+        ]
+      }
+    },
+    "streamingcommunity": {
+      "returned": 3,
+      "unique_source_urls": 3,
+      "unique_native_ids": 3,
+      "duplicate_source_urls": 0,
+      "content_type_counts": {
+        "movie": 2,
+        "series": 1
+      },
+      "year_known": 3,
+      "audio_language_rows": 0,
+      "subtitle_language_rows": 0,
+      "sample": [
+        {
+          "title": "L'imperatrice",
+          "year": 2022,
+          "content_type": "series",
+          "source_url": "https://streaming-community.army/titles/28205-limperatrice-streaming",
+          "native_id": "28205",
+          "audio": [],
+          "subs": []
+        },
+        {
+          "title": "Street Fighter",
+          "year": 2026,
+          "content_type": "movie",
+          "source_url": "https://streaming-community.army/titles/33477-street-fighter-streaming",
+          "native_id": "33477",
+          "audio": [],
+          "subs": []
+        },
+        {
+          "title": "Spider-Man: Brand New Day",
+          "year": 2026,
+          "content_type": "movie",
+          "source_url": "https://streaming-community.army/titles/32167-spider-man-brand-new-day-streaming",
+          "native_id": "32167",
+          "audio": [],
+          "subs": []
+        }
+      ],
+      "fixture": "streamingcommunity_listing.html",
+      "fetch_calls": 4,
+      "raw_parsed_upper_bound": 12
+    },
+    "cineblog01": {
+      "returned": 3,
+      "unique_source_urls": 3,
+      "unique_native_ids": 3,
+      "duplicate_source_urls": 0,
+      "content_type_counts": {
+        "movie": 3
+      },
+      "year_known": 2,
+      "audio_language_rows": 1,
+      "subtitle_language_rows": 0,
+      "sample": [
+        {
+          "title": "Mammina",
+          "year": null,
+          "content_type": "movie",
+          "source_url": "https://cineblog001.run/cb01-streaming/35542-mammina-streaming-cb01.html",
+          "native_id": "35542",
+          "audio": [],
+          "subs": []
+        },
+        {
+          "title": "Il Signore degli Anelli - Gli Anelli del Potere",
+          "year": 2024,
+          "content_type": "movie",
+          "source_url": "https://cineblog001.run/cb01-streaming/27123-il-signore-degli-anelli-streaming-cb01.html",
+          "native_id": "27123",
+          "audio": [],
+          "subs": []
+        },
+        {
+          "title": "Dead-End Job",
+          "year": 2024,
+          "content_type": "movie",
+          "source_url": "https://cineblog001.run/cb01-streaming/35370-dead-end-job-streaming-cb01.html",
+          "native_id": "35370",
+          "audio": [
+            "IT"
+          ],
+          "subs": []
+        }
+      ],
+      "fixture": "cineblog01_listing.html",
+      "fetch_calls": 8,
+      "raw_parsed_upper_bound": 24
+    },
+    "altadefinizione": {
+      "returned": 2,
+      "unique_source_urls": 2,
+      "unique_native_ids": 2,
+      "duplicate_source_urls": 0,
+      "content_type_counts": {
+        "movie": 1,
+        "series": 1
+      },
+      "year_known": 2,
+      "audio_language_rows": 0,
+      "subtitle_language_rows": 1,
+      "sample": [
+        {
+          "title": "Un appuntamento sotto l'albero",
+          "year": 2024,
+          "content_type": "series",
+          "source_url": "https://altadefinizionex.ink/tv-show/45584-un-appuntamento-sotto-lalbero-streaming.html",
+          "native_id": "45584",
+          "audio": [],
+          "subs": []
+        },
+        {
+          "title": "Mi ameranno quando sarò morto",
+          "year": 1999,
+          "content_type": "movie",
+          "source_url": "https://altadefinizionex.ink/documentario/45583-mi-ameranno-quando-saro-morto-streaming.html",
+          "native_id": "45583",
+          "audio": [],
+          "subs": [
+            "IT"
+          ]
+        }
+      ],
+      "fixture": "altadefinizione_listing.html",
+      "fetch_calls": 4,
+      "raw_parsed_upper_bound": 8
+    }
+  },
+  "checks": {
+    "offers_created": 0,
+    "database_rows_written": 0,
+    "network_requests": 0,
+    "all_unofficial_legacy_gated": true,
+    "all_unofficial_permissions_unverified": true,
+    "raiplay_nhk_control_allowed": true
+  }
+}
