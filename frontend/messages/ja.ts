@@ -73,5 +73,6 @@ export const ja: TranslationCatalog = {
     coverageNotice: "データ提供状況に関する注意",
     coverageNoticeSparse: "終了日時を正式に提供しているサービスのみ表示しています。記載がない場合でも配信が継続されるとは限りません。",
     srDepartureDate: "{date}に配信終了",
+    timeZone: "表示時刻: {zone}",
   },
 };

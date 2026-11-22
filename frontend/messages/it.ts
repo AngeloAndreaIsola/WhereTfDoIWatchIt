@@ -73,5 +73,6 @@ export const it: TranslationCatalog = {
     coverageNotice: "Nota sulla copertura",
     coverageNoticeSparse: "Vengono mostrati solo i servizi che pubblicano date di scadenza verificate. L'assenza di una data non garantisce la permanenza nel catalogo.",
     srDepartureDate: "Scade il {date}",
+    timeZone: "Orari indicati in {zone}",
   },
 };

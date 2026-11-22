@@ -621,3 +621,188 @@ describe("Leaving Soon i18n: EN, IT, JA translations", () => {
     expect(screen.getByText(/ITで視聴可能な最後の配信/i)).toBeInTheDocument();
   });
 });
+
+describe("LeavingSoonSection: review-feedback regressions", () => {
+  const asOfMs = new Date(AS_OF_UTC).getTime();
+  const MS_DAY = 86_400_000;
+
+  const makeResponse = (
+    country: string,
+    title: string,
+    until: string = new Date(asOfMs + 3 * MS_DAY).toISOString()
+  ): LeavingSoonResponse => ({
+    country,
+    horizon: {
+      days: 30,
+      as_of: AS_OF_UTC,
+      until: new Date(asOfMs + 30 * MS_DAY).toISOString(),
+    },
+    items: [makeDepartureItem(900, title, [{ provider: "p", provider_display: "Provider", available_until: until }])],
+    coverage: {
+      status: "partial_confirmed_departures",
+      watchlist_titles: 1,
+      titles_with_confirmed_expiry_data: 1,
+      offers_with_confirmed_expiry_data: 1,
+      scope: "selected_country_watchlist_only",
+      completeness: "partial_not_all_providers_report_expiry",
+    },
+  });
+
+  beforeEach(() => {
+    invalidateLeavingSoonCache();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("restores a typed cached response on unmount/remount without fetching", async () => {
+    const fixture = makeResponse("NL", "Cached Title");
+    leavingSoonCache.set({
+      key: "NL:30",
+      items: [fixture],
+      page: 1,
+      paginationInfo: { totalPages: 1, hasNext: false, hasPrevious: false },
+      filters: null,
+      scrollY: 0,
+      cachedAt: Date.now(),
+    });
+    const fetchSpy = vi.fn(() => {
+      throw new Error("cached mount must not fetch");
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const first = render(
+      <LocaleProvider initialLocale="en">
+        <LeavingSoonSection country="NL" />
+      </LocaleProvider>
+    );
+    expect(await screen.findByText(/Cached Title/)).toBeInTheDocument();
+    expect(screen.getAllByTestId("leaving-soon-card")).toHaveLength(1);
+    first.unmount();
+
+    render(
+      <LocaleProvider initialLocale="en">
+        <LeavingSoonSection country="NL" />
+      </LocaleProvider>
+    );
+    expect(await screen.findByText(/Cached Title/)).toBeInTheDocument();
+    expect(screen.getAllByTestId("leaving-soon-card")).toHaveLength(1);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("ignores a pending request when the country switches to a cached country", async () => {
+    let resolveNl: ((value: unknown) => void) | undefined;
+    const nlPending = new Promise((resolve) => {
+      resolveNl = resolve;
+    });
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).includes("country=NL")) return nlPending;
+      throw new Error(`unexpected fetch: ${String(url)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    leavingSoonCache.set({
+      key: "IT:30",
+      items: [makeResponse("IT", "Italian Snapshot")],
+      page: 1,
+      paginationInfo: { totalPages: 1, hasNext: false, hasPrevious: false },
+      filters: null,
+      scrollY: 0,
+      cachedAt: Date.now(),
+    });
+
+    const view = render(
+      <LocaleProvider initialLocale="en">
+        <LeavingSoonSection country="NL" />
+      </LocaleProvider>
+    );
+    expect(screen.getByTestId("leaving-soon-loading")).toBeInTheDocument();
+
+    view.rerender(
+      <LocaleProvider initialLocale="en">
+        <LeavingSoonSection country="IT" />
+      </LocaleProvider>
+    );
+    expect(await screen.findByText(/Italian Snapshot/)).toBeInTheDocument();
+
+    await act(async () => {
+      resolveNl?.({
+        ok: true,
+        status: 200,
+        json: async () => makeResponse("NL", "Stale Dutch Response"),
+      });
+      await nlPending;
+    });
+
+    expect(screen.queryByText("Stale Dutch Response")).not.toBeInTheDocument();
+    expect(screen.getByText(/Italian Snapshot/)).toBeInTheDocument();
+  });
+
+  it("shows error/retry for malformed successful responses", async () => {
+    const malformed = [
+      { country: "NL", items: [], horizon: { days: 30 } },
+      { country: "NL", horizon: { days: 30, as_of: AS_OF_UTC, until: "2026-12-22T10:00:00Z" }, coverage: {} },
+      { ...makeResponse("NL", "Broken"), items: [{ movie: {}, leaving_offers: [] }] },
+    ];
+    for (const response of malformed) {
+      invalidateLeavingSoonCache();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => ({ ok: true, status: 200, json: async () => response }))
+      );
+      const view = render(
+        <LocaleProvider initialLocale="en">
+          <LeavingSoonSection country="NL" />
+        </LocaleProvider>
+      );
+      expect(await screen.findByTestId("leaving-soon-error")).toBeInTheDocument();
+      expect(screen.queryByTestId("leaving-soon-departures")).not.toBeInTheDocument();
+      view.unmount();
+    }
+  });
+
+  it("renders localized date and time with timezone, including a DST-boundary expiry", async () => {
+    // Europe/Rome switches to CEST on 2026-03-29; the exact UTC instant must
+    // still be rendered with a locale-aware time, not just a calendar date.
+    const dstExpiry = "2026-03-29T01:30:00+00:00";
+    const dstFixture = {
+      ...makeResponse("NL", "DST Title", dstExpiry),
+      horizon: {
+        days: 30,
+        as_of: "2026-03-28T10:00:00+00:00",
+        until: "2026-04-27T10:00:00+00:00",
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => dstFixture,
+      }))
+    );
+
+    const view = render(
+      <LocaleProvider initialLocale="en">
+        <LeavingSoonSection country="NL" />
+      </LocaleProvider>
+    );
+    expect(await screen.findByText(/DST Title/)).toBeInTheDocument();
+    const time = screen.getByTestId("leaving-soon-card").querySelector("time");
+    expect(time?.getAttribute("datetime")).toBe(dstExpiry);
+    expect(time?.textContent).toMatch(/\d{1,2}:\d{2}/);
+    expect(screen.getAllByText(/Times shown in/i).length).toBeGreaterThan(0);
+    view.unmount();
+
+    invalidateLeavingSoonCache();
+    render(
+      <LocaleProvider initialLocale="it">
+        <LeavingSoonSection country="NL" />
+      </LocaleProvider>
+    );
+    await waitFor(() =>
+      expect(screen.getAllByText(/Orari indicati in/i).length).toBeGreaterThan(0)
+    );
+  });
+});

@@ -10,7 +10,9 @@ import {
 } from "@/lib/api";
 import {
   groupLeavingOffers,
-  formatDepartureDate,
+  getCachedLeavingSoon,
+  parseLeavingSoonResponse,
+  formatDepartureDateTime,
   formatObservedDate,
   getAccessTypeLabel,
   type LeavingSoonDepartureEntry,
@@ -30,7 +32,9 @@ export function LeavingSoonSection({
   const normalizedCountry = country.trim().toUpperCase();
 
   const cacheKey = normalizedCountry ? `${normalizedCountry}:30` : "";
-  const cachedData = cacheKey ? (leavingSoonCache.get(cacheKey) as LeavingSoonResponse | undefined) : undefined;
+  const cachedData = cacheKey
+    ? getCachedLeavingSoon(leavingSoonCache.get(cacheKey))
+    : undefined;
 
   const [data, setData] = useState<LeavingSoonResponse | null>(cachedData ?? null);
   const [loading, setLoading] = useState<boolean>(!cachedData && Boolean(normalizedCountry));
@@ -51,13 +55,25 @@ export function LeavingSoonSection({
       }
 
       const key = `${normalizedCountry}:30`;
-      if (!force && lastFetchedKeyRef.current === key && dataRef.current) {
+      // A country transition must invalidate in-flight work even when the new
+      // country is served from cache, otherwise the older response can land
+      // after the cached snapshot and overwrite it.
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+      const gen = ++fetchGenRef.current;
+
+      if (
+        !force &&
+        lastFetchedKeyRef.current === key &&
+        dataRef.current?.country.toUpperCase() === normalizedCountry
+      ) {
         return;
       }
 
       if (!force) {
-        const cached = leavingSoonCache.get(key) as LeavingSoonResponse | undefined;
-        if (cached) {
+        const cached = getCachedLeavingSoon(leavingSoonCache.get(key));
+        if (cached && cached.country.toUpperCase() === normalizedCountry) {
           setData(cached);
           setError(null);
           setIsOffline(false);
@@ -66,11 +82,6 @@ export function LeavingSoonSection({
           return;
         }
       }
-
-      abortRef.current?.abort();
-      const controller = new AbortController();
-      abortRef.current = controller;
-      const gen = ++fetchGenRef.current;
 
       setLoading(true);
       setError(null);
@@ -87,29 +98,7 @@ export function LeavingSoonSection({
         if (controller.signal.aborted || gen !== fetchGenRef.current) {
           return;
         }
-        // Normalize response shape in case mock returns partial/unexpected payload
-        const result: LeavingSoonResponse = {
-          country: rawResult.country || normalizedCountry,
-          horizon: rawResult.horizon || {
-            days: 30,
-            as_of: new Date().toISOString(),
-            until: new Date(Date.now() + 30 * 86_400_000).toISOString(),
-          },
-          items: Array.isArray(rawResult.items) ? rawResult.items : [],
-          coverage: rawResult.coverage || {
-            status: "no_confirmed_expiry_data",
-            watchlist_titles: 0,
-            titles_with_confirmed_expiry_data: 0,
-            offers_with_confirmed_expiry_data: 0,
-            scope: "selected_country_watchlist_only",
-            completeness: "partial_not_all_providers_report_expiry",
-          },
-        };
-
-        // Verify country matches current country (ignore stale responses)
-        if (result.country && result.country.toUpperCase() !== normalizedCountry) {
-          return;
-        }
+        const result = parseLeavingSoonResponse(rawResult, normalizedCountry);
 
         setData(result);
         lastFetchedKeyRef.current = key;
@@ -170,7 +159,7 @@ export function LeavingSoonSection({
   };
 
   const grouped = useMemo(() => {
-    if (!data) {
+    if (!data || data.country.toUpperCase() !== normalizedCountry) {
       return { next_7_days: [], days_8_14: [], days_15_30: [], totalDepartures: 0 };
     }
     const asOf = data.horizon?.as_of || new Date().toISOString();
@@ -184,7 +173,11 @@ export function LeavingSoonSection({
   const renderCard = (entry: LeavingSoonDepartureEntry) => {
     const { movie, offer } = entry;
     const href = movie.content_type === "series" ? `/tv/${movie.tmdb_id}` : `/movie/${movie.tmdb_id}`;
-    const formattedDate = formatDepartureDate(offer.available_until, locale);
+    const formattedDate = formatDepartureDateTime(offer.available_until, locale);
+    const timeZone =
+      typeof Intl !== "undefined"
+        ? Intl.DateTimeFormat().resolvedOptions().timeZone || "local time"
+        : "local time";
     const observedDate = offer.last_verified_at ? formatObservedDate(offer.last_verified_at, locale) : null;
     const cardKey = `${movie.tmdb_id}-${offer.provider}-${offer.season_number ?? "all"}-${offer.episode_number ?? "all"}-${offer.available_until}`;
 
@@ -266,11 +259,16 @@ export function LeavingSoonSection({
           <div className="mt-2 pt-1 border-t border-gray-100 dark:border-gray-800 flex flex-wrap items-center justify-between gap-1 text-[11px]">
             <div>
               <span className="sr-only">
-                {t("leavingSoon.srDepartureDate", { date: formattedDate })}
+                {t("leavingSoon.srDepartureDate", {
+                  date: `${formattedDate} (${t("leavingSoon.timeZone", { zone: timeZone })})`,
+                })}
               </span>
               <time dateTime={offer.available_until} className="font-semibold text-red-600 dark:text-red-400">
                 {t("leavingSoon.leavingDate", { date: formattedDate })}
               </time>
+              <span className="ml-1 text-[10px] text-gray-500 dark:text-gray-400">
+                {t("leavingSoon.timeZone", { zone: timeZone })}
+              </span>
             </div>
             {observedDate && (
               <span className="text-[10px] text-gray-400 dark:text-gray-500">

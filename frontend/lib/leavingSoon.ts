@@ -2,6 +2,7 @@ import type {
   LeavingSoonItem,
   LeavingSoonMovie,
   LeavingSoonOffer,
+  LeavingSoonResponse,
 } from "./api";
 
 export interface LeavingSoonDepartureEntry {
@@ -17,6 +18,90 @@ export interface GroupedLeavingOffers {
 }
 
 const MS_PER_DAY = 86_400_000;
+
+/**
+ * `BoundedPageCache` stores a CachedPage whose `items` array holds the page
+ * payload. Leaving Soon stores one response per country key; reading the
+ * cache entry itself as a response would make `items` an array of responses
+ * and silently drop every departure.
+ */
+export function getCachedLeavingSoon(
+  cached: unknown
+): LeavingSoonResponse | undefined {
+  if (!cached || typeof cached !== "object") return undefined;
+  const items = (cached as { items?: unknown }).items;
+  if (!Array.isArray(items) || items.length !== 1) return undefined;
+  const response = items[0];
+  if (!response || typeof response !== "object") return undefined;
+  const candidate = response as LeavingSoonResponse;
+  if (
+    typeof candidate.country !== "string" ||
+    !candidate.horizon ||
+    !Array.isArray(candidate.items) ||
+    !candidate.coverage
+  ) {
+    return undefined;
+  }
+  return candidate;
+}
+
+const validIso = (value: unknown): value is string =>
+  typeof value === "string" && !Number.isNaN(new Date(value).getTime());
+
+/**
+ * Fail closed: a successful HTTP 200 with missing or malformed fields must
+ * become an error state, never an apparently valid "no evidence" result.
+ */
+export function parseLeavingSoonResponse(
+  raw: unknown,
+  expectedCountry: string
+): LeavingSoonResponse {
+  if (!raw || typeof raw !== "object") {
+    throw new Error("Malformed Leaving Soon response");
+  }
+  const value = raw as Partial<LeavingSoonResponse>;
+  if (
+    typeof value.country !== "string" ||
+    value.country.trim().toUpperCase() !== expectedCountry ||
+    !value.horizon ||
+    typeof value.horizon.days !== "number" ||
+    !validIso(value.horizon.as_of) ||
+    !validIso(value.horizon.until) ||
+    !Array.isArray(value.items) ||
+    !value.coverage ||
+    typeof value.coverage.status !== "string" ||
+    typeof value.coverage.watchlist_titles !== "number" ||
+    typeof value.coverage.titles_with_confirmed_expiry_data !== "number" ||
+    typeof value.coverage.offers_with_confirmed_expiry_data !== "number"
+  ) {
+    throw new Error("Malformed Leaving Soon response");
+  }
+  for (const item of value.items) {
+    if (
+      !item ||
+      !item.movie ||
+      typeof item.movie.tmdb_id !== "number" ||
+      typeof item.movie.title !== "string" ||
+      typeof item.movie.content_type !== "string" ||
+      !Array.isArray(item.leaving_offers)
+    ) {
+      throw new Error("Malformed Leaving Soon response");
+    }
+    for (const offer of item.leaving_offers) {
+      if (
+        !offer ||
+        typeof offer.provider !== "string" ||
+        typeof offer.country !== "string" ||
+        !validIso(offer.available_until) ||
+        (offer.departure_kind !== "leaving_provider" &&
+          offer.departure_kind !== "last_option")
+      ) {
+        throw new Error("Malformed Leaving Soon response");
+      }
+    }
+  }
+  return value as LeavingSoonResponse;
+}
 
 /**
  * Groups leaving offers into three disjoint local-time / UTC-preserving horizon buckets:

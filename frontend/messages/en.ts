@@ -71,6 +71,7 @@ export interface TranslationCatalog {
     coverageNotice: string;
     coverageNoticeSparse: string;
     srDepartureDate: string;
+    timeZone: string;
   };
 }
 
@@ -147,6 +148,7 @@ export const en: TranslationCatalog = {
     coverageNotice: "Coverage note",
     coverageNoticeSparse: "Only services reporting verified departure dates are shown. Missing dates do not guarantee a title will remain available.",
     srDepartureDate: "Leaves on {date}",
+    timeZone: "Times shown in {zone}",
   },
 };
 
