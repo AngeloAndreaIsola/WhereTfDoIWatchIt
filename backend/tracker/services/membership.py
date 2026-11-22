@@ -13,6 +13,7 @@ blocks on the lock, then observes the first caller's committed row.
 
 from django.db import router, transaction
 
+from tracker.ownership import resolve_personal_owner_id
 from ..models import Movie, WatchlistItem
 
 
@@ -24,7 +25,7 @@ def locked_watchlist_memberships(movie: Movie, *, user_id: int):
 
 
 def get_or_create_watchlist_membership(
-    movie: Movie, *, user_id: int = 1, source: str = "manual"
+    movie: Movie, *, user_id: int | None = None, source: str = "manual"
 ) -> tuple[WatchlistItem, bool]:
     """Return ``(item, created)`` for the user's single membership of *movie*.
 
@@ -32,6 +33,7 @@ def get_or_create_watchlist_membership(
     source; the original provenance is preserved unchanged. ``source`` is only
     used when a new membership is actually created.
     """
+    user_id = resolve_personal_owner_id() if user_id is None else user_id
     with transaction.atomic(using=router.db_for_write(WatchlistItem)):
         memberships = locked_watchlist_memberships(movie, user_id=user_id)
         item = memberships.order_by("pk").first()

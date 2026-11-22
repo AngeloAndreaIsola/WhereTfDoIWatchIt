@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
 from tracker.models import Movie, Preference, Provider, Subscription
+from tracker.ownership import resolve_personal_owner_id
 from tracker.services.access import (
     INCLUDED_ACCESS_TYPES,
     AccessResult,
@@ -218,13 +219,14 @@ class WatchabilityResult:
         }
 
 
-def get_user_subscriptions(user_id: int = 1) -> set[str]:
+def get_user_subscriptions(user_id: int | None = None) -> set[str]:
     """Return set of normalized provider slugs and subscription names for user.
 
     Legacy flat set (slugs + names, plus auto-counted broadcaster/scraper
     providers). Kept for callers that only need membership testing; the
     access-mode-aware view of the same rows is :func:`access.build_user_access`.
     """
+    user_id = resolve_personal_owner_id() if user_id is None else user_id
     subs = list(Subscription.objects.filter(user_id=user_id).values_list("provider__slug", "name"))
     subscribed = set()
     for slug, name in subs:

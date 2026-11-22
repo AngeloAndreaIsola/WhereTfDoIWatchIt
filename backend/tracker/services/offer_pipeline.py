@@ -6,6 +6,7 @@ from typing import Optional
 
 from django.conf import settings
 from tracker.models import Preference, Provider, ProviderCategory
+from tracker.ownership import resolve_personal_owner_id
 
 from .enrichment import enrich_movie_from_tmdb
 from .preferences import build_preference, resolve_preferences
@@ -26,11 +27,11 @@ class OfficialOffersPipelineResult:
 class OfficialOffersPipeline:
     def __init__(
         self,
-        user_id: int = 1,
+        user_id: int | None = None,
         default_provider_slug: str = "prime",
         provider_category_set: Optional[set[str]] = None,
     ):
-        self.user_id = user_id
+        self.user_id = resolve_personal_owner_id() if user_id is None else user_id
         self.default_provider_slug = default_provider_slug
         self.provider_category_set = provider_category_set
 

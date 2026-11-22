@@ -10,7 +10,6 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta, timezone as dt_timezone
 
-from django.conf import settings
 from django.utils import timezone
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -20,6 +19,7 @@ from availability.models import OfferEvidence, build_offer_identity
 from availability.services.query import AvailabilityQueryService
 from tracker.management.commands.seed_catalog import ALL_ISO_COUNTRIES
 from tracker.models import Provider, WatchlistItem
+from tracker.ownership import resolve_personal_owner_id
 from tracker.services.access import (
     build_reach,
     build_user_access,
@@ -115,22 +115,6 @@ def _confirmed_expiry(offer, now: datetime, *, recorded_presence=None):
                 active_supporters.append(observation)
         supporters = tuple(active_supporters)
     return (expiry, supporters) if supporters else (None, ())
-
-
-def _legacy_or_authenticated_owner(request) -> int:
-    """Keep the current single-owner deployment configurable until #96.
-
-    Never accept a caller-provided user ID. Authenticated sessions use their
-    own identity; anonymous clients follow the existing legacy installation
-    owner's ID, configurable rather than repeated throughout query paths.
-    """
-    principal = getattr(request, "user", None)
-    if getattr(principal, "is_authenticated", False):
-        return int(principal.pk)
-    legacy_owner = getattr(settings, "WTDW_LEGACY_OWNER_ID", None)
-    if legacy_owner is None:
-        legacy_owner = WatchlistItem._meta.get_field("user_id").get_default()
-    return int(legacy_owner)
 
 
 def build_leaving_soon(*, user_id: int, country: str, days: int = 30, now=None) -> dict:
@@ -277,9 +261,6 @@ def leaving_soon(request):
     if len(days_values) > 1 or not re.fullmatch(r"[1-9][0-9]?", raw_days) or int(raw_days) > 90:
         return Response({"error": "days must be an integer between 1 and 90"}, status=400)
 
-    owner_id = _legacy_or_authenticated_owner(request)
-    if owner_id <= 0:
-        return Response({"error": "no valid watchlist owner"}, status=403)
     return Response(build_leaving_soon(
-        user_id=owner_id, country=country, days=int(raw_days)
+        user_id=resolve_personal_owner_id(), country=country, days=int(raw_days)
     ))

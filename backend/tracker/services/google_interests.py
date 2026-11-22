@@ -48,6 +48,8 @@ from urllib.parse import parse_qs, unquote, urlencode, urlparse
 import requests
 from django.conf import settings
 
+from tracker.ownership import resolve_personal_owner_id
+
 logger = logging.getLogger(__name__)
 
 
@@ -505,7 +507,7 @@ def _search_all(client, title: str, year: Optional[int], attempts: int = 2) -> l
 def import_interests(
     rows: Iterable[GoogleInterestRow],
     client=None,
-    user_id: int = 1,
+    user_id: int | None = None,
 ) -> GoogleInterestsImportResult:
     """Resolve a list of GoogleInterestRow entries into WatchlistItem rows.
 
@@ -518,6 +520,7 @@ def import_interests(
     from tracker.services.refresh_requests import request_import_refresh
     from tracker.services.tmdb import TMDbClient
 
+    user_id = resolve_personal_owner_id() if user_id is None else user_id
     client = client or TMDbClient(settings.TMDB_API_KEY, timeout=3)
     result = GoogleInterestsImportResult()
     import_freshness_configuration = source_configuration_snapshot().get(
@@ -626,6 +629,7 @@ def import_interests(
             priority=RefreshPriority.WATCHLIST,
             entering=movie_created or item_created,
             source_configuration=import_freshness_configuration,
+            user_id=user_id,
         )
 
     return result
@@ -646,7 +650,7 @@ def parse_and_import(
     html: str,
     page_url: str,
     client=None,
-    user_id: int = 1,
+    user_id: int | None = None,
 ) -> GoogleInterestsImportResult:
     """Parse one page of Google list HTML and import every title found.
 

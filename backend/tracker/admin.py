@@ -5,6 +5,7 @@ from django.urls import path
 from django.utils.html import format_html
 from django.shortcuts import render
 
+from .ownership import resolve_personal_owner_id
 from .services.membership import locked_watchlist_memberships
 
 from .models import (
@@ -181,14 +182,28 @@ class AvailabilityAdmin(admin.ModelAdmin):
     search_fields = ("movie__title",)
 
 
+class PersonalDataForm(forms.ModelForm):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.initial["user_id"] = resolve_personal_owner_id()
+        self.fields["user_id"].disabled = True
+
+
+class PersonalDataAdmin(admin.ModelAdmin):
+    form = PersonalDataForm
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).filter(user_id=resolve_personal_owner_id())
+
+
 @admin.register(Subscription)
-class SubscriptionAdmin(admin.ModelAdmin):
+class SubscriptionAdmin(PersonalDataAdmin):
     list_display = ("name", "user_id")
     search_fields = ("name",)
 
 
 @admin.register(Preference)
-class PreferenceAdmin(admin.ModelAdmin):
+class PreferenceAdmin(PersonalDataAdmin):
     list_display = ("user_id", "audio_languages", "subtitle_languages", "candidate_countries")
 
     def formfield_for_dbfield(self, db_field, **kwargs):
@@ -198,7 +213,7 @@ class PreferenceAdmin(admin.ModelAdmin):
         return field
 
 
-class WatchlistMembershipForm(forms.ModelForm):
+class WatchlistMembershipForm(PersonalDataForm):
     def clean(self):
         data = super().clean()
         movie = data.get("movie")
@@ -217,7 +232,7 @@ class WatchlistMembershipForm(forms.ModelForm):
 
 
 @admin.register(WatchlistItem)
-class WatchlistItemAdmin(admin.ModelAdmin):
+class WatchlistItemAdmin(PersonalDataAdmin):
     form = WatchlistMembershipForm
     list_display = ("movie", "source", "added_at")
     search_fields = ("movie__title",)

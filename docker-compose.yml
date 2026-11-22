@@ -36,6 +36,7 @@ services:
       RAPIDAPI_KEY: ${RAPIDAPI_KEY:-}
       WATCHMODE_API_KEY: ${WATCHMODE_API_KEY:-}
       DEFAULT_PREFERENCE_PROVIDER: ${DEFAULT_PREFERENCE_PROVIDER:-prime}
+      WTDW_LEGACY_OWNER_ID: ${WTDW_LEGACY_OWNER_ID:-1}
       # Consult the metered aggregator only for titles a cheaper source has
       # not already resolved. Set on both the service that enqueues and the
       # worker that drains, since the gate is enforced at both ends: the
@@ -124,6 +125,7 @@ services:
       WATCHMODE_API_KEY: ${WATCHMODE_API_KEY:-}
       UNOFFICIAL_CATALOGUE_DISCOVERY_SCHEDULES: ${UNOFFICIAL_CATALOGUE_DISCOVERY_SCHEDULES:-}
       DEFAULT_PREFERENCE_PROVIDER: ${DEFAULT_PREFERENCE_PROVIDER:-prime}
+      WTDW_LEGACY_OWNER_ID: ${WTDW_LEGACY_OWNER_ID:-1}
       # Same ladder switch as the backend. The worker enforces the gate at
       # drain time independently, so a request that became unnecessary while
       # queued is settled without being attempted — which only works if this

@@ -9,6 +9,7 @@ import logging
 
 from django.core.management.base import BaseCommand
 
+from ...ownership import resolve_personal_owner_id
 from ...services.bulk_refresh import process_watchlist_refresh
 
 logger = logging.getLogger(__name__)
@@ -31,7 +32,7 @@ class Command(BaseCommand):
         budget = options["budget"]
         summary = process_watchlist_refresh(
             budget=budget,
-            user_id=1,
+            user_id=resolve_personal_owner_id(),
             content_types=["movie", "series"],
         )
 

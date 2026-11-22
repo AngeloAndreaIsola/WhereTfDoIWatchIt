@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from rest_framework import serializers
 
+from .ownership import resolve_personal_owner_id
 from .languages import CANONICAL_LANGUAGE_MAP, normalize_language_code
 from django.db import models
 from .models import (
@@ -65,11 +66,11 @@ class MovieDetailSerializer(serializers.ModelSerializer):
         ]
 
     def get_user_data(self, obj: Movie):
-        user_data = UserMovieData.objects.filter(user_id=1, movie=obj).first()
+        user_data = UserMovieData.objects.filter(user_id=resolve_personal_owner_id(), movie=obj).first()
         return UserMovieDataSerializer(user_data).data if user_data else None
 
     def get_watch_events(self, obj: Movie):
-        events = MovieWatchEvent.objects.filter(user_id=1, movie=obj).order_by("-watched_date", "-created_at")
+        events = MovieWatchEvent.objects.filter(user_id=resolve_personal_owner_id(), movie=obj).order_by("-watched_date", "-created_at")
         return MovieWatchEventSerializer(events, many=True).data
 
 
@@ -190,14 +191,14 @@ class ProviderSerializer(serializers.ModelSerializer):
         user_subscribed_ids = self.context.get("user_subscribed_ids")
         if user_subscribed_ids is not None:
             return obj.id in user_subscribed_ids
-        return Subscription.objects.filter(user_id=1, provider__id=obj.id).exists()
+        return Subscription.objects.filter(user_id=resolve_personal_owner_id(), provider__id=obj.id).exists()
 
     def get_access_mode(self, obj: Provider):
         """The user's declared access mode for this provider (or ``None``)."""
         modes = self.context.get("user_access_modes")
         if modes is not None:
             return modes.get(obj.id)
-        sub = Subscription.objects.filter(user_id=1, provider=obj).only("access_mode").first()
+        sub = Subscription.objects.filter(user_id=resolve_personal_owner_id(), provider=obj).only("access_mode").first()
         return sub.access_mode if sub else None
 
     def get_scraped_content_count(self, obj: Provider) -> int:

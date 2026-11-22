@@ -8,7 +8,7 @@ Status: contract documented for ChatGPT Web review; **not formally accepted** un
 
 - `country`: required, stripped, uppercased, ASCII ISO-3166-1 alpha-2, exactly one occurrence. Duplicate/invalid/missing -> 400. No default market.
 - `days` is optional and defaults to 30. A supplied value must match `[1-9][0-9]?` and be at most 90. Invalid values and repeated `days` parameters return 400.
-- Owner: authenticated principal's `pk`; otherwise `settings.WTDW_LEGACY_OWNER_ID` or, if unset, the `WatchlistItem.user_id` field default (currently `1`). No literal owner ID in the view; caller-supplied IDs ignored. `owner_id <= 0` -> 403. Local QA classifies the "no configured legacy owner -> 403" expectation as a test-expectation error against the documented single-owner compatibility contract.
+- Owner is resolved by the [installation-wide ownership policy](watchlist-owner-migration-plan.md). The server uses `WTDW_LEGACY_OWNER_ID` with a fallback to `1` when unset. Caller-supplied IDs and session identity do not influence owner selection.
 
 ## Response 200
 

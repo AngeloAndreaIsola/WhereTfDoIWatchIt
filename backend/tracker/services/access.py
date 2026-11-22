@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
 from tracker.models import Provider, ProviderCategory, Subscription
+from tracker.ownership import resolve_personal_owner_id
 from tracker.services.offers import (
     Offer,
     TerritorialScope,
@@ -331,7 +332,7 @@ def build_explicit_access(slugs: Iterable[str]) -> UserAccess:
     )
 
 
-def build_user_access(user_id: int = 1) -> UserAccess:
+def build_user_access(user_id: int | None = None) -> UserAccess:
     """Build the user's access map from ``Subscription`` rows.
 
     ``access_mode`` decides the bucket; ``none`` means "explicitly not owned"
@@ -339,6 +340,7 @@ def build_user_access(user_id: int = 1) -> UserAccess:
     (broadcaster VOD, scraper sources) still auto-count. Name-only rows
     preserve their declared ``access_mode``; unknown modes are ignored.
     """
+    user_id = resolve_personal_owner_id() if user_id is None else user_id
     access = UserAccess()
     targets = {
         SubscriptionAccessMode.INCLUDED: access.included,
@@ -825,7 +827,7 @@ def resolve_title(
     elif user_subscriptions is not None:
         access = build_explicit_access(user_subscriptions)
     else:
-        access = build_user_access(getattr(preference, "user_id", 1) or 1)
+        access = build_user_access(getattr(preference, "user_id", None) or None)
 
     reach = build_reach(preference, current_country)
     if provider_map is None:

@@ -212,6 +212,7 @@ LOGGING = {
 # External API keys (set via env or docker-compose env_file).
 TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "")
 RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "")
+WTDW_LEGACY_OWNER_ID = os.environ.get("WTDW_LEGACY_OWNER_ID")
 # Watchmode aggregator API key. Read from the environment like the other
 # provider keys and never hard-coded; an empty value makes the source raise
 # an explicit auth error rather than silently report no availability.

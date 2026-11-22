@@ -64,6 +64,7 @@ from availability.services.refresh import AvailabilityRefreshService
 from availability.sources import DEFAULT_SOURCE_SLUG, source_registry
 from availability.sources.base import SourceQuotaExceeded
 
+from tracker.ownership import resolve_personal_owner_id
 from ..models import (
     AvailabilityRefresh,
     CatalogueRefreshRequest,
@@ -424,7 +425,7 @@ def request_title_refresh(
 
 
 def request_watchlist_refresh(
-    user_id: int = 1,
+    user_id: int | None = None,
     *,
     priority: int = RefreshPriority.EXPLICIT,
     if_stale: bool = False,
@@ -486,9 +487,10 @@ def request_watchlist_refresh(
     enqueued exactly as before — the change is additive, and turning the gate
     off restores the previous scheduling byte for byte.
     """
+    user_id = resolve_personal_owner_id() if user_id is None else user_id
     batch = uuid.uuid4()
     country = (
-        resolve_source_country() if country is None else str(country).strip().upper()
+        resolve_source_country(user_id) if country is None else str(country).strip().upper()
     ) or ""
     base_sources = list(sources) if sources is not None else title_level_source_slugs()
     source_configurations = source_configuration_snapshot(
@@ -575,6 +577,7 @@ def request_import_refresh(
     *,
     entering: bool = False,
     source_configuration=None,
+    user_id: int | None = None,
 ) -> RefreshRequest | None:
     """Refresh-request rule for imported titles.
 
@@ -596,6 +599,7 @@ def request_import_refresh(
         priority=priority,
         if_stale=True,
         source_configuration=source_configuration,
+        country=resolve_source_country(user_id) or "",
     )
 
 

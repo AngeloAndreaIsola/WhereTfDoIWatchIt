@@ -27,6 +27,8 @@ application lock protocol until database uniqueness is established.
 The serving snapshot used for the November 20 verification contained 195
 memberships, zero duplicate user and movie groups, and no Django auth
 accounts. Recheck the intended database immediately before any schema work.
+Use the `audit_watchlist_memberships` command for the current review manifest
+and direct foreign-key inventory. See the [ownership migration plan](../watchlist-owner-migration-plan.md).
 
 ```sql
 SELECT user_id, movie_id, count(*) AS memberships,
@@ -44,12 +46,10 @@ watched state, ratings and watch events available for review.
 
 ## Database constraint and reconciliation under #96
 
-Review the authenticated owner contract before deciding whether the
-constraint uses the legacy `(user_id, movie_id)` pair or the new authenticated
-owner foreign key. Explicitly choose which authenticated account inherits
-legacy user 1 and decide how dependent user state, exports and background
-jobs resolve that owner. Replacing the current source-based uniqueness
-before that decision would change access behavior in the single-user app.
+The approved ownership contract targets `UNIQUE(owner_id, movie_id)` after
+review and rehearsal. The installation keeps legacy owner 1 and requires
+explicit approval of any future account-to-profile mapping. Dependent user
+state, exports and background jobs must carry that authorized owner.
 
 For any duplicate group, prepare a reviewed manifest with each row's ID,
 source and timestamp, the exact surviving membership, and all inbound

@@ -41,6 +41,7 @@ from django.conf import settings
 
 from availability.freshness import source_configuration_snapshot
 from availability.sources import DEFAULT_SOURCE_SLUG
+from tracker.ownership import resolve_personal_owner_id
 from ..models import Movie, MovieWatchEvent, RefreshPriority, UserMovieData, WatchlistItem
 from .membership import get_or_create_watchlist_membership
 from .refresh_requests import request_import_refresh
@@ -678,9 +679,10 @@ def fetch_profile_rows(
 def import_rows(
     rows: Iterable[LetterboxdRow],
     client: Optional[TMDbClient] = None,
-    user_id: int = 1,
+    user_id: int | None = None,
     source: str = "letterboxd",
 ) -> ImportResult:
+    user_id = resolve_personal_owner_id() if user_id is None else user_id
     client = client or TMDbClient(settings.TMDB_API_KEY, timeout=3)
     result = ImportResult()
     import_freshness_configuration = source_configuration_snapshot().get(
@@ -909,6 +911,7 @@ def import_rows(
                 priority=RefreshPriority.WATCHLIST,
                 entering=movie_created or item_created,
                 source_configuration=import_freshness_configuration,
+                user_id=user_id,
             )
         else:
             request_import_refresh(
@@ -916,6 +919,7 @@ def import_rows(
                 priority=RefreshPriority.BACKGROUND,
                 entering=movie_created,
                 source_configuration=import_freshness_configuration,
+                user_id=user_id,
             )
 
     return result

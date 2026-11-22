@@ -224,7 +224,8 @@ class ConcurrentMembershipTests(TransactionTestCase):
         self.assertEqual(len({pk for pk, _ in results}), 1)
         self.assertEqual(sum(1 for _, created in results if created), 1)
 
-    def test_importers_wait_for_overlapping_manual_add(self):
+    @override_settings(WTDW_LEGACY_OWNER_ID=97)
+    def test_importers_wait_for_overlapping_manual_add_for_configured_owner(self):
         importers = (
             (import_rows, LetterboxdRow, "letterboxd"),
             (import_rows, LetterboxdRow, "myanimelist"),
@@ -235,6 +236,12 @@ class ConcurrentMembershipTests(TransactionTestCase):
                 movie = Movie.objects.create(
                     tmdb_id=680 + offset, title=source, year=2020,
                     content_type="series" if source == "myanimelist" else "movie",
+                )
+                historical = WatchlistItem.objects.create(
+                    user_id=1, movie=movie, source="historical",
+                )
+                watched = UserMovieData.objects.create(
+                    user_id=97, movie=movie, is_watched=True, rating=4,
                 )
                 backend_pids = Queue()
 
@@ -268,12 +275,25 @@ class ConcurrentMembershipTests(TransactionTestCase):
                                 if monotonic() >= deadline:
                                     self.fail("Importer did not wait on the manual transaction")
                                 sleep(0.02)
-                        manual, created = get_or_create_watchlist_membership(movie, source="manual")
-                        self.assertTrue(created)
+                        with patch("tracker.services.enrichment.TMDbClient") as mock_cls:
+                            _mock_tmdb_details(mock_cls, movie.tmdb_id, movie.title, movie.year, movie.content_type)
+                            response = APIClient().post(
+                                "/api/watchlist/add/",
+                                {"tmdb_id": movie.tmdb_id, "content_type": movie.content_type, "user_id": 1},
+                                format="json",
+                            )
+                        self.assertEqual(response.status_code, 201, response.content)
+                        manual_id = response.json()["watchlist_item"]["id"]
                     result = future.result(timeout=10)
 
-                self.assertEqual([item.pk for item in result.resolved], [manual.pk])
-                self.assertEqual(WatchlistItem.objects.get(movie=movie).source, "manual")
+                self.assertEqual([item.pk for item in result.resolved], [manual_id])
+                self.assertCountEqual(
+                    WatchlistItem.objects.filter(movie=movie).values_list("pk", "user_id", "source"),
+                    [(manual_id, 97, "manual"), (historical.pk, 1, "historical")],
+                )
+                watched.refresh_from_db()
+                self.assertTrue(watched.is_watched)
+                self.assertEqual(watched.rating, 4)
 
     def test_concurrent_resolve_endpoint_creates_single_row(self):
         barrier = threading.Barrier(4)

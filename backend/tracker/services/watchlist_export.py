@@ -21,6 +21,7 @@ from typing import Optional
 
 from django.http import HttpResponse
 
+from tracker.ownership import resolve_personal_owner_id
 from ..models import UserMovieData, WatchlistItem
 from .letterboxd import LetterboxdRow
 
@@ -38,8 +39,10 @@ class CanonicalImportError(ValueError):
     """Uploaded CSV has the canonical header but invalid content."""
 
 
-def watchlist_export_rows(user_id: int = 1) -> list[dict]:
+def watchlist_export_rows(user_id: int | None = None) -> list[dict]:
     """Rows for everything currently on the user's watchlist."""
+
+    user_id = resolve_personal_owner_id() if user_id is None else user_id
     items = (
         WatchlistItem.objects.select_related("movie")
         .filter(user_id=user_id)
@@ -60,8 +63,10 @@ def watchlist_export_rows(user_id: int = 1) -> list[dict]:
     return rows
 
 
-def watched_export_rows(user_id: int = 1) -> list[dict]:
+def watched_export_rows(user_id: int | None = None) -> list[dict]:
     """Rows for movies explicitly marked watched (``is_watched=True``)."""
+
+    user_id = resolve_personal_owner_id() if user_id is None else user_id
     watched = (
         UserMovieData.objects.select_related("movie")
         .filter(user_id=user_id, is_watched=True)
@@ -81,8 +86,10 @@ def watched_export_rows(user_id: int = 1) -> list[dict]:
     return rows
 
 
-def combined_export_rows(user_id: int = 1) -> list[dict]:
+def combined_export_rows(user_id: int | None = None) -> list[dict]:
     """Watchlist and watched rows in one file (a movie in both appears twice)."""
+
+    user_id = resolve_personal_owner_id() if user_id is None else user_id
     return watchlist_export_rows(user_id) + watched_export_rows(user_id)
 
 
