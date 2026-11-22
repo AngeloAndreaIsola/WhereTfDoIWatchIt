@@ -50,11 +50,77 @@ class CohortValidationTests(SimpleTestCase):
     def test_empty_cohort_is_valid(self):
         self.assertEqual(_parse_cohort([]), [])
 
+    def test_corrected_coherence_row_parses_with_pilot_schema(self):
+        cases = _parse_cohort([{
+            "tmdb_id": "220289", "title": "Coherence", "media_type": "movie",
+            "year": "2013", "country": "NL",
+        }])
+        self.assertEqual(cases, [{
+            "tmdb_id": 220289, "title": "Coherence", "media_type": "movie",
+            "year": 2013, "country": "NL",
+        }])
+
 
 class ComparisonClassificationTests(SimpleTestCase):
     def setUp(self):
         self.case = {"tmdb_id": 10, "title": "A", "media_type": "movie", "year": 2000, "country": "NL"}
-        self.movie = SimpleNamespace(content_type="movie", year=2000)
+        self.movie = Movie(tmdb_id=10, content_type="movie", title="A", canonical_title="A", year=2000)
+        self.verified_offer = SimpleNamespace(
+            currently_available=True, evidence="verified", country="NL",
+            provider="netflix", offer_type="subscription",
+        )
+
+    def _compare_identity(self, case, movie, external_title=None):
+        external = {
+            **case, "tmdb_id": str(case["tmdb_id"]), "year": str(case["year"] or ""),
+            "provider": "Netflix", "offer_type": "subscription",
+            "explicitly_confirms_availability": "Yes",
+        }
+        if external_title is not None:
+            external["title"] = external_title
+        return _classify(case, external, movie, [self.verified_offer])
+
+    def test_exact_wrong_id_is_rejected_even_when_external_title_copies_cohort(self):
+        case = {**self.case, "tmdb_id": 300602, "title": "Coherence", "year": 2013}
+        movie = Movie(tmdb_id=300602, content_type="movie", title="Coherence",
+                      canonical_title="Capture the Flag", year=2015)
+        state, _ = self._compare_identity(case, movie)
+        self.assertEqual(state, "NOT_COMPARABLE")
+
+    def test_corrected_id_and_independent_coherence_identity_can_agree(self):
+        case = {**self.case, "tmdb_id": 220289, "title": "Coherence", "year": 2013}
+        movie = Movie(tmdb_id=220289, content_type="movie", title="My display title",
+                      title_is_override=True, canonical_title="Coherence", year=2013)
+        state, _ = self._compare_identity(case, movie)
+        self.assertEqual(state, "AGREEMENT_CONFIRMED")
+
+    def test_documented_localized_alias_can_agree_for_same_film_and_year(self):
+        case = {**self.case, "tmdb_id": 619264, "title": "Il buco", "year": 2019}
+        movie = Movie(tmdb_id=619264, content_type="movie", title="The Platform",
+                      canonical_title="The Platform", year=2019)
+        state, _ = self._compare_identity(case, movie, external_title="The Platform")
+        self.assertEqual(state, "AGREEMENT_CONFIRMED")
+
+    def test_unsupported_or_uncertain_identity_never_agrees(self):
+        case = {**self.case, "tmdb_id": 220289, "title": "Coherence", "year": 2013}
+        movie = Movie(tmdb_id=220289, content_type="movie", title="Coherence")
+        for title, year, external_title in [
+            ("Coherence Redux", 2013, "Coherence"),
+            ("", 2013, "Coherence"),
+            ("Coherence", None, "Coherence"),
+            ("Coherence", 2013, "Coherence Redux"),
+        ]:
+            with self.subTest(title=title, year=year, external_title=external_title):
+                movie.canonical_title = title
+                movie.year = year
+                state, _ = self._compare_identity(case, movie, external_title)
+                self.assertEqual(state, "NOT_COMPARABLE")
+
+        case = {**self.case, "tmdb_id": 20, "title": "Il buco", "year": 2019}
+        movie = Movie(tmdb_id=20, content_type="movie", title="The Platform",
+                      canonical_title="The Platform", year=2019)
+        state, _ = self._compare_identity(case, movie)
+        self.assertEqual(state, "NOT_COMPARABLE")
 
     def test_secondary_positive_does_not_turn_missing_app_row_into_conflict(self):
         external = {"tmdb_id": "10", "country": "NL", "explicitly_confirms_availability": "Yes", "provider": "Netflix", "offer_type": "subscription"}
@@ -93,29 +159,27 @@ class ComparisonClassificationTests(SimpleTestCase):
     def test_rental_offer_cannot_agree_with_external_subscription_listing(self):
         external = {"tmdb_id": "10", "country": "NL", "explicitly_confirms_availability": "Yes",
                     "provider": "Netflix", "offer_type": "subscription"}
-        movie = SimpleNamespace(content_type="movie", year=2000)
         app_offer = SimpleNamespace(currently_available=True, evidence="verified", country="NL",
                                     provider="netflix", offer_type="rent")
-        result, _ = _classify(self.case, external, movie, [app_offer])
+        result, _ = _classify(self.case, external, self.movie, [app_offer])
         self.assertEqual(result, "INSUFFICIENT_APP_EVIDENCE")
 
     def test_stale_matching_provider_cannot_borrow_an_unrelated_verified_offer(self):
         external = {"tmdb_id": "10", "country": "NL", "explicitly_confirms_availability": "Yes",
                     "provider": "Netflix", "offer_type": "subscription"}
-        movie = SimpleNamespace(content_type="movie", year=2000)
         offers = [
             SimpleNamespace(currently_available=True, evidence="stale", country="NL",
                              provider="netflix", offer_type="subscription"),
             SimpleNamespace(currently_available=True, evidence="verified", country="NL",
                              provider="prime", offer_type="subscription"),
         ]
-        result, _ = _classify(self.case, external, movie, offers)
+        result, _ = _classify(self.case, external, self.movie, offers)
         self.assertEqual(result, "APP_DATA_STALE")
 
     def test_local_release_year_mismatch_is_not_comparable(self):
         external = {"tmdb_id": "10", "country": "NL", "year": "2000",
                     "explicitly_confirms_availability": "Yes", "provider": "Netflix", "offer_type": "subscription"}
-        wrong_release = SimpleNamespace(content_type="movie", year=1984)
+        wrong_release = Movie(tmdb_id=10, content_type="movie", canonical_title="A", year=1984)
         verified = SimpleNamespace(currently_available=True, evidence="verified", country="NL",
                                    provider="netflix", offer_type="subscription")
         result, _ = _classify(self.case, external, wrong_release, [verified])
@@ -133,8 +197,7 @@ class ComparisonClassificationTests(SimpleTestCase):
     def test_external_research_source_does_not_imply_disabled_app_source(self):
         external = {"tmdb_id": "10", "country": "NL", "explicitly_confirms_availability": "Yes",
                     "provider": "Netflix", "offer_type": "subscription", "evidence_source": "JustWatch"}
-        movie = SimpleNamespace(content_type="movie", year=2000)
-        result, _ = _classify(self.case, external, movie, [], "unknown")
+        result, _ = _classify(self.case, external, self.movie, [], "unknown")
         self.assertEqual(result, "APP_DATA_MISSING")
 
     def test_multi_provider_multi_class_listing_cannot_form_a_cross_product_agreement(self):
@@ -202,7 +265,8 @@ class ReadOnlyAuditPostgreSQLTests(TransactionTestCase):
     reset_sequences = True
 
     def test_command_emits_comparable_snapshot_without_mutating_fixture_rows_or_http(self):
-        movie = Movie.objects.create(tmdb_id=987654, title="Audit fixture", year=2000, content_type="movie")
+        movie = Movie.objects.create(tmdb_id=987654, title="Audit fixture", canonical_title="Audit fixture",
+                                     year=2000, content_type="movie")
         provider, _ = Provider.objects.get_or_create(
             slug="netflix", defaults={"name": "Netflix", "category": ProviderCategory.OFFICIAL}
         )
@@ -282,7 +346,8 @@ class ReadOnlyAuditPostgreSQLTests(TransactionTestCase):
             (987666, "Unconfigured source", 2000),
         ]
         movies = {
-            tmdb_id: Movie.objects.create(tmdb_id=tmdb_id, title=title, year=year, content_type="movie")
+            tmdb_id: Movie.objects.create(tmdb_id=tmdb_id, title=title, canonical_title=title,
+                                          year=year, content_type="movie")
             for tmdb_id, title, year in cases
         }
         old = timezone.now() - timedelta(days=90)

@@ -13,6 +13,7 @@ from django.utils import timezone
 from availability.domain.enums import AvailabilityEvidence, ContentType
 from availability.freshness import freshness_state
 from availability.models import ContentMapping, Country, Offer, Source
+from availability.services.normalize import normalize_title
 from availability.services.query import AvailabilityQueryService
 from tracker.models import Movie, Preference, Provider, ProviderCategory
 from tracker.services.access import UserAccess, normalize_service_slug, resolve_title
@@ -27,6 +28,10 @@ COMPARISON_STATES = {
     "INSUFFICIENT_APP_EVIDENCE", "NOT_COMPARABLE",
 }
 FREE_CATEGORIES = {ProviderCategory.BVOD, ProviderCategory.AVOD, ProviderCategory.FAST}
+# Stage 2B records this Italian title in docs/audits/stage2b/source_evidence.md.
+LOCALIZED_TITLE_ALIASES = {
+    (619264, ContentType.MOVIE, 2019): frozenset({"the platform", "il buco"}),
+}
 
 
 def _read_csv(path: Path, required: set[str], label: str) -> list[dict]:
@@ -199,7 +204,26 @@ def _external_offer_classes(row):
     return classes
 
 
+def _titles_match(case, expected, observed):
+    aliases = LOCALIZED_TITLE_ALIASES.get((case["tmdb_id"], case["media_type"], case["year"]), ())
+    return expected == observed or (expected in aliases and observed in aliases)
+
+
 def _classify(case, external, movie, offers, source_state="unknown", providers=()):
+    expected_title = normalize_title(case["title"])
+    if movie is not None:
+        # canonical_title is persisted TMDb evidence. The display title may
+        # be an override or a legacy label with unknown provenance.
+        canonical_title = normalize_title(movie.canonical_title)
+        if movie.content_type != case["media_type"] or (
+            case["year"] is not None and movie.year is not None and movie.year != case["year"]
+        ):
+            return "NOT_COMPARABLE", "Local Movie identity year or media type differs from the cohort."
+        if canonical_title and not _titles_match(case, expected_title, canonical_title):
+            return "NOT_COMPARABLE", "Canonical TMDb title differs from the cohort without a documented alias."
+        if movie.is_quarantined or not canonical_title or case["year"] is None or movie.year is None:
+            return "NOT_COMPARABLE", "No usable independent canonical title and release year for this case."
+
     if not external:
         return "INSUFFICIENT_EXTERNAL_EVIDENCE", "No matching Stage 2B evidence row."
     evidence_country = (external.get("country") or "").strip().upper()
@@ -221,6 +245,9 @@ def _classify(case, external, movie, offers, source_state="unknown", providers=(
         evidence_year = None
     if evidence_year is not None and case["year"] is not None and evidence_year != case["year"]:
         return "NOT_COMPARABLE", "External evidence release year differs from cohort."
+    evidence_title = (external.get("title") or "").strip()
+    if evidence_title and not _titles_match(case, expected_title, normalize_title(evidence_title)):
+        return "NOT_COMPARABLE", "External evidence title differs from the cohort without a documented alias."
     explicit_negative = str(external.get("explicitly_confirms_unavailability") or "").strip().lower() in {"yes", "true", "1"}
     authority = str(external.get("evidence_authority") or "").strip().lower()
     if not _external_positive(external) and not explicit_negative:
@@ -237,10 +264,6 @@ def _classify(case, external, movie, offers, source_state="unknown", providers=(
         return "INSUFFICIENT_EXTERNAL_EVIDENCE", "External evidence does not associate one provider with one offer class."
     if movie is None:
         return "APP_DATA_MISSING", "No local Movie row with exact TMDb id and media type."
-    if movie.content_type != case["media_type"] or (
-        case["year"] is not None and movie.year != case["year"]
-    ):
-        return "NOT_COMPARABLE", "Local Movie identity year or media type differs from the cohort."
     normalized = _provider_name_keys(provider_names, providers)
     positive = [x for x in offers if x.currently_available and x.evidence in (AvailabilityEvidence.VERIFIED, AvailabilityEvidence.STALE, AvailabilityEvidence.UNKNOWN)]
     if explicit_negative:
@@ -478,7 +501,8 @@ class Command(BaseCommand):
             "# Confirmed discrepancies\n\n"
             "No application-versus-external conflict was confirmed. Stage 2B evidence is a secondary listing source and contains no confirmed negative availability; absent local offers are classified as missing coverage, never as an app error.\n\n"
             "## Classification precedence\n\n"
-            "1. `NOT_COMPARABLE` when TMDb identity, media type, year, or country disagrees.\n"
+            "1. `NOT_COMPARABLE` when title identity, TMDb ID, media type, year, or country disagrees, "
+            "or a local Movie lacks trusted title/year evidence. Localized titles require an allowlisted alias.\n"
             "2. `INSUFFICIENT_EXTERNAL_EVIDENCE` when no matching row exists, availability is not explicitly positive, provider names are absent, or a negative is secondary/unspecified.\n"
             "3. `APP_DATA_MISSING` when the exact local Movie identity is absent.\n"
             "4. For explicit primary/official negatives, `CONFLICT_CONFIRMED` requires a verified same-provider canonical offer in the same country; otherwise `INSUFFICIENT_APP_EVIDENCE`.\n"
@@ -486,7 +510,8 @@ class Command(BaseCommand):
             "6. Positive `AGREEMENT_CONFIRMED` requires external evidence that unambiguously names one provider and one offer class, plus fresh verified canonical evidence matching provider, country, and class. Aggregated provider/class lists without a pairing stay `INSUFFICIENT_EXTERNAL_EVIDENCE`; a same-provider offer of another class is insufficient. An aggregator's omission of other app providers is not a conflict. Remaining mismatches are `INSUFFICIENT_APP_EVIDENCE`.\n\n"
             "## Targeted edge cases\n\n"
             "- **D1 — Dune (1984) vs (2021):** no local Movie or offer row was found for TMDb 438631. Source TMDb IDs are persisted as exact external-ID mappings; fallback matching constrains media type and known movie year, and canonical reads are keyed by TMDb ID and media type. No defect reproduced.\n"
-            "- **D2 — localized titles:** no local rows existed for Dark (70523) or The Platform (619264). TMDb IDs bypass title matching; sources without IDs use exact title/year matching, so aliases remain an unverified coverage risk. No speculative alias was added.\n"
+            "- **D2 — localized titles:** the audit requires title/year evidence even for exact TMDb IDs. "
+            "The allowlist includes The Platform / Il buco (619264, movie, 2019), documented in Stage 2B.\n"
             "- **D3 — Prime Video country scope:** the Prime Video collector declares NL only; refresh scope rejects IT requests and canonical offer reads filter by country. JustWatch may independently record IT offers. No matching local rows existed to test leakage.\n"
             "- **D4 — multi-provider offers:** canonical identity retains provider and country; reconciliation merges same-provider observations while keeping source facts and source-specific evidence. Non-authoritative aggregator omission does not deactivate another source's positive. No Godfather rows existed to test live behavior.\n"
             "- **D5 — unavailable external pages:** Stage 2B's JustWatch NL 404s, RaiPlay search 404s, and Pluto TV geo-block remain unverified evidence limitations, not negative findings.\n",
