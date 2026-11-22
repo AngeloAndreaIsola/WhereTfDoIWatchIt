@@ -16,6 +16,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from availability.domain.enums import AvailabilityEvidence, ConflictKind, ContentType
+from availability.models import OfferEvidence, build_offer_identity
 from availability.services.query import AvailabilityQueryService
 from tracker.management.commands.seed_catalog import ALL_ISO_COUNTRIES
 from tracker.models import Provider, WatchlistItem
@@ -50,7 +51,35 @@ def _source_declares_window(source, content_type):
     return bool(source) and not source.startswith("justwatch")
 
 
-def _confirmed_expiry(offer, now: datetime):
+def _recorded_presence(reconciled, country):
+    """Current reporting sources for dated identities that have a source ledger."""
+    identities = {
+        _observation_identity(offer, observation)
+        for offers in reconciled.values()
+        for offer in offers
+        if offer.country.upper() == country and offer.available_until is not None
+        for observation in offer.observations
+        if observation.available_until is not None
+    }
+    rows = OfferEvidence.objects.filter(offer_identity__in=identities).values_list(
+        "offer_identity", "source__slug", "is_present",
+    )
+    presence = {}
+    for identity, source, present in rows:
+        sources = presence.setdefault(identity, set())
+        if present:
+            sources.add(source)
+    return presence
+
+
+def _observation_identity(offer, observation):
+    return build_offer_identity(
+        offer.provider, offer.country, offer.content_type, offer.tmdb_id,
+        offer.season_number, offer.episode_number, offer.offer_type, observation.provider_content_id,
+    )
+
+
+def _confirmed_expiry(offer, now: datetime, *, recorded_presence=None):
     """Return (expiry, supporting observations), or (None, ()) when unproven.
 
     Reconciliation may select an end date reported only by JustWatch while a
@@ -75,6 +104,16 @@ def _confirmed_expiry(offer, now: datetime):
         and not observation.mapping_doubt
         and _source_declares_window(observation.source.lower(), offer.content_type)
     )
+    if recorded_presence:
+        # A co-reporting source can keep the canonical row available after the
+        # writer of its end date withdrew. Rows predating the ledger still
+        # carry their own source observation.
+        active_supporters = []
+        for observation in supporters:
+            sources = recorded_presence.get(_observation_identity(offer, observation))
+            if sources is None or observation.source in sources:
+                active_supporters.append(observation)
+        supporters = tuple(active_supporters)
     return (expiry, supporters) if supporters else (None, ())
 
 
@@ -114,6 +153,7 @@ def build_leaving_soon(*, user_id: int, country: str, days: int = 30, now=None) 
         keys_by_movie[movie.pk] = [(movie.tmdb_id, kind) for kind in kinds]
     pairs = [key for keys in keys_by_movie.values() for key in keys]
     reconciled = AvailabilityQueryService().get_reconciled_for_contents(pairs, now=now)
+    recorded_presence = _recorded_presence(reconciled, country)
 
     preference = build_preference(user_id)
     access = build_user_access(user_id)
@@ -138,7 +178,7 @@ def build_leaving_soon(*, user_id: int, country: str, days: int = 30, now=None) 
                 reach=reach, provider_map=providers,
             )
             if classified.is_accessible and classified.is_qualifying_offer_type:
-                expiry, supporters = _confirmed_expiry(offer, now)
+                expiry, supporters = _confirmed_expiry(offer, now, recorded_presence=recorded_presence)
                 accessible.append((offer, classified, expiry, supporters))
 
         dated = [row for row in accessible if row[2] is not None]
