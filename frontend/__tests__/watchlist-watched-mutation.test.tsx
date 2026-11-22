@@ -119,11 +119,35 @@ function reportForCurrentParams(params: URLSearchParams) {
   };
 }
 
+/** leaving-soon must return a contract-valid response in shared watchlist fixtures. */
+function leavingSoonEmpty(country: string) {
+  return {
+    country: country.toUpperCase(),
+    horizon: {
+      days: 30,
+      as_of: "2026-11-22T10:00:00+00:00",
+      until: "2026-12-22T10:00:00+00:00",
+    },
+    items: [],
+    coverage: {
+      status: "no_confirmed_expiry_data",
+      watchlist_titles: 1,
+      titles_with_confirmed_expiry_data: 0,
+      offers_with_confirmed_expiry_data: 0,
+      scope: "selected_country_watchlist_only",
+      completeness: "partial_not_all_providers_report_expiry",
+    },
+  };
+}
+
 /** Server state is read on every request, so a revalidation sees mutations. */
 function installServer(rows: Row[]) {
   serverRows = rows;
   fetchMock = vi.fn(async (url: string) => {
     const params = new URL(url, "http://localhost").searchParams;
+    if (String(url).includes("/api/leaving-soon/")) {
+      return json(leavingSoonEmpty(params.get("country") || "US"));
+    }
     return json(reportForCurrentParams(params));
   });
   vi.stubGlobal("fetch", fetchMock);
