@@ -13,6 +13,7 @@ import { Pagination } from "@/components/Pagination";
 import { formatLastSeen } from "@/lib/time";
 import WatchlistRefreshButton from "@/components/WatchlistRefreshButton";
 import AvailabilityStatusPanel from "@/components/AvailabilityStatusPanel";
+import LeavingSoonSection from "@/components/LeavingSoonSection";
 import {
   addToWatchlist,
   markMovieWatched,
@@ -152,6 +153,7 @@ export default function WatchlistPage() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [pendingWatched, setPendingWatched] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [leavingSoonRefreshKey, setLeavingSoonRefreshKey] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
   const fetchGenerationRef = useRef(0);
   const watchlistCacheKeyRef = useRef(watchlistCacheKey);
@@ -195,6 +197,7 @@ export default function WatchlistPage() {
     invalidateCatalogCache();
     setPage(1);
     setFilters({ ...filters });
+    setLeavingSoonRefreshKey((key) => key + 1);
   };
 
   const handleSetFilters = (newFilters: FilterState) => {
@@ -494,6 +497,12 @@ export default function WatchlistPage() {
             browser reload instead of vanishing with the component. */}
         <AvailabilityStatusPanel onCompleted={refreshWatchlistData} />
       </section>
+
+      {/* ─── Leaving Soon departures ─────────────────────────────────────── */}
+      <LeavingSoonSection
+        country={currentCountry}
+        refreshKey={leavingSoonRefreshKey}
+      />
 
       <FilterBar
         filters={filters}

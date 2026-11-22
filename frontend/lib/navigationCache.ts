@@ -71,9 +71,13 @@ export const catalogPageCache = new BoundedPageCache<unknown>(
 export const watchlistPageCache = new BoundedPageCache<unknown>(
   WATCHLIST_CACHE_TTL_MS
 );
+export const leavingSoonCache = new BoundedPageCache<unknown>(
+  WATCHLIST_CACHE_TTL_MS
+);
 
 let catalogCacheEpoch = 0;
 let watchlistCacheEpoch = 0;
+let leavingSoonCacheEpoch = 0;
 
 export function invalidateCatalogCache(): void {
   catalogPageCache.clear();
@@ -82,7 +86,14 @@ export function invalidateCatalogCache(): void {
 
 export function invalidateWatchlistCache(): void {
   watchlistPageCache.clear();
+  leavingSoonCache.clear();
   watchlistCacheEpoch += 1;
+  leavingSoonCacheEpoch += 1;
+}
+
+export function invalidateLeavingSoonCache(): void {
+  leavingSoonCache.clear();
+  leavingSoonCacheEpoch += 1;
 }
 
 export function getCatalogCacheEpoch(): number {
@@ -91,4 +102,8 @@ export function getCatalogCacheEpoch(): number {
 
 export function getWatchlistCacheEpoch(): number {
   return watchlistCacheEpoch;
+}
+
+export function getLeavingSoonCacheEpoch(): number {
+  return leavingSoonCacheEpoch;
 }

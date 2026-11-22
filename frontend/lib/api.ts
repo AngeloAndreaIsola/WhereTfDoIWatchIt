@@ -1685,3 +1685,79 @@ export async function fetchWatchedReport(
   }
   return res.json();
 }
+
+export type LeavingSoonDepartureKind = "leaving_provider" | "last_option";
+
+export type LeavingSoonCoverageStatus =
+  | "no_confirmed_expiry_data"
+  | "no_departures_within_horizon"
+  | "partial_confirmed_departures";
+
+export interface LeavingSoonOffer {
+  provider: string;
+  provider_display: string;
+  country: string;
+  offer_type: string;
+  access_type: string;
+  locality?: string;
+  season_number: number | null;
+  episode_number: number | null;
+  available_until: string;
+  last_verified_at: string;
+  sources: string[];
+  evidence: string;
+  departure_kind: LeavingSoonDepartureKind;
+}
+
+export interface LeavingSoonMovie {
+  tmdb_id: number;
+  content_type: string;
+  title: string;
+  year: number | null;
+  poster_path: string | null;
+}
+
+export interface LeavingSoonItem {
+  movie: LeavingSoonMovie;
+  leaving_offers: LeavingSoonOffer[];
+}
+
+export interface LeavingSoonCoverage {
+  status: LeavingSoonCoverageStatus;
+  watchlist_titles: number;
+  titles_with_confirmed_expiry_data: number;
+  offers_with_confirmed_expiry_data: number;
+  scope: string;
+  completeness: string;
+}
+
+export interface LeavingSoonHorizon {
+  days: number;
+  as_of: string;
+  until: string;
+}
+
+export interface LeavingSoonResponse {
+  country: string;
+  horizon: LeavingSoonHorizon;
+  items: LeavingSoonItem[];
+  coverage: LeavingSoonCoverage;
+}
+
+export async function fetchLeavingSoon(
+  country: string,
+  days: number = 30,
+  signal?: AbortSignal
+): Promise<LeavingSoonResponse> {
+  const normalizedCountry = country.trim().toUpperCase();
+  const params = new URLSearchParams({
+    country: normalizedCountry,
+    days: days.toString(),
+  });
+  const res = await fetch(`/api/leaving-soon/?${params.toString()}`, { signal });
+  if (!res.ok) {
+    const errorBody: { error?: string } = await res.json().catch(() => ({}));
+    throw new Error(errorBody?.error || `Failed to load leaving soon data (${res.status})`);
+  }
+  return res.json();
+}
