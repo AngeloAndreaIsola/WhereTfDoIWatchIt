@@ -158,13 +158,18 @@ export function LeavingSoonSection({
     loadData(true);
   };
 
+  // Derived from the requested country on every render: a stale response for
+  // another country must never feed grouping or any state branch.
+  const activeData =
+    data && data.country.toUpperCase() === normalizedCountry ? data : null;
+
   const grouped = useMemo(() => {
-    if (!data || data.country.toUpperCase() !== normalizedCountry) {
+    if (!activeData) {
       return { next_7_days: [], days_8_14: [], days_15_30: [], totalDepartures: 0 };
     }
-    const asOf = data.horizon?.as_of || new Date().toISOString();
-    return groupLeavingOffers(data.items, asOf);
-  }, [data]);
+    const asOf = activeData.horizon.as_of;
+    return groupLeavingOffers(activeData.items, asOf);
+  }, [activeData, normalizedCountry]);
 
   if (!normalizedCountry) {
     return null;
@@ -172,7 +177,14 @@ export function LeavingSoonSection({
 
   const renderCard = (entry: LeavingSoonDepartureEntry) => {
     const { movie, offer } = entry;
-    const href = movie.content_type === "series" ? `/tv/${movie.tmdb_id}` : `/movie/${movie.tmdb_id}`;
+    const isTv = movie.content_type !== "movie";
+    const seasonQuery =
+      isTv && offer.season_number != null
+        ? `?season=${offer.season_number}`
+        : "";
+    const href = isTv
+      ? `/tv/${movie.tmdb_id}${seasonQuery}`
+      : `/movie/${movie.tmdb_id}`;
     const formattedDate = formatDepartureDateTime(offer.available_until, locale);
     const timeZone =
       typeof Intl !== "undefined"
@@ -281,7 +293,7 @@ export function LeavingSoonSection({
     );
   };
 
-  const coverage = data?.coverage;
+  const coverage = activeData?.coverage;
   const watchlistTitles = coverage?.watchlist_titles ?? 0;
   const coverageStatus = coverage?.status;
 
@@ -356,7 +368,7 @@ export function LeavingSoonSection({
       )}
 
       {/* State 5: Empty Watchlist */}
-      {!loading && !isOffline && !error && data && watchlistTitles === 0 && (
+      {!loading && !isOffline && !error && activeData && watchlistTitles === 0 && (
         <div
           role="status"
           data-testid="leaving-soon-empty-watchlist"
@@ -375,7 +387,7 @@ export function LeavingSoonSection({
       {!loading &&
         !isOffline &&
         !error &&
-        data &&
+        activeData &&
         watchlistTitles > 0 &&
         coverageStatus === "no_confirmed_expiry_data" && (
           <div
@@ -399,7 +411,7 @@ export function LeavingSoonSection({
       {!loading &&
         !isOffline &&
         !error &&
-        data &&
+        activeData &&
         watchlistTitles > 0 &&
         (coverageStatus === "no_departures_within_horizon" ||
           (coverageStatus === "partial_confirmed_departures" && grouped.totalDepartures === 0)) && (
@@ -421,7 +433,7 @@ export function LeavingSoonSection({
         )}
 
       {/* State 2: Confirmed departures */}
-      {!loading && !isOffline && !error && data && grouped.totalDepartures > 0 && (
+      {!loading && !isOffline && !error && activeData && grouped.totalDepartures > 0 && (
         <div data-testid="leaving-soon-departures" className="space-y-6">
           {grouped.next_7_days.length > 0 && (
             <div data-testid="group-next-7-days" className="space-y-2">

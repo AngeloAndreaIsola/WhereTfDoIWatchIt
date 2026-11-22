@@ -12,6 +12,9 @@ Fixture injection replaced only `/api/leaving-soon/` (and stubbed unrelated `/ap
 | `screenshot-desktop-error.png` | 1440×900 | en | `Could not load departure dates: upstream unavailable` with Retry |
 | `screenshot-italian-departures.png` | 390×844 | it | `In scadenza`, `Prossimi 7 giorni`, `Scade il`, `Ultima opzione disponibile in NL` |
 | `screenshot-japanese-departures.png` | 390×844 | ja | `配信終了予定`, `今後7日間`, `NLで視聴可能な最後の配信` |
+| `screenshot-season-tv-link.png` | 390×844 | en | Native season departure (`content_type: season`, season 2) rendered with `Season 2` and a link to `/tv/777/?season=2`, captured with ego-browser |
+
+Second-review browser check (ego-browser, fresh fixture): the native season card displayed `Season 2` and linked to `/tv/777/?season=2`; document `scrollWidth === clientWidth === 390`, console errors empty.
 
 The departure fixture uses `as_of = 2026-11-22T10:00:00+00:00` and expiries at +3, +7 and +18 days. A separate DST-boundary fixture is asserted in `frontend/__tests__/leaving-soon.test.tsx`.
 

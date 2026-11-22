@@ -45,8 +45,17 @@ export function getCachedLeavingSoon(
   return candidate;
 }
 
+const VALID_COVERAGE_STATUSES = new Set([
+  "no_confirmed_expiry_data",
+  "no_departures_within_horizon",
+  "partial_confirmed_departures",
+]);
+
 const validIso = (value: unknown): value is string =>
   typeof value === "string" && !Number.isNaN(new Date(value).getTime());
+
+const validCount = (value: unknown): value is number =>
+  typeof value === "number" && Number.isInteger(value) && value >= 0;
 
 /**
  * Fail closed: a successful HTTP 200 with missing or malformed fields must
@@ -60,19 +69,28 @@ export function parseLeavingSoonResponse(
     throw new Error("Malformed Leaving Soon response");
   }
   const value = raw as Partial<LeavingSoonResponse>;
+  const horizon = value.horizon;
+  const coverageValue = value.coverage;
   if (
     typeof value.country !== "string" ||
     value.country.trim().toUpperCase() !== expectedCountry ||
-    !value.horizon ||
-    typeof value.horizon.days !== "number" ||
-    !validIso(value.horizon.as_of) ||
-    !validIso(value.horizon.until) ||
+    !horizon ||
+    !Number.isInteger(horizon.days) ||
+    horizon.days < 1 ||
+    horizon.days > 90 ||
+    !validIso(horizon.as_of) ||
+    !validIso(horizon.until) ||
+    new Date(horizon.until).getTime() <= new Date(horizon.as_of).getTime() ||
     !Array.isArray(value.items) ||
-    !value.coverage ||
-    typeof value.coverage.status !== "string" ||
-    typeof value.coverage.watchlist_titles !== "number" ||
-    typeof value.coverage.titles_with_confirmed_expiry_data !== "number" ||
-    typeof value.coverage.offers_with_confirmed_expiry_data !== "number"
+    !coverageValue ||
+    !VALID_COVERAGE_STATUSES.has(coverageValue.status) ||
+    !validCount(coverageValue.watchlist_titles) ||
+    !validCount(coverageValue.titles_with_confirmed_expiry_data) ||
+    !validCount(coverageValue.offers_with_confirmed_expiry_data) ||
+    typeof coverageValue.scope !== "string" ||
+    coverageValue.scope.length === 0 ||
+    typeof coverageValue.completeness !== "string" ||
+    coverageValue.completeness.length === 0
   ) {
     throw new Error("Malformed Leaving Soon response");
   }
@@ -92,6 +110,19 @@ export function parseLeavingSoonResponse(
         !offer ||
         typeof offer.provider !== "string" ||
         typeof offer.country !== "string" ||
+        offer.country.trim().toUpperCase() !== expectedCountry ||
+        typeof offer.provider_display !== "string" ||
+        typeof offer.offer_type !== "string" ||
+        typeof offer.access_type !== "string" ||
+        typeof offer.locality !== "string" ||
+        (offer.season_number != null &&
+          (!Number.isInteger(offer.season_number) || offer.season_number < 0)) ||
+        (offer.episode_number != null &&
+          (!Number.isInteger(offer.episode_number) || offer.episode_number < 0)) ||
+        (offer.last_verified_at != null && !validIso(offer.last_verified_at)) ||
+        !Array.isArray(offer.sources) ||
+        !offer.sources.every((source) => typeof source === "string") ||
+        offer.evidence !== "verified" ||
         !validIso(offer.available_until) ||
         (offer.departure_kind !== "leaving_provider" &&
           offer.departure_kind !== "last_option")

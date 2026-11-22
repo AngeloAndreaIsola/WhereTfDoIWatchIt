@@ -8,6 +8,7 @@ import { LocaleProvider } from "@/lib/i18n/LocaleProvider";
 import {
   groupLeavingOffers,
   formatDepartureDate,
+  parseLeavingSoonResponse,
 } from "@/lib/leavingSoon";
 import { leavingSoonCache, invalidateLeavingSoonCache } from "@/lib/navigationCache";
 import type { LeavingSoonResponse, LeavingSoonItem } from "@/lib/api";
@@ -804,5 +805,114 @@ describe("LeavingSoonSection: review-feedback regressions", () => {
     await waitFor(() =>
       expect(screen.getAllByText(/Orari indicati in/i).length).toBeGreaterThan(0)
     );
+  });
+});
+
+describe("LeavingSoonSection: second review regressions", () => {
+  const asOfMs = new Date(AS_OF_UTC).getTime();
+  const MS_DAY = 86_400_000;
+  const makeResponse = (
+    country: string,
+    title: string
+  ): LeavingSoonResponse => ({
+    country,
+    horizon: {
+      days: 30,
+      as_of: AS_OF_UTC,
+      until: new Date(asOfMs + 30 * MS_DAY).toISOString(),
+    },
+    items: [makeDepartureItem(950, title, [{
+      provider: "p", provider_display: "Provider",
+      available_until: new Date(asOfMs + 2 * MS_DAY).toISOString(),
+    }])],
+    coverage: {
+      status: "partial_confirmed_departures",
+      watchlist_titles: 1,
+      titles_with_confirmed_expiry_data: 1,
+      offers_with_confirmed_expiry_data: 1,
+      scope: "selected_country_watchlist_only",
+      completeness: "partial_not_all_providers_report_expiry",
+    },
+  });
+
+  beforeEach(() => invalidateLeavingSoonCache());
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("does not briefly render old-country departures after a country switch", async () => {
+    let resolveIt: ((v: unknown) => void) | undefined;
+    const pendingIt = new Promise((resolve) => { resolveIt = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      if (String(url).includes("country=NL")) {
+        return { ok: true, status: 200, json: async () => makeResponse("NL", "Dutch Only") };
+      }
+      return pendingIt;
+    }));
+    const view = render(
+      <LocaleProvider initialLocale="en"><LeavingSoonSection country="NL" /></LocaleProvider>
+    );
+    expect(await screen.findByText(/Dutch Only/)).toBeInTheDocument();
+
+    view.rerender(
+      <LocaleProvider initialLocale="en"><LeavingSoonSection country="IT" /></LocaleProvider>
+    );
+    expect(screen.queryByTestId("leaving-soon-card")).not.toBeInTheDocument();
+    expect(screen.getByTestId("leaving-soon-loading")).toBeInTheDocument();
+    await act(async () => {
+      const itResponse = makeResponse("IT", "Italian Next");
+      itResponse.items[0].leaving_offers[0].country = "IT";
+      resolveIt?.({ ok: true, status: 200, json: async () => itResponse });
+    });
+    expect(await screen.findByText(/Italian Next/)).toBeInTheDocument();
+    expect(screen.queryByText(/Dutch Only/)).not.toBeInTheDocument();
+  });
+
+  it("rejects offers whose country differs from the selected country", () => {
+    const response = makeResponse("NL", "Wrong Country Offer");
+    response.items[0].leaving_offers[0].country = "IT";
+    expect(() => parseLeavingSoonResponse(response, "NL")).toThrow(/Malformed/);
+  });
+
+  it("rejects invalid coverage statuses and remaining malformed contract fields", () => {
+    const base = makeResponse("NL", "Contract Fields");
+    const variants: unknown[] = [
+      { ...base, coverage: { ...base.coverage, status: "unknown_status" } },
+      { ...base, coverage: { ...base.coverage, watchlist_titles: -1 } },
+      { ...base, coverage: { ...base.coverage, scope: "" } },
+      { ...base, coverage: { ...base.coverage, completeness: "" } },
+      { ...base, horizon: { ...base.horizon, days: 0 } },
+      { ...base, horizon: { ...base.horizon, until: base.horizon.as_of } },
+      { ...base, items: [{ ...base.items[0], leaving_offers: [{ ...base.items[0].leaving_offers[0], evidence: "stale" }] }] },
+    ];
+    for (const variant of variants) {
+      expect(() => parseLeavingSoonResponse(variant, "NL")).toThrow(/Malformed/);
+    }
+  });
+
+  it("links season and episode departures to TV detail with the season selected", async () => {
+    const base = makeResponse("NL", "TV Scope");
+    base.items = [{
+      movie: { tmdb_id: 777, content_type: "season", title: "Season Title", year: 2022, poster_path: null },
+      leaving_offers: [{ ...base.items[0].leaving_offers[0], season_number: 2, episode_number: null }],
+    }];
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 200, json: async () => base })));
+    const view = render(<LocaleProvider initialLocale="en"><LeavingSoonSection country="NL" /></LocaleProvider>);
+    await screen.findByText(/Season Title/);
+    const links = screen.getByTestId("leaving-soon-card").querySelectorAll("a");
+    expect(Array.from(links).some((a) => a.getAttribute("href") === "/tv/777?season=2")).toBe(true);
+
+    view.unmount();
+    invalidateLeavingSoonCache();
+    const episodeResponse = {
+      ...base,
+      items: [{
+        movie: { ...base.items[0].movie, content_type: "episode" },
+        leaving_offers: [{ ...base.items[0].leaving_offers[0], season_number: 2, episode_number: 1 }],
+      }],
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 200, json: async () => episodeResponse })));
+    render(<LocaleProvider initialLocale="en"><LeavingSoonSection country="NL" /></LocaleProvider>);
+    await screen.findByText(/Season Title/);
+    const episodeLinks = screen.getByTestId("leaving-soon-card").querySelectorAll("a");
+    expect(Array.from(episodeLinks).some((a) => a.getAttribute("href") === "/tv/777?season=2")).toBe(true);
   });
 });
