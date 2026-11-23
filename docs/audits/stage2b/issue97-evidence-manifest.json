@@ -548,9 +548,9 @@
     }
   },
   "published_outputs": {
-    "issue97-acceptance-checklist.md": "8b96eae7378bd61b5455709e77a9c7e19657278abe7a16ab9c2c263dc570d19c",
+    "issue97-acceptance-checklist.md": "6dfcb11ade286c19b63a9bcb4289e13b2ce7fa58d70a62406289d9b098150103",
     "issue97-accepted-observations.csv": "560ceaf1f3edf4b2c6b33988dd578acbd76a38c4d18e3a49220e92005961a389",
-    "issue97-final-verification-report.md": "e7e7b2694c7ef3c30ed2bdab15d20f7ee4178d679111eaf7dd9987ed4f508ca4",
+    "issue97-final-verification-report.md": "012d8a7d4cd2f630f4e25af3fb01c86beb1d58153c01fc5fb5d7142b4ad5006f",
     "issue97-identity-decisions.md": "1dc2c67895410c8d0581b7af35afe78d51fe48089d1f5796c92f797ebdcf904a",
     "issue97-provider-mapping-decisions.md": "ad914020b15e8c51980a4052f4514ac1d1b84b2f7a4a563f2e001dc263faca12",
     "issue97-provider-reconciliation.csv": "ac1ec4c8d062a87f656e7356a030ddb64a01d09f2be2188c00c8b7f08606fd81",
@@ -567,7 +567,8 @@
       "directory_mode": "0500",
       "file_mode": "0400",
       "both_uchg": true,
-      "owner_chmod_refused": true
+      "owner_chmod_refused": true,
+      "owner_write_open_refused_errno": 1
     },
     "members_sha256": {
       "baseline/issue97-evidence-manifest.json": "59489f08d26424a2a20eb8d3d464ae5cfba77b4d24a3f6c4ae91b12bf92f2d67",
@@ -679,6 +680,52 @@
       "tmdb/series_70523.json": "e029ca87bbb50a427bc545986c4e60a39f7301debbdc1d9f97973a9f3ae949f9",
       "watchmode/v1.json": "2b30ab7d78a20a308cafcbda1c495e37d30b4ead4d3bd012affc175e96cea204",
       "watchmode/v2.json": "e815d65784795b944bbca7abe3d7cfd6b06ae6fc395a45750e372edfddd31f42"
-    }
+    },
+    "custody": "Single owner host, outside Git and sync folders. Owner can clear uchg. No independently verified offsite copy."
+  },
+  "review_verification": {
+    "code_revision": "b08d133f378a8249aba698a1e304cf5d4be1c521",
+    "recorded_utc": "2026-11-23T20:40:34.825185+00:00",
+    "additional_provider_requests": 0,
+    "archive_members_verified_in_tar_and_after_restore": 109,
+    "first_party_signals_verified": 13,
+    "historical_and_reviewed_csv_and_json_byte_comparisons": 4,
+    "clone_guard": {
+      "vendor": "postgresql",
+      "default_transaction_read_only": "on",
+      "actual_database": "tracker_97_audit_20261122",
+      "matching_expected_exit": 0,
+      "matching_display_rows_excluding_read_utc": 34,
+      "mismatched_expected_database": "tracker_97_other_disposable",
+      "mismatched_expected_exit": 2,
+      "refused_before_output_parent": true
+    },
+    "negative_control_exit": {
+      "changed_archive": 1,
+      "changed_restored_html": 1
+    },
+    "tests": {
+      "guard_and_first_party": {
+        "tests": 8,
+        "exit": 0,
+        "local_log_sha256": "bc65c913f670be3d46b4d9da07da9b7f9a571e4a995649583f252e5370597e0e"
+      },
+      "standalone_comparator": {
+        "tests": 18,
+        "exit": 0,
+        "local_log_sha256": "6c16d5905acc6ee2570dc74d82585b675e56326cfe1e4755ab81f1f87a4a05ae"
+      },
+      "isolated_audit_module": {
+        "tests": 29,
+        "exit": 0,
+        "local_log_sha256": "c3ac87ed74a38553f1c33d13db5173231125dc8c4b9943fa2419aa739d8d6438"
+      },
+      "isolated_tracker_availability": {
+        "tests": 3731,
+        "exit": 0,
+        "local_log_sha256": "71c490d2778a2c4438b4a583471a300a837045bbda00e37521bdcf7bb520d5bb"
+      }
+    },
+    "hosted_ci": "NOT PROVEN"
   }
 }

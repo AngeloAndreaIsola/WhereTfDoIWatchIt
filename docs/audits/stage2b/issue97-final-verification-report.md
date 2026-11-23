@@ -42,7 +42,7 @@ Seven of eight original pages now support their proposed class. The new direct N
 
 **Sample false negatives and false positives depend on the claim.** For retrieval of a publicly advertised listing in the clone’s current-offer array, zero of the **13 known-positive pairs** appeared during the reference hour. Ten omissions came from HTTP 200 responses and three from missing typed Movie rows. Counting a 404 as a retrieval miss gives **13 misses / 13 advertised positives**, including 8/8 priority pairs. The clone communicated uncertainty or missing data. It made **zero explicit negative assertions** about those titles. There were no eligible independently confirmed negative pairs and no current positive assertions to score as false positives. For source-fresh canonical accuracy there are **0 eligible same-window independent pairs, 0 classified agreements/conflicts, 0 classified FP/FN and 13/13 unresolved positives**. Rates are undefined. No entitlement or playback denominator exists. The response-read clock and the stored observation clock must stay separate. [Machine-readable counts](issue97-reconciliation-summary.json)
 
-**Concrete data defect.** In a read-only replay, select series 2316, GB, source bbc_iplayer, offer 3504. Its public URL identifies programme b00jd68z. The response for US Office includes bbc_iplayer/free in last-known history while the current array is empty. The BBC describes Wernham Hogg in Slough, and NBC identifies Dunder Mifflin in Scranton. This is one confirmed wrong provider identity in one sampled BBC history link. Remediation should quarantine/review that exact mapping and its season/episode descendants, record the replacement identity from primary evidence, and test that neither edition inherits the other’s offers. No stored row was edited. The CBC trailer is a needs-recheck case. The current public page cannot establish what the feature offered on October 24. [Identity integrity #112](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/issues/112) · [BBC listing](https://www.bbc.co.uk/iplayer/episodes/b00jd68z/the-office) · [CBC listing](https://gem.cbc.ca/the-farewell) · [CBC territory](https://cbchelp.cbc.ca/hc/en-ca/articles/360045250014-New-to-CBC-Gem-Technical-Support)
+**Concrete data defect.** In a read-only replay, select series 2316, GB, source bbc_iplayer, offer 3504. Its public URL identifies programme b00jd68z. The response for US Office includes bbc_iplayer/free in last-known history while the current array is empty. The BBC describes Wernham Hogg in Slough, and NBC identifies Dunder Mifflin in Scranton. This is one confirmed wrong provider identity in one sampled BBC history link. Remediation should quarantine/review that exact mapping and its season/episode descendants, record the replacement identity from primary evidence, and test that neither edition inherits the other’s offers. No stored row was edited. The CBC trailer is a needs-recheck case. The current public page cannot establish what the feature offered on October 24. [BBC defect #190](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/issues/190) · [Identity integrity #112](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/issues/112) · [BBC listing](https://www.bbc.co.uk/iplayer/episodes/b00jd68z/the-office) · [CBC listing](https://gem.cbc.ca/the-farewell) · [CBC territory](https://cbchelp.cbc.ca/hc/en-ca/articles/360045250014-New-to-CBC-Gem-Technical-Support)
 
 **Expiry and fresh collection.** The AU Dune JustWatch row 6923 has a stored end date of March 31, 2027 UTC and October last-seen evidence. The read path withholds an expiry sourced only from JustWatch because its end-date semantics are unverified. A future end date never refreshes the row. The existing stale/expired/ambiguous fixture suite exercised the display distinction. For Inception the native Prime adapter parsed the actual preserved page using its territory check, detail parser and offer projection. It emitted subscription, rent and buy for movie 0FFJSDLK6HUWC5T8XJUQODMFJ3 in NL. Those three outputs use the same first-party bytes as the external evidence. No independent verifier or persisted refresh resulted. Prime and CBC use catalogue-driven collectors. Netflix/Rakuten have no equivalent in-scope targeted first-party refresh. The metered aggregators and JustWatch preflight were unavailable for refresh under this authorization. [Prime adapter](../../../backend/availability/sources/prime_video.py) · [Freshness tests](../../../backend/tracker/tests/test_stale_offer_semantics.py) · [Expiry gate #175](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/issues/175)
 
@@ -60,49 +60,92 @@ Using the reviewed code and fresh audit export **of that same clone**, 14/15 ide
 
 The authorization covered up to 40 anonymous provider website document reads. **26 GETs** were issued, including redirect hops: 19 HTTP 200, five 302, one 301 and one 404. Requests used a plain audit user agent, no cookies or credentials, no automated redirect handling or asset loading, and at least three seconds between requests within each batch. A separate, preselected Peacock help request ran after its title redirected to “unavailable”. Neither redirect was followed. NLZIET’s authorization destination was also left unopened. Apple support article 118402 concerned ringtones and was discarded. Article 108816 documented movie rental. CBC’s /help 404 and the subsequent customer help documents are all counted. New raw material is local in a private directory. There were zero metered API calls, playback sessions or charges. [Full request ledger](issue97-evidence-manifest.json)
 
-Use the same authorized disposable clone and preserved local inputs. Never target a serving database. These commands assume the repository root, a backend Python environment, private writable output paths, and the caller’s clone-only PostgreSQL authentication. The recorded host used Python 3.11.15, Django 5.2.17 and PostgreSQL 18.7. The code revision for the 34-case replay was `3ed0212aefcf7155e39190c46f898236fa534e22`. The 15-case replay and backend tests used `3e23fb830910f9a6f2aae3770c9894c62f54b6a3`. The intervening commit adds the US control only. Timestamps in a new display read will differ.
+## Evidence custody and offline reproduction
+
+The owner sealed the 109-file allowlist on November 23 at 20:34 UTC. The single-host archive is `~/Library/Application Support/WhereTfDoIWatchIt/issue97/2026-11-23-v1/issue97-evidence.tar`. It is 18,728,960 bytes. Its SHA-256 is `6aaa66279d95c54d4b2bddbfe8ff677ec960182a79f71ddcfb7b95b9264147ad`. The Git manifest lists each member path and full SHA-256. The sealed archive includes the baseline manifest from draft `077bcc78c539cda1294610ad1f4a1e1e955affe2`, the 16 original HTML/screenshots, 26 later public response bodies, 15 direct-ID responses and their index, two Watchmode input files, and the pinned intake, scope, clone exports and comparator outputs. The seven pair-audit groups each retain their exact input, application snapshot and comparison. The archived allowlist excludes the database dump, environment configuration, credentials, personal-account records and unrelated folders. [Archive inventory](issue97-evidence-manifest.json)
+
+On the owner’s Mac, the archive resolves directly under local Application Support. The version directory and archive belong to the operator and have modes `0500` and `0400`, respectively. Both have the native macOS user immutable flag (`uchg`). The operator checked the mode, owner and flag with `stat` and `ls -ldeO`. Opening the file for writing and attempting to change its mode each returned a permission error. The enclosing issue directory is owner-only (`0700`). The owner can clear the flag. This is one local copy on one host. There is no verified independent custodian, offsite copy or disaster-recovery guarantee. The archive format uses normalized member headers. Original acquisition timestamps come from the baseline manifest and request ledger.
+
+With a checkout alone, reviewers can inspect the code, published rows, full digests, counts and decision rationales, and run the public regression tests below. Raw-byte verification and semantic re-extraction require authorized local access to the archive. A file digest supports integrity since capture. The original capture times, request location, absence of a login and storage controls are operator records. The archive has no independent signed timestamp. The clone is separately required only to rerun the application. The archive and Git repository suffice for both frozen comparators, inspecting the 34 recorded display results and the first-party pair reconciliation. No cache paths or network requests are used by the following replay.
+
+Run from the repository root with Python 3.11+ and the baseline Git revision available locally. The restore verifies the container before creating its destination, checks membership and independently hashes the bytes read back from every restored file. The final four `cmp` checks require byte-identical CSV and JSON outputs for both historical and reviewed decisions.
+
+```sh
+set -eu
+umask 077
+OUT=$(mktemp -d)
+R="$OUT/restored"
+python3 scripts/restore_issue97_archive.py --restore-to "$R"
+python3 scripts/verify_issue97_evidence.py --restored "$R"
+mkdir "$OUT/original-code"
+git archive 752dc23fd5beb2699612c2a2ee29a1fee0f4824e scripts/reconcile_watchmode_offline.py backend/availability/audit_identity.py > "$OUT/code.tar"
+tar -xf "$OUT/code.tar" -C "$OUT/original-code"
+compare() {
+  name=$1 script=$2 app=$3 revision=$4
+  shift 4
+  python3 "$script" "$@" --cohort "$R/stage2b/nl_pilot_cohort_20261122_v2.csv" \
+    --identity-manifest "$R/stage2b/identity_manifest_20261122.csv" --manifest-evidence-dir "$R/tmdb" \
+    --watchmode-v1 "$R/watchmode/v1.json" --watchmode-correction "$R/watchmode/v2.json" \
+    --expected-cohort-sha abcbb06161a5afc5896b507d4f1b1bf1c4fb9831d72973ed2be47487eb17d40b \
+    --expected-identity-manifest-sha ae78a757272aecbb9824d9ef3cea4d8f125bd5e150cc6abafcc96e50e2737925 \
+    --expected-v1-sha 2b30ab7d78a20a308cafcbda1c495e37d30b4ead4d3bd012affc175e96cea204 \
+    --expected-correction-sha e815d65784795b944bbca7abe3d7cfd6b06ae6fc395a45750e372edfddd31f42 \
+    --app-snapshot "$R/$app/application_snapshot.csv" --app-comparison "$R/$app/comparison.csv" \
+    --snapshot-label tracker_97_audit_20261122 --audit-code-sha "$revision" \
+    --output "$OUT/$name.csv" --summary "$OUT/$name.json"
+  cmp "$OUT/$name.csv" "$R/local_replays/$name.csv"
+  cmp "$OUT/$name.json" "$R/local_replays/$name.json"
+}
+compare historical "$OUT/original-code/scripts/reconcile_watchmode_offline.py" previous 8e10b76277fd74928d17a8ef52bfc7aab8d6a4e7
+compare reviewed scripts/reconcile_watchmode_offline.py final-nl 3e23fb830910f9a6f2aae3770c9894c62f54b6a3 --reviewed-nl-providers
+```
+
+## What the verifier establishes
+
+| Decision | Mechanical check against frozen evidence | Judgment and limit |
+|---|---|---|
+| Five Netflix subscriptions | For each accepted ID, parse the typed JSON-LD name and URL. Match the same top-level video ID, the title model’s availability and ads-plan flags, and anonymous request country NL. The parser reads data without running captured JavaScript. | Treating those title flags as an advertised subscription is a reviewed interpretation. The exact title aliases, series-year meaning, credits and cross-source ID decisions are documented separately. No current viewer access or playback follows from these flags. |
+| Prime base subscription and HBO Max add-on | Bind the page GTI to the film detail, title, year and movie type, plus both NL territory fields. Check the detail’s Prime flag and its own primary PRIME/Prime action. Check that the channel option under that GTI carries PV_CHANNEL/wbdmaxnl. | The reviewed channel registry maps that benefit to HBO Max via Prime. The evidence distinguishes the two subscriptions. Trial qualifications, an account’s plans and playback are unknown. |
+| Prime rental and purchase | Extract RENTAL and PURCHASE from the film’s own primary actions. Match the final EUR amounts €2.99 and €4.99 after the struck-through purchase price. | These are store offers on the captured page. A completed transaction and later pricing are unknown. |
+| Four Rakuten transactions | Match the movie JSON-LD title and copyright year, canonical NL URL and slug, Netherlands chart text and each specific rent/buy button’s EUR amount. | The canonical route and named territorial chart identify the storefront. A storefront listing does not establish the viewer’s billing territory or rights after checkout. |
+| Eight rejections | Hash, URL, time, typed matrix joins, individual decision counts and absence of positive or access claims are checked. Redirect status and Location are recorded in the original request ledger, including empty response bodies. | Human review classified the Netflix login form, BBC’s UK-series identifiers, CBC’s trailer runtime, the Rakuten client shell, Netflix IT redirect to NL, Apple collection/trailer, HBO’s conditional region template and Peacock’s regional denial. The verifier does not derive these eight semantic judgments from the HTML. None establishes a title-level negative. |
+| Identity, source independence and historical provider maps | The verifier compares all 15 typed TMDb IDs, names and years to the pinned responses. The comparator mechanically applies reviewed match rules to 166 pilot rows. The published first-party rows bind each priority ID to its frozen typed title, market, provider and class. | Cross-service identity, exact alternate names, interpreting source independence, title specificity and provider nomenclature remain reviewed decisions. OCR was a secondary manual aid. The numerical replay does not turn stale overlaps into independent current observations. |
+
+Across accepted rows the verifier checks unique observation IDs and unique typed title/market/provider/class keys, all eight priority bindings, source file digests and UTC, 13 NL advertised positives, six subscriptions, three rentals, three purchases and one add-on. Across all 21 observations it checks zero observed entitlements or playbacks and zero confirmed negative pairs. For each positive it checks the archived HTTP response, current and last-known offer membership and the corresponding provider/class Django comparison. The resulting 10 omissions on HTTP 200 and three on 404, five stale/three missing/five insufficient audit results, and zero eligible independent accuracy pairs agree with the published summary. The eight rejection rows share no observation IDs with the positives. [Identity decisions](issue97-identity-decisions.md) · [Mapping decisions](issue97-provider-mapping-decisions.md) · [Verifier](../../../scripts/verify_issue97_evidence.py)
+
+## Separate disposable PostgreSQL check
+
+The recorded panel used Python 3.11.15, Django 5.2.17 and PostgreSQL 18.7. Original panel code was `3ed0212aefcf7155e39190c46f898236fa534e22`. The NL audit was `3e23fb830910f9a6f2aae3770c9894c62f54b6a3`. Reproduction of the live read path requires the authorized November 22 disposable clone and a backend Python environment. Supply its authorized name independently of connection configuration. The audit compares PostgreSQL’s actual `current_database()` to this required argument, requires PostgreSQL and default read-only transactions, then reads the cohort and creates the output. A new run records a new read time. The archive preserves the earlier hour’s measurement.
 
 ```sh
 umask 077
+OUT=$(mktemp -d)
 export PGOPTIONS='-c default_transaction_read_only=on'
 export POSTGRES_DB=tracker_97_audit_20261122 POSTGRES_HOST=/tmp
 export POSTGRES_USER="$(id -un)" POSTGRES_PASSWORD='' DJANGO_DEBUG=1
-D=docs/audits/stage2b
-REV=$(git rev-parse HEAD)
-python scripts/audit_issue97_sample.py --audit-code-sha "$REV" --output "$OUT/panel"
-python backend/manage.py audit_availability_accuracy --offline --audit-code-sha "$REV" \
-  --cohort "$D/nl_pilot_cohort_20261122_v2.csv" \
-  --identity-manifest "$D/identity_manifest_20261122.csv" --output "$OUT/nl"
+python scripts/audit_issue97_sample.py --expected-database tracker_97_audit_20261122 \
+  --audit-code-sha "$(git rev-parse HEAD)" --output "$OUT/panel"
+```
 
-python3 scripts/reconcile_watchmode_offline.py --reviewed-nl-providers \
-  --cohort "$D/nl_pilot_cohort_20261122_v2.csv" --identity-manifest "$D/identity_manifest_20261122.csv" \
-  --manifest-evidence-dir "$TMDB_RAW" --watchmode-v1 "$PILOT_V1" --watchmode-correction "$PILOT_V2" \
-  --expected-cohort-sha abcbb06161a5afc5896b507d4f1b1bf1c4fb9831d72973ed2be47487eb17d40b \
-  --expected-identity-manifest-sha ae78a757272aecbb9824d9ef3cea4d8f125bd5e150cc6abafcc96e50e2737925 \
-  --expected-v1-sha 2b30ab7d78a20a308cafcbda1c495e37d30b4ead4d3bd012affc175e96cea204 \
-  --expected-correction-sha e815d65784795b944bbca7abe3d7cfd6b06ae6fc395a45750e372edfddd31f42 \
-  --app-snapshot "$OUT/nl/application_snapshot.csv" --app-comparison "$OUT/nl/comparison.csv" \
-  --snapshot-label tracker_97_audit_20261122 --audit-code-sha "$REV" \
-  --output "$OUT/reviewed.csv" --summary "$OUT/reviewed.json"
+Revision `b08d133f378a8249aba698a1e304cf5d4be1c521` ran that command on the authorized clone with read-only default `on`. It read 34 cases and exited 0. All 34 display rows matched the archive after excluding the new read timestamps. Keeping the same connection and supplying `--expected-database tracker_97_other_disposable` with `--output "$OUT/refusal/panel"` exited 2 before creating even the `refusal` directory. The regression also checks that cohort selection, the audit management command and display measurement receive zero calls. A deliberately damaged archive failed its digest with exit 1 before restore. A changed HTML file in a separate throwaway restoration failed the input digest check with exit 1. Both are expected refusals.
 
-python3 scripts/verify_issue97_evidence.py --prior-pages "$PRIOR_RAW" --page-dir "$NEW_RAW" --tmdb-dir "$TMDB_RAW"
+```sh
+python3 -m unittest discover -s scripts -p test_issue97_verification.py -v
 python3 -m unittest discover -s scripts -p test_reconcile_watchmode_offline.py -v
 ./scripts/test-backend-isolated.sh availability.tests.test_audit_availability_accuracy -v 2
 ./scripts/test-backend-isolated.sh tracker availability -v 1
 ```
 
-For the historical comparator replay, use master `752dc23`, omit `--reviewed-nl-providers`, use the immutable November 22 manifest-accepted application snapshot and comparison, and label their audit revision `8e10b76277fd74928d17a8ef52bfc7aab8d6a4e7`. Verify both CSV digests before comparing. Neither the pre-manifest export nor old multi-provider Stage 2B rows are valid input to the current first-party comparisons. The matrix carries three layers: original Watchmode rows with old and reviewed decisions, one row per application case, and accepted/rejected first-party observations. The provider decision table and first-party CSVs record the reviewed semantic judgments. The verifier checks file integrity, provenance, time, sidecar joins and totals. [Evidence manifest](issue97-evidence-manifest.json)
-
-To reproduce the seven first-party audit batches, group the accepted CSV by `canonical_provider,offer_class`, preserving its row order. Write a CSV per group with columns `tmdb_id,media_type,title,year,country,provider,offer_type,explicitly_confirms_availability`. Use `canonical_year,canonical_provider,offer_class,yes` for the year, provider, offer type and positive flag. Pass that file to **both** `--cohort` and `--external-evidence`, with the same reviewed identity manifest, read-only clone, revision, offline flag and a new output directory. The evidence manifest pins all seven input and output CSV sets.
-
-| Local verification | Result |
+| Review verification | Result |
 |---|---|
+| First-party and database boundary regressions | 8 tests, exit 0 |
+| Standalone comparator regressions | 18 tests, exit 0 |
 | Audit Django module | 29 tests, exit 0 |
 | Full tracker and availability suites | 3,731 tests, exit 0 |
-| Standalone comparator regressions | 18 tests, exit 0 |
-| Actual comparator and raw-evidence verifier | Both exit 0 |
+| Private archive and restored byte checks | 109/109, exit 0 |
+| First-party verifier and historical/reviewed comparators | 13 positives, eight rejected observations and two 166-row replays, exit 0. Four CSV/JSON byte comparisons exited 0. |
 | Hosted CI | NOT PROVEN |
 
-The test wrapper used its unique Compose project and tmpfs PostgreSQL 16, local dependency image `sha256:7f2b532c2e9db5f0930f35afc0b466d4dce0d85701901cca3e9ed73f162f8de7`, checked matching requirements, worktree source mounted read-only, and an internal network. First attempts exited 1 before any tests because Docker could not create a nested bind target under a read-only parent. Mounting the backend directories and files individually fixed that failure. The reported final counts are from new runs on the reviewed backend. The draft and audit carry no authorization to merge, deploy, grant access, spend provider quota or release #103.
+The isolated backend runs used the wrapper’s separate Compose projects and tmpfs PostgreSQL 16 databases with the matching cached dependency image `sha256:7f2b532c2e9db5f0930f35afc0b466d4dce0d85701901cca3e9ed73f162f8de7`, individually mounted read-only backend paths and an internal network. The earlier nested bind-mount failure and initial run’s test evidence remain in Git at the baseline draft revision. This revision made zero new provider requests and incurred zero charges.
 
 The next evidence gate is a contemporaneous, authorized independent canonical source for a measured provider/class, with verified positive and negative title evidence in the same market and observation window. Entitlement and playback require separate legitimate evidence. Coverage expansion requires independent territorial observations for the blocked markets and free feature films. Notifications, watchable-home and catalogue-completeness claims depend on these distinctions. [Notifications #147](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/issues/147) · [Homepage #119](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/issues/119) · [Catalogue #161](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/issues/161)
