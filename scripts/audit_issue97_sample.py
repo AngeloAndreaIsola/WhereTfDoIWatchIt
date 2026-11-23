@@ -79,6 +79,8 @@ def measure(rows):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--expected-database", required=True,
+                        help="Name of the disposable clone authorized for this run")
     parser.add_argument("--audit-code-sha", required=True)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
@@ -88,9 +90,17 @@ def main():
     django.setup()
     from django.core.management import call_command
     from django.db import connection
+    run(args, connection, call_command, parser)
+
+
+def run(args, connection, call_command, parser):
     if connection.vendor != "postgresql":
         parser.error("Use the authorized disposable PostgreSQL clone.")
     with connection.cursor() as cursor:
+        cursor.execute("SELECT current_database()")
+        actual = cursor.fetchone()[0]
+        if actual != args.expected_database:
+            parser.error(f"Connected database {actual!r} differs from expected clone {args.expected_database!r}.")
         cursor.execute("SHOW default_transaction_read_only")
         if cursor.fetchone()[0] != "on":
             parser.error("Set PGOPTIONS='-c default_transaction_read_only=on'.")
