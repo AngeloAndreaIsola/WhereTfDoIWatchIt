@@ -3,16 +3,24 @@
 from __future__ import annotations
 
 import csv
+import hashlib
+import io
 import json
+import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 from reconcile_watchmode_offline import (
+    APP_COLUMNS,
     classify_offer,
     identity_observation_ok,
     load_cohort,
+    load_identity_manifest,
     load_pilot_results,
+    main,
     provider_index,
     read_csv,
     reconcile,
@@ -23,6 +31,8 @@ from reconcile_watchmode_offline import (
 
 CASE = {"tmdb_id": 238, "title": "The Godfather", "media_type": "movie", "year": 1972, "country": "NL"}
 KEY = (238, "movie", "NL")
+AUDIT_DIR = Path(__file__).resolve().parents[1] / "docs/audits/stage2b"
+MANIFEST = AUDIT_DIR / "identity_manifest_20261122.csv"
 
 
 def observation(*sources):
@@ -92,6 +102,113 @@ class ReconciliationTests(unittest.TestCase):
                             [], [comparison(found=False)])
         self.assertEqual(rows[0]["decision"], "IDENTITY_UNVERIFIED")
         self.assertEqual(rows[0]["candidate_state"], "UNMAPPED_PROVIDER_OR_CLASS")
+
+    def test_manifest_can_supply_identity_without_verifying_catalogue_presence(self):
+        saved = observation(source("Netflix", "sub"))
+        mappings = [{"watchmode_name": "Netflix", "watchmode_type": "sub", "app_provider_slug": "netflix"}]
+        for found, state in [(False, "MISSING_MOVIE"), (True, "MISSING_CANONICAL_TITLE")]:
+            with self.subTest(state=state), patch("socket.socket.connect", side_effect=AssertionError("Offline only")):
+                rows, summary = reconcile(
+                    {KEY: CASE}, {KEY: saved}, [],
+                    [{**comparison("NOT_COMPARABLE" if found else "APP_DATA_MISSING", found),
+                      "local_identity_state": state}], mappings,
+                    identity_manifest=load_identity_manifest(MANIFEST),
+                )
+                self.assertEqual(rows[0]["identity_gate"], "PASS")
+                self.assertIs(rows[0]["app_movie_found"], found)
+                self.assertEqual(rows[0]["identity_source"], "tmdb_manifest")
+                self.assertEqual(rows[0]["decision"], "NO_APP_OFFER")
+                gate = summary["title_identity_gates"][str(KEY)]
+                self.assertFalse(gate["trusted_local_identity"])
+                self.assertEqual(gate["local_identity_state"], state)
+
+    def test_manifest_cannot_override_quarantined_conflicting_or_unknown_local_identity(self):
+        manifest = load_identity_manifest(MANIFEST)
+        saved = observation(source("Netflix", "sub"))
+        for local in [
+            [],
+            [comparison("NOT_COMPARABLE")],
+            [{**comparison(), "local_identity_state": "QUARANTINED"}],
+            [{**comparison(), "local_identity_state": "CONFLICT"}],
+            [{**comparison(), "local_identity_state": "INCOMPLETE"}],
+        ]:
+            with self.subTest(local=local):
+                rows, _ = reconcile({KEY: CASE}, {KEY: saved}, [], local, identity_manifest=manifest)
+                self.assertEqual(rows[0]["identity_gate"], "BLOCKED")
+                self.assertEqual(rows[0]["decision"], "IDENTITY_UNVERIFIED")
+
+    def test_review_flags_preserve_coherence_year_and_office_alias(self):
+        manifest = load_identity_manifest(MANIFEST)
+        cohort = load_cohort(AUDIT_DIR / "nl_pilot_cohort_20261122_v2.csv")
+        self.assertEqual(len(manifest), 15)
+        for tmdb_id, kind, year, title, flag in [
+            (220289, "movie", 2014, "Coherence", "YEAR_MISMATCH"),
+            (2316, "series", 2005, "The Office", "TITLE_ALIAS_REVIEW"),
+        ]:
+            with self.subTest(tmdb_id=tmdb_id):
+                key = (tmdb_id, kind, "NL")
+                case = cohort[key]
+                # Match the cohort in Watchmode to isolate the manifest discrepancy.
+                saved = {**observation(), "tmdb_id": tmdb_id, "watchmode_type": kind,
+                         "watchmode_name": case["title"], "watchmode_year": case["year"]}
+                local = {**comparison(), **case}
+                offers, summary = reconcile({key: case}, {key: saved}, [], [local], identity_manifest=manifest)
+                self.assertEqual(offers, [])
+                gate = summary["title_identity_gates"][str(key)]
+                self.assertTrue(gate["watchmode_title_year_match"])
+                self.assertEqual((gate["cohort_title"], gate["cohort_year"]), (case["title"], case["year"]))
+                self.assertEqual(gate["identity_manifest_year"], year)
+                self.assertEqual(gate["identity_manifest_title"], title)
+                self.assertEqual(gate["identity_manifest_review"], flag)
+                self.assertEqual(gate["identity_gate"], "BLOCKED")
+                self.assertEqual(gate["identity_source"], "")
+
+    def test_manifest_rejects_duplicate_and_invalid_evidence_digest(self):
+        header, first, *_ = MANIFEST.read_text(encoding="utf-8").splitlines()
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "manifest.csv"
+            path.write_text(f"{header}\n{first}\n{first}\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "Duplicate identity manifest entry"):
+                load_identity_manifest(path)
+            digest = load_identity_manifest(MANIFEST)[KEY[:2]].evidence_sha256
+            path.write_text(f"{header}\n{first.replace(digest, 'invalid')}\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "Invalid identity manifest data"):
+                load_identity_manifest(path)
+
+    def test_cli_pins_manifest_and_exports_gate_for_missing_movie(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            path = {name: root / name for name in ("cohort", "v1", "v2", "app", "comparison", "output", "summary")}
+            path["cohort"].write_text("tmdb_id,title,media_type,year,country\n238,The Godfather,movie,1972,NL\n",
+                                      encoding="utf-8")
+            path["app"].write_text(",".join(sorted(APP_COLUMNS)) + "\n", encoding="utf-8")
+            local = comparison("APP_DATA_MISSING", found=False)
+            path["comparison"].write_text(",".join(local) + "\n" + ",".join(local.values()) + "\n", encoding="utf-8")
+            args = [
+                "reconcile_watchmode_offline.py", "--cohort", str(path["cohort"]),
+                "--watchmode-v1", str(path["v1"]), "--watchmode-correction", str(path["v2"]),
+                "--app-snapshot", str(path["app"]), "--app-comparison", str(path["comparison"]),
+                "--identity-manifest", str(MANIFEST), "--output", str(path["output"]), "--summary", str(path["summary"]),
+                "--expected-identity-manifest-sha",
+            ]
+            digest = hashlib.sha256(MANIFEST.read_bytes()).hexdigest()
+            saved = {KEY: observation(source("Netflix", "sub"))}
+            with (
+                patch("reconcile_watchmode_offline.load_pilot_results", return_value=(saved, {})),
+                patch("socket.socket.connect", side_effect=AssertionError("Offline only")),
+            ):
+                errors = io.StringIO()
+                with patch.object(sys, "argv", [*args, "0" * 64]), redirect_stderr(errors), self.assertRaises(SystemExit):
+                    main()
+                self.assertIn("Evidence SHA-256 mismatch for identity_manifest_sha256", errors.getvalue())
+                self.assertFalse(path["output"].exists())
+                with patch.object(sys, "argv", [*args, digest]), redirect_stdout(io.StringIO()):
+                    main()
+            with path["output"].open(newline="", encoding="utf-8") as handle:
+                row = next(csv.DictReader(handle))
+            self.assertEqual((row["identity_gate"], row["app_movie_found"]), ("PASS", "False"))
+            summary = json.loads(path["summary"].read_text(encoding="utf-8"))
+            self.assertEqual(summary["evidence_sha256"]["identity_manifest_sha256"], digest)
 
     def test_duplicate_application_comparison_fails_closed(self):
         with self.assertRaisesRegex(ValueError, "Duplicate application comparison identity"):

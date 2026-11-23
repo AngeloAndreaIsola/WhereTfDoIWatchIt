@@ -264,6 +264,93 @@ class ReadOnlyAuditPostgreSQLTests(TransactionTestCase):
 
     reset_sequences = True
 
+    def test_manifest_gate_preserves_missing_conflicting_and_quarantined_catalogue_rows(self):
+        cases = [
+            (238, "movie", "The Godfather", 1972, "The Godfather", 1972),
+            (603, "movie", "The Matrix", 1999, "The Matrix", 1999),
+            (27205, "movie", "Inception", 2010, "Inception", 2010),
+            (496243, "movie", "Parasite", 2019, "Parasite", 2019),
+            (438631, "movie", "Dune", 2021, "Dune", 2021),
+            (220289, "movie", "Coherence", 2013, "Coherence", 2014),
+            (2316, "series", "The Office US", 2005, "The Office", 2005),
+        ]
+        Movie.objects.create(tmdb_id=238, title="Legacy display title", year=1972)
+        Movie.objects.create(tmdb_id=27205, title="Inception", canonical_title="Unrelated", year=2010)
+        Movie.objects.create(tmdb_id=496243, title="Parasite", year=2000)
+        Movie.objects.create(tmdb_id=438631, title="Dune", year=2021, is_quarantined=True)
+        Movie.objects.create(tmdb_id=220289, title="Coherence", canonical_title="Coherence", year=2013)
+        Movie.objects.create(tmdb_id=2316, title="Same numeric ID in movie namespace", year=2005)
+        provider, _ = Provider.objects.get_or_create(
+            slug="netflix", defaults={"name": "Netflix", "category": ProviderCategory.OFFICIAL}
+        )
+        source, _ = Source.objects.update_or_create(slug="justwatch", defaults={"name": "JustWatch", "enabled": True})
+        country, _ = Country.objects.get_or_create(code="NL", defaults={"name": "Netherlands", "enabled": True})
+        for tmdb_id in (238, 603):
+            CanonicalOffer.objects.create(
+                provider=provider, source=source, country=country, content_type="movie", tmdb_id=tmdb_id,
+                offer_type="subscription", provider_content_id=str(tmdb_id), last_seen=timezone.now(),
+                currently_available=True, identity="",
+            )
+        before = list(Movie.objects.order_by("pk").values())
+
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            cohort, evidence, manifest = root / "cohort.csv", root / "evidence.csv", root / "manifest.csv"
+            output = root / "out"
+            with (
+                cohort.open("w", newline="", encoding="utf-8") as cohort_file,
+                evidence.open("w", newline="", encoding="utf-8") as evidence_file,
+                manifest.open("w", newline="", encoding="utf-8") as manifest_file,
+            ):
+                cohort_writer, evidence_writer, manifest_writer = map(csv.writer, (cohort_file, evidence_file, manifest_file))
+                cohort_writer.writerow(["tmdb_id", "media_type", "title", "year", "country"])
+                evidence_writer.writerow(["tmdb_id", "media_type", "title", "year", "country", "provider",
+                                          "offer_type", "explicitly_confirms_availability"])
+                manifest_writer.writerow(["tmdb_id", "media_type", "canonical_title", "year", "source",
+                                          "evidence_sha256", "observed_utc", "provenance"])
+                for tmdb_id, kind, title, year, canonical_title, canonical_year in cases:
+                    cohort_writer.writerow([tmdb_id, kind, title, year, "NL"])
+                    evidence_writer.writerow([tmdb_id, kind, title, year, "NL", "Netflix", "subscription", "Yes"])
+                    manifest_writer.writerow([tmdb_id, kind, canonical_title, canonical_year, "tmdb_direct_id_details",
+                                              "a" * 64, "2026-11-23T00:00:00+00:00", "Direct ID fixture"])
+            with (
+                patch("requests.sessions.Session.request", side_effect=AssertionError("HTTP must not be called")),
+                patch("socket.socket.connect", side_effect=AssertionError("No new network connection expected")),
+            ):
+                call_command("audit_availability_accuracy", cohort=cohort, external_evidence=evidence,
+                             identity_manifest=manifest, output=output, offline=True, verbosity=0)
+            with (output / "comparison.csv").open(newline="", encoding="utf-8") as handle:
+                results = {int(row["tmdb_id"]): row for row in csv.DictReader(handle)}
+            with (output / "application_snapshot.csv").open(newline="", encoding="utf-8") as handle:
+                snapshot = {int(row["tmdb_id"]): row for row in csv.DictReader(handle)}
+
+        self.assertEqual(list(Movie.objects.order_by("pk").values()), before)
+        accepted = results[238]
+        self.assertEqual(accepted["local_identity_state"], "MISSING_CANONICAL_TITLE")
+        self.assertEqual(accepted["identity_source"], "tmdb_manifest")
+        self.assertEqual(accepted["comparison_state"], "AGREEMENT_CONFIRMED")
+        missing = results[603]
+        self.assertEqual(missing["comparison_state"], "APP_DATA_MISSING")
+        self.assertEqual(missing["identity_source"], "tmdb_manifest")
+        self.assertEqual(missing["app_movie_found"], "False")
+        self.assertEqual(snapshot[603]["movie_id"], "")
+        self.assertEqual(snapshot[603]["identity_match"], "False")
+        self.assertEqual(snapshot[603]["profile_c_verdict"], "")
+        for tmdb_id, state in [(27205, "CONFLICT"), (496243, "CONFLICT"), (438631, "QUARANTINED")]:
+            with self.subTest(tmdb_id=tmdb_id):
+                self.assertEqual(results[tmdb_id]["local_identity_state"], state)
+                self.assertEqual(results[tmdb_id]["identity_source"], "")
+                self.assertEqual(results[tmdb_id]["comparison_state"], "NOT_COMPARABLE")
+        coherence = results[220289]
+        self.assertEqual((coherence["year"], coherence["identity_manifest_year"]), ("2013", "2014"))
+        self.assertEqual(coherence["identity_manifest_review"], "YEAR_MISMATCH")
+        self.assertEqual(coherence["comparison_state"], "NOT_COMPARABLE")
+        office = results[2316]
+        self.assertEqual((office["title"], office["identity_manifest_title"]), ("The Office US", "The Office"))
+        self.assertEqual(office["identity_manifest_review"], "TITLE_ALIAS_REVIEW")
+        self.assertEqual(office["comparison_state"], "NOT_COMPARABLE")
+        self.assertEqual(office["app_movie_found"], "False")
+
     def test_command_emits_comparable_snapshot_without_mutating_fixture_rows_or_http(self):
         movie = Movie.objects.create(tmdb_id=987654, title="Audit fixture", canonical_title="Audit fixture",
                                      year=2000, content_type="movie")
