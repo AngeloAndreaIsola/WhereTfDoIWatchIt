@@ -24,7 +24,7 @@ def sample():
         identity = pilot.get(identifier, row)
         rows.append({**{k: identity[k] for k in ("tmdb_id", "title", "media_type", "year")},
                      "country": row["country"]})
-    for identifier, country in [("2316", "GB"), ("565310", "CA"), ("438631", "AU")]:
+    for identifier, country in [("2316", "GB"), ("565310", "CA"), ("438631", "AU"), ("2316", "US")]:
         rows.append({**pilot[identifier], "country": country})
     return rows
 
