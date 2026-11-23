@@ -62,6 +62,19 @@ class CohortValidationTests(SimpleTestCase):
 
 
 class ComparisonClassificationTests(SimpleTestCase):
+    def test_reviewed_aliases_require_both_names_and_exact_typed_id_and_year(self):
+        from availability.audit_identity import titles_match
+
+        for tmdb_id, kind, year, left, right in [
+            (619264, "movie", 2019, "the platform", "el hoyo"),
+            (2316, "series", 2005, "the office us", "the office"),
+        ]:
+            case = {"tmdb_id": tmdb_id, "media_type": kind, "year": year}
+            self.assertTrue(titles_match(case, left, right))
+            self.assertFalse(titles_match(case, left, "unrelated"))
+            for change in [{"tmdb_id": 2996}, {"media_type": "episode"}, {"year": year + 1}]:
+                self.assertFalse(titles_match({**case, **change}, left, right))
+
     def setUp(self):
         self.case = {"tmdb_id": 10, "title": "A", "media_type": "movie", "year": 2000, "country": "NL"}
         self.movie = Movie(tmdb_id=10, content_type="movie", title="A", canonical_title="A", year=2000)
@@ -347,8 +360,9 @@ class ReadOnlyAuditPostgreSQLTests(TransactionTestCase):
         self.assertEqual(coherence["comparison_state"], "NOT_COMPARABLE")
         office = results[2316]
         self.assertEqual((office["title"], office["identity_manifest_title"]), ("The Office US", "The Office"))
-        self.assertEqual(office["identity_manifest_review"], "TITLE_ALIAS_REVIEW")
-        self.assertEqual(office["comparison_state"], "NOT_COMPARABLE")
+        self.assertEqual(office["identity_manifest_review"], "")
+        self.assertEqual(office["identity_source"], "tmdb_manifest")
+        self.assertEqual(office["comparison_state"], "APP_DATA_MISSING")
         self.assertEqual(office["app_movie_found"], "False")
 
     def test_command_emits_comparable_snapshot_without_mutating_fixture_rows_or_http(self):
@@ -401,6 +415,12 @@ class ReadOnlyAuditPostgreSQLTests(TransactionTestCase):
             self.assertEqual(comparison["comparison_state"], "AGREEMENT_CONFIRMED")
             self.assertEqual(comparison["app_offer_count"], "2")
             self.assertEqual(comparison["app_positive_provider_count"], "2")
+            report = (output / "coverage_summary.md").read_text()
+            self.assertIn("code revision: unrecorded", report)
+            self.assertIn('--external-evidence "$EXTERNAL_EVIDENCE_CSV"', report)
+            self.assertNotIn("--identity-manifest", report)
+            self.assertNotIn("stage2c", report)
+            self.assertIn("Confirmed conflicts in this run: 0", (output / "confirmed_discrepancies.md").read_text())
 
     def test_nonempty_cases_classify_missing_stale_offer_type_identity_and_source_state(self):
         country, _ = Country.objects.get_or_create(code="NL", defaults={"name": "Netherlands", "enabled": True})

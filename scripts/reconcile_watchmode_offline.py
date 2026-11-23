@@ -19,7 +19,7 @@ from urllib.parse import parse_qs, urlsplit
 # The shared identity parser lives in the backend so the Django command can
 # use it from the backend image. This script uses it without loading Django.
 sys.path.append(str(Path(__file__).resolve().parents[1] / "backend"))
-from availability.audit_identity import load_identity_manifest, manifest_identity_fields, normalized_title
+from availability.audit_identity import load_identity_manifest, manifest_identity_fields, normalized_title, titles_match
 
 
 COHORT_COLUMNS = {"tmdb_id", "title", "media_type", "year", "country"}
@@ -32,12 +32,31 @@ COMPARISON_COLUMNS = {
     "tmdb_id", "media_type", "country", "app_movie_found", "comparison_state",
 }
 WATCHMODE_OFFER_TYPES = {"sub": "subscription", "rent": "rent", "buy": "buy"}
+# Review is specific to the NL pilot and these first-party link destinations.
+# meJane has no established canonical slug in the reviewed provider inventory.
+TRANSACTIONAL = {"rent": "rent", "buy": "buy"}
+SUBSCRIPTION = {"sub": "subscription"}
+NL_PILOT_PROVIDERS = {
+    24: ("Amazon", "app.primevideo.com", "prime", TRANSACTIONAL),
+    26: ("Prime Video", "app.primevideo.com", "prime", SUBSCRIPTION),
+    203: ("Netflix", "www.netflix.com", "netflix", SUBSCRIPTION),
+    349: ("AppleTV", "tv.apple.com", "apple_tv_store", TRANSACTIONAL),
+    372: ("Disney+", "www.disneyplus.com", "disney", SUBSCRIPTION),
+    387: ("HBO Max", "play.hbomax.com", "max", SUBSCRIPTION),
+    417: ("Rakuten TV", "www.rakuten.tv", "rakuten_tv", TRANSACTIONAL),
+    464: ("SkyShowtime", "www.skyshowtime.com", "skyshowtime", SUBSCRIPTION),
+    465: ("Videoland", "v2.videoland.com", "videoland", SUBSCRIPTION),
+    466: ("NLZIET", "app.nlziet.nl", "nlziet", SUBSCRIPTION),
+    490: ("MAX (Via Amazon Prime)", "app.primevideo.com", "max_amazon", {"sub": "addon"}),
+    637: ("Pathé Thuis", "www.pathe-thuis.nl", "pathe_thuis", TRANSACTIONAL),
+    640: ("NPO Plus", "npo.nl", "npo_plus", SUBSCRIPTION),
+}
 WATCHMODE_TYPES = {"movie": "movie", "tv_series": "series", "series": "series"}
 OUTPUT_COLUMNS = [
     "tmdb_id", "title", "media_type", "year", "country", "watchmode_id",
     "watchmode_source_id", "watchmode_provider", "watchmode_offer_type",
     "watchmode_observed_at_utc", "evidence_artifact",
-    "provider_slug", "sanitized_provider_url", "candidate_state", "identity_gate",
+    "provider_slug", "app_offer_type", "sanitized_provider_url", "candidate_state", "identity_gate",
     "app_movie_found", "identity_source", "identity_manifest_review",
     "decision", "matching_app_sources", "matching_app_offer_ids",
 ]
@@ -133,7 +152,8 @@ def identity_observation_ok(cohort_row: dict, observed: dict) -> bool:
         observed.get("exact_tmdb_match") is True
         and WATCHMODE_TYPES.get(observed.get("watchmode_type")) == cohort_row["media_type"]
         and int(observed.get("watchmode_year") or 0) == cohort_row["year"]
-        and normalized_title(observed.get("watchmode_name")) == normalized_title(cohort_row["title"])
+        and titles_match(cohort_row, normalized_title(observed.get("watchmode_name")),
+                         normalized_title(cohort_row["title"]))
     )
 
 
@@ -161,9 +181,21 @@ def resolve_provider(name: str, offer_type: str, index: dict) -> str:
     return next(iter(candidates)) if len(candidates) == 1 else ""
 
 
+def reviewed_nl_provider(source: dict) -> tuple[str, str]:
+    entry = NL_PILOT_PROVIDERS.get(source.get("source_id"))
+    link = urlsplit(safe_url(source.get("web_url", "")))
+    if not entry or source.get("region") != "NL" or link.scheme != "https":
+        return "", ""
+    name, host, slug, classes = entry
+    if source.get("name") != name or link.hostname != host or source.get("type") not in classes:
+        return "", ""
+    return slug, classes[source["type"]]
+
+
 def classify_offer(external: dict, app_rows: list[dict], identity_ok: bool,
-                   provider_slug: str) -> dict:
-    offer_type = WATCHMODE_OFFER_TYPES.get(external.get("type"), "")
+                   provider_slug: str, offer_type: str | None = None) -> dict:
+    if offer_type is None:
+        offer_type = WATCHMODE_OFFER_TYPES.get(external.get("type"), "")
     if not provider_slug or not offer_type:
         candidate = "UNMAPPED_PROVIDER_OR_CLASS"
         matches = []
@@ -192,7 +224,7 @@ def classify_offer(external: dict, app_rows: list[dict], identity_ok: bool,
 
 def reconcile(cohort: dict, observations: dict, app_rows: list[dict],
               comparisons: list[dict], provider_map_rows: list[dict] | None = None, *,
-              identity_manifest: dict | None = None) -> tuple[list[dict], dict]:
+              identity_manifest: dict | None = None, reviewed_nl: bool = False) -> tuple[list[dict], dict]:
     app_by_key = defaultdict(list)
     for row in app_rows:
         app_by_key[identity_key(row)].append(row)
@@ -245,8 +277,12 @@ def reconcile(cohort: dict, observations: dict, app_rows: list[dict],
         for source in obs.get("nl_sources", []):
             if source.get("region") != "NL":
                 raise ValueError(f"Non-NL Watchmode source for {key}")
-            provider_slug = resolve_provider(source.get("name", ""), source.get("type", ""), index)
-            classification = classify_offer(source, app_by_key[key], identity_ok, provider_slug)
+            if reviewed_nl:
+                provider_slug, offer_type = reviewed_nl_provider(source)
+            else:
+                provider_slug = resolve_provider(source.get("name", ""), source.get("type", ""), index)
+                offer_type = WATCHMODE_OFFER_TYPES.get(source.get("type"), "")
+            classification = classify_offer(source, app_by_key[key], identity_ok, provider_slug, offer_type)
             output.append({
                 "tmdb_id": case["tmdb_id"], "title": case["title"],
                 "media_type": case["media_type"], "year": case["year"], "country": case["country"],
@@ -257,6 +293,7 @@ def reconcile(cohort: dict, observations: dict, app_rows: list[dict],
                 "watchmode_observed_at_utc": obs.get("_observed_utc", ""),
                 "evidence_artifact": obs.get("_artifact", ""),
                 "provider_slug": provider_slug,
+                "app_offer_type": offer_type if provider_slug else "",
                 "sanitized_provider_url": safe_url(source.get("web_url", "")),
                 "identity_gate": "PASS" if identity_ok else "BLOCKED",
                 "app_movie_found": movie_found,
@@ -293,7 +330,10 @@ def main() -> None:
     parser.add_argument("--identity-manifest", type=Path, help="Optional reviewed TMDb identity evidence CSV")
     parser.add_argument("--manifest-evidence-dir", type=Path,
                         help="Verify manifest SHA-256 values against preserved local TMDb JSON responses")
-    parser.add_argument("--provider-map", type=Path,
+    providers = parser.add_mutually_exclusive_group()
+    providers.add_argument("--reviewed-nl-providers", action="store_true",
+                           help="Use only the reviewed November NL pilot source IDs, labels, hosts and classes")
+    providers.add_argument("--provider-map", type=Path,
                         help="Optional CSV: watchmode_name,watchmode_type,app_provider_slug")
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--summary", required=True, type=Path)
@@ -335,7 +375,9 @@ def main() -> None:
             manifest = load_identity_manifest(args.identity_manifest, evidence_dir=args.manifest_evidence_dir)
         except (OSError, ValueError, csv.Error) as exc:
             parser.error(f"Cannot load identity manifest: {exc}")
-    rows, summary = reconcile(cohort, observations, app, comparison, mapping, identity_manifest=manifest)
+    rows, summary = reconcile(cohort, observations, app, comparison, mapping,
+                              identity_manifest=manifest, reviewed_nl=args.reviewed_nl_providers)
+    summary["reviewed_nl_providers"] = args.reviewed_nl_providers
     summary["evidence_sha256"] = hashes
     summary["manifest_evidence_verified"] = args.manifest_evidence_dir is not None
     summary["snapshot_label"] = args.snapshot_label
