@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import csv
+import hashlib
+import re
 import json
 from collections import Counter
 from pathlib import Path
@@ -329,12 +331,16 @@ class Command(BaseCommand):
         parser.add_argument("--cohort", required=True, type=Path)
         parser.add_argument("--output", required=True, type=Path)
         parser.add_argument("--external-evidence", type=Path)
+        parser.add_argument("--audit-code-sha", help="Optional full Git revision of the code running this export.")
         parser.add_argument("--identity-manifest", type=Path, help="Optional reviewed TMDb identity evidence CSV.")
         parser.add_argument("--offline", action="store_true", help="Required; the command never performs network I/O.")
 
     def handle(self, *args, **options):
         if not options["offline"]:
             raise CommandError("--offline is required; this audit command never makes HTTP requests.")
+        revision = options["audit_code_sha"]
+        if revision and not re.fullmatch(r"[0-9a-f]{40}", revision):
+            raise CommandError("--audit-code-sha must be a full lowercase Git commit SHA.")
         cohort_rows = _parse_cohort(_read_csv(options["cohort"], REQUIRED_COHORT_COLUMNS, "Cohort"))
         external_rows = []
         if options["external_evidence"]:
@@ -488,10 +494,10 @@ class Command(BaseCommand):
         comparison_columns = list(comparisons[0]) if comparisons else [*sorted(REQUIRED_COHORT_COLUMNS), "comparison_state"]
         _write_csv(outdir / "application_snapshot.csv", app_snapshot, snapshot_columns)
         _write_csv(outdir / "comparison.csv", comparisons, comparison_columns)
-        self._write_reports(outdir, cohort_rows, app_snapshot, comparisons, source_status)
+        self._write_reports(outdir, cohort_rows, app_snapshot, comparisons, source_status, options)
         self.stdout.write(self.style.SUCCESS(f"Audited {len(cohort_rows)} cases; wrote read-only snapshot to {outdir}"))
 
-    def _write_reports(self, outdir, cohort, snapshot, comparisons, sources):
+    def _write_reports(self, outdir, cohort, snapshot, comparisons, sources, options):
         counts = Counter(row["comparison_state"] for row in comparisons)
         found = sum(1 for row in comparisons if row["app_movie_found"])
         missing = len(comparisons) - found
@@ -506,9 +512,19 @@ class Command(BaseCommand):
         disabled_rows = sorted(slug for slug in registered if sources[slug]["present"] and sources[slug]["enabled"] is False)
         evaluated = sum(1 for row in comparisons if row["profile_b_verdict"] is not None and row["profile_c_verdict"] is not None)
         external_positive = sum(1 for row in comparisons if row["external_explicit_positive"])
+        arguments = []
+        inputs = []
+        for key in ("cohort", "external_evidence", "identity_manifest"):
+            if options[key]:
+                label = key.replace("_", "-")
+                arguments.append(f'--{label} "${key.upper()}_CSV"')
+                digest = hashlib.sha256(Path(options[key]).read_bytes()).hexdigest()
+                inputs.append(f"- {label} SHA-256 `{digest}`")
+        if options["audit_code_sha"]:
+            arguments.append(f'--audit-code-sha {options["audit_code_sha"]}')
         (outdir / "coverage_summary.md").write_text(
-            "# Stage 2C coverage summary\n\n"
-            f"Baseline: `0da80a3f86555206670e74d7b4344bb21fa22111`\n\n"
+            "# Offline availability audit\n\n"
+            f"Operator-supplied code revision: {options['audit_code_sha'] or 'unrecorded'}.\n\n"
             f"Cohort cases: {len(cohort)}. Movie rows found: {found}; missing: {missing}. "
             f"Canonical raw offer rows: {offers}; lifecycle-current rows: {current_offers}; stale rows: {stale}. "
             f"Synthetic resolver results returned: {evaluated} cases across Profiles B and C. "
@@ -519,16 +535,18 @@ class Command(BaseCommand):
             f"Registered sources with no persisted Source row: {', '.join(absent_rows) or 'none'}. "
             f"Persisted but disabled sources: {', '.join(disabled_rows) or 'none'}.\n\n"
             "## Comparison states\n\n" + "\n".join(f"- {name}: {counts.get(name, 0)}" for name in sorted(COMPARISON_STATES)) + "\n\n"
-            "The local database is an offline developer database, not production. No user subscriptions or preferences were read. "
+            "No user subscriptions or preferences were read. "
             "Profile verdicts use in-memory synthetic preferences and the canonical `resolve_title` resolver. "
             "The audit command made 0 HTTP requests and consumed 0 Streaming Availability or Watchmode API calls.\n\n"
             "## Reproduction\n\n"
-            "From `backend/`, run `python manage.py audit_availability_accuracy --cohort ../docs/audits/stage2c/cohort.csv "
-            "--external-evidence ../docs/audits/stage2c/external_evidence.csv --output ../docs/audits/stage2c --offline`.\n",
+            + "\n".join(inputs) + "\n\n"
+            + "`python manage.py audit_availability_accuracy " + " ".join(arguments)
+            + ' --output "$NEW_OUTPUT_DIR" --offline`\n',
             encoding="utf-8")
         (outdir / "confirmed_discrepancies.md").write_text(
             "# Confirmed discrepancies\n\n"
-            "No application-versus-external conflict was confirmed. Stage 2B evidence is a secondary listing source and contains no confirmed negative availability; absent local offers are classified as missing coverage, never as an app error.\n\n"
+            f"Confirmed conflicts in this run: {counts['CONFLICT_CONFIRMED']}. "
+            "See comparison.csv for each title and market.\n\n"
             "## Classification precedence\n\n"
             "1. `NOT_COMPARABLE` when title identity, TMDb ID, media type, year, or country disagrees, "
             "or when the identity manifest flags a discrepancy for review. A reviewed manifest may supply missing "
@@ -537,14 +555,7 @@ class Command(BaseCommand):
             "3. `APP_DATA_MISSING` when the exact local Movie identity is absent.\n"
             "4. For explicit primary/official negatives, `CONFLICT_CONFIRMED` requires a verified same-provider canonical offer in the same country; otherwise `INSUFFICIENT_APP_EVIDENCE`.\n"
             "5. `APP_SOURCE_DISABLED` requires an explicit `app_source_slug` in the external evidence and a persisted local Source row with `enabled=false`. An absent/unconfigured row has unknown state and is never inferred disabled from the research site's name. Without that explicit source attribution, no-offer cases are `APP_DATA_MISSING`. A stale matching provider/class is `APP_DATA_STALE`, even if a different provider has fresh evidence.\n"
-            "6. Positive `AGREEMENT_CONFIRMED` requires external evidence that unambiguously names one provider and one offer class, plus fresh verified canonical evidence matching provider, country, and class. Aggregated provider/class lists without a pairing stay `INSUFFICIENT_EXTERNAL_EVIDENCE`; a same-provider offer of another class is insufficient. An aggregator's omission of other app providers is not a conflict. Remaining mismatches are `INSUFFICIENT_APP_EVIDENCE`.\n\n"
-            "## Targeted edge cases\n\n"
-            "- **D1 — Dune (1984) vs (2021):** no local Movie or offer row was found for TMDb 438631. Source TMDb IDs are persisted as exact external-ID mappings; fallback matching constrains media type and known movie year, and canonical reads are keyed by TMDb ID and media type. No defect reproduced.\n"
-            "- **D2 — localized titles:** the audit requires title/year evidence even for exact TMDb IDs. "
-            "The allowlist includes The Platform / Il buco (619264, movie, 2019), documented in Stage 2B.\n"
-            "- **D3 — Prime Video country scope:** the Prime Video collector declares NL only; refresh scope rejects IT requests and canonical offer reads filter by country. JustWatch may independently record IT offers. No matching local rows existed to test leakage.\n"
-            "- **D4 — multi-provider offers:** canonical identity retains provider and country; reconciliation merges same-provider observations while keeping source facts and source-specific evidence. Non-authoritative aggregator omission does not deactivate another source's positive. No Godfather rows existed to test live behavior.\n"
-            "- **D5 — unavailable external pages:** Stage 2B's JustWatch NL 404s, RaiPlay search 404s, and Pluto TV geo-block remain unverified evidence limitations, not negative findings.\n",
+            "6. Positive `AGREEMENT_CONFIRMED` requires external evidence that unambiguously names one provider and one offer class, plus fresh verified canonical evidence matching provider, country, and class. Aggregated provider/class lists without a pairing stay `INSUFFICIENT_EXTERNAL_EVIDENCE`; a same-provider offer of another class is insufficient. An aggregator's omission of other app providers is not a conflict. Remaining mismatches are `INSUFFICIENT_APP_EVIDENCE`.\n\n",
             encoding="utf-8")
         source_lines = ["# Source coverage", "", "Source registry presence and persisted Source rows are reported separately. Missing Source rows mean configuration state is unknown/absent in this DB, not disabled in deployment.", "", "| Source | Registered | Row present | Enabled |", "|---|---:|---:|---:|"]
         source_lines += [f"| {slug} | {str(v['registered']).lower()} | {str(v['present']).lower()} | {v['enabled'] if v['enabled'] is not None else 'unknown'} |" for slug, v in sources.items()]
@@ -555,7 +566,7 @@ class Command(BaseCommand):
             "2. Compare provider-level offers only when title identity, country, and offer class align; retain aggregator evidence as secondary.\n"
             "3. For Dune (438631), inspect the exact provider content ID, TMDb mapping method/year, and offer country against Dune (1984) before interpreting any mismatch.\n"
             "4. For Dark (70523) and The Platform (619264), compare provider-native titles, release year, media type, and source TMDb IDs; only add localized aliases after a reproducible unmapped or wrong-match case.\n"
-            "5. Compare Prime Video NL collector rows with independent IT aggregator rows, preserving country on every offer; do not widen the collector's declared NL scope.\n"
+            "5. Compare Prime Video NL collector rows with independent observations in the same market and offer class.\n"
             "6. For The Godfather (238), verify distinct provider offer groups and source observations, including the Paramount/Prime add-on base requirement.\n"
             "7. Confirm negative availability only from explicit authoritative evidence; source failures and omissions remain unverified.\n",
             encoding="utf-8")

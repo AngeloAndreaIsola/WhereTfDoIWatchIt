@@ -25,6 +25,7 @@ from reconcile_watchmode_offline import (
     read_csv,
     reconcile,
     resolve_provider,
+    reviewed_nl_provider,
     safe_url,
 )
 
@@ -151,13 +152,13 @@ class ReconciliationTests(unittest.TestCase):
                 self.assertEqual(rows[0]["identity_gate"], "BLOCKED")
                 self.assertEqual(rows[0]["decision"], "IDENTITY_UNVERIFIED")
 
-    def test_review_flags_preserve_coherence_year_and_office_alias(self):
+    def test_review_flags_preserve_coherence_year_and_scoped_office_alias(self):
         manifest = load_identity_manifest(MANIFEST)
         cohort = load_cohort(AUDIT_DIR / "nl_pilot_cohort_20261122_v2.csv")
         self.assertEqual(len(manifest), 15)
         for tmdb_id, kind, year, title, flag in [
             (220289, "movie", 2014, "Coherence", "YEAR_MISMATCH"),
-            (2316, "series", 2005, "The Office", "TITLE_ALIAS_REVIEW"),
+            (2316, "series", 2005, "The Office", ""),
         ]:
             with self.subTest(tmdb_id=tmdb_id):
                 key = (tmdb_id, kind, "NL")
@@ -174,8 +175,31 @@ class ReconciliationTests(unittest.TestCase):
                 self.assertEqual(gate["identity_manifest_year"], year)
                 self.assertEqual(gate["identity_manifest_title"], title)
                 self.assertEqual(gate["identity_manifest_review"], flag)
-                self.assertEqual(gate["identity_gate"], "BLOCKED")
-                self.assertEqual(gate["identity_source"], "")
+                self.assertEqual(gate["identity_gate"], "BLOCKED" if flag else "PASS")
+                self.assertEqual(gate["identity_source"], "" if flag else "local_movie")
+
+    def test_reviewed_store_base_and_channel_have_distinct_classes(self):
+        for provider_id, name, kind, slug, target in [
+            (24, "Amazon", "rent", "prime", "rent"),
+            (24, "Amazon", "buy", "prime", "buy"),
+            (26, "Prime Video", "sub", "prime", "subscription"),
+            (490, "MAX (Via Amazon Prime)", "sub", "max_amazon", "addon"),
+        ]:
+            row = {**source(name, kind, provider_id), "web_url": "https://app.primevideo.com/detail"}
+            self.assertEqual(reviewed_nl_provider(row), (slug, target))
+            for change in [{"region": "IT"}, {"source_id": 0}, {"type": "bundle"},
+                           {"web_url": "https://example.org/detail"}, {"name": "Prime"}]:
+                self.assertEqual(reviewed_nl_provider({**row, **change}), ("", ""))
+        apple = {**source("AppleTV", "buy", 349), "web_url": "https://tv.apple.com/nl/movie/title"}
+        self.assertEqual(reviewed_nl_provider(apple), ("apple_tv_store", "buy"))
+        self.assertEqual(reviewed_nl_provider({**apple, "type": "sub"}), ("", ""))
+
+    def test_reviewed_channel_cannot_match_standalone_or_base_subscription(self):
+        channel = {**source("MAX (Via Amazon Prime)", "sub", 490),
+                   "web_url": "https://app.primevideo.com/detail"}
+        offers = [app(slug, slug, "subscription", "justwatch", "stale") for slug in ("max", "prime", "max_amazon")]
+        rows, _ = reconcile({KEY: CASE}, {KEY: observation(channel)}, offers, [comparison()], reviewed_nl=True)
+        self.assertEqual((rows[0]["app_offer_type"], rows[0]["decision"]), ("addon", "NO_APP_OFFER"))
 
     def test_manifest_rejects_duplicate_and_invalid_evidence_digest(self):
         header, first, *_ = MANIFEST.read_text(encoding="utf-8").splitlines()

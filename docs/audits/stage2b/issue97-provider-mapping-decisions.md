@@ -1,0 +1,26 @@
+# Reviewed NL provider and class decisions
+
+The opt-in `--reviewed-nl-providers` comparison requires the exact Watchmode source ID, source label, NL region, HTTPS destination host and source class. These identifiers come from the pinned pilot. The canonical targets were checked against the disposable provider catalogue and the application’s existing package and channel registry. An external listing never establishes a viewer’s subscription. The comparator retains the original label, class and source ID on every output row. [Class-specific mappings](../../../scripts/reconcile_watchmode_offline.py) · [Canonical package and parent definitions](../../../backend/availability/sources/justwatch_providers.py)
+
+| Measured label / ID | Destination host | Source class and count | Canonical provider / class | Decision |
+|---|---|---|---|---|
+| Amazon / 24 | app.primevideo.com | rent 17, buy 19 | prime / rent or buy | Transaction in the Prime Video store. The captured Inception detail has separate rental and purchase actions for the title GTI. Neither action implies Prime membership. [Prime](https://www.primevideo.com/detail/0FFJSDLK6HUWC5T8XJUQODMFJ3) |
+| Prime Video / 26 | app.primevideo.com | sub 5 | prime / subscription | Base service. Inception’s own detail gives `isPrime=true` and the same GTI has a PRIME / Prime action. |
+| MAX (Via Amazon Prime) / 490 | app.primevideo.com | sub 4 | max_amazon / addon | Separately sold channel. The title’s option is PV_CHANNEL / wbdmaxnl. The app catalogue names HBO Max Amazon Channel and declares prime as parent. Neither max/ subscription nor prime/subscription matches this offer. |
+| HBO Max / 387 | play.hbomax.com | sub 4 | max / subscription | Standalone HBO Max destination and existing canonical Max provider. [HBO Max](https://www.hbomax.com/au/en/movie/e7dc7b3a-a494-4ef1-8107-f4308aa6bbf7) |
+| AppleTV / 349 | tv.apple.com | rent 19, buy 19 | apple_tv_store / rent or buy | Apple documents individual movie rental in the TV app. The canonical registry distinguishes the iTunes store from Apple TV subscription and the Amazon channel. The IT film page also promotes a collection, which supplies no individual-film price. [Apple Support](https://support.apple.com/en-us/108816) · [Apple film page](https://tv.apple.com/it/movie/inception/umc.cmc.6loas01ow0w4lkatxxloz7a6e) |
+| Rakuten TV / 417 | www.rakuten.tv | rent 8, buy 16 | rakuten_tv / rent or buy | Separate movie-level rent and buy controls with EUR prices. The same provider can carry AVOD elsewhere. These 24 rows say rent or buy. [Rakuten](https://www.rakuten.tv/nl/movies/dune-2021) |
+| Pathé Thuis / 637 | www.pathe-thuis.nl | rent 12, buy 12 | pathe_thuis / rent or buy | Exact Dutch store, two transactional classes. |
+| Netflix / 203 | www.netflix.com | sub 6 | netflix / subscription | Exact service. Ads-plan eligibility on a captured title does not identify a user’s plan. |
+| Disney+ / 372 | www.disneyplus.com | sub 1 | disney / subscription | Standalone service in the clone catalogue. |
+| SkyShowtime / 464 | www.skyshowtime.com | sub 2 | skyshowtime / subscription | Standalone provider, distinct from any channel trial. |
+| Videoland / 465 | v2.videoland.com | sub 2 | videoland / subscription | Exact NL brand, distinct from Viaplay. |
+| NLZIET / 466 | app.nlziet.nl | sub 1 | nlziet / subscription | Preserve the platform offering. A channel in a bundle is not a separate entitled provider. |
+| NPO Plus / 640 | npo.nl | sub 1 | npo_plus / subscription | Keep paid NPO Plus separate from free NPO Start. |
+| meJane / 684 | www.mejane.com | rent 10, buy 8 | unresolved / source class retained | Distributor and transaction are identified. The authorized clone and canonical registry have no reviewed meJane slug. Reject substitution of another NL store. |
+
+The table accounts for **166 rows, 14 labels and 19 label/class combinations**. The reviewed map resolves 148/166 rows across 17/19 combinations. Across the original **85** distinct title/source/class combinations, 23 overlapping rows represent **17 distinct canonical title/provider/class pairs**. Duplicate prices, formats or links for one pair do not create additional confirmations. No changed mapping updates application providers, entitlements or persisted offers.
+
+First-party brand checks identified Pathé Thuis, SkyShowtime Nederland, Videoland and meJane. NPO explicitly prices Plus per month on the NPO Start site. NLZIET’s marketing redirect led to an authorization URL and stopped there. Its mapping relies on the saved NL pilot’s exact label/ID/host and the app’s registered NLZIET provider. Service landing pages supply no additional title availability. [Pathé Thuis](https://www.pathe-thuis.nl/over-pathe-thuis) · [SkyShowtime Nederland](https://www.skyshowtime.com/nl) · [Videoland](https://www.videoland.com/nl/) · [NPO Plus](https://npo.nl/start/plus) · [meJane](https://www.mejane.com/)
+
+The standalone tests reject a changed region, source ID, label, host or class. They exercise cases where standalone Max, base Prime or even a subscription-class row for the channel would otherwise be mistaken for an add-on. Same-source exclusions and source-specific freshness still apply after mapping. [Reconciliation matrix](issue97-provider-reconciliation.csv)

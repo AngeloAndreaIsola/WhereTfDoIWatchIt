@@ -15,9 +15,10 @@ MANIFEST_COLUMNS = {
     "tmdb_id", "media_type", "canonical_title", "year", "source",
     "evidence_sha256", "observed_utc", "provenance",
 }
-# Stage 2B records this Italian title in docs/audits/stage2b/source_evidence.md.
+# Typed aliases reviewed in docs/audits/stage2b/issue97-identity-decisions.md.
 LOCALIZED_TITLE_ALIASES = {
-    (619264, "movie", 2019): frozenset({"the platform", "il buco"}),
+    (619264, "movie", 2019): frozenset({"the platform", "il buco", "el hoyo"}),
+    (2316, "series", 2005): frozenset({"the office us", "the office"}),
 }
 
 
