@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -27,7 +28,9 @@ class ManifestIdentity:
     evidence_sha256: str
 
 
-def load_identity_manifest(path: Path) -> dict[tuple[int, str], ManifestIdentity]:
+def load_identity_manifest(
+    path: Path, *, evidence_dir: Path | None = None,
+) -> dict[tuple[int, str], ManifestIdentity]:
     entries = {}
     with Path(path).open(newline="", encoding="utf-8-sig") as handle:
         reader = csv.DictReader(handle)
@@ -53,6 +56,14 @@ def load_identity_manifest(path: Path) -> dict[tuple[int, str], ManifestIdentity
             key = (tmdb_id, media_type)
             if key in entries:
                 raise ValueError(f"Duplicate identity manifest entry on line {line}.")
+            if evidence_dir is not None:
+                response = evidence_dir / f"{media_type}_{tmdb_id}.json"
+                try:
+                    actual_digest = hashlib.sha256(response.read_bytes()).hexdigest()
+                except OSError as exc:
+                    raise ValueError(f"Cannot read identity manifest evidence for {response.name}.") from exc
+                if actual_digest != digest:
+                    raise ValueError(f"Identity manifest evidence SHA-256 mismatch for {response.name}.")
             entries[key] = ManifestIdentity(title, year, digest)
     return entries
 

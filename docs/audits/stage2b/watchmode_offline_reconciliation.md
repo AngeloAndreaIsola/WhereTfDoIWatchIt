@@ -20,6 +20,12 @@ data consists of advertised offers, not entitlement or playback evidence.
   official TMDb direct-ID lookups. Pass it as `--identity-manifest` to both
   commands when auditing Option B. From `backend/`, the audit flag takes
   `../docs/audits/stage2b/identity_manifest_20261122.csv`.
+- Pass the preserved TMDb response directory as `--manifest-evidence-dir` to
+  the comparator to verify every manifest digest against its `movie_<id>.json`
+  or `series_<id>.json` file. An unreadable, missing, or mismatched response
+  aborts the run before it writes either output. The summary records whether
+  this check ran in `manifest_evidence_verified`. Runs without the directory
+  rely on the manifest's prior provenance review.
 - An optional, reviewed `provider_map.csv` with
   `watchmode_name,watchmode_type,app_provider_slug`. A mapping is valid only
   for that exact Watchmode offer class (`sub`, `rent`, or `buy`). Store and
@@ -55,6 +61,7 @@ python3 scripts/reconcile_watchmode_offline.py \
   --app-snapshot /path/to/wtdw97-fresh-audit-application_snapshot.csv \
   --app-comparison /path/to/wtdw97-fresh-audit-comparison.csv \
   --identity-manifest docs/audits/stage2b/identity_manifest_20261122.csv \
+  --manifest-evidence-dir /path/to/wtdw97-tmdb-identity-evidence-20261122 \
   --snapshot-label tracker_97_audit_20261122 \
   --audit-code-sha "<commit-used-to-produce-the-application-audit>" \
   --expected-cohort-sha abcbb06161a5afc5896b507d4f1b1bf1c4fb9831d72973ed2be47487eb17d40b \
@@ -91,10 +98,10 @@ For an absent local row or a row with an empty `Movie.canonical_title`, the
 manifest can supply a matching typed ID, title and year. `identity_source`
 records `tmdb_manifest` in that case. `app_movie_found` still reports local
 presence, and the application audit skips synthetic profile evaluation when
-the Movie is absent. For older comparison exports, the reconciliation script
-requires `app_movie_found=False` to use this fallback. A present legacy row
-with `NOT_COMPARABLE` needs a fresh export with an explicit local identity state.
-Conflicting and quarantined rows remain blocked.
+the Movie is absent. The comparator requires the audit export to record
+`identity_source=tmdb_manifest` before applying the fallback. Older exports
+without this value need a fresh audit with the reviewed manifest to use the
+fallback. Conflicting and quarantined rows remain blocked.
 
 Both tools report `YEAR_MISMATCH` for Coherence (220289), preserving the cohort's
 2013 beside the TMDb release year 2014 (`2014-04-06`). Both also report

@@ -222,7 +222,7 @@ def reconcile(cohort: dict, observations: dict, app_rows: list[dict],
         if not manifest_review:
             if trusted_local_identity:
                 identity_source = "local_movie"
-            elif entry and (
+            elif entry and local.get("identity_source") == "tmdb_manifest" and (
                 (movie_found is False and local_state in {"", "MISSING_MOVIE"})
                 or (movie_found is True and local_state == "MISSING_CANONICAL_TITLE")
             ):
@@ -291,6 +291,8 @@ def main() -> None:
     parser.add_argument("--app-snapshot", required=True, type=Path)
     parser.add_argument("--app-comparison", required=True, type=Path)
     parser.add_argument("--identity-manifest", type=Path, help="Optional reviewed TMDb identity evidence CSV")
+    parser.add_argument("--manifest-evidence-dir", type=Path,
+                        help="Verify manifest SHA-256 values against preserved local TMDb JSON responses")
     parser.add_argument("--provider-map", type=Path,
                         help="Optional CSV: watchmode_name,watchmode_type,app_provider_slug")
     parser.add_argument("--output", required=True, type=Path)
@@ -302,6 +304,8 @@ def main() -> None:
     parser.add_argument("--snapshot-label", default="", help="Human-readable identity of the audited DB snapshot")
     parser.add_argument("--audit-code-sha", default="", help="Commit used to generate the application audit")
     args = parser.parse_args()
+    if args.manifest_evidence_dir and not args.identity_manifest:
+        parser.error("--manifest-evidence-dir requires --identity-manifest")
 
     cohort = load_cohort(args.cohort)
     observations, hashes = load_pilot_results(args.watchmode_v1, args.watchmode_correction, cohort)
@@ -325,9 +329,15 @@ def main() -> None:
     app = read_csv(args.app_snapshot, APP_COLUMNS)
     comparison = read_csv(args.app_comparison, COMPARISON_COLUMNS)
     mapping = read_csv(args.provider_map, {"watchmode_name", "watchmode_type", "app_provider_slug"}) if args.provider_map else []
-    manifest = load_identity_manifest(args.identity_manifest) if args.identity_manifest else None
+    manifest = None
+    if args.identity_manifest:
+        try:
+            manifest = load_identity_manifest(args.identity_manifest, evidence_dir=args.manifest_evidence_dir)
+        except (OSError, ValueError, csv.Error) as exc:
+            parser.error(f"Cannot load identity manifest: {exc}")
     rows, summary = reconcile(cohort, observations, app, comparison, mapping, identity_manifest=manifest)
     summary["evidence_sha256"] = hashes
+    summary["manifest_evidence_verified"] = args.manifest_evidence_dir is not None
     summary["snapshot_label"] = args.snapshot_label
     summary["audit_code_sha"] = args.audit_code_sha
     args.output.parent.mkdir(parents=True, exist_ok=True)
