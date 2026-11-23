@@ -10,6 +10,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import connection, transaction
 from django.utils import timezone
 
+from availability.audit_identity import load_identity_manifest, manifest_identity_fields, titles_match
 from availability.domain.enums import AvailabilityEvidence, ContentType
 from availability.freshness import freshness_state
 from availability.models import ContentMapping, Country, Offer, Source
@@ -28,10 +29,6 @@ COMPARISON_STATES = {
     "INSUFFICIENT_APP_EVIDENCE", "NOT_COMPARABLE",
 }
 FREE_CATEGORIES = {ProviderCategory.BVOD, ProviderCategory.AVOD, ProviderCategory.FAST}
-# Stage 2B records this Italian title in docs/audits/stage2b/source_evidence.md.
-LOCALIZED_TITLE_ALIASES = {
-    (619264, ContentType.MOVIE, 2019): frozenset({"the platform", "il buco"}),
-}
 
 
 def _read_csv(path: Path, required: set[str], label: str) -> list[dict]:
@@ -204,25 +201,47 @@ def _external_offer_classes(row):
     return classes
 
 
-def _titles_match(case, expected, observed):
-    aliases = LOCALIZED_TITLE_ALIASES.get((case["tmdb_id"], case["media_type"], case["year"]), ())
-    return expected == observed or (expected in aliases and observed in aliases)
+def _local_identity(case, movie):
+    if movie is None:
+        return "MISSING_MOVIE", ""
+    if movie.is_quarantined:
+        return "QUARANTINED", "Local Movie identity is quarantined."
+    wrong_id = (movie.tmdb_id, movie.content_type) != (case["tmdb_id"], case["media_type"])
+    wrong_year = (
+        case["year"] is not None and movie.year is not None and movie.year != case["year"]
+    )
+    if wrong_id or wrong_year:
+        return "CONFLICT", "Local Movie identity ID, media type or release year differs from the cohort."
+    # The display title may be an override or a legacy label with unknown provenance.
+    if not (movie.canonical_title or "").strip():
+        return "MISSING_CANONICAL_TITLE", "Local Movie lacks a canonical TMDb title."
+    canonical_title = normalize_title(movie.canonical_title)
+    if not canonical_title or not titles_match(case, normalize_title(case["title"]), canonical_title):
+        return "CONFLICT", "Canonical TMDb title differs from the cohort without a documented alias."
+    if case["year"] is None or movie.year is None:
+        return "INCOMPLETE", "No usable canonical release year for this case."
+    return "TRUSTED", ""
 
 
-def _classify(case, external, movie, offers, source_state="unknown", providers=()):
-    expected_title = normalize_title(case["title"])
-    if movie is not None:
-        # canonical_title is persisted TMDb evidence. The display title may
-        # be an override or a legacy label with unknown provenance.
-        canonical_title = normalize_title(movie.canonical_title)
-        if movie.content_type != case["media_type"] or (
-            case["year"] is not None and movie.year is not None and movie.year != case["year"]
-        ):
-            return "NOT_COMPARABLE", "Local Movie identity year or media type differs from the cohort."
-        if canonical_title and not _titles_match(case, expected_title, canonical_title):
-            return "NOT_COMPARABLE", "Canonical TMDb title differs from the cohort without a documented alias."
-        if movie.is_quarantined or not canonical_title or case["year"] is None or movie.year is None:
-            return "NOT_COMPARABLE", "No usable independent canonical title and release year for this case."
+def _audit_identity(case, movie, entry):
+    local_state, blocker = _local_identity(case, movie)
+    fields = manifest_identity_fields(case, entry)
+    source = ""
+    if fields["identity_manifest_review"]:
+        if not blocker or local_state == "MISSING_CANONICAL_TITLE":
+            blocker = "TMDb identity manifest differs from the cohort. See identity_manifest_review."
+    elif local_state == "TRUSTED":
+        source = "local_movie"
+    elif entry and local_state in {"MISSING_MOVIE", "MISSING_CANONICAL_TITLE"}:
+        source, blocker = "tmdb_manifest", ""
+    return {**fields, "local_identity_state": local_state, "identity_source": source}, blocker
+
+
+def _classify(case, external, movie, offers, source_state="unknown", providers=(), *, identity_blocker=None):
+    if identity_blocker is None:
+        _, identity_blocker = _local_identity(case, movie)
+    if identity_blocker:
+        return "NOT_COMPARABLE", identity_blocker
 
     if not external:
         return "INSUFFICIENT_EXTERNAL_EVIDENCE", "No matching Stage 2B evidence row."
@@ -246,7 +265,7 @@ def _classify(case, external, movie, offers, source_state="unknown", providers=(
     if evidence_year is not None and case["year"] is not None and evidence_year != case["year"]:
         return "NOT_COMPARABLE", "External evidence release year differs from cohort."
     evidence_title = (external.get("title") or "").strip()
-    if evidence_title and not _titles_match(case, expected_title, normalize_title(evidence_title)):
+    if evidence_title and not titles_match(case, normalize_title(case["title"]), normalize_title(evidence_title)):
         return "NOT_COMPARABLE", "External evidence title differs from the cohort without a documented alias."
     explicit_negative = str(external.get("explicitly_confirms_unavailability") or "").strip().lower() in {"yes", "true", "1"}
     authority = str(external.get("evidence_authority") or "").strip().lower()
@@ -310,6 +329,7 @@ class Command(BaseCommand):
         parser.add_argument("--cohort", required=True, type=Path)
         parser.add_argument("--output", required=True, type=Path)
         parser.add_argument("--external-evidence", type=Path)
+        parser.add_argument("--identity-manifest", type=Path, help="Optional reviewed TMDb identity evidence CSV.")
         parser.add_argument("--offline", action="store_true", help="Required; the command never performs network I/O.")
 
     def handle(self, *args, **options):
@@ -320,6 +340,12 @@ class Command(BaseCommand):
         if options["external_evidence"]:
             external_rows = _read_csv(options["external_evidence"], {"tmdb_id", "country"}, "External evidence")
         external_index = _external_index(external_rows)
+        manifest = {}
+        if options["identity_manifest"]:
+            try:
+                manifest = load_identity_manifest(options["identity_manifest"])
+            except (OSError, ValueError, csv.Error) as exc:
+                raise CommandError(f"Cannot load identity manifest: {exc}") from exc
         outdir = Path(options["output"])
         outdir.mkdir(parents=True, exist_ok=True)
 
@@ -349,6 +375,7 @@ class Command(BaseCommand):
             for case in cohort_rows:
                 key = (case["tmdb_id"], case["media_type"])
                 movie = movies.get(key)
+                identity_fields, identity_blocker = _audit_identity(case, movie, manifest.get(key))
                 raw_rows = list(Offer.objects.filter(
                     tmdb_id=case["tmdb_id"], content_type=case["media_type"], country__code=case["country"]
                 ).select_related("provider", "country", "source", "sync_run").order_by("provider__slug", "offer_type", "source__slug", "id"))
@@ -356,8 +383,9 @@ class Command(BaseCommand):
                     case["tmdb_id"], case["media_type"], case["country"], now=timezone.now()
                 )
                 reconciled = list(reconciliation.offers)
-                profiles = _evaluate(movie or Movie(tmdb_id=case["tmdb_id"], title=case["title"],
-                    year=case["year"], content_type=case["media_type"]), case["country"], reconciled, providers)
+                profiles = _evaluate(movie, case["country"], reconciled, providers) if movie else {}
+                profile_b_verdict = profiles["B"].verdict if profiles else None
+                profile_c_verdict = profiles["C"].verdict if profiles else None
                 external = external_index.get((case["tmdb_id"], case["media_type"], case["country"]))
                 names = _external_providers(external)
                 # Stage 2B's research/aggregator source is not the app's
@@ -373,7 +401,8 @@ class Command(BaseCommand):
                         source_state = "disabled"
                     elif source_record["enabled"] is True:
                         source_state = "enabled"
-                state, reason = _classify(case, external, movie, reconciled, source_state, providers)
+                state, reason = _classify(case, external, movie, reconciled, source_state, providers,
+                                          identity_blocker=identity_blocker)
                 if state not in COMPARISON_STATES:
                     raise CommandError(f"Unexpected comparison state {state}")
                 # Independent snapshot rows preserve each canonical observation;
@@ -382,7 +411,7 @@ class Command(BaseCommand):
                 for raw in rows_for_case:
                     recons = next((r for r in reconciled if raw and raw.provider.slug == r.provider and raw.offer_type == r.offer_type), None)
                     profile_offer = {}
-                    if recons:
+                    if recons and profiles:
                         for profile_name in ("B", "C"):
                             profile_offer[profile_name] = next((item for item in profiles[profile_name].offers
                                 if item.service == recons.provider and item.country == recons.country
@@ -401,7 +430,7 @@ class Command(BaseCommand):
                         **case, "movie_id": movie.id if movie else None,
                         "movie_title": movie.title if movie else None,
                         "movie_year": movie.year if movie else None,
-                        "identity_match": bool(movie and movie.year == case["year"] and movie.content_type == case["media_type"]),
+                        "identity_match": identity_fields["local_identity_state"] == "TRUSTED",
                         "offer_id": raw.id if raw else None,
                         "source_slug": raw.source.slug if raw else None,
                         "source_enabled": source_status.get(raw.source.slug, {}).get("enabled") if raw else None,
@@ -433,13 +462,13 @@ class Command(BaseCommand):
                         "local_reachability": profile_offer.get("C").locality if profile_offer.get("C") else None,
                         "vpn_reachability": "disabled",
                         "catalogue_verdict": "inventory_only",
-                        "profile_b_verdict": profiles["B"].verdict,
-                        "profile_c_verdict": profiles["C"].verdict,
-                        "profile_b_best_offer": _csv_value(profiles["B"].best_offer.to_dict()) if profiles["B"].best_offer else None,
-                        "profile_c_best_offer": _csv_value(profiles["C"].best_offer.to_dict()) if profiles["C"].best_offer else None,
+                        "profile_b_verdict": profile_b_verdict,
+                        "profile_c_verdict": profile_c_verdict,
+                        "profile_b_best_offer": _csv_value(profiles["B"].best_offer.to_dict()) if profiles and profiles["B"].best_offer else None,
+                        "profile_c_best_offer": _csv_value(profiles["C"].best_offer.to_dict()) if profiles and profiles["C"].best_offer else None,
                     })
                 comparisons.append({
-                    **case, "app_movie_found": bool(movie), "app_offer_count": len(raw_rows),
+                    **case, "app_movie_found": bool(movie), **identity_fields, "app_offer_count": len(raw_rows),
                     "app_positive_provider_count": len({r.provider for r in reconciled if r.currently_available}),
                     "app_verified_offer_count": sum(1 for r in reconciled if r.currently_available and r.evidence == AvailabilityEvidence.VERIFIED),
                     "app_stale_offer_count": sum(1 for r in reconciled if r.currently_available and r.evidence == AvailabilityEvidence.STALE),
@@ -451,8 +480,8 @@ class Command(BaseCommand):
                     "external_explicit_positive": _external_positive(external),
                     "external_provider_names": names,
                     "comparison_state": state, "comparison_reason": reason,
-                    "profile_b_verdict": profiles["B"].verdict,
-                    "profile_c_verdict": profiles["C"].verdict,
+                    "profile_b_verdict": profile_b_verdict,
+                    "profile_c_verdict": profile_c_verdict,
                 })
 
         snapshot_columns = list(app_snapshot[0]) if app_snapshot else [*sorted(REQUIRED_COHORT_COLUMNS), "movie_id", "offer_id"]
@@ -502,7 +531,8 @@ class Command(BaseCommand):
             "No application-versus-external conflict was confirmed. Stage 2B evidence is a secondary listing source and contains no confirmed negative availability; absent local offers are classified as missing coverage, never as an app error.\n\n"
             "## Classification precedence\n\n"
             "1. `NOT_COMPARABLE` when title identity, TMDb ID, media type, year, or country disagrees, "
-            "or a local Movie lacks trusted title/year evidence. Localized titles require an allowlisted alias.\n"
+            "or when the identity manifest flags a discrepancy for review. A reviewed manifest may supply missing "
+            "canonical identity for this audit. Localized titles require an allowlisted alias.\n"
             "2. `INSUFFICIENT_EXTERNAL_EVIDENCE` when no matching row exists, availability is not explicitly positive, provider names are absent, or a negative is secondary/unspecified.\n"
             "3. `APP_DATA_MISSING` when the exact local Movie identity is absent.\n"
             "4. For explicit primary/official negatives, `CONFLICT_CONFIRMED` requires a verified same-provider canonical offer in the same country; otherwise `INSUFFICIENT_APP_EVIDENCE`.\n"

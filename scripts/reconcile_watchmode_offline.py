@@ -11,10 +11,15 @@ import argparse
 import csv
 import hashlib
 import json
-import unicodedata
+import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
+
+# The shared identity parser lives in the backend so the Django command can
+# use it from the backend image. This script uses it without loading Django.
+sys.path.append(str(Path(__file__).resolve().parents[1] / "backend"))
+from availability.audit_identity import load_identity_manifest, manifest_identity_fields, normalized_title
 
 
 COHORT_COLUMNS = {"tmdb_id", "title", "media_type", "year", "country"}
@@ -33,14 +38,9 @@ OUTPUT_COLUMNS = [
     "watchmode_source_id", "watchmode_provider", "watchmode_offer_type",
     "watchmode_observed_at_utc", "evidence_artifact",
     "provider_slug", "sanitized_provider_url", "candidate_state", "identity_gate",
+    "app_movie_found", "identity_source", "identity_manifest_review",
     "decision", "matching_app_sources", "matching_app_offer_ids",
 ]
-
-
-def normalized_title(value: object) -> str:
-    decomposed = unicodedata.normalize("NFKD", str(value or ""))
-    plain = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
-    return " ".join("".join(ch if ch.isalnum() else " " for ch in plain.casefold()).split())
 
 
 def read_csv(path: Path, required: set[str]) -> list[dict[str, str]]:
@@ -191,7 +191,8 @@ def classify_offer(external: dict, app_rows: list[dict], identity_ok: bool,
 
 
 def reconcile(cohort: dict, observations: dict, app_rows: list[dict],
-              comparisons: list[dict], provider_map_rows: list[dict] | None = None) -> tuple[list[dict], dict]:
+              comparisons: list[dict], provider_map_rows: list[dict] | None = None, *,
+              identity_manifest: dict | None = None) -> tuple[list[dict], dict]:
     app_by_key = defaultdict(list)
     for row in app_rows:
         app_by_key[identity_key(row)].append(row)
@@ -204,17 +205,39 @@ def reconcile(cohort: dict, observations: dict, app_rows: list[dict],
     index = provider_index(app_rows, provider_map_rows)
     output = []
     title_gates = {}
+    identity_manifest = identity_manifest or {}
 
     for key, case in sorted(cohort.items()):
         obs = observations[key]
-        local = comparison_by_key.get(key)
+        local = comparison_by_key.get(key, {})
         observed_identity = identity_observation_ok(case, obs)
-        local_identity = bool(local and str(local.get("app_movie_found", "")).lower() == "true"
-                              and local.get("comparison_state") != "NOT_COMPARABLE")
-        identity_ok = observed_identity and local_identity
+        movie_found = {"true": True, "false": False}.get(str(local.get("app_movie_found", "")).lower())
+        local_state = local.get("local_identity_state") or ""
+        trusted_local_identity = (movie_found is True and local_state in {"", "TRUSTED"}
+                                  and local.get("comparison_state") != "NOT_COMPARABLE")
+        entry = identity_manifest.get(key[:2])
+        manifest_fields = manifest_identity_fields(case, entry)
+        manifest_review = manifest_fields["identity_manifest_review"]
+        identity_source = ""
+        if not manifest_review:
+            if trusted_local_identity:
+                identity_source = "local_movie"
+            elif entry and local.get("identity_source") == "tmdb_manifest" and (
+                (movie_found is False and local_state in {"", "MISSING_MOVIE"})
+                or (movie_found is True and local_state == "MISSING_CANONICAL_TITLE")
+            ):
+                identity_source = "tmdb_manifest"
+        identity_ok = observed_identity and bool(identity_source)
         title_gates[str(key)] = {
+            "cohort_title": case["title"],
+            "cohort_year": case["year"],
             "watchmode_title_year_match": observed_identity,
-            "trusted_local_identity": local_identity,
+            "app_movie_found": movie_found,
+            "local_identity_state": local_state,
+            "trusted_local_identity": trusted_local_identity,
+            "identity_source": identity_source,
+            "identity_gate": "PASS" if identity_ok else "BLOCKED",
+            **manifest_fields,
             "nl_offer_count": len(obs.get("nl_sources", [])),
             "observation_utc": obs.get("_observed_utc", ""),
             "evidence_artifact": obs.get("_artifact", ""),
@@ -236,6 +259,9 @@ def reconcile(cohort: dict, observations: dict, app_rows: list[dict],
                 "provider_slug": provider_slug,
                 "sanitized_provider_url": safe_url(source.get("web_url", "")),
                 "identity_gate": "PASS" if identity_ok else "BLOCKED",
+                "app_movie_found": movie_found,
+                "identity_source": identity_source,
+                "identity_manifest_review": manifest_review,
                 **classification,
             })
 
@@ -248,6 +274,7 @@ def reconcile(cohort: dict, observations: dict, app_rows: list[dict],
         "limitations": [
             "Secondary advertised offers are not entitlement or playback evidence.",
             "Same-source Watchmode echoes are not independent corroboration.",
+            "TMDb manifest entries supply identity evidence only. Watchmode identity metadata may derive from TMDb.",
             "Stale overlaps do not establish current availability.",
             "Missing Watchmode listings are not authoritative unavailability evidence.",
             "These counts are not streaming accuracy rates.",
@@ -263,6 +290,9 @@ def main() -> None:
     parser.add_argument("--watchmode-correction", required=True, type=Path)
     parser.add_argument("--app-snapshot", required=True, type=Path)
     parser.add_argument("--app-comparison", required=True, type=Path)
+    parser.add_argument("--identity-manifest", type=Path, help="Optional reviewed TMDb identity evidence CSV")
+    parser.add_argument("--manifest-evidence-dir", type=Path,
+                        help="Verify manifest SHA-256 values against preserved local TMDb JSON responses")
     parser.add_argument("--provider-map", type=Path,
                         help="Optional CSV: watchmode_name,watchmode_type,app_provider_slug")
     parser.add_argument("--output", required=True, type=Path)
@@ -270,17 +300,25 @@ def main() -> None:
     parser.add_argument("--expected-cohort-sha", help="Optional pinned SHA-256 of cohort input")
     parser.add_argument("--expected-v1-sha", help="Optional pinned SHA-256 of original pilot JSON")
     parser.add_argument("--expected-correction-sha", help="Optional pinned SHA-256 of correction JSON")
+    parser.add_argument("--expected-identity-manifest-sha", help="Optional pinned SHA-256 of the identity manifest")
     parser.add_argument("--snapshot-label", default="", help="Human-readable identity of the audited DB snapshot")
     parser.add_argument("--audit-code-sha", default="", help="Commit used to generate the application audit")
     args = parser.parse_args()
+    if args.manifest_evidence_dir and not args.identity_manifest:
+        parser.error("--manifest-evidence-dir requires --identity-manifest")
 
     cohort = load_cohort(args.cohort)
     observations, hashes = load_pilot_results(args.watchmode_v1, args.watchmode_correction, cohort)
     hashes["cohort_sha256"] = sha256(args.cohort)
+    if args.identity_manifest:
+        hashes["identity_manifest_sha256"] = sha256(args.identity_manifest)
+    elif args.expected_identity_manifest_sha:
+        parser.error("--expected-identity-manifest-sha requires --identity-manifest")
     for key, expected in (
         ("cohort_sha256", args.expected_cohort_sha),
         ("v1_sha256", args.expected_v1_sha),
         ("correction_sha256", args.expected_correction_sha),
+        ("identity_manifest_sha256", args.expected_identity_manifest_sha),
     ):
         if expected and hashes[key].lower() != expected.lower():
             parser.error(f"Evidence SHA-256 mismatch for {key}: input is not the pinned artifact")
@@ -291,8 +329,15 @@ def main() -> None:
     app = read_csv(args.app_snapshot, APP_COLUMNS)
     comparison = read_csv(args.app_comparison, COMPARISON_COLUMNS)
     mapping = read_csv(args.provider_map, {"watchmode_name", "watchmode_type", "app_provider_slug"}) if args.provider_map else []
-    rows, summary = reconcile(cohort, observations, app, comparison, mapping)
+    manifest = None
+    if args.identity_manifest:
+        try:
+            manifest = load_identity_manifest(args.identity_manifest, evidence_dir=args.manifest_evidence_dir)
+        except (OSError, ValueError, csv.Error) as exc:
+            parser.error(f"Cannot load identity manifest: {exc}")
+    rows, summary = reconcile(cohort, observations, app, comparison, mapping, identity_manifest=manifest)
     summary["evidence_sha256"] = hashes
+    summary["manifest_evidence_verified"] = args.manifest_evidence_dir is not None
     summary["snapshot_label"] = args.snapshot_label
     summary["audit_code_sha"] = args.audit_code_sha
     args.output.parent.mkdir(parents=True, exist_ok=True)
