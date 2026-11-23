@@ -1,0 +1,560 @@
+{
+  "master": "752dc23fd5beb2699612c2a2ee29a1fee0f4824e",
+  "panel_code_revision": "3ed0212aefcf7155e39190c46f898236fa534e22",
+  "nl_replay_and_backend_tests_code_revision": "3e23fb830910f9a6f2aae3770c9894c62f54b6a3",
+  "source_dump_sha256_from_owner_report": "ccfbd9291e570a5479cb77e2d60a8afe271953aaf5ef7f90d4905c806eeb2794",
+  "observation_window": [
+    "2026-11-23T15:00:00Z",
+    "2026-11-23T16:00:00Z"
+  ],
+  "prior_raw_files": {
+    "netflix_breaking_bad_nl.html": {
+      "sha256": "82831ff638d5872f989d25bbfdf6ed63936d15b8221b61a18a022c92703b91e8",
+      "bytes": 1172077,
+      "filesystem_modified_utc": "2026-11-23T15:13:39.330745+00:00",
+      "filesystem_created_utc": "2026-11-23T15:13:39.330065+00:00",
+      "intake_utc": "2026-11-23T15:13:35.251+00:00",
+      "public_url": "https://www.netflix.com/nl/title/70143836"
+    },
+    "netflix_breaking_bad_nl.png": {
+      "sha256": "eaeba8fa4251cfe0d3c10e68903d4af8130a638928da2dc2de4ea81272ebe3a4",
+      "bytes": 588976,
+      "filesystem_modified_utc": "2026-11-23T15:13:41.159847+00:00",
+      "filesystem_created_utc": "2026-11-23T15:13:41.159390+00:00",
+      "pixels": [
+        1482,
+        872
+      ]
+    },
+    "netflix_dark_nl.html": {
+      "sha256": "6fb901cef06a3f54221a8d819bec1ad82a9153c2ca728227360d14b87dd7915e",
+      "bytes": 1191501,
+      "filesystem_modified_utc": "2026-11-23T15:13:51.926880+00:00",
+      "filesystem_created_utc": "2026-11-23T15:13:51.925883+00:00",
+      "intake_utc": "2026-11-23T15:13:47.883+00:00",
+      "public_url": "https://www.netflix.com/nl/title/80100172"
+    },
+    "netflix_dark_nl.png": {
+      "sha256": "4d0af066fc96ca1192e66ea32b89062d46b86f41433b51e9bd212e7d046977ec",
+      "bytes": 531681,
+      "filesystem_modified_utc": "2026-11-23T15:13:53.663208+00:00",
+      "filesystem_created_utc": "2026-11-23T15:13:53.661953+00:00",
+      "pixels": [
+        1482,
+        872
+      ]
+    },
+    "netflix_inception_search_nl.html": {
+      "sha256": "a62e937ff518f9198fad96dcb6bb7f17acd31d250fda17e1354e00f8cd6b2b98",
+      "bytes": 750366,
+      "filesystem_modified_utc": "2026-11-23T15:15:13.986017+00:00",
+      "filesystem_created_utc": "2026-11-23T15:15:13.985305+00:00",
+      "intake_utc": "2026-11-23T15:15:10.026+00:00",
+      "public_url": "https://www.netflix.com/nl/search?q=Inception"
+    },
+    "netflix_inception_search_nl.png": {
+      "sha256": "3f2d86b89a2fb4062eb38f3894b7b9cc5004b3f8c5d0a7e5c9710073b70c51cf",
+      "bytes": 176880,
+      "filesystem_modified_utc": "2026-11-23T15:15:14.078686+00:00",
+      "filesystem_created_utc": "2026-11-23T15:15:14.078280+00:00",
+      "pixels": [
+        1482,
+        872
+      ]
+    },
+    "netflix_stranger_things_nl.html": {
+      "sha256": "3ade8a5b45df5fe2ff6f92700e7edbbdb611b6ff501fd0676cf4fa02456a99c3",
+      "bytes": 1215102,
+      "filesystem_modified_utc": "2026-11-23T15:13:45.624365+00:00",
+      "filesystem_created_utc": "2026-11-23T15:13:45.452667+00:00",
+      "intake_utc": "2026-11-23T15:13:41.162+00:00",
+      "public_url": "https://www.netflix.com/nl/title/80057281"
+    },
+    "netflix_stranger_things_nl.png": {
+      "sha256": "f2b1799602e8f0c78d8d2dd03769e608593176080ae309f8efed65f44fcde163",
+      "bytes": 468574,
+      "filesystem_modified_utc": "2026-11-23T15:13:47.879308+00:00",
+      "filesystem_created_utc": "2026-11-23T15:13:47.877320+00:00",
+      "pixels": [
+        1482,
+        872
+      ]
+    },
+    "netflix_the_platform_nl.html": {
+      "sha256": "540eaa9d939a48008662b1b6411a99dcaba8a25cc9f524432c16f6d8004662d4",
+      "bytes": 1076699,
+      "filesystem_modified_utc": "2026-11-23T15:13:57.540327+00:00",
+      "filesystem_created_utc": "2026-11-23T15:13:57.539450+00:00",
+      "intake_utc": "2026-11-23T15:13:53.665+00:00",
+      "public_url": "https://www.netflix.com/nl/title/81128579"
+    },
+    "netflix_the_platform_nl.png": {
+      "sha256": "c2ac19c5cdd5b16279e536be7df84e2ca16463c83e49cdb627d6a71d84a092ad",
+      "bytes": 641673,
+      "filesystem_modified_utc": "2026-11-23T15:13:59.144103+00:00",
+      "filesystem_created_utc": "2026-11-23T15:13:59.143523+00:00",
+      "pixels": [
+        1482,
+        872
+      ]
+    },
+    "primevideo_inception_nl.html": {
+      "sha256": "e61a628945ad4a81bf19a345b7252f3695087d3a7059dd8fd76bbce7589f6997",
+      "bytes": 639482,
+      "filesystem_modified_utc": "2026-11-23T15:12:33.720993+00:00",
+      "filesystem_created_utc": "2026-11-23T15:12:33.707583+00:00",
+      "intake_utc": "2026-11-23T15:12:31.629+00:00",
+      "public_url": "https://www.primevideo.com/detail/0FFJSDLK6HUWC5T8XJUQODMFJ3"
+    },
+    "primevideo_inception_nl.png": {
+      "sha256": "fa41a76513db72cccc102517bc3e91409ac01ddfb286f4e54e9312b672daeba1",
+      "bytes": 739464,
+      "filesystem_modified_utc": "2026-11-23T15:12:35.556555+00:00",
+      "filesystem_created_utc": "2026-11-23T15:12:35.554921+00:00",
+      "pixels": [
+        1482,
+        872
+      ]
+    },
+    "rakuten_dune_nl.html": {
+      "sha256": "c6126e31be57907d0208202b948bf5700d9618963dedd957840277ed1538819f",
+      "bytes": 543720,
+      "filesystem_modified_utc": "2026-11-23T15:14:38.753138+00:00",
+      "filesystem_created_utc": "2026-11-23T15:14:38.752560+00:00",
+      "intake_utc": "2026-11-23T15:14:34.135+00:00",
+      "public_url": "https://www.rakuten.tv/nl/movies/dune-2021"
+    },
+    "rakuten_dune_nl.png": {
+      "sha256": "d5101acf3333c994991318007d56a568b3863fc8de40e774ab6a66eed44ea90f",
+      "bytes": 632868,
+      "filesystem_modified_utc": "2026-11-23T15:14:40.553589+00:00",
+      "filesystem_created_utc": "2026-11-23T15:14:40.550487+00:00",
+      "pixels": [
+        1482,
+        872
+      ]
+    },
+    "rakuten_holdovers_nl.html": {
+      "sha256": "f9837098e8bda786867970b3b06400f670d642356791bf0ae1ba991f52a26e52",
+      "bytes": 532797,
+      "filesystem_modified_utc": "2026-11-23T15:14:44.952672+00:00",
+      "filesystem_created_utc": "2026-11-23T15:14:44.952049+00:00",
+      "intake_utc": "2026-11-23T15:14:40.560+00:00",
+      "public_url": "https://www.rakuten.tv/nl/movies/the-holdovers"
+    },
+    "rakuten_holdovers_nl.png": {
+      "sha256": "ace13523f666ca37d163a86ba2c29f88d62024d602b775531576db9df8a0730c",
+      "bytes": 640832,
+      "filesystem_modified_utc": "2026-11-23T15:14:47.028449+00:00",
+      "filesystem_created_utc": "2026-11-23T15:14:47.026805+00:00",
+      "pixels": [
+        1482,
+        872
+      ]
+    }
+  },
+  "tmdb_raw_files": {
+    "movie_238.json": {
+      "sha256": "f81b13ca6d16aa8029de1cfeb83c3bb02cfc691c4a4b3ebbd9f39f4ca8f8ee2b",
+      "observed_utc": "2026-11-23T00:00:24.273400+00:00"
+    },
+    "movie_27205.json": {
+      "sha256": "4d4a57db6b0686ea7f2b3de9f95eb9467e11becefd551cd96de6091bd908589c",
+      "observed_utc": "2026-11-23T00:00:24.456587+00:00"
+    },
+    "movie_496243.json": {
+      "sha256": "2abf986aa2a804acf87a7261b737b2a53b63b0f2c64d955c4b233bb52efd5e1c",
+      "observed_utc": "2026-11-23T00:00:24.598467+00:00"
+    },
+    "movie_603.json": {
+      "sha256": "56b9dac0a197019f736dacffbaf3c4e1cfb1eb817d580c282421b75ae3ae0597",
+      "observed_utc": "2026-11-23T00:00:24.751812+00:00"
+    },
+    "movie_438631.json": {
+      "sha256": "03fd27dc34b2711dc8aaaca1cdc66a02d00d080a93a3c981fd818e6f422a9230",
+      "observed_utc": "2026-11-23T00:00:24.883813+00:00"
+    },
+    "movie_619264.json": {
+      "sha256": "ed42eb367dcde44e78a4e44cecf28f65dd0ddcbfb1b6fdc9131fc27a3de57200",
+      "observed_utc": "2026-11-23T00:00:25.013996+00:00"
+    },
+    "movie_840430.json": {
+      "sha256": "b4ba95858b37471f0c0821bf901f78346e189e8706e1bf0fb75014eb9d9a3db2",
+      "observed_utc": "2026-11-23T00:00:25.164759+00:00"
+    },
+    "movie_565310.json": {
+      "sha256": "3ed2c0c878ca14e9def342178d1927f2bf32a9ee739fec69ec1258ba5a9a9004",
+      "observed_utc": "2026-11-23T00:00:25.293577+00:00"
+    },
+    "movie_220289.json": {
+      "sha256": "e33f4aba5e64cb5de4cb23285bacaa107d962f5f9ef6b705abc40f0fd188eaaa",
+      "observed_utc": "2026-11-23T00:00:25.427177+00:00"
+    },
+    "movie_116149.json": {
+      "sha256": "f6279b0663a8e62c1706f87f20c872030d0e9a8e7b94b71b711220b334ce4da1",
+      "observed_utc": "2026-11-23T00:00:25.569869+00:00"
+    },
+    "series_1396.json": {
+      "sha256": "7685411f05c8b2389ac7379f72b03912c5b3ce49f36b3a21c9e61fd6674c1f14",
+      "observed_utc": "2026-11-23T00:00:25.699892+00:00"
+    },
+    "series_70523.json": {
+      "sha256": "e029ca87bbb50a427bc545986c4e60a39f7301debbdc1d9f97973a9f3ae949f9",
+      "observed_utc": "2026-11-23T00:00:25.850944+00:00"
+    },
+    "series_66732.json": {
+      "sha256": "444e7addf56f5fea77d732bda4a0952b70e5ad67aa404987125e0b3ffb8fa220",
+      "observed_utc": "2026-11-23T00:00:25.979336+00:00"
+    },
+    "series_2316.json": {
+      "sha256": "02188370e858933c0624382abf16edae9c5f7c0dd4a52586024a1ca8fa2af278",
+      "observed_utc": "2026-11-23T00:00:26.113176+00:00"
+    },
+    "series_1438.json": {
+      "sha256": "b15d8b5538d446f7794eb59c3baa66f8658efcafa709de37f5225e45f3bb62e4",
+      "observed_utc": "2026-11-23T00:00:26.242124+00:00"
+    }
+  },
+  "sha256_inputs_and_replays": {
+    "previous/issue97-acceptance-checklist.md": "51fbcf0270db9eb81315fbda3bdd89d03a9fce8cb5e9ec456b67da37147a6f74",
+    "previous/issue97-accepted-observations.csv": "2e79c532ddaa0a18b948a2101817982204545e1c8e374a4fdeb9962e2f3183a1",
+    "previous/issue97-final-verification-report.md": "7d6becb12e924ee4397d708855d0656ce67a933e5f9e2d7b464ec3c413b66eb6",
+    "previous/owner_supplied_observations.csv": "8bfba001afb27c78c4fbc0054fba9fff729a08fdb9a3d2decf43cb5832300b6a",
+    "previous/issue97-provider-reconciliation.csv": "8a0da07502a6c0ef526540d4c6dd69e87448bd5bc3a848f208b13e7e0fc1c684",
+    "previous/issue97-reconciliation-summary.json": "7480f4fc119048dd5bea0c06b318ac91e5eef1235548f734c41ab379107bfc08",
+    "previous/issue97-rejected-observations.csv": "6238e12e805cda74286cf62c9aeafbe6ad889e0e6274b15bb69f7459f1f99ba2",
+    "previous/eight_pair_targets.csv": "f0680ce9aa0797a35757fe0eb93cb51452fb13199cd33678ffa98a1cefde5cd9",
+    "previous/application_snapshot.csv": "ef4773dea67a5256b5b4b1688e03258a6e0e68e97ba2986df39ab1d67071a92f",
+    "previous/comparison.csv": "d6f718ab4e714dcdc3883d96c494bcd6a70bf294b5dabe486c4c8339c1a98f5e",
+    "previous/wtdw97-reconciliation-identity-accepted-summary-20261123.json": "c5058c841380d6f4e4597e777d567ad9282ed49d7c9acc82272d3a5b04f1063a",
+    "previous/issue97-evidence-manifest.json": "27681f8063957c8adf4693e07851c4b2051d752f328496d9256018a34c2719fa",
+    "panel/cohort.csv": "3c907814634c236381e44c213c36b6d8130ae9298498f052efc84ae061e6b830",
+    "panel/display.json": "8bc27fdf4c9067ef233f41d29419b43acad9953bb31ec86cd366de0ab1320ef6",
+    "panel/comparison.csv": "368921de4eb5c47fe4901af0212306013c2cb9b9d9fe421387b7dae8f2359ff2",
+    "panel/application_snapshot.csv": "86fbb247dcba85883a571c500c2a19c18a106d4a864f1515ad12927c664a1642",
+    "panel/source_coverage.md": "b661fc11642828804837dca94577613414d4458a42b5830eecf8dc80f37e2ae4",
+    "panel/coverage_summary.md": "9d289c85763b20dedb3b51e91dd7cfb4f9bdb26b562752cbd62d0f0847c213b6",
+    "final-nl/application_snapshot.csv": "ef4773dea67a5256b5b4b1688e03258a6e0e68e97ba2986df39ab1d67071a92f",
+    "final-nl/comparison.csv": "7f7608c53ac48069b2aed984735f5c4735c93a5ddb4fe7f3254405355ed1d834",
+    "local_replays/historical.csv": "fc0577839d16e74a1eff93158155e082aeee1f93f917a8a6bd17b34e78c26756",
+    "local_replays/historical.json": "d7d115ac436b6e86171b34ccb5a11e91c541d8deef16b8b4b02b317ef943439e",
+    "local_replays/reviewed.csv": "f73da5b0c416527a230fe58f2cd1583e58738265cf24e22dcb2c2c5bb6673ab0",
+    "local_replays/reviewed.json": "7dd4247f9f46f1ad7d4c9121b9a00a7e86493f7344674253757011c9cd49e694",
+    "pair-audits/max_amazon-addon/application_snapshot.csv": "d45ad812009aa33cb605ac3394a77b08cc51e4aa283d8970c10e7919597e3605",
+    "pair-audits/max_amazon-addon/comparison.csv": "02d97e31a1260d67aa5817e86b8ed42b1b5a03ec032e086973fdf1d94bb161d6",
+    "pair-audits/max_amazon-addon/input.csv": "ebeac3ccf01baccc8e438c03501f7708121c691d10b13030979be40860bd2f44",
+    "pair-audits/netflix-subscription/application_snapshot.csv": "14385d1873508f87f4acef24b38bb932beacfef855c20d5e572f3cb8f91245e7",
+    "pair-audits/netflix-subscription/comparison.csv": "631f9ced600724968aeba5f2da10e5e790bad9a6f89d5dd81164f87d3538f445",
+    "pair-audits/netflix-subscription/input.csv": "9f7c8b9cb56939d0a75b058dc2b3dd8097ef2c423e37c5ffcc408d043618309a",
+    "pair-audits/prime-buy/application_snapshot.csv": "d45ad812009aa33cb605ac3394a77b08cc51e4aa283d8970c10e7919597e3605",
+    "pair-audits/prime-buy/comparison.csv": "c0bc2d4f0836fdab92f27540117b8f9aab19f8941893da81e7f343b999f8aff5",
+    "pair-audits/prime-buy/input.csv": "a66172c3f2680b5fe8d671a8014fdf863b8e041bac4bc8fab5872bdae49715d8",
+    "pair-audits/prime-rent/application_snapshot.csv": "d45ad812009aa33cb605ac3394a77b08cc51e4aa283d8970c10e7919597e3605",
+    "pair-audits/prime-rent/comparison.csv": "c0bc2d4f0836fdab92f27540117b8f9aab19f8941893da81e7f343b999f8aff5",
+    "pair-audits/prime-rent/input.csv": "5826962b6bf5928361f486de5168e1b373d130235977e9cb00c57a76abf42598",
+    "pair-audits/prime-subscription/application_snapshot.csv": "d45ad812009aa33cb605ac3394a77b08cc51e4aa283d8970c10e7919597e3605",
+    "pair-audits/prime-subscription/comparison.csv": "d4713dc3065fed524b17ac2b3c2865b1cf20e748de005c32c2f6ea13cd9faa85",
+    "pair-audits/prime-subscription/input.csv": "0c5e0dc23bb56fad84328ad09b4acac6a062cd80cafd072bbce42374308f48b6",
+    "pair-audits/rakuten_tv-buy/application_snapshot.csv": "539959ab007bf2b7726c72867051d1fec17b9d9b134e5156084fa5944958f2b8",
+    "pair-audits/rakuten_tv-buy/comparison.csv": "d7c14eba6e7eb4127a6f4bcc654f4eb445988a1b6e65586f235219894be823cd",
+    "pair-audits/rakuten_tv-buy/input.csv": "9a0fc9b75ad2bd4b02f3eb46e10eb08591c2d99ac35fb6c923e32b513a519ea5",
+    "pair-audits/rakuten_tv-rent/application_snapshot.csv": "539959ab007bf2b7726c72867051d1fec17b9d9b134e5156084fa5944958f2b8",
+    "pair-audits/rakuten_tv-rent/comparison.csv": "b33b0bc3d53f03e7555da197996410b48bcf4a876ee181227f474c5d4e92265c",
+    "pair-audits/rakuten_tv-rent/input.csv": "3a5b4316c22256ebb48927262ae3c409aebc1a1a43b4155675375408c30c38d0",
+    "cohort": "abcbb06161a5afc5896b507d4f1b1bf1c4fb9831d72973ed2be47487eb17d40b",
+    "correction_v2": "e815d65784795b944bbca7abe3d7cfd6b06ae6fc395a45750e372edfddd31f42",
+    "identity_manifest": "ae78a757272aecbb9824d9ef3cea4d8f125bd5e150cc6abafcc96e50e2737925",
+    "tmdb_bundle_csv": "877b22b59cf866926f4fb173275a03d318625b636fa94e0d1cfa22972f35df42",
+    "watchmode_v1": "2b30ab7d78a20a308cafcbda1c495e37d30b4ead4d3bd012affc175e96cea204",
+    "stage2b/live_sample.csv": "a05e96f7cedc4b5199a8e28df591fc0bb29f645feac92c8dec7d00736b9acea4"
+  },
+  "additional_document_GETs": [
+    {
+      "id": "inception_nl",
+      "url": "https://www.netflix.com/nl/title/70131314",
+      "start": "2026-11-23T15:32:01.024438+00:00",
+      "status": 200,
+      "location": "",
+      "sha256": "4876c83e5df2779f00a79152ec20594afae4c8de8cd9e268be6b1664cf5ef3c5",
+      "bytes": 2314978,
+      "end": "2026-11-23T15:32:01.945280+00:00"
+    },
+    {
+      "id": "office_uk",
+      "url": "https://www.bbc.co.uk/iplayer/episodes/b00jd68z/the-office",
+      "start": "2026-11-23T15:32:04.948398+00:00",
+      "status": 200,
+      "location": "",
+      "sha256": "02f49328e6402e9ad3d144ee5d0b50f736baf5cd44c33d750d3e045070ea08e5",
+      "bytes": 416792,
+      "end": "2026-11-23T15:32:05.165781+00:00"
+    },
+    {
+      "id": "farewell_ca",
+      "url": "https://gem.cbc.ca/the-farewell",
+      "start": "2026-11-23T15:32:08.176512+00:00",
+      "status": 200,
+      "location": "",
+      "sha256": "e5381401b594db22318ecc15a860702efbc0c5dbec83203c632811ae96cef1b5",
+      "bytes": 120613,
+      "end": "2026-11-23T15:32:09.402627+00:00"
+    },
+    {
+      "id": "dune_it",
+      "url": "https://www.rakuten.tv/it/movies/dune-2021",
+      "start": "2026-11-23T15:32:12.406388+00:00",
+      "status": 200,
+      "location": "",
+      "sha256": "c961a839c509e966dfb3a5ae972513f714ea97f4e5346aeeba8aa730321f3ad2",
+      "bytes": 19809,
+      "end": "2026-11-23T15:32:12.653557+00:00"
+    },
+    {
+      "id": "platform_it",
+      "url": "https://www.netflix.com/it/title/81128579",
+      "start": "2026-11-23T15:32:15.677452+00:00",
+      "status": 301,
+      "location": "https://www.netflix.com/nl/title/81128579",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "end": "2026-11-23T15:32:15.894309+00:00"
+    },
+    {
+      "id": "apple_store",
+      "url": "https://support.apple.com/en-us/118402",
+      "start": "2026-11-23T15:32:18.899047+00:00",
+      "status": 200,
+      "location": "",
+      "sha256": "a97aa14627be531dde1bec52b20522e4422a27d254f76d246f04928228aac1a2",
+      "bytes": 119641,
+      "end": "2026-11-23T15:32:19.761404+00:00"
+    },
+    {
+      "id": "office_nbc",
+      "url": "https://www.nbc.com/the-office",
+      "start": "2026-11-23T15:32:22.767095+00:00",
+      "status": 200,
+      "location": "",
+      "sha256": "9de4957098f6afe0bbfc028db883e60358e029d0757d005d0353aebe41316c14",
+      "bytes": 403145,
+      "end": "2026-11-23T15:32:23.915299+00:00"
+    },
+    {
+      "id": "coherence",
+      "url": "https://oscilloscope.net/films/film/coherence/",
+      "start": "2026-11-23T15:32:26.919237+00:00",
+      "status": 200,
+      "location": "",
+      "sha256": "783acae95e63b492eea4cf64813aa80a14f73bb44caa5f8dd4ca2bbce2dd60e9",
+      "bytes": 109890,
+      "end": "2026-11-23T15:32:30.701909+00:00"
+    },
+    {
+      "id": "inception_apple_it",
+      "url": "https://tv.apple.com/it/movie/inception/umc.cmc.6loas01ow0w4lkatxxloz7a6e",
+      "start": "2026-11-23T15:34:17.239595+00:00",
+      "status": 200,
+      "location": "",
+      "sha256": "a58a54614bdfe6ba130b4a4ba4e83d3b5a78df7da063f0913788a1a2b2c3e5df",
+      "bytes": 368227,
+      "end": "2026-11-23T15:34:17.588463+00:00"
+    },
+    {
+      "id": "cbc_help",
+      "url": "https://gem.cbc.ca/help",
+      "start": "2026-11-23T15:34:20.594758+00:00",
+      "status": 404,
+      "location": "",
+      "sha256": "ea1319a567fec50f5f2d2c54ffe19dc850632306bb5a43fe469f5f8a3a0c81c9",
+      "bytes": 66289,
+      "end": "2026-11-23T15:34:20.922534+00:00"
+    },
+    {
+      "id": "breaking_sony",
+      "url": "https://www.sonypictures.com/tv/breakingbad",
+      "start": "2026-11-23T15:34:23.928487+00:00",
+      "status": 200,
+      "location": "",
+      "sha256": "7f0cffcf48e14d716832db261fc8fc4cda7dd9b8031b16eb0b314f81787cf4c1",
+      "bytes": 70028,
+      "end": "2026-11-23T15:34:24.129415+00:00"
+    },
+    {
+      "id": "apple_rent",
+      "url": "https://support.apple.com/en-us/108816",
+      "start": "2026-11-23T15:34:27.137853+00:00",
+      "status": 200,
+      "location": "",
+      "sha256": "5093b2e1aa14c7cc67e2904cc50a7331864c3beba552a4febdb56de5cfc5c0c8",
+      "bytes": 125791,
+      "end": "2026-11-23T15:34:28.097764+00:00"
+    },
+    {
+      "id": "cbc_devices",
+      "url": "https://cbchelp.cbc.ca/hc/en-ca/articles/360016269794-What-devices-are-supported-on-CBC-Gem",
+      "start": "2026-11-23T15:34:31.104133+00:00",
+      "status": 200,
+      "location": "",
+      "sha256": "5d4d8754407956d460d9c344708436617109e3dafce610b292b99dbae37a839d",
+      "bytes": 59931,
+      "end": "2026-11-23T15:34:31.358964+00:00"
+    },
+    {
+      "id": "cbc_geo_search",
+      "url": "https://cbchelp.cbc.ca/hc/en-ca/search?query=outside%20Canada%20Gem",
+      "start": "2026-11-23T15:38:09.880813+00:00",
+      "status": 200,
+      "location": "",
+      "sha256": "4b2e8fb63cf3b9b37e9a793abfdfad098569c62a51b9953f6855cc34b1339fd1",
+      "bytes": 43122,
+      "end": "2026-11-23T15:38:10.846047+00:00"
+    },
+    {
+      "id": "cbc_new",
+      "url": "https://cbchelp.cbc.ca/hc/en-ca/articles/360045250014-New-to-CBC-Gem-Technical-Support",
+      "start": "2026-11-23T15:38:13.847957+00:00",
+      "status": 200,
+      "location": "",
+      "sha256": "950f8e057bc3b79bbbdad8f4193947de52fe29eb713997d79b9a13ea3e1de189",
+      "bytes": 34671,
+      "end": "2026-11-23T15:38:14.090859+00:00"
+    },
+    {
+      "id": "dune_au",
+      "url": "https://www.hbomax.com/au/en/movie/e7dc7b3a-a494-4ef1-8107-f4308aa6bbf7",
+      "start": "2026-11-23T15:38:17.096083+00:00",
+      "status": 200,
+      "location": "",
+      "sha256": "2854d929d2c046a4314742e36d83edeb50a77c67c2f91436cc18ae755e75f20d",
+      "bytes": 710059,
+      "end": "2026-11-23T15:38:18.613391+00:00"
+    },
+    {
+      "id": "office_us",
+      "url": "https://www.peacocktv.com/stream-tv/the-office",
+      "start": "2026-11-23T15:44:18.221203+00:00",
+      "status": 302,
+      "location": "https://www.peacocktv.com/unavailable",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "end": "2026-11-23T15:44:18.307357+00:00"
+    },
+    {
+      "id": "peacock_territory",
+      "url": "https://www.peacocktv.com/help/article/where-is-peacock-available",
+      "start": "2026-11-23T15:44:21.312358+00:00",
+      "status": 302,
+      "location": "https://www.peacocktv.com/unavailable",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "end": "2026-11-23T15:44:21.371337+00:00"
+    },
+    {
+      "id": "pathe_store",
+      "url": "https://www.pathe-thuis.nl/",
+      "start": "2026-11-23T15:49:42.929553+00:00",
+      "status": 302,
+      "location": "https://www.pathe-thuis.nl/over-pathe-thuis",
+      "sha256": "1e1f4002d5056ec38dcae5b1cef68d271f2fdff81c526eea6f28d625483e0648",
+      "bytes": 76,
+      "end": "2026-11-23T15:49:43.021722+00:00"
+    },
+    {
+      "id": "sky_service",
+      "url": "https://www.skyshowtime.com/nl",
+      "start": "2026-11-23T15:49:46.022677+00:00",
+      "status": 200,
+      "location": "",
+      "sha256": "49b277e0acf10876fc55611055905342fc7cfb865f3b5f9c837165dbfddd66a6",
+      "bytes": 912263,
+      "end": "2026-11-23T15:49:46.210087+00:00"
+    },
+    {
+      "id": "nlziet_service",
+      "url": "https://www.nlziet.nl/",
+      "start": "2026-11-23T15:49:49.217367+00:00",
+      "status": 302,
+      "location": "https://redirect.nlziet.nl/nlziet-nl",
+      "sha256": "0f303914c984ce9cb957184a21cf473bb3b9725da95c964ba513c0c12af5e6dc",
+      "bytes": 499,
+      "end": "2026-11-23T15:49:49.320213+00:00"
+    },
+    {
+      "id": "videoland_service",
+      "url": "https://www.videoland.com/nl/",
+      "start": "2026-11-23T15:49:52.323922+00:00",
+      "status": 200,
+      "location": "",
+      "sha256": "b43b22e72e9b972179396d9c1b47b5fc607d2fa7b80720cf909fb01122f9098e",
+      "bytes": 158443,
+      "end": "2026-11-23T15:49:52.630514+00:00"
+    },
+    {
+      "id": "npo_plus_service",
+      "url": "https://npo.nl/start/plus",
+      "start": "2026-11-23T15:49:55.636079+00:00",
+      "status": 200,
+      "location": "",
+      "sha256": "461e4b764e517e7f0ea0a112414ae7f250c40424c0616d7afebeff9aba2cbd1c",
+      "bytes": 59274,
+      "end": "2026-11-23T15:49:55.796324+00:00"
+    },
+    {
+      "id": "mejane_store",
+      "url": "https://www.mejane.com/",
+      "start": "2026-11-23T15:49:58.799309+00:00",
+      "status": 200,
+      "location": "",
+      "sha256": "d2bb128f723834cd3478889e89372c07d98383fcb8bbef19da65c3f942e4a898",
+      "bytes": 553639,
+      "end": "2026-11-23T15:49:59.460142+00:00"
+    },
+    {
+      "id": "pathe_about",
+      "url": "https://www.pathe-thuis.nl/over-pathe-thuis",
+      "start": "2026-11-23T15:51:35.161276+00:00",
+      "status": 200,
+      "location": "",
+      "sha256": "4a45675cb95afe36d2ab84ae871cbad19347207736e226d6e7b66ceea83b9187",
+      "bytes": 23020,
+      "end": "2026-11-23T15:51:36.118547+00:00"
+    },
+    {
+      "id": "nlziet_redirect",
+      "url": "https://redirect.nlziet.nl/nlziet-nl",
+      "start": "2026-11-23T15:51:39.123023+00:00",
+      "status": 302,
+      "location": "https://id.nlziet.nl/connect/authorize",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "end": "2026-11-23T15:51:39.226417+00:00"
+    }
+  ],
+  "tests": {
+    "standalone-final": {
+      "sha256": "6c16d5905acc6ee2570dc74d82585b675e56326cfe1e4755ab81f1f87a4a05ae",
+      "tests": 18,
+      "exit": 0
+    },
+    "target-final": {
+      "sha256": "278cca3c376507562cfec169afcf7afc6533ff810f724304c56fec43c4b7c62a",
+      "tests": 29,
+      "exit": 0
+    },
+    "full-final": {
+      "sha256": "1cbf790c0992e032c6db10acb634942a1cc4ae20ab6822051d000120e77d1d07",
+      "tests": 3731,
+      "exit": 0
+    }
+  },
+  "published_outputs": {
+    "issue97-acceptance-checklist.md": "8b96eae7378bd61b5455709e77a9c7e19657278abe7a16ab9c2c263dc570d19c",
+    "issue97-accepted-observations.csv": "560ceaf1f3edf4b2c6b33988dd578acbd76a38c4d18e3a49220e92005961a389",
+    "issue97-final-verification-report.md": "e7e7b2694c7ef3c30ed2bdab15d20f7ee4178d679111eaf7dd9987ed4f508ca4",
+    "issue97-identity-decisions.md": "1dc2c67895410c8d0581b7af35afe78d51fe48089d1f5796c92f797ebdcf904a",
+    "issue97-provider-mapping-decisions.md": "ad914020b15e8c51980a4052f4514ac1d1b84b2f7a4a563f2e001dc263faca12",
+    "issue97-provider-reconciliation.csv": "ac1ec4c8d062a87f656e7356a030ddb64a01d09f2be2188c00c8b7f08606fd81",
+    "issue97-reconciliation-summary.json": "3e3e599911ff6363f7aa1ca9b95282923c114f9f385f03d05cababf6df2575c1",
+    "issue97-rejected-observations.csv": "f2ae67aed74f819ddd0332c671b7fbe01d5856e6ec86bf69859525dcc3261437"
+  }
+}

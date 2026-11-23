@@ -1,0 +1,153 @@
+{
+  "reference_window_utc": [
+    "2026-11-23T15:00:00Z",
+    "2026-11-23T16:00:00Z"
+  ],
+  "db_snapshot_date": "2026-11-22",
+  "snapshot_code": "3ed0212aefcf7155e39190c46f898236fa534e22",
+  "baseline": "752dc23fd5beb2699612c2a2ee29a1fee0f4824e",
+  "original_stage2b_cases": 30,
+  "clone_panel": {
+    "cases": 34,
+    "distinct_typed_titles": 16,
+    "by_market": {
+      "IT": 15,
+      "NL": 15,
+      "GB": 1,
+      "CA": 1,
+      "AU": 1,
+      "US": 1
+    },
+    "media": {
+      "movie": 23,
+      "series": 11
+    },
+    "raw": 37,
+    "raw_classes": {
+      "subscription": 29,
+      "free": 2,
+      "addon": 1,
+      "buy": 2,
+      "rent": 3
+    },
+    "raw_sources": {
+      "justwatch": 13,
+      "streaming_availability": 12,
+      "cbc_gem": 1,
+      "bbc_iplayer": 1,
+      "mediaset_infinity": 1,
+      "watchmode": 4,
+      "prime_video": 5
+    },
+    "raw_stale": 37,
+    "raw_verified": 0,
+    "display_states": {
+      "NO_VISIBLE_TYPED_MOVIE": 16,
+      "unknown": 6,
+      "needs_recheck": 12
+    },
+    "current_displayed": 0,
+    "last_known_displayed": 24,
+    "wrong_work_last_known_links": 1
+  },
+  "historical_replay": {
+    "offers": 166,
+    "offer_classes": {
+      "buy": 74,
+      "rent": 66,
+      "sub": 26
+    },
+    "decisions": {
+      "IDENTITY_UNVERIFIED": 6,
+      "NO_APP_OFFER": 23,
+      "STALE_OR_UNVERIFIED_OVERLAP": 10,
+      "UNMAPPED_PROVIDER_OR_CLASS": 127
+    },
+    "identity_pass": 13,
+    "identity_blocked": 2
+  },
+  "reviewed_historical_pilot": {
+    "offers": 166,
+    "decision_counts": {
+      "NO_APP_OFFER": 125,
+      "STALE_OR_UNVERIFIED_OVERLAP": 23,
+      "UNMAPPED_PROVIDER_OR_CLASS": 18
+    },
+    "identity_gates": {
+      "PASS": 14,
+      "BLOCKED": 1
+    },
+    "distinct_label_id_class_pairs": 19,
+    "distinct_overlap_pairs": 17,
+    "same_source_only_rows": 0,
+    "mixed_overlap_rows_with_watchmode_excluded": 3
+  },
+  "first_party": {
+    "prior_intake": 8,
+    "prior_accepted": 2,
+    "prior_rejected": 6,
+    "accepted_original_pages": 7,
+    "new_direct_priority_pages": 1,
+    "priority_pairs_covered": 8,
+    "advertised_positive_pairs": 13,
+    "by_class": {
+      "subscription": 6,
+      "rent": 3,
+      "buy": 3,
+      "addon": 1
+    },
+    "by_market": {
+      "NL": 13
+    },
+    "rejected_observations": {
+      "AUTH_NO_OBSERVATION": 1,
+      "WRONG_WORK_LAST_KNOWN_LINK": 1,
+      "TRAILER_ONLY": 1,
+      "SHELL_ONLY": 1,
+      "MARKET_REDIRECT": 1,
+      "CATALOGUE_ONLY": 1,
+      "REGION_CONDITIONAL_UNKNOWN": 1,
+      "REGIONAL_DENIAL": 1
+    },
+    "confirmed_negative_pairs": 0,
+    "entitlements_observed": 0,
+    "playbacks_observed": 0
+  },
+  "canonical_accuracy": {
+    "eligible_independent_same_window_pairs": 0,
+    "agreements": 0,
+    "conflicts": 0,
+    "fp": 0,
+    "fn": 0,
+    "unknown_of_advertised_positives": 13,
+    "rate": null
+  },
+  "clone_response_coverage": {
+    "known_positive_pairs": 13,
+    "returned_current": 0,
+    "omitted_with_200": 10,
+    "omitted_with_404": 3,
+    "known_negative_pairs": 0,
+    "false_positive_rate": null,
+    "negative_predictive_value": null,
+    "scope": "Display retrieval only on the frozen November 22 clone read in the reference hour"
+  },
+  "source_adapter_only": {
+    "prime_video_current_page_classes": [
+      "subscription",
+      "rent",
+      "buy"
+    ],
+    "persisted": 0,
+    "independent_pairs": 0
+  },
+  "additional_provider_requests": 26,
+  "new_metered_calls": 0,
+  "paid_cost": 0,
+  "terminal": "BLOCKED_ON_SPECIFIC_ACCEPTANCE_GATE",
+  "django_first_party_pair_decisions": {
+    "APP_DATA_STALE": 5,
+    "APP_DATA_MISSING": 3,
+    "INSUFFICIENT_APP_EVIDENCE": 5
+  }
+}
