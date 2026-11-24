@@ -18,8 +18,34 @@ const baseOffer = {
     is_language_match: true,
   },
 };
+const providerUrl = "https://www.primevideo.com/detail/example";
 
 describe("OfferRow", () => {
+  it("keeps the Watch link for a verified offer", () => {
+    render(<OfferRow offer={{ ...baseOffer, url: providerUrl, availability_evidence: "verified" }} />);
+    expect(screen.queryByTestId("unverified-badge")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Watch" })).toHaveAttribute("href", providerUrl);
+  });
+
+  it.each(["stale", "unknown"] as const)(
+    "labels a %s offer as unverified and keeps its provider link",
+    (evidence) => {
+      render(
+        <OfferRow offer={{ ...baseOffer, url: providerUrl, availability_evidence: evidence }} />
+      );
+      const badge = screen.getByTestId("unverified-badge");
+      expect(badge).toHaveTextContent("Unverified");
+      expect(badge).toHaveAttribute("data-verification-state", evidence);
+      expect(screen.getByRole("link", { name: "Check provider" })).toHaveAttribute("href", providerUrl);
+      expect(screen.queryByRole("link", { name: /watch/i })).not.toBeInTheDocument();
+    },
+  );
+
+  it("keeps the internal fallback link for an unverified offer without a provider URL", () => {
+    render(<OfferRow offer={{ ...baseOffer, availability_evidence: "stale" }} tmdbId={238} />);
+    expect(screen.getByRole("link", { name: "Verify availability" })).toHaveAttribute("href", "/watch/238");
+  });
+
   it("shows Local badge for current country", () => {
     render(<OfferRow offer={baseOffer} currentCountry="IT" />);
     expect(screen.getByText("Local")).toBeInTheDocument();

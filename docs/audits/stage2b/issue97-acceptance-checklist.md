@@ -33,3 +33,27 @@
 | One focused draft, readiness stated, no merge/close/deploy | PASS for draft delivery. Issue #97 remains open. Production accuracy approval is BLOCKED. |
 
 No observation licenses an entitlement claim for #103 or a verified-availability claim for downstream work. [#147 notifications](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/issues/147) · [#119 homepage](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/issues/119) · [#161 catalogue](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/issues/161)
+
+## Follow-up contract pass — 2026-11-23 (base `e3dd825`)
+
+Verdict vocabulary: `PASS | PARTIAL | FAIL | BLOCKED | NOT PROVEN`. This section is
+deliberately separate from the preserved historical checklist above.
+
+| # | Deliverable | Status | Measured evidence / remaining condition |
+|---|---|---|---|
+| 1 | Stale/unverified display contract | PARTIAL → implementation ready for review | Explicit `Unverified` badge now rendered by the shared `OfferRow` for every `stale`/`unknown` positive; backend qualified status label also says `Unverified` for stale offers. Fresh availability, country/class, last-seen time, entitlement separation and confirmed-unavailable hiding were already present at `e3dd825`. No schema change. |
+| 2 | Regression tests | PASS | 12 named contract cases in `backend/tracker/tests/test_issue97_availability_contract.py`; 12/12 pass with 15 existing stale-semantics tests (27 total). Frontend OfferRow + LastKnownOffers 27/27 pass. |
+| 3 | Manual verification sheet | PASS (artifact) | `docs/audits/stage2b/manual-verification-sheet.md`: eight NL typed pairs, direct official URLs, classification rules, explicit "no Netflix purchase required". |
+| 4 | Automated evidence intake | PASS | `scripts/ingest_owner_observations.py` + 6 offline tests: computes or verifies SHA-256, rejects naive UTC, bad identities/classes, duplicates, manifest-blocked titles, unsanitized URLs and same-source echoes. |
+| 5 | Fresh application observations | BLOCKED | Measured 0/11,003 rows within 24h in the only authorized disposable clone; newest cohort observation 2026-10-24. [Report](issue97-fresh-observation-report.md). |
+| 6 | Accepted/rejected evidence manifest | PASS (existing) | 109-member sealed archive, 16/16 original files and all decision inputs verified in the prior pass; unchanged here. |
+| 7 | Independent reconciliation | PARTIAL | Historical Watchmode and first-party comparisons preserved. 0 fresh independent comparable pairs, so no new accuracy classification. |
+| 8 | Accuracy metrics with valid denominators | BLOCKED | FP/FN/TP/TN/precision/recall remain NOT PROVEN; denominators are zero. Display-retrieval misses (13/13) are not accuracy rates. |
+| 9 | Source/provider coverage | PARTIAL | 13 advertised NL pairs across 3 provider sites, no entitlement/playback; the six-country panel remains display evidence only. |
+| 10 | Focused defect PRs | PARTIAL | Contract implementation prepared as one focused draft; #190 remains a separately traceable defect and was not touched. |
+
+**Terminal state: `BLOCKED_ON_SPECIFIC_ACCEPTANCE_GATE`.** The code and tests are
+ready for ChatGPT Web review, but #97 must remain **OPEN** and #103 **ON HOLD**:
+there is no fresh, independent, permissioned observation pair and no defensible
+negative control. Passing tests and a more honest stale display do not close the
+real-world accuracy gap.

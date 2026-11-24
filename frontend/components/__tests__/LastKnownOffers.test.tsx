@@ -34,8 +34,9 @@ describe("LastKnownOffers", () => {
     );
     expect(screen.getByText(/Last known availability — needs recheck/)).toBeInTheDocument();
     expect(screen.getByTestId("last-known-label")).toHaveTextContent(
-      `Needs recheck · ${formatLastSeen(seen)}`
+      `Unverified · last seen — ${formatLastSeen(seen)}`
     );
+    expect(screen.getByTestId("unverified-badge")).toHaveTextContent("Unverified");
     expect(screen.getByText(/not counted as watchable now/)).toBeInTheDocument();
   });
 
@@ -45,6 +46,9 @@ describe("LastKnownOffers", () => {
     );
     expect(screen.getByTestId("last-known-label")).toHaveTextContent(
       "Unverified · Last seen: date unknown"
+    );
+    expect(screen.getByTestId("unverified-badge")).toHaveAttribute(
+      "data-verification-state", "unknown"
     );
   });
 
