@@ -124,10 +124,12 @@ class JustWatchRegressionCoverageTests(TestCase):
         rent = priced_offer("netflix", "Netflix", "nfx", "RENT", offer_id="shared")
         buy = priced_offer("netflix", "Netflix", "nfx", "BUY", offer_id="shared")
         prime = priced_offer("amazonprimevideo", "Prime Video", "prv", "RENT")
+        second_rent = {**rent, "standardWebURL": "https://example.test/second-movie"}
+        series_rent = {**rent, "standardWebURL": "https://example.test/first-series"}
         nodes = [
             fx.title("tm98001", "First Movie", tmdb_id="98001", offers=[rent, rent, buy, prime, prime]),
-            fx.title("tm98002", "Second Movie", tmdb_id="98002", offers=[rent]),
-            fx.title("ts98001", "First Series", object_type="SHOW", tmdb_id="98001", offers=[rent]),
+            fx.title("tm98002", "Second Movie", tmdb_id="98002", offers=[second_rent]),
+            fx.title("ts98001", "First Series", object_type="SHOW", tmdb_id="98001", offers=[series_rent]),
         ]
         titles = [
             Movie.objects.create(tmdb_id=int(node["content"]["externalIds"]["tmdbId"]),
@@ -155,7 +157,7 @@ class JustWatchRegressionCoverageTests(TestCase):
             {("netflix", "rent")},
         ]
         displayed = get_offer_evidence_bulk(titles)
-        for title, pairs in zip(titles, expected):
+        for title, pairs, expected_rent in zip(titles, expected, (rent, second_rent, series_rent)):
             with self.subTest(title=title.title):
                 evidence = displayed[title.pk]
                 offers = evidence.current + evidence.last_known
@@ -165,6 +167,11 @@ class JustWatchRegressionCoverageTests(TestCase):
                 self.assertEqual(len(offers), len(keys))
                 self.assertEqual({(offer.price["amount"], offer.price["currency"]) for offer in offers},
                                  {("4.9900", "EUR")})
+                for offer in offers:
+                    if (offer.service, offer.offer_type) == ("netflix", "rent"):
+                        variants = offer.prices[0]["variants"]
+                        self.assertEqual(len(variants), 1)
+                        self.assertEqual(variants[0]["url"], expected_rent["standardWebURL"])
         http.assert_not_called()
 
     def test_catalogue_skips_rows_without_a_native_title_id(self):
@@ -182,6 +189,76 @@ class JustWatchRegressionCoverageTests(TestCase):
                          [(98003, "tm98003")])
         self.assertEqual(list(ProviderContent.objects.values_list("provider_content_id", flat=True)),
                          ["tm98003"])
+
+    @patch("requests.sessions.Session.request", side_effect=AssertionError("Unexpected HTTP"))
+    def test_copresent_variants_survive_refresh_on_stable_offer_and_price_rows(self, http):
+        title = Movie.objects.create(tmdb_id=98004, content_type="movie", title="Variants", year=2025)
+        hd = fx.offer("shared", "netflix", "Netflix", "nfx", monetization="RENT",
+                      url="https://example.test/rent/hd")
+        hd["retailPriceValue"] = 3.99
+        uhd = {**hd, "presentationType": "_4K", "retailPriceValue": 5.99,
+               "standardWebURL": "https://example.test/rent/4k"}
+        distinct_package = {**hd, "package": {**hd["package"], "packageId": 99004}}
+        unpriced = {**hd, "id": None, "retailPriceValue": None}
+        past_window = {**hd, "id": "past", "retailPriceValue": 1.99,
+                       "availableTo": "2000-01-01T00:00:00Z"}
+        variants = [hd, hd, uhd, distinct_package, past_window, unpriced]
+
+        def response(offers):
+            node = fx.title("tm98004", title.title, tmdb_id="98004", offers=offers)
+            return fx.FakeResponse(payload=fx.envelope({"popularTitles": {"edges": fx.edges(node)}}))
+
+        post = RecordingPost([response(variants), response(variants[::-1])])
+        service = AvailabilityRefreshService(source=source_with(post))
+        service.refresh_catalogue(country="NL")
+        price = OfferPrice.objects.get(tmdb_id=title.tmdb_id)
+        self.assertTrue(price.is_current)
+        identities = (ModelOffer.objects.get(tmdb_id=title.tmdb_id).pk, price.pk)
+        snapshot = price.variants
+        service.refresh_catalogue(country="NL")
+
+        price = OfferPrice.objects.get(tmdb_id=title.tmdb_id)
+        offer = ModelOffer.objects.get(tmdb_id=title.tmdb_id)
+        self.assertEqual((offer.pk, price.pk), identities)
+        self.assertEqual(price.amount, Decimal("3.99"))
+        self.assertTrue(price.is_current)
+        self.assertEqual(offer.quality, "hd")
+        self.assertEqual(price.variants, snapshot)
+        self.assertEqual(
+            {(variant["source_offer_id"], variant["presentation_type"],
+              variant["amount"], variant["package_id"]) for variant in price.variants},
+            {("shared", "HD", "3.9900", 1), ("shared", "_4K", "5.9900", 1),
+             ("shared", "HD", "3.9900", 99004), ("", "HD", None, 1),
+             ("past", "HD", "1.9900", 1)},
+        )
+        self.assertEqual(len(price.variants), 5)
+        self.assertFalse(next(variant for variant in price.variants
+                              if variant["source_offer_id"] == "past")["window_open_at_observation"])
+        evidence = get_offer_evidence_bulk([title])[title.pk]
+        displayed, = evidence.current + evidence.last_known
+        self.assertEqual(displayed.price["amount"], "3.9900")
+        self.assertTrue(displayed.price["is_from"])
+        self.assertEqual(displayed.prices[0]["variants"], snapshot)
+        http.assert_not_called()
+
+    def test_conflicting_native_title_across_catalogue_pages_stays_unresolved(self):
+        offer = fx.offer("o1", "netflix", "Netflix", "nfx")
+
+        def response(*nodes):
+            return fx.FakeResponse(payload=fx.envelope({"popularTitles": {"edges": fx.edges(*nodes)}}))
+
+        post = RecordingPost([
+            response(fx.title("ambiguous", "First", tmdb_id="98001", offers=[offer])),
+            response(fx.title("ambiguous", "Second", tmdb_id="98002", offers=[offer]),
+                     fx.title("confirmed", "Third", tmdb_id="98003", offers=[offer])),
+        ])
+        service = AvailabilityRefreshService(source=source_with(post))
+        service.refresh_catalogue(country="NL", provider="netflix", pages=2)
+
+        self.assertEqual(list(ModelOffer.objects.values_list("tmdb_id", "provider_content_id")),
+                         [(98003, "confirmed")])
+        self.assertEqual(list(ContentMapping.objects.values_list("tmdb_id", "provider_content_id")),
+                         [(98003, "confirmed")])
 
     # -------------------------------------------------------------------------
     # 1. An offer on an unsubscribed but known service remains evidence/a possible

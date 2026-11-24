@@ -35,12 +35,14 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime
+from decimal import Decimal
 from typing import Iterable, Optional
 
 from django.db.models import F, Exists, OuterRef, Q
 from django.utils import timezone
 
 from ..domain.enums import AvailabilityEvidence, ConflictKind, ContentType, FreshnessState, MatchMethod, SyncMode, SyncStatus
+from ..domain.models import offer_variant_key
 from ..domain.reconciliation import (
     OfferObservation,
     PriceObservation,
@@ -553,8 +555,14 @@ class AvailabilityReconciliationService:
             same_currency,
             key=lambda price: (price.amount, price.source, price.source_offer_id),
         )
-        is_from = len({price.amount for price in same_currency}) > 1
-        return chosen, is_from
+        amounts = {price.amount for price in same_currency}
+        for price in same_currency:
+            amounts.update(
+                Decimal(variant["amount"]) for variant in price.variants
+                if variant["currency"] == currency and variant["amount"] is not None
+                and not variant["validation_error"] and variant.get("window_open_at_observation", True)
+            )
+        return chosen, len(amounts) > 1
 
     def _quality_value(self, group, observations):
         """Known quality wins over unknown; two known values cannot be ranked."""
@@ -772,6 +780,7 @@ def _price_observation(row) -> PriceObservation:
         observed_at=_aware_opt(row.observed_at),
         is_current=bool(row.is_current),
         validation_error=row.validation_error or "",
+        variants=tuple(row.variants),
     )
 
 
@@ -791,6 +800,7 @@ def _dedupe_prices(prices: Iterable[PriceObservation]) -> tuple[PriceObservation
             price.amount,
             price.currency,
             price.is_current,
+            tuple(offer_variant_key(variant) for variant in price.variants),
         )
         if key in seen:
             continue

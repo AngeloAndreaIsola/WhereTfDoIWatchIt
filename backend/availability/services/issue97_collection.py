@@ -2,19 +2,19 @@
 from __future__ import annotations
 
 import csv
-from collections import Counter
 from datetime import datetime, timezone
 
 from availability.audit_identity import load_identity_manifest, normalized_title, titles_match
-from availability.domain.enums import ContentType, OfferType
+from availability.domain.enums import OfferType
+from availability.domain.models import offer_variant_key
 from availability.services.experiment_runner import (
     APPROVED_MANIFEST,
     ExperimentBlocked,
     manifest_digest,
     validate_search_payload,
 )
-from availability.services.normalize import normalize_justwatch_offer_type
-from availability.sources.justwatch import JustWatchSource
+from availability.services.normalize import normalize_justwatch_offer_type, normalize_price
+from availability.sources.justwatch import JustWatchSource, justwatch_offer_variant
 from availability.sources.justwatch_client import GRAPHQL_URL, SEASONS_QUERY, JustWatchClient, JustWatchError
 from availability.sources.justwatch_providers import is_addon_package, provider_slug_for_package
 
@@ -120,9 +120,8 @@ def replay_scope(scope, search_response, *, seasons_response=None):
         "authoritative": False, "title_offers": [], "season_offers": [], "unresolved": [],
         "season_status": "not_requested", "status": "unknown",
     }
-    seen_offers = set()
-
     def record_offers(node, output, season_number=None):
+        presence = {}
         for offer in node.offers:
             provider = provider_slug_for_package(offer.package)
             offer_class = normalize_justwatch_offer_type(offer.monetization_type)
@@ -131,50 +130,58 @@ def replay_scope(scope, search_response, *, seasons_response=None):
             observation = {
                 "tmdb_id": scope["tmdb_id"], "media_type": scope["media_type"],
                 "country": scope["country"], "season_number": season_number,
-                "provider": provider, "offer_class": offer_class,
+                "provider": provider, "offer_class": offer_class, "jw_id": node.id,
             }
+            price = normalize_price(offer.retail_price_value, offer.currency, offer.retail_price)
+            variant = justwatch_offer_variant(offer, price)
             if not provider or offer_class == OfferType.UNKNOWN:
                 report["unresolved"].append({
                     **observation,
                     "package": offer.package.technical_name,
                     "monetization_type": offer.monetization_type,
+                    "variants": [variant],
                 })
                 continue
-            # The replay projects comparable offer facts. Price, rendition and
-            # the individual JustWatch offer ID are observation attributes.
+            # Compare service/class presence once. Retain the distinct source
+            # variants under that fact for offer-level inspection.
             key = (scope["media_type"], scope["tmdb_id"], scope["country"],
                    season_number, provider, offer_class)
-            if key not in seen_offers:
-                seen_offers.add(key)
-                output.append(observation)
+            fact, variants = presence.setdefault(key, (observation, {}))
+            variants[offer_variant_key(variant)] = variant
+        for fact, variants in presence.values():
+            output.append({**fact, "variants": [variants[key] for key in sorted(variants)]})
 
     try:
         page = client.search_titles(
             scope["title"], country=scope["country"],
             object_types=["MOVIE" if scope["media_type"] == "movie" else "SHOW"],
         )
-        matches = [node for node in page.titles
-                   if JustWatchSource._content_type(node) == scope["media_type"]
-                   and node.tmdb_id_int == scope["tmdb_id"]]
-        if (len(matches) != 1 or not matches[0].has_native_id
-                or not titles_match(scope, normalized_title(scope["title"]), normalized_title(matches[0].title))
-                or matches[0].year != scope["year"]):
+        typed_nodes = [node for node in page.titles if JustWatchSource._content_type(node) == scope["media_type"]]
+        exact = [node for node in typed_nodes if node.tmdb_id_int == scope["tmdb_id"] and node.has_native_id]
+        native_ids = {node.id for node in exact}
+        match = JustWatchSource._merge_title_matches(
+            [node for node in typed_nodes if node.has_native_id and node.id in native_ids], page.titles,
+        )
+        reviewed_title = normalized_title(scope["title"])
+        labels = [(normalized_title(node.title), node.year) for node in exact]
+        has_reviewed_anchor = any(label and year == scope["year"] for label, year in labels)
+        conflicting_label = any(
+            (label and not titles_match(scope, reviewed_title, label))
+            or (year is not None and year != scope["year"])
+            for label, year in labels
+        )
+        if match is None or not has_reviewed_anchor or conflicting_label:
             report["reason"] = "typed_title_missing_ambiguous_or_label_mismatch"
             return report
 
-        match = matches[0]
         matched_node_id = match.id
         record_offers(match, report["title_offers"])
         report["status"] = "observed_fixture_offers" if report["title_offers"] else "unknown"
         if scope["media_type"] == "series" and seasons_response is not None:
             report["season_status"] = "unknown"
             seasons = client.seasons(match.id, country=scope["country"])
-            season_counts = Counter(season.season_number for season in seasons)
-            for season in seasons:
-                if (not season.has_native_id
-                        or JustWatchSource._content_type(season) != ContentType.SEASON
-                        or type(season.season_number) is not int or season.season_number < 0
-                        or season_counts[season.season_number] != 1):
+            for season in JustWatchSource._season_matches(seasons):
+                if season is None:
                     report["unresolved"].append({"reason": "invalid_season_identity"})
                     continue
                 record_offers(season, report["season_offers"], season.season_number)

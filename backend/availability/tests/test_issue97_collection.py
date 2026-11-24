@@ -38,30 +38,62 @@ class Issue97ReplayTests(SimpleTestCase):
         self.assertEqual(report["provenance"], "SYNTHETIC_FIXTURE")
         http.assert_not_called()
 
-    def test_repeated_offer_facts_collapse_after_normalization(self):
+    def test_presence_collapses_exact_repeats_and_keeps_distinct_variants(self):
         search = deepcopy(FIXTURES[INCEPTION["scope_id"]]["search"])
-        offers = search["data"]["popularTitles"]["edges"][0]["node"]["offers"]
-        original = replay_scope(INCEPTION, search)["title_offers"]
-        # An identical observation and an alternate rendition/price describe
-        # the same comparable title, market, service and offer class.
-        repeated = deepcopy(offers[0])
-        offers.extend([repeated, {**repeated, "id": None, "presentationType": "SD",
-                                  "retailPriceValue": 5.99}])
+        edges = search["data"]["popularTitles"]["edges"]
+        offers = edges[0]["node"]["offers"]
+        rent = next(offer for offer in offers if offer["monetizationType"] == "RENT")
+        rent.update(id="rent-hd", retailPriceValue=3.99, currency="EUR", presentationType="HD")
+        offers.extend([
+            deepcopy(rent),
+            {**rent, "id": None, "retailPriceValue": 5.99},
+            {**rent, "retailPriceValue": 4.99},
+            {**rent, "presentationType": "SD"},
+            {**rent, "monetizationType": "RENTAL"},
+            {**rent, "package": {**rent["package"], "packageId": 987}},
+        ])
+        repeated_edge = deepcopy(edges[0])
+        repeated_edge["node"]["content"]["externalIds"]["tmdbId"] = None
+        repeated_edge["node"]["offers"] = [{**rent, "id": "another-provider-offer"}]
+        edges.append(repeated_edge)
+        partial_edge = deepcopy(edges[0])
+        partial_edge["node"]["content"].pop("originalReleaseYear")
+        partial_edge["node"]["offers"] = [{**rent, "id": "partial-edge-offer"}]
+        edges.append(partial_edge)
 
-        self.assertEqual(replay_scope(INCEPTION, search)["title_offers"], original)
+        report = replay_scope(INCEPTION, search)
+        self.assertEqual(len(report["title_offers"]), 6)
+        fact = next(row for row in report["title_offers"] if row["offer_class"] == "rent")
+        variants = fact["variants"]
+        self.assertEqual(len(variants), 8)
+        self.assertEqual({variant["amount"] for variant in variants}, {"3.9900", "4.9900", "5.9900"})
+        self.assertEqual({variant["presentation_type"] for variant in variants}, {"HD", "SD"})
+        self.assertEqual({variant["monetization_type"] for variant in variants}, {"RENT", "RENTAL"})
+        self.assertEqual({variant["source_offer_id"] for variant in variants},
+                         {"rent-hd", "", "another-provider-offer", "partial-edge-offer"})
+        self.assertIn(987, {variant["package_id"] for variant in variants})
+        edges.reverse()
+        self.assertEqual(next(row for row in replay_scope(INCEPTION, search)["title_offers"]
+                              if row["offer_class"] == "rent"), fact)
 
-    def test_wrong_type_id_year_edition_or_duplicate_stays_unknown(self):
+    def test_wrong_type_id_year_edition_or_conflicting_identity_stays_unknown(self):
         for field, value in (
-            ("objectType", "SHOW"), ("tmdbId", "438631"), ("tmdbId", ""),
-            ("originalReleaseYear", 2020), ("title", "Inception Redux"), ("duplicate", True),
+            ("objectType", "SHOW"), ("tmdbId", "438631"), ("tmdbId", ""), ("id", None),
+            ("originalReleaseYear", 2020), ("title", "Inception Redux"),
+            ("alternate_native_id", "tm-other"), ("conflicting_id", "438631"),
         ):
             with self.subTest(field=field, value=value):
                 search = deepcopy(FIXTURES[INCEPTION["scope_id"]]["search"])
                 edges = search["data"]["popularTitles"]["edges"]
                 node = edges[0]["node"]
-                if field == "duplicate":
-                    edges.append(deepcopy(edges[0]))
-                elif field == "objectType":
+                if field in ("alternate_native_id", "conflicting_id"):
+                    conflict = deepcopy(edges[0])
+                    if field == "alternate_native_id":
+                        conflict["node"]["id"] = value
+                    else:
+                        conflict["node"]["content"]["externalIds"]["tmdbId"] = value
+                    edges.append(conflict)
+                elif field in ("id", "objectType"):
                     node[field] = value
                 elif field == "tmdbId":
                     node["content"]["externalIds"][field] = value

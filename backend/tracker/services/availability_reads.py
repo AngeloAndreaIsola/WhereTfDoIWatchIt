@@ -182,7 +182,7 @@ def _price_dict(price, *, is_from: bool = False) -> dict:
     localized display string. ``is_current`` tells the reader whether the value
     was confirmed by the latest observation.
     """
-    return {
+    result = {
         "amount": None if price.amount is None else str(price.amount),
         "currency": price.currency or "",
         "source": price.source,
@@ -194,3 +194,6 @@ def _price_dict(price, *, is_from: bool = False) -> dict:
         "is_from": bool(is_from),
         "validation_error": price.validation_error or "",
     }
+    if price.variants:
+        result["variants"] = list(price.variants)
+    return result

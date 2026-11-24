@@ -107,14 +107,17 @@ from collections import defaultdict
 from dataclasses import dataclass, field, replace
 
 from django.db import transaction
+from django.utils import timezone
 
 from tracker.models import ExternalProviderMapping, Provider
 
 from ..domain.enums import MatchMethod, SyncMode
+from ..domain.models import offer_variant_key
 from .identity_policy import mapping_is_trusted
-from ..models import ContentMapping, Country, Source
+from ..models import ContentMapping, Country, Source, build_offer_identity
 from ..sources.justwatch_providers import provider_slug_for_package
 from ..persistence.repositories import (
+    PROVIDER_CONTENT_ID_MAX_LENGTH,
     CursorRepository,
     MappingRepository,
     OfferPriceRepository,
@@ -125,7 +128,7 @@ from ..persistence.repositories import (
 from ..sources import DEFAULT_SOURCE_SLUG, ContentRequest, source_registry
 from ..sources.base import accepts_kwarg
 from .matching import match_local_catalog
-from .normalize import normalize_content_type
+from .normalize import normalize_content_type, truncate_field
 from .write_barrier import writer_barrier
 
 logger = logging.getLogger(__name__)
@@ -167,6 +170,44 @@ def _content_row_key(provider, content, content_type) -> tuple:
         content.season_number,
         content.episode_number,
     )
+
+
+def _offer_observations(group, provider, country):
+    """Keep each source variant while writing one canonical offer and price row."""
+    by_identity = defaultdict(dict)
+    for offer in group:
+        if offer.source_variant is None:
+            yield offer, ()
+            continue
+        identity = build_offer_identity(
+            provider.slug, country.code, offer.content_type, offer.tmdb_id,
+            offer.season_number, offer.episode_number, offer.offer_type,
+            truncate_field(offer.provider_content_id, PROVIDER_CONTENT_ID_MAX_LENGTH),
+        )
+        by_identity[identity][offer_variant_key(offer.source_variant)] = offer
+
+    now = timezone.now()
+    for variants in by_identity.values():
+        ordered = [variants[key] for key in sorted(variants)]
+        observations = [
+            (offer, (offer.available_from is None or offer.available_from <= now)
+             and (offer.available_until is None or offer.available_until > now))
+            for offer in ordered
+        ]
+        candidates = [offer for offer, window_open in observations if window_open] or ordered
+        priced = [
+            offer for offer in candidates
+            if offer.price_amount is not None and offer.price_currency and not offer.price_error
+        ]
+        # Keep a single display price tied to the representative rendition.
+        # The currency and amount win in that order, independent of input order.
+        representative = min(
+            priced, key=lambda offer: (offer.price_currency, offer.price_amount), default=candidates[0],
+        )
+        yield representative, [
+            {**offer.source_variant, "window_open_at_observation": window_open}
+            for offer, window_open in observations
+        ]
 
 
 def _content_metadata(content) -> dict:
@@ -845,7 +886,7 @@ class AvailabilityRefreshService:
                 for run, provider, country, group in runs:
                     seen: set[str] = set()
                     group_created = group_updated = 0
-                    for normalized in group:
+                    for normalized, variants in _offer_observations(group, provider, country):
                         offer, was_created = self.offers.upsert(
                             provider=provider, country=country, source=source,
                             sync_run=run,
@@ -874,16 +915,18 @@ class AvailabilityRefreshService:
                             currency=normalized.price_currency,
                             source_offer_id=normalized.source_record_id,
                             error=normalized.price_error,
+                            variants=variants,
                         )
                         seen.add(offer.identity)
                         group_created += int(was_created)
                         group_updated += int(not was_created)
 
                     group_deactivated = 0
+                    group_processed = group_created + group_updated
                     self.sync_runs.mark_succeeded(
                         run,
                         items_discovered=len(group),
-                        items_processed=len(group),
+                        items_processed=group_processed,
                         offers_created=group_created,
                         offers_updated=group_updated,
                     )
@@ -894,7 +937,7 @@ class AvailabilityRefreshService:
                         run.offers_deactivated = group_deactivated
                         run.save(update_fields=["offers_deactivated", "updated_at"])
                         deactivated += group_deactivated
-                    processed += len(group)
+                    processed += group_processed
                     created += group_created
                     updated += group_updated
                     logger.info(
@@ -903,7 +946,7 @@ class AvailabilityRefreshService:
                         "discovered=%s processed=%s created=%s updated=%s "
                         "deactivated=%s",
                         self.source.slug, provider.slug, country.code, tmdb_id,
-                        run.pk, may_deactivate, len(group), len(group),
+                        run.pk, may_deactivate, len(group), group_processed,
                         group_created, group_updated, group_deactivated,
                     )
                 if persist_cursor and result.cursor:
@@ -1020,7 +1063,7 @@ class AvailabilityRefreshService:
             for run, provider, country, group in runs:
                 group_created = 0
                 group_updated = 0
-                for normalized in group:
+                for normalized, variants in _offer_observations(group, provider, country):
                     offer, was_created = self.offers.upsert(
                         provider=provider,
                         country=country,
@@ -1048,6 +1091,7 @@ class AvailabilityRefreshService:
                         currency=normalized.price_currency,
                         source_offer_id=normalized.source_record_id,
                         error=normalized.price_error,
+                        variants=variants,
                     )
                     persisted_identities.append(offer.identity)
                     group_created += int(was_created)
@@ -1056,7 +1100,7 @@ class AvailabilityRefreshService:
                 self.sync_runs.mark_succeeded(
                     run,
                     items_discovered=len(group),
-                    items_processed=len(group),
+                    items_processed=group_created + group_updated,
                     offers_created=group_created,
                     offers_updated=group_updated,
                 )

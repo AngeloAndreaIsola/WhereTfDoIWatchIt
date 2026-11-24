@@ -75,6 +75,7 @@ class PriceObservation:
     observed_at: Optional[datetime]
     is_current: bool
     validation_error: str = ""
+    variants: tuple[dict, ...] = ()
 
     @property
     def is_valid(self) -> bool:
