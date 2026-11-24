@@ -1,0 +1,407 @@
+{
+  "artifact_refs": {
+    "attempt_accounting": "sanitized/attempt_accounting.json",
+    "function_schema": "sanitized/function_schema.json",
+    "identity_provenance": "sanitized/identity_provenance.json",
+    "original_show_redacted": "sanitized/function_show_original.json",
+    "provider_summary": "sanitized/provider_summary.json",
+    "redeploy_show": "sanitized/function_show.json"
+  },
+  "base_ref": "origin/master",
+  "base_sha": "c2ead763bb8e49859e13e56a3cd8e80e6c0ee4d7",
+  "budgets": {
+    "justwatch_http_attempts": {
+      "ledgered": false,
+      "measured_count": null,
+      "static_estimate": {
+        "nominal_actions_per_successful_invocation": 4,
+        "status": "ESTIMATE_NOT_MEASURED"
+      },
+      "status": "UNKNOWN"
+    },
+    "notte_collection_invocations": {
+      "limit": 6,
+      "used": 3
+    },
+    "notte_validation_probes": {
+      "limit": 3,
+      "used": 1
+    }
+  },
+  "checkpoints": [
+    {
+      "batch": 1,
+      "function_run_id_sha256_prefix": "713f22bd925be0c2",
+      "offers": 0,
+      "raw_ref": "call-01-inception.json",
+      "raw_sha256": "5756a1959fb0eeaadde760ba2e0371d444d8c03544459adb229d5900f5a3ccac",
+      "reason": "deployed function import error",
+      "status": "failed",
+      "title": "Inception"
+    },
+    {
+      "batch": 2,
+      "raw_ref": "call-02-dune.json",
+      "raw_sha256": "47922ee5abc249324f4e2cf3b319d8aed8528d5464c1d599047ec711fb16448e",
+      "records": 27,
+      "status": "closed",
+      "title": "Dune"
+    },
+    {
+      "batch": 3,
+      "raw_ref": "call-03-inception-retry.json",
+      "raw_sha256": "79e90f57a41eea5ec0452d2772f034cca50358ed1c93eb57e051c81a8c0ab0fe",
+      "records": 29,
+      "retry_of": 1,
+      "status": "closed",
+      "title": "Inception"
+    }
+  ],
+  "declared_hashes": {
+    "params_hash": {
+      "provenance": "Declared in runs/jw-canary-2026-11-24/manifest.json:47 (derived_from R2b-notte-cli).",
+      "reason": "Exhaustive scan of 22 retained evidence files and 11,631 scratch/cache files (<5MB), plus raw and four canonical JSON serializations of every JSON object and all recorded call/probe variables, produced no matching bytes. The exact serialized parameter object was not retained; value left unchanged, not corrected.",
+      "reproduced_from": null,
+      "status": "UNVERIFIABLE",
+      "value": "d4c2880edbbd00d738229e737171998fdaa9a264ff7fc1a3e1b5dad2faf9ebf4"
+    },
+    "previous_spec_sha256": {
+      "provenance": "Declared in spec/manifest.json:4 and runs/jw-canary-2026-11-24/manifest.json:49; PENDING.md R3 records owner export of the current spec only.",
+      "reason": "Bytes of the pre-R3/previous spec are not retained anywhere searched; no file hashes to this value. Value left unchanged, not corrected.",
+      "reproduced_from": null,
+      "status": "UNVERIFIABLE",
+      "value": "05449a1c3f238bc09a08afee22db3c11ef2ebf8886b5cad19bcdecd32f136bd0"
+    },
+    "run_manifest_sha256": {
+      "reproduced_from": "runs/jw-canary-2026-11-24/manifest.json",
+      "status": "VERIFIED",
+      "value": "f5d28b45a45b55ecdad1eb0895f4231b4bd0adffdcf9af7d38db39a02552f3b2"
+    },
+    "show_json_sha256": {
+      "note": "Historical pre-redeploy show bytes verified locally. See the sanitized show derivative for provenance.",
+      "reproduced_bytes": 5586,
+      "reproduced_from": "~/.hermes/cache/scratch/anything-mcp-preflight/notte_function_show.json",
+      "status": "VERIFIED",
+      "value": "123aa9000f175070e1037fcba01f87a83062b7aca5e32ca1410402bb41828d89"
+    },
+    "source_code_sha256": {
+      "reproduced_from": "spec/stage-a-notte-function.py",
+      "status": "VERIFIED",
+      "value": "b512a7becc416a8609c251396184cb7330c03a22a72b2235fa3831078bbc20a5"
+    },
+    "source_code_sha256_v2": {
+      "reproduced_from": "spec/stage-a-notte-function_v2.py",
+      "status": "VERIFIED",
+      "value": "b512a7becc416a8609c251396184cb7330c03a22a72b2235fa3831078bbc20a5"
+    },
+    "spec_manifest_sha256": {
+      "reproduced_from": "spec/manifest.json",
+      "status": "VERIFIED",
+      "value": "124b50d9c46c32f739bf7484cf62b63819ebf30282f90ce4e246ed13f3f8aa36"
+    },
+    "spec_sha256": {
+      "reproduced_from": "spec/stage-a-notte-function.yaml",
+      "status": "VERIFIED",
+      "value": "faf8b4ba69835f0428821b71a0c29f6072fe0aab0647016b8148120005e0a23f"
+    },
+    "tool_list_schema_sha256": {
+      "provenance": "Declared in spec/manifest.json:12, runs/jw-canary-2026-11-24/manifest.json:61, spec/PENDING.md:11 and scratch preflight.json + resume_report.json.",
+      "reason": "A tools/list artifact is retained (scratch/anything-mcp-preflight/tools.json and tools.raw.txt) but neither its raw bytes nor canonical variants of the list, its items, input/output schemas or SSE fragments reproduce the declared digest. The exact serialized object that was hashed was not retained; value left unchanged, not corrected.",
+      "reproduced_from": null,
+      "status": "UNVERIFIABLE",
+      "value": "0e688edd1bd330f98bb4d89146c6497f5d0abb62a95654c5dcf09c64b9115705"
+    }
+  },
+  "dedup_key_extended": [
+    "title",
+    "jw_id",
+    "country",
+    "provider",
+    "monetization_type",
+    "quality",
+    "price",
+    "currency"
+  ],
+  "dedup_key_literal_brief": [
+    "country",
+    "provider",
+    "monetization_type",
+    "quality",
+    "price",
+    "currency"
+  ],
+  "excluded_from_pr": [
+    "Raw canary calls, offers and per-record validation",
+    "Raw show metadata, signed URLs, and operational or provider UUIDs",
+    "Full Python source export and full YAML function schema",
+    "Raw redeploy download log and TMDb payloads"
+  ],
+  "expected_metrics": {
+    "available_true": 56,
+    "call_02_records": 27,
+    "call_03_records": 29,
+    "countries": {
+      "NL": 56
+    },
+    "dedup_extended_kept": 56,
+    "dedup_extended_removed": 0,
+    "dedup_literal_kept": 34,
+    "dedup_literal_removed": 22,
+    "monetization": {
+      "buy": 20,
+      "rent": 20,
+      "subscription": 16
+    },
+    "near_duplicate_price_groups": 0,
+    "normalization_field": "country",
+    "normalization_from": "nl",
+    "normalization_to": "NL",
+    "normalizations": 56,
+    "object_types": {
+      "movie": 56
+    },
+    "offers_equals_normalized_raw": true,
+    "offers_json_records": 56,
+    "provider_counts_full": {
+      "Amazon Prime Video": 2,
+      "Amazon Video": 12,
+      "Apple TV Store": 12,
+      "HBO Max": 6,
+      "HBO Max Amazon Channel": 6,
+      "Netflix": 2,
+      "Pathé Thuis": 4,
+      "Rakuten TV": 10,
+      "meJane": 2
+    },
+    "provider_counts_literal_dedup": {
+      "Amazon Prime Video": 2,
+      "Amazon Video": 6,
+      "Apple TV Store": 6,
+      "HBO Max": 3,
+      "HBO Max Amazon Channel": 3,
+      "Netflix": 2,
+      "Pathé Thuis": 4,
+      "Rakuten TV": 6,
+      "meJane": 2
+    },
+    "raw_records": 56,
+    "rejects": 0,
+    "source_label_sets": [
+      [
+        "SAME_SOURCE_ECHO",
+        "UNLICENSED"
+      ]
+    ],
+    "unknown_audio_lists": 2,
+    "unknown_subtitle_lists": 2
+  },
+  "findings_disposition": {
+    "D1": "RESOLVED_IN_PACKAGE — 56 observed source-reported offers. The historical incorrect key collapses 22 across titles and yields 34 rows.",
+    "D2": "PARTIALLY_RESOLVED — show_json_sha256 VERIFIED against original retained bytes; params_hash, previous_spec_sha256 and tool_list_schema_sha256 explicitly UNVERIFIABLE with provenance/reason (no corrections invented).",
+    "D3": "DOCUMENTED — show lists six versions; event names two; intermediate v20261124_150411 not expanded because no extra event evidence exists.",
+    "D4": "RESOLVED — sanitized/attempt_accounting.json names each namespace: validation probes, collection calls, per-title attempts, global call index.",
+    "D5": "DOCUMENTED_OPEN — internal JustWatch HTTP attempts are UNKNOWN. Four nominal actions per successful invocation is a static estimate.",
+    "D6": "RESOLVED_AS_EXTERNAL_ATTRIBUTION — TMDb identity is inferred from matching title, release year and media type using external hash-matched evidence. The canary has no TMDb join key.",
+    "D7": "DOCUMENTED — language-sentinel wrapping is asserted and tested by the offline verifier; originating run manifest was not edited.",
+    "D8": "DOCUMENTED — version-event detection timestamp follows the retry call; chronology retained as measured."
+  },
+  "function_alias": "stage-a-notte-function",
+  "hash_investigation": {
+    "files_hashed_total": 11631,
+    "matched": [
+      {
+        "bytes": 5586,
+        "hash_name": "show_json_sha256",
+        "historical_input": "~/.hermes/cache/scratch/anything-mcp-preflight/notte_function_show.json",
+        "result": "VERIFIED",
+        "value": "123aa9000f175070e1037fcba01f87a83062b7aca5e32ca1410402bb41828d89"
+      }
+    ],
+    "methods": [
+      "raw SHA-256 of every retained evidence file",
+      "canonical JSON (compact, compact/non-ASCII, spaced, indent-2) of every JSON object",
+      "raw/canonical variants of scratch preflight artifacts including tools list and function show",
+      "full hash scan of 11,631 scratch/cache files under 5MB"
+    ],
+    "unverifiable": [
+      "params_hash",
+      "previous_spec_sha256",
+      "tool_list_schema_sha256"
+    ]
+  },
+  "metrics_class": "MEASURED_AGAINST_UNVERIFIED_SOURCE",
+  "missing_evidence_updated": [
+    "params_hash, previous_spec_sha256 and tool_list_schema_sha256 source bytes/serializations (UNVERIFIABLE).",
+    "Per-request JustWatch HTTP ledger (D5).",
+    "Direct canary-record field joining a JustWatch id to a TMDb id (D6); external hash-matched identity evidence exists but the join is inferred.",
+    "Deployed function source artifact hash. The local download log does not establish it.",
+    "Independent first-party comparator / entitlement / playback observation."
+  ],
+  "package_id": "issue97-r2b-canary-2026-11-24-evidence",
+  "review_base_sha": "d84308be248828bc9bcef07465eb7dd533e1f621",
+  "run": "JW-CANARY-v1b",
+  "run_date": "2026-11-24",
+  "source_custody": {
+    "bytes": 336717,
+    "files": 20,
+    "record": "../evidence-custody-verification.md",
+    "source_commit": "ff150586319e89b8ce4f8dfde9403a33eceea1d1"
+  },
+  "source_inventory": [
+    {
+      "bytes": 1132,
+      "location": "restricted_custody",
+      "path": "runs/jw-canary-2026-11-24/batch-01.json",
+      "sha256": "4317ad46e0cce62e92926807933281e6a0b7429ad0c522513fa48a4fe7ee0602"
+    },
+    {
+      "bytes": 381,
+      "location": "restricted_custody",
+      "path": "runs/jw-canary-2026-11-24/batch-02.json",
+      "sha256": "8406aa59c9e772e297ad9047b5a5cbcb086c3b86c1a108375199483d1777173f"
+    },
+    {
+      "bytes": 423,
+      "location": "restricted_custody",
+      "path": "runs/jw-canary-2026-11-24/batch-03.json",
+      "sha256": "5a2cd834d559d588bb883c6b8126083fae4381bf37d4efcbb881c4ddcf3e6e18"
+    },
+    {
+      "bytes": 1611,
+      "location": "restricted_custody",
+      "path": "runs/jw-canary-2026-11-24/call-01-inception.json",
+      "sha256": "5756a1959fb0eeaadde760ba2e0371d444d8c03544459adb229d5900f5a3ccac"
+    },
+    {
+      "bytes": 48246,
+      "location": "restricted_custody",
+      "path": "runs/jw-canary-2026-11-24/call-02-dune.json",
+      "sha256": "47922ee5abc249324f4e2cf3b319d8aed8528d5464c1d599047ec711fb16448e"
+    },
+    {
+      "bytes": 47393,
+      "location": "restricted_custody",
+      "path": "runs/jw-canary-2026-11-24/call-03-inception-retry.json",
+      "sha256": "79e90f57a41eea5ec0452d2772f034cca50358ed1c93eb57e051c81a8c0ab0fe"
+    },
+    {
+      "bytes": 736,
+      "location": "restricted_custody",
+      "path": "runs/jw-canary-2026-11-24/coverage.json",
+      "sha256": "96d514638731f8b328bc269af4c6a3cb5d887adb9f1bdc09b03d929f8feebf35"
+    },
+    {
+      "bytes": 206,
+      "location": "local_download_log",
+      "note": "Ignored local log outside the published tree. A byte match verifies the log only. Missing input yields UNVERIFIABLE.",
+      "path": "runs/jw-canary-2026-11-24/download_redeploy.log",
+      "sha256": "a2b861d0a3b09466c977540cef1d3c1f9cffce4418d2460d68f7f184768057c9"
+    },
+    {
+      "bytes": 5604,
+      "location": "restricted_custody",
+      "path": "runs/jw-canary-2026-11-24/function_show_redeploy.json",
+      "sha256": "e25f372188c7c1f9c17c898af1b930ff482b7addae8e9a82c690e8036a9a219c"
+    },
+    {
+      "bytes": 2223,
+      "location": "restricted_custody",
+      "path": "runs/jw-canary-2026-11-24/manifest.json",
+      "sha256": "f5d28b45a45b55ecdad1eb0895f4231b4bd0adffdcf9af7d38db39a02552f3b2"
+    },
+    {
+      "bytes": 68988,
+      "location": "restricted_custody",
+      "path": "runs/jw-canary-2026-11-24/offers.csv",
+      "sha256": "caabaf16fe2c439c005b23d7508b09882339964db4c92c4d5d81c018348a8578"
+    },
+    {
+      "bytes": 95952,
+      "location": "restricted_custody",
+      "path": "runs/jw-canary-2026-11-24/offers.json",
+      "sha256": "e9f1bd0f7fe2e2cb5564662ad11c4c1f54ade94f1780d089a6fe49434e828220"
+    },
+    {
+      "bytes": 1458,
+      "location": "restricted_custody",
+      "path": "runs/jw-canary-2026-11-24/probe-01.json",
+      "sha256": "6bd38c95f2b25d374c0784f472b2711a4745b8e31e04bfe7ba2cd5603e74c577"
+    },
+    {
+      "bytes": 2,
+      "location": "restricted_custody",
+      "path": "runs/jw-canary-2026-11-24/rejects.json",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "bytes": 1529,
+      "location": "restricted_custody",
+      "path": "runs/jw-canary-2026-11-24/summary.md",
+      "sha256": "c174f48a348d07a0b5871931b20dd32f35f8d39c0e007279f2fffcfe98aa89eb"
+    },
+    {
+      "bytes": 7634,
+      "location": "restricted_custody",
+      "path": "runs/jw-canary-2026-11-24/validation_log.json",
+      "sha256": "f1e0983c1ae1ffe0ad6c6851bc17c86b06278fd9e35632be13993dd0c2539de6"
+    },
+    {
+      "bytes": 2878,
+      "location": "restricted_custody",
+      "path": "spec/PENDING.md",
+      "sha256": "318399c7e81ebf34016dcdef9df294a1f227af7a98543d03efd01e524393ca79"
+    },
+    {
+      "bytes": 22453,
+      "location": "restricted_custody",
+      "path": "spec/stage-a-notte-function.py",
+      "sha256": "b512a7becc416a8609c251396184cb7330c03a22a72b2235fa3831078bbc20a5"
+    },
+    {
+      "bytes": 4665,
+      "location": "restricted_custody",
+      "path": "spec/stage-a-notte-function.yaml",
+      "sha256": "faf8b4ba69835f0428821b71a0c29f6072fe0aab0647016b8148120005e0a23f"
+    },
+    {
+      "bytes": 22453,
+      "location": "restricted_custody",
+      "path": "spec/stage-a-notte-function_v2.py",
+      "sha256": "b512a7becc416a8609c251396184cb7330c03a22a72b2235fa3831078bbc20a5"
+    },
+    {
+      "bytes": 956,
+      "location": "restricted_custody",
+      "path": "spec/manifest.json",
+      "sha256": "124b50d9c46c32f739bf7484cf62b63819ebf30282f90ce4e246ed13f3f8aa36"
+    },
+    {
+      "bytes": 2584,
+      "location": "historical_git_blob",
+      "note": "Hash pins the original decision. The cleaned base has a separate sanitized current revision.",
+      "path": "docs/source-permission/decision-2026-11-24.md",
+      "sha256": "044894da78a336e3b3c9999980e09e04bd63a164c2b38b297adfed44c20fec2b",
+      "source_commit": "ff150586319e89b8ce4f8dfde9403a33eceea1d1"
+    }
+  ],
+  "source_labels": [
+    "SAME_SOURCE_ECHO",
+    "UNLICENSED"
+  ],
+  "status": "READY_FOR_REVIEW",
+  "versions": {
+    "event_detected_at": "2026-11-24T15:36:40.818929+00:00",
+    "event_from": "v20261124_135310",
+    "event_to": "v20261124_150434",
+    "redeploy_updated_at": "2026-11-24T15:04:34.589983Z",
+    "show_versions": [
+      "v20261124_135051",
+      "v20261124_135131",
+      "v20261124_135152",
+      "v20261124_135310",
+      "v20261124_150411",
+      "v20261124_150434"
+    ],
+    "source_hash_unchanged": true
+  }
+}

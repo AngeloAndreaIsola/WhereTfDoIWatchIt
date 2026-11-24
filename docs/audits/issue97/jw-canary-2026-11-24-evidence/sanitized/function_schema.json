@@ -1,0 +1,70 @@
+{
+  "function_alias": "stage-a-notte-function",
+  "provenance": {
+    "custody_record": "../evidence-custody-verification.md",
+    "derived_from": "R2b-notte-cli",
+    "export_tool_version": "Notte CLI v0.0.79",
+    "source_spec_sha256": "faf8b4ba69835f0428821b71a0c29f6072fe0aab0647016b8148120005e0a23f",
+    "source_spec_bytes": 4665
+  },
+  "inputs": [
+    {
+      "name": "title",
+      "type": "string",
+      "constraint": "Non-empty title without template placeholders"
+    },
+    {
+      "name": "markets",
+      "type": "string",
+      "constraint": "Comma-separated lowercase ISO 3166-1 alpha-2 codes without duplicates, or ALL"
+    },
+    {
+      "name": "reference_market",
+      "type": "string",
+      "constraint": "us"
+    },
+    {
+      "name": "object_type",
+      "type": "string",
+      "values": [
+        "movie",
+        "tv-show",
+        "UNKNOWN"
+      ]
+    },
+    {
+      "name": "release_year",
+      "type": "integer",
+      "constraint": "Positive year, or 0 for unknown"
+    }
+  ],
+  "output": {
+    "type": "array of offer records",
+    "required_fields": [
+      "title",
+      "jw_id",
+      "object_type",
+      "release_year",
+      "country",
+      "country_name",
+      "available",
+      "provider",
+      "monetization_type",
+      "quality",
+      "price",
+      "currency",
+      "audio_languages",
+      "subtitle_languages",
+      "deeplink",
+      "source_url",
+      "observed_at",
+      "flags"
+    ],
+    "language_fields": {
+      "raw": "Array of strings or UNKNOWN",
+      "normalized_unknown": [
+        "UNKNOWN"
+      ]
+    }
+  }
+}

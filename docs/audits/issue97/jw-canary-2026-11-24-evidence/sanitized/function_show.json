@@ -1,0 +1,32 @@
+{
+  "created_at": "2026-11-24T13:50:51.371073Z",
+  "function_alias": "stage-a-notte-function",
+  "latest_version": "v20261124_150434",
+  "published": false,
+  "raw_bytes": 5604,
+  "raw_path": "runs/jw-canary-2026-11-24/function_show_redeploy.json",
+  "raw_sha256": "e25f372188c7c1f9c17c898af1b930ff482b7addae8e9a82c690e8036a9a219c",
+  "redactions": [
+    "Unpublished function and workflow identifiers, signed download URL, and full function configuration omitted."
+  ],
+  "required_secrets_count": 0,
+  "shared": false,
+  "source": "anything",
+  "status": "active",
+  "updated_at": "2026-11-24T15:04:34.589983Z",
+  "variable_names": [
+    "title",
+    "markets",
+    "reference_market",
+    "object_type",
+    "release_year"
+  ],
+  "versions": [
+    "v20261124_135051",
+    "v20261124_135131",
+    "v20261124_135152",
+    "v20261124_135310",
+    "v20261124_150411",
+    "v20261124_150434"
+  ]
+}

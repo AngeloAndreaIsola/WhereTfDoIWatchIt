@@ -1,6 +1,5 @@
 # Issue #97 JustWatch collection preflight
 
-> **Issue-level policy update (2026-11-24; JustWatch only):** Issue #97 no longer requires a separate written upstream JustWatch permission reference as a task or acceptance artifact. The observations, `UNKNOWN` fields, and `LIVE_COLLECTION_BLOCKED` verdict below are retained as historical evidence of the 2026-11-24 offline run. The existing runtime permission checks and experiment preflight remain unchanged and can still block live execution. Do not invent permission evidence or treat this documentation update as approval to send requests.
 
 **LIVE_COLLECTION_BLOCKED.** The 15-title Netherlands plan and synthetic replay are ready for code review. Fresh collection and independent assessment remain pending. [Issue #97](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/issues/97) · [PR #86](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/pull/86)
 
@@ -19,7 +18,6 @@ Reviewed base `a50305e097fbeab356c79de6bdcfb2f90428949c`. PR #86 merged at `bd3d
 | Permission ceiling and retry allowance | **UNKNOWN**. The ceilings above are enforced software limits. The written provider ceiling, retry allowance and total low-level quota are pending. |
 | Quota class, balance and rate policy | **UNKNOWN**. A current reviewed policy reference and quota classification are pending, with remaining request balance if metered. |
 | Pacing, concurrency and burst | **UNKNOWN** for source approval. The fixed runner serializes under shared locks and now requires reviewed minimum pacing and the existing evidence for a burst allowance of at least six. |
-| Live target and execution | A verified disposable target for a live run and separate execution approval are pending. Evidence in this report uses ephemeral test PostgreSQL and synthetic input. |
 
 The fixed v1 manifest digest remains `bfd245d7ba4916f6dd6aaea9dcc77c89c2995c8cae6e26ccc3fe03c468680209`. Transport rejects non-exact documents, variables, scopes and endpoints. Application limits stack with the reviewed permission and rate gates. The attempt ledger reserves each transmitted POST before sending, records denial, redirect and 429 as spent outcomes, and requires reconciliation for interrupted or incomplete scopes. The runner checks evidence expiry before reserving another attempt. In the disposable PostgreSQL preflight without synthetic authorization evidence, both fixed scopes were blocked by absent current permission and quota/rate-policy evidence with zero reservations, overlapping queue items and unfinished runs.
 
