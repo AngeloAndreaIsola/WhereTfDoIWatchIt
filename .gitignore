@@ -39,3 +39,11 @@ yarn-error.log*
 # unrelated work. Delete this line to share the recipe deliberately.
 .hermes/
 .catalogue-staging/
+
+# Issue #97 canary raw evidence — restricted custody outside Git; never recommit
+/runs/jw-canary-2026-11-24/
+/spec/fe1b97b6.py
+/spec/fe1b97b6.yaml
+/spec/fe1b97b6_v2.py
+/spec/manifest.json
+/spec/PENDING.md
