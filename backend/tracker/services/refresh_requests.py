@@ -75,6 +75,7 @@ from ..models import (
     RefreshRequestOutcome,
     RefreshRequestStatus,
     RefreshRun,
+    TitleAvailabilityCheck,
     WatchlistItem,
 )
 from .bulk_refresh import (
@@ -230,14 +231,14 @@ def request_availability_refresh(
             departures=departures,
         ):
             return None
-        if (
-            if_stale and freshness_source not in TITLE_AGGREGATORS
-            and recently_attempted(movie, source, country)
-        ):
-            # Already fetched (or failed) moments ago for this scope — the
-            # title may legitimately still be stale because the provider has
-            # nothing for it; do not open a new attempt on every read.
-            return None
+        if if_stale and recently_attempted(movie, source, country):
+            # Old requests have no typed attempt timestamp. Keep their
+            # cooldown until this scope has a cache record. From then on the
+            # typed cache owns the cooldown, including after a TMDb relink.
+            if freshness_source not in TITLE_AGGREGATORS or not TitleAvailabilityCheck.objects.filter(
+                movie=movie, source=freshness_source, country=country,
+            ).exists():
+                return None
 
         effective_priority = priority
         if (
