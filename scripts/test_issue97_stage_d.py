@@ -14,8 +14,14 @@ ROOT = Path(__file__).resolve().parents[1]
 PILOT = ROOT / "docs/audits/stage2b/nl_pilot_cohort_20261122_v2.csv"
 IDENTITIES = PILOT.with_name("identity_manifest_20261122.csv")
 REMAINING = PILOT.parent.parent / "issue97/stage-d-remaining-cohort.csv"
-CANARY = ROOT / "runs/jw-canary-2026-11-24/coverage.json"
+# The cleaned repository deliberately contains no raw canary payloads.  These
+# are the two independently reviewed typed identities excluded from the
+# remaining manifest; this offline check does not claim to verify a response.
 CANARY_KEYS = {(27205, "movie"), (438631, "movie")}
+CANARY_EXCLUSIONS = {
+    (27205, "movie"): "Inception",
+    (438631, "movie"): "Dune",
+}
 
 
 def read_rows(path):
@@ -40,9 +46,10 @@ class StageDManifestTests(unittest.TestCase):
 
     def test_remaining_scope_is_exact_cohort_minus_collected_canaries(self):
         self.assertEqual(self.cohort_path.read_bytes(), PILOT.read_bytes())
-        coverage = json.loads(CANARY.read_text(encoding="utf-8"))["returned_markets"]
-        canaries = [(row["title"], row["market"]) for row in coverage if row["records"] > 0]
-        self.assertCountEqual(canaries, [("Inception", "nl"), ("Dune", "nl")])
+        self.assertEqual(CANARY_EXCLUSIONS, {
+            (27205, "movie"): "Inception", (438631, "movie"): "Dune",
+        })
+        self.assertTrue(set(CANARY_EXCLUSIONS).isdisjoint({typed_key(row) for row in self.remaining}))
         self.assertEqual({typed_key(row) for row in self.pilot}, self.identities.keys())
         expected = [row for row in self.pilot if typed_key(row) not in CANARY_KEYS]
         self.assertEqual(len(expected), 13)
