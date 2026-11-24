@@ -1,8 +1,8 @@
-pair_id,tmdb_id,media_type,year,country,provider_slug,offer_class,provider_title_id,first_party_offered,first_party_capture_id,first_party_observed_utc,first_party_price,temporal_eligible,canary_reported,canary_label,canary_source,canary_observed_utc,stale_watchmode_match,verdict,notes
-INC-27205-NL-netflix-subscription,27205,movie,2010,NL,netflix,subscription,70131314,yes,C-1,2026-11-23T15:32:01Z,,no,,,,,,yes,,Direct title-page capture inside reference hour; highest-value corroboration target
-INC-27205-NL-prime-subscription,27205,movie,2010,NL,prime,subscription,amzn1.dv.gti.04a9f72c-f9c8-c4d1-f97b-6d7ad986a51f,yes,C-2,2026-11-23T15:12:31Z,,no,,,,,,yes,,GTI + NL territory + isPrime=true inside reference hour
-INC-27205-NL-prime-rent,27205,movie,2010,NL,prime,rent,amzn1.dv.gti.04a9f72c-f9c8-c4d1-f97b-6d7ad986a51f,yes,C-2,2026-11-23T15:12:31Z,2.99,no,,,,,,yes,,RENTAL action with price inside reference hour
-INC-27205-NL-prime-buy,27205,movie,2010,NL,prime,buy,amzn1.dv.gti.04a9f72c-f9c8-c4d1-f97b-6d7ad986a51f,yes,C-2,2026-11-23T15:12:31Z,4.99,no,,,,,,yes,,PURCHASE action with price inside reference hour
-INC-27205-NL-max_amazon-addon,27205,movie,2010,NL,max_amazon,addon,amzn1.dv.gti.04a9f72c-f9c8-c4d1-f97b-6d7ad986a51f,yes,C-2,2026-11-23T15:12:31Z,,no,,,,,,yes,,PV_CHANNEL/wbdmaxnl channel option inside reference hour
-DUNE-438631-NL-rakuten_tv-rent,438631,movie,2021,NL,rakuten_tv,rent,dune-2021,yes,C-3,2026-11-23T15:14:34Z,2.99,no,,,,,,yes,,Direct storefront capture with price inside reference hour
-DUNE-438631-NL-rakuten_tv-buy,438631,movie,2021,NL,rakuten_tv,buy,dune-2021,yes,C-3,2026-11-23T15:14:34Z,9.99,no,,,,,,yes,,Direct storefront capture with price inside reference hour
+pair_id,tmdb_id,media_type,year,country,provider_slug,offer_class,provider_title_ref,first_party_offered,first_party_capture_id,first_party_observed_utc,first_party_price,temporal_eligible,canary_reported,canary_label,canary_source,canary_observed_utc,stale_watchmode_match,verdict,notes
+INC-27205-NL-netflix-subscription,27205,movie,2010,NL,netflix,subscription,netflix-inception,yes,C-1,2026-11-23T15:32:01.945280+00:00,,no,,,,,yes,,Direct title-page capture inside reference hour; highest-value corroboration target
+INC-27205-NL-prime-subscription,27205,movie,2010,NL,prime,subscription,prime-inception,yes,C-2,2026-11-23T15:12:31.629+00:00,,no,,,,,yes,,GTI + NL territory + isPrime=true inside reference hour
+INC-27205-NL-prime-rent,27205,movie,2010,NL,prime,rent,prime-inception,yes,C-2,2026-11-23T15:12:31.629+00:00,2.99,no,,,,,no,,RENTAL action with price inside reference hour
+INC-27205-NL-prime-buy,27205,movie,2010,NL,prime,buy,prime-inception,yes,C-2,2026-11-23T15:12:31.629+00:00,4.99,no,,,,,no,,PURCHASE action with price inside reference hour
+INC-27205-NL-max_amazon-addon,27205,movie,2010,NL,max_amazon,addon,prime-inception,yes,C-2,2026-11-23T15:12:31.629+00:00,,no,,,,,no,,PV_CHANNEL/wbdmaxnl channel option inside reference hour
+DUNE-438631-NL-rakuten_tv-rent,438631,movie,2021,NL,rakuten_tv,rent,rakuten-dune,yes,C-3,2026-11-23T15:14:34.135+00:00,2.99,no,,,,,yes,,Direct storefront capture with price inside reference hour
+DUNE-438631-NL-rakuten_tv-buy,438631,movie,2021,NL,rakuten_tv,buy,rakuten-dune,yes,C-3,2026-11-23T15:14:34.135+00:00,9.99,no,,,,,no,,Direct storefront capture with price inside reference hour
