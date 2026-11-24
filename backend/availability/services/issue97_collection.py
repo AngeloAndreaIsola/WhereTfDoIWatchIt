@@ -163,8 +163,15 @@ def replay_scope(scope, search_response, *, seasons_response=None):
             [node for node in typed_nodes if node.has_native_id and node.id in native_ids], page.titles,
         )
         reviewed_title = normalized_title(scope["title"])
-        labels = [(normalized_title(node.title), node.year) for node in exact]
-        has_reviewed_anchor = any(label and year == scope["year"] for label, year in labels)
+        # A typed native-ID anchor authorizes coalescing only if *every*
+        # edge for that identity agrees where it states title/year. Blank
+        # metadata is common in replay fixtures and remains admissible.
+        coalesced = [node for node in typed_nodes if node.has_native_id and node.id in native_ids]
+        labels = [(normalized_title(node.title), node.year) for node in coalesced]
+        has_reviewed_anchor = any(
+            node.tmdb_id_int == scope["tmdb_id"] and label and year == scope["year"]
+            for node, (label, year) in zip(coalesced, labels)
+        )
         conflicting_label = any(
             (label and not titles_match(scope, reviewed_title, label))
             or (year is not None and year != scope["year"])

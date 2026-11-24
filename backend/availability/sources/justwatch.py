@@ -330,10 +330,21 @@ class JustWatchSource:
         selected = next((title for title in candidates if title.tmdb_id_int is not None), candidates[0])
         if tmdb_ids and selected.tmdb_id_int not in tmdb_ids:
             return None
-        if len(candidates) == 1:
+        # A complete title/year edge may resolve the native identity, but the
+        # API can split its offers over partial duplicate edges.  Admit those
+        # edges only when every stated label agrees with the resolved scope.
+        selected_title = (selected.title or "").casefold()
+        selected_year = selected.year
+        compatible = []
+        for title in claims:
+            if ((title.title and selected_title and title.title.casefold() != selected_title)
+                    or (title.year is not None and selected_year is not None and title.year != selected_year)):
+                return None
+            compatible.append(title)
+        if len(compatible) == 1:
             return selected
         selected = copy(selected)
-        selected.offers = [offer for title in candidates for offer in title.offers]
+        selected.offers = [offer for title in compatible for offer in title.offers]
         return selected
 
     @classmethod

@@ -205,7 +205,7 @@ def _offer_observations(group, provider, country):
             priced, key=lambda offer: (offer.price_currency, offer.price_amount), default=candidates[0],
         )
         yield representative, [
-            {**offer.source_variant, "window_open_at_observation": window_open}
+            {**offer.source_variant, "available_from": offer.available_from.isoformat() if offer.available_from else None, "available_until": offer.available_until.isoformat() if offer.available_until else None, "window_open_at_observation": window_open}
             for offer, window_open in observations
         ]
 

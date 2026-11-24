@@ -287,10 +287,17 @@ class AvailabilityReconciliationService:
         elif identity_sensitive_provider and not has_trusted_source_identity:
             detail = "provider-content mapping is unresolved"
 
-        window_open = (
+        raw_window_open = (
             (row.available_from is None or _aware(row.available_from) <= now)
             and (row.available_until is None or _aware(row.available_until) > now)
         )
+        own_variants = tuple(
+            variant for price in prices if price.source_id == row.source_id
+            for variant in price.variants
+        )
+        live_variants = tuple(variant for variant in own_variants if _variant_window_open(variant, now))
+        # Legacy prices have no variant snapshot and retain their scalar window.
+        window_open = bool(live_variants) if own_variants else raw_window_open
         freshness = freshness_state(
             row.source.slug,
             row.last_seen,
@@ -316,7 +323,7 @@ class AvailabilityReconciliationService:
             ):
                 title_checked_at = check.last_succeeded_at
 
-        source_prices = tuple(_price_observation(price) for price in prices)
+        source_prices = tuple(_price_observation(price, now=now) for price in prices)
         own_source = row.source.slug
         own_price = next(
             (price for price in source_prices if price.source == own_source),
@@ -328,8 +335,8 @@ class AvailabilityReconciliationService:
             source=row.source.slug,
             sync_run_id=row.sync_run_id,
             provider_content_id=provider_content_id,
-            provider_url=row.provider_url or "",
-            quality=row.quality or "",
+            provider_url=_variant_value(live_variants, "url", row.provider_url or ""),
+            quality=_variant_value(live_variants, "presentation_type", row.quality or ""),
             audio_languages=_languages(row.audio_languages),
             subtitle_languages=_languages(row.subtitle_languages),
             available_from=_aware_opt(row.available_from),
@@ -560,7 +567,7 @@ class AvailabilityReconciliationService:
             amounts.update(
                 Decimal(variant["amount"]) for variant in price.variants
                 if variant["currency"] == currency and variant["amount"] is not None
-                and not variant["validation_error"] and variant.get("window_open_at_observation", True)
+                and not variant["validation_error"] and _variant_window_open(variant, timezone.now())
             )
         return chosen, len(amounts) > 1
 
@@ -770,18 +777,44 @@ def _dedupe(conflicts: Iterable[ReconciliationConflict]) -> list[ReconciliationC
     return unique
 
 
-def _price_observation(row) -> PriceObservation:
-    """Adapt one stored ``OfferPrice`` row to its derived value object."""
+def _price_observation(row, *, now) -> PriceObservation:
+    """Adapt one stored ``OfferPrice`` row to its derived value object.
+
+    A variant snapshot is a set of time-bounded facts, not ingest-time state.
+    Its scalar representative must never outlive every variant in the set.
+    """
+    variants = tuple(row.variants)
+    open_variants = tuple(variant for variant in variants if _variant_window_open(variant, now))
+    usable = [variant for variant in open_variants if variant.get("amount") is not None
+              and variant.get("currency") and not variant.get("validation_error")]
+    chosen = min(usable, key=lambda variant: (variant["currency"], Decimal(variant["amount"])), default=None)
     return PriceObservation(
         source=row.source.slug,
-        amount=row.amount,
-        currency=row.currency or "",
+        amount=Decimal(chosen["amount"]) if chosen else (row.amount if not variants else None),
+        currency=chosen["currency"] if chosen else (row.currency or "" if not variants else ""),
         source_offer_id=row.source_offer_id or "",
         observed_at=_aware_opt(row.observed_at),
         is_current=bool(row.is_current),
         validation_error=row.validation_error or "",
-        variants=tuple(row.variants),
+        variants=variants,
     )
+
+
+def _variant_window_open(variant, now):
+    def parsed(value):
+        if not value:
+            return None
+        try:
+            return _aware(datetime.fromisoformat(str(value).replace("Z", "+00:00")))
+        except (TypeError, ValueError):
+            return None
+    start, end = parsed(variant.get("available_from")), parsed(variant.get("available_until"))
+    return (start is None or start <= now) and (end is None or end > now)
+
+
+def _variant_value(variants, key, fallback):
+    values = [variant.get(key) for variant in variants if variant.get(key)]
+    return sorted(values)[0] if values else fallback
 
 
 def _dedupe_prices(prices: Iterable[PriceObservation]) -> tuple[PriceObservation, ...]:

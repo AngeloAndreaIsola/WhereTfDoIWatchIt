@@ -252,6 +252,15 @@ class TitleIdentityTests(SimpleTestCase):
                 self.assertEqual(result.contents, [])
                 self.assertEqual(result.offers, [])
 
+    def test_partial_edge_keeps_variants_after_title_year_fallback_resolves_native_id(self):
+        complete = fx.title("tm1", "Fight Club", year=1999, tmdb_id=None,
+                            offers=[netflix_offer("complete")])
+        partial = fx.title("tm1", "Fight Club", year=None, tmdb_id=None,
+                           offers=[netflix_offer("partial")])
+        source, _ = self.set_source(page(complete, partial))
+        result = self.fetch(source, tmdb_id=None, title="Fight Club", year=1999, content_type=MOVIE)
+        self.assertEqual([offer.source_record_id for offer in result.offers], ["complete", "partial"])
+
     def test_repeated_native_node_keeps_offers_from_each_edge(self):
         node = fx.title("tm1", "Fight Club", year=1999, tmdb_id="550",
                         offers=[netflix_offer("o1")])

@@ -173,3 +173,13 @@ class Issue97ReadIsolationTests(TestCase):
             [("netflix", "subscription", "stale")],
         )
         http.assert_not_called()
+
+    def test_offline_reviewed_anchor_rejects_conflicting_labels_on_coalesced_edge(self):
+        search = deepcopy(FIXTURES[INCEPTION["scope_id"]]["search"])
+        conflicting = deepcopy(search["data"]["popularTitles"]["edges"][0])
+        conflicting["node"]["content"]["externalIds"]["tmdbId"] = None
+        conflicting["node"]["content"]["title"] = "Wrong Inception"
+        search["data"]["popularTitles"]["edges"].append(conflicting)
+        report = replay_scope(INCEPTION, search)
+        self.assertEqual(report["status"], "unknown")
+        self.assertEqual(report["title_offers"], [])
