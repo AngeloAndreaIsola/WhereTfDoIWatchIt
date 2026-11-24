@@ -1,8 +1,9 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, act, waitFor } from "@testing-library/react";
+import { render, screen, act, fireEvent, waitFor } from "@testing-library/react";
 import MovieDetailPage from "@/app/movie/[tmdb_id]/page";
 import SeriesDetailPage from "@/app/tv/[tmdb_id]/page";
+import { CurrentLocationProvider } from "@/components/CurrentLocationProvider";
 
 const nav = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn() }));
 
@@ -160,6 +161,31 @@ describe("Reload reconstruction (P9)", () => {
       expect(screen.getAllByText("Best Match").length).toBeGreaterThan(0),
     );
     expect(screen.queryByText("Checking availability…")).not.toBeInTheDocument();
+  });
+
+  it("posts the active market and clears the spinner for a recent check", async () => {
+    const refreshUrl = "/api/movie/550/refresh/?content_type=movie&current_country=NL";
+    const fetchMock = vi.fn((url: string) => {
+      if (url === refreshUrl) {
+        return Promise.resolve(response({ body: { refresh_pending: false, refresh_status: null } }));
+      }
+      if (url.includes("/api/preferences/")) {
+        return Promise.resolve(response({ body: { ...preferencesBody, current_country: "NL" } }));
+      }
+      if (url.includes("/api/v2/unofficial/")) return Promise.resolve(response({ body: unofficialBody }));
+      if (url.includes("/api/prime/movie/")) return Promise.resolve(response({ body: resolvedMovieBody }));
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <CurrentLocationProvider>
+        <MovieDetailPage params={{ tmdb_id: "550" }} />
+      </CurrentLocationProvider>,
+    );
+    await waitFor(() => expect(primeCalls(fetchMock, "movie").some(([url]) => url.includes("NL"))).toBe(true));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh availability" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(refreshUrl, expect.objectContaining({ method: "POST" })));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Refresh availability" })).toBeEnabled());
   });
 
   it("does not claim unavailable for a pending title after a reload", async () => {

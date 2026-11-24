@@ -19,6 +19,7 @@ from django.utils import timezone
 from availability.domain.enums import OfferType, SourceType
 from availability.freshness import (
     FRESHNESS_INTERVAL_KEY,
+    TITLE_REFRESH_INTERVAL_KEY,
     declared_freshness,
     freshness_for,
     source_configuration_snapshot,
@@ -146,7 +147,7 @@ class ConfiguredFreshnessSchedulingTests(TestCase):
         )
 
     def _set_interval(self, seconds):
-        self.source.configuration = {FRESHNESS_INTERVAL_KEY: seconds}
+        self.source.configuration = {TITLE_REFRESH_INTERVAL_KEY: seconds}
         self.source.save(update_fields=["configuration"])
 
     def _justwatch_offer(self, *, age=dt.timedelta(hours=2), content_type="movie"):

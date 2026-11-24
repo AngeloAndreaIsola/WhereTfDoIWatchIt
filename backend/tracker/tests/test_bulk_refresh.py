@@ -133,11 +133,13 @@ class BulkRefreshServiceTests(TestCase):
     def test_queue_ownership_does_not_suppress_other_media_type(self):
         series = Movie.objects.create(tmdb_id=self.movie1.tmdb_id, content_type="series", title="Series 1")
         WatchlistItem.objects.create(user_id=1, movie=series)
-        RefreshRequest.objects.create(movie=self.movie1, source="streaming_availability", country="IT")
+        RefreshRequest.objects.create(movie=self.movie1, source="streaming_availability", country="US")
         local_offer(self.movie2)
         local_offer(self.movie3)
 
-        with patch("tracker.services.refresh_requests._service_for_scope", return_value=self.refresh_service):
+        with patch("tracker.services.bulk_refresh.resolve_source_country", return_value="US"), patch(
+            "tracker.services.refresh_requests._service_for_scope", return_value=self.refresh_service,
+        ):
             summary = self._run()
 
         self.assertEqual(summary["requests_drained"], 1)
@@ -146,6 +148,23 @@ class BulkRefreshServiceTests(TestCase):
             [(call.args[0].pk, call.args[0].content_type)
              for call in self.refresh_service.refresh_content.call_args_list],
             [(self.movie1.pk, "movie"), (series.pk, "series")],
+        )
+
+    def test_foreign_queue_ownership_does_not_suppress_local_sweep(self):
+        RefreshRequest.objects.create(movie=self.movie1, source="streaming_availability", country="IT")
+        local_offer(self.movie2)
+        local_offer(self.movie3)
+
+        with patch("tracker.services.bulk_refresh.resolve_source_country", return_value="US"), patch(
+            "tracker.services.refresh_requests._service_for_scope", return_value=self.refresh_service,
+        ):
+            summary = self._run()
+
+        self.assertEqual(summary["refreshed"], 2)
+        self.assertCountEqual(
+            [(call.args[0].pk, call.kwargs["country"])
+             for call in self.refresh_service.refresh_content.call_args_list],
+            [(self.movie1.pk, "IT"), (self.movie1.pk, "US")],
         )
 
     def test_rate_limit_stopping(self):

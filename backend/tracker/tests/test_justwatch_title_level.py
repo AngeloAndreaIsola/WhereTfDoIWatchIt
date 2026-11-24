@@ -204,10 +204,10 @@ class SchedulingEligibilityTests(TestCase):
             currently_available=True,
         )
         Offer.objects.filter(pk=row.pk).update(
-            last_seen=timezone.now() - dt.timedelta(hours=48)
+            last_seen=timezone.now() - dt.timedelta(days=8)
         )
 
-        self.assertIn(JW, stale_refresh_scopes(movie.tmdb_id))
+        self.assertIn(JW, stale_refresh_scopes(movie.tmdb_id, country="NL", content_type="movie"))
 
 
 class TitleFanOutTests(TestCase):
@@ -221,7 +221,7 @@ class TitleFanOutTests(TestCase):
     def test_fans_out_to_every_title_level_source(self):
         movie = _movie(tmdb_id=1100)
 
-        result = request_title_refresh(movie, if_stale=False)
+        result = request_title_refresh(movie, if_stale=False, country="NL")
 
         queued = set(
             RefreshRequest.objects.filter(movie=movie).values_list(
@@ -235,7 +235,7 @@ class TitleFanOutTests(TestCase):
     def test_catalogue_only_sources_never_get_a_title_request(self):
         movie = _movie(tmdb_id=1101)
 
-        request_title_refresh(movie, if_stale=False)
+        request_title_refresh(movie, if_stale=False, country="NL")
 
         queued = set(
             RefreshRequest.objects.filter(movie=movie).values_list(
@@ -249,14 +249,14 @@ class TitleFanOutTests(TestCase):
         """Only targeted lookups — no CatalogueRefreshRequest is created."""
         movie = _movie(tmdb_id=1102)
 
-        request_title_refresh(movie, if_stale=False)
+        request_title_refresh(movie, if_stale=False, country="NL")
 
         self.assertEqual(CatalogueRefreshRequest.objects.count(), 0)
 
     def test_an_explicit_source_list_restricts_the_fan_out(self):
         movie = _movie(tmdb_id=1103)
 
-        result = request_title_refresh(movie, if_stale=False, sources=[JW])
+        result = request_title_refresh(movie, if_stale=False, sources=[JW], country="NL")
 
         self.assertEqual(result["sources"], [JW])
         self.assertEqual(
@@ -370,15 +370,13 @@ class CoordinatorEndToEndTests(TestCase):
         self.assertFalse(
             Offer.objects.filter(tmdb_id=movie.tmdb_id, source__slug=JW).exists()
         )
-        # JustWatch has spoken ("no offer") — that is a definitive negative for
-        # this source, never a transient failure.
-        row = next(
-            r
-            for r in ar.title_source_report([movie.pk])[movie.pk]["sources"]
-            if r["source"] == JW
-        )
-        self.assertEqual(row["reason"], "no_offer")
+        # A successful search can be inconclusive about actual availability.
+        report = ar.title_source_report([movie.pk])[movie.pk]
+        row = next(r for r in report["sources"] if r["source"] == JW)
+        self.assertEqual(report["state"], "unknown")
+        self.assertEqual(row["reason"], "unknown_reason")
         self.assertEqual(row["status"], "completed")
+        self.assertIsNotNone(row["last_attempted_at"])
 
     def test_an_error_does_not_become_false_unavailability(self):
         """A transient failure is absence of information, not a 'no'."""

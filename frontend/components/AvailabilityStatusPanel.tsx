@@ -36,7 +36,7 @@ const REASON_LABELS: Record<AvailabilityResolutionReason, string> = {
   quota_exhausted: "quota exhausted",
   source_unavailable: "source unavailable",
   collector_not_run: "catalogue never synced",
-  unknown_reason: "unclassified",
+  unknown_reason: "inconclusive",
 };
 
 function reasonText(reason: AvailabilityResolutionReason | "" | undefined): string {

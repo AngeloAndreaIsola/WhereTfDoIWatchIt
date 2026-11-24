@@ -19,7 +19,8 @@ from availability.persistence.repositories import OfferRepository
 from availability.sources.pbs import PbsSource
 from tracker.models import Movie, Preference, Provider, Subscription, WatchlistItem
 from tracker.services.access import UserAccess
-from tracker.views_leaving_soon import _confirmed_expiry, build_leaving_soon
+from availability.services.departures import confirmed_expiry
+from tracker.views_leaving_soon import build_leaving_soon
 
 
 NOW = datetime(2026, 11, 21, 12, tzinfo=timezone.utc)
@@ -249,7 +250,7 @@ class LeavingSoonScopeTests(SimpleTestCase):
         self.query = self.enterContext(patch(
             "tracker.views_leaving_soon.AvailabilityQueryService.get_reconciled_for_contents"
         ))
-        self.enterContext(patch("tracker.views_leaving_soon._recorded_presence", return_value={}))
+        self.enterContext(patch("tracker.views_leaving_soon.recorded_presence", return_value={}))
 
     def departures(self, *offers, country="NL"):
         def lookup(pairs, *, now):
@@ -283,10 +284,10 @@ class LeavingSoonScopeTests(SimpleTestCase):
             with self.subTest(source=source, kind=kind):
                 raw = offer(self.series, source=source, season=1 if kind == "season" else None)
                 raw.content_type = kind
-                self.assertEqual(_confirmed_expiry(raw, NOW), (None, ()))
+                self.assertEqual(confirmed_expiry(raw, NOW), (None, ()))
         episode = offer(self.series, source="pbs", season=1)
         episode.content_type, episode.episode_number = "episode", 2
-        self.assertEqual(_confirmed_expiry(episode, NOW), (episode.available_until, episode.observations))
+        self.assertEqual(confirmed_expiry(episode, NOW), (episode.available_until, episode.observations))
 
     def test_foreign_offer_requires_reach_even_when_its_country_is_requested(self):
         foreign = offer(self.series, country="IT")

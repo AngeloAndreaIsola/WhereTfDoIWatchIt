@@ -34,7 +34,7 @@ import datetime as dt
 import logging
 from collections import Counter, defaultdict
 
-from django.db.models import Count, Q
+from django.db.models import Count, F, Q
 from django.utils import timezone
 
 from availability.models import Offer, ProviderContent, Source, SyncRun
@@ -50,6 +50,7 @@ from ..models import (
     RefreshRequest,
     RefreshRequestOutcome,
     RefreshRequestStatus,
+    TitleAvailabilityCheck,
     RefreshRun,
     ScrapedContentMapping,
 )
@@ -593,7 +594,7 @@ def _last_attempted_per_source(movie_ids: list[int], batch=None, country: str | 
         if tmdb_id:
             by_tmdb[tmdb_id].append(movie_id)
 
-    newest: dict[tuple[int, str], tuple[object, int]] = {}
+    newest: dict[tuple[int, str], tuple[object, int | None]] = {}
     qs = RefreshRequest.objects.filter(movie_id__in=movie_ids)
     if batch is not None:
         qs = qs.filter(batch=batch)
@@ -608,6 +609,17 @@ def _last_attempted_per_source(movie_ids: list[int], batch=None, country: str | 
         prev = newest.get(key)
         if prev is None or candidate[0] is not None and (prev[0] is None or candidate[0] >= prev[0]):
             newest[key] = candidate
+    if batch is None:
+        checks = TitleAvailabilityCheck.objects.filter(
+            movie_id__in=movie_ids, tmdb_id=F("movie__tmdb_id"),
+            content_type=F("movie__content_type"),
+        )
+        if country is not None:
+            checks = checks.filter(country=country.upper())
+        for movie_id, source, attempted in checks.values_list("movie_id", "source", "last_attempted_at"):
+            previous, _ = newest.get((movie_id, source), (None, None))
+            if previous is None or attempted > previous:
+                newest[(movie_id, source)] = (attempted, None)
     return {key: value[0] for key, value in newest.items() if value[0] is not None}
 
 
@@ -685,6 +697,8 @@ def classify_source(
             # produced_active_offer already handled above (RESOLVED). No active
             # offer now means stale historical evidence, not a fresh NO_OFFER.
             return "skipped", AvailabilityResolutionReason.NOT_APPLICABLE
+        if outcome == RefreshRequestOutcome.INCONCLUSIVE:
+            return "completed", AvailabilityResolutionReason.UNKNOWN_REASON
         if outcome == "no_offer":
             return "completed", AvailabilityResolutionReason.NO_OFFER
         # Unknown/unexpected outcomes must not become a definitive negative.

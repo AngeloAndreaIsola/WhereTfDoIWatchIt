@@ -436,8 +436,8 @@ class RecentAttemptCooldownTests(TestCase):
 
         from tracker.services.refresh_requests import recently_attempted
 
-        self.assertTrue(recently_attempted(movie, DEFAULT_SOURCE_SLUG))
-        self.assertIsNone(request_availability_refresh(movie))
+        self.assertTrue(recently_attempted(movie, DEFAULT_SOURCE_SLUG, "US"))
+        self.assertIsNone(request_availability_refresh(movie, country="US"))
 
         # The detail response therefore reports nothing pending: the
         # frontend stops polling instead of spinning on a settled queue.

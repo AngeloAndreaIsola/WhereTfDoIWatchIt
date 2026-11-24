@@ -467,7 +467,7 @@ class BulkDrainEndToEndTests(TestCase):
         local_offer(movie_a)  # fresh: EXPLICIT must still be refreshed
 
         resp = self.client.post(
-            "/api/watchlist/refresh-explicit/",
+            "/api/watchlist/refresh-explicit/?current_country=NL",
             data={},
             content_type="application/json",
         )
@@ -570,7 +570,7 @@ class BatchStampingTests(TestCase):
         _watchlist_movie(416)
 
         resp = self.client.post(
-            "/api/watchlist/refresh-explicit/",
+            "/api/watchlist/refresh-explicit/?current_country=NL",
             data={},
             content_type="application/json",
         )

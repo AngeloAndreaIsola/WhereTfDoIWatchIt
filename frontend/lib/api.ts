@@ -482,17 +482,21 @@ export interface RefreshAvailabilityResponse {
   tmdb_id: number;
   content_type: string;
   refresh_pending: boolean;
-  refresh_status: "pending";
+  refresh_status: "pending" | null;
   priority: number;
   request_id: number | null;
 }
 
 export async function requestAvailabilityRefresh(
   tmdbId: number,
-  contentType?: "movie" | "series"
+  contentType?: "movie" | "series",
+  currentCountry?: string
 ): Promise<RefreshAvailabilityResponse> {
-  const query = contentType ? `?content_type=${contentType}` : "";
-  const res = await fetch(`/api/movie/${tmdbId}/refresh/${query}`, {
+  const params = new URLSearchParams();
+  if (contentType) params.set("content_type", contentType);
+  if (currentCountry) params.set("current_country", currentCountry);
+  const query = params.toString();
+  const res = await fetch(`/api/movie/${tmdbId}/refresh/${query ? `?${query}` : ""}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({}),

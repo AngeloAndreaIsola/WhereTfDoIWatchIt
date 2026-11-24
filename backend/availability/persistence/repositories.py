@@ -394,7 +394,7 @@ class OfferRepository:
             qs = qs.filter(country__code=country_code.upper())
         return qs.select_related("provider", "country", "source", "sync_run").order_by("id")
 
-    def observations_for_contents(self, contents):
+    def observations_for_contents(self, contents, *, country_code=None):
         """Raw observations for several ``(tmdb_id, content_type)`` pairs.
 
         This is the list-page counterpart to :meth:`observations_for`.  The
@@ -407,9 +407,10 @@ class OfferRepository:
             predicate |= Q(tmdb_id=tmdb_id, content_type=content_type)
         if not predicate:
             return Offer.objects.none()
-        return Offer.objects.filter(predicate).select_related(
-            "provider", "country", "source", "sync_run"
-        ).order_by("id")
+        rows = Offer.objects.filter(predicate)
+        if country_code:
+            rows = rows.filter(country__code=country_code.upper())
+        return rows.select_related("provider", "country", "source", "sync_run").order_by("id")
 
     def all_observations(self):
         """Every raw observation row, for database-wide reconciliation audits."""

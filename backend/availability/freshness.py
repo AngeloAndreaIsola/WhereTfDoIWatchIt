@@ -26,13 +26,16 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Mapping, Optional
 
-from django.db.models import Max
+from django.db.models import Max, Q
 from django.utils import timezone
 
-from .domain.enums import FreshnessState
+from .domain.enums import FreshnessState, SyncMode
 from .models import Offer, Source
 
 FRESHNESS_INTERVAL_KEY = "expected_refresh_interval_seconds"
+TITLE_REFRESH_INTERVAL_KEY = "title_refresh_interval_seconds"
+TITLE_AGGREGATORS = frozenset({"justwatch", "watchmode"})
+TITLE_REFRESH_INTERVAL = timedelta(days=7)
 
 #: Fallback window for a slug that declares nothing (policy entry and
 #: configuration alike). Only reachable for unregistered/test slugs: every
@@ -103,19 +106,26 @@ def declared_freshness(
     An unconfigured unregistered slug answers ``None`` — the read path turns
     that into ``FreshnessState.UNKNOWN`` rather than a silent ``fresh``.
     """
+    return _configured_interval(configuration, FRESHNESS_INTERVAL_KEY) or SOURCE_FRESHNESS.get(slug)
+
+
+def _configured_interval(configuration, key):
     config = configuration if isinstance(configuration, Mapping) else {}
-    raw = config.get(FRESHNESS_INTERVAL_KEY)
+    raw = config.get(key)
     if isinstance(raw, bool) or not isinstance(raw, (int, float)):
-        return SOURCE_FRESHNESS.get(slug)
+        return None
     try:
         interval = timedelta(seconds=raw)
     except (OverflowError, TypeError, ValueError):
-        return SOURCE_FRESHNESS.get(slug)
-    # timedelta rounds sub-microsecond floats; a positive configured value can
-    # therefore become zero and diverge from the read path's default fallback.
-    if interval <= timedelta(0):
-        return SOURCE_FRESHNESS.get(slug)
-    return interval
+        return None
+    return interval if interval > timedelta(0) else None
+
+
+def title_refresh_interval(slug: str, configuration=None) -> timedelta:
+    """Operational cache lifetime for a title check, separate from offer evidence."""
+    if slug in TITLE_AGGREGATORS:
+        return _configured_interval(configuration, TITLE_REFRESH_INTERVAL_KEY) or TITLE_REFRESH_INTERVAL
+    return freshness_for(slug, configuration)
 
 
 def freshness_for(
@@ -186,6 +196,7 @@ def source_last_seen(
     *,
     country: Optional[str] = None,
     content_type: Optional[str] = None,
+    targeted_only: bool = False,
 ) -> Optional[datetime]:
     """Newest matching ``Offer.last_seen`` for a source observation.
 
@@ -201,6 +212,10 @@ def source_last_seen(
         query = query.filter(country__code=code)
     if content_type is not None:
         query = query.filter(content_type=content_type)
+    if targeted_only:
+        # Legacy rows without run attribution can seed the operational cache.
+        # A known catalogue observation cannot stand in for a title check.
+        query = query.filter(Q(sync_run__mode=SyncMode.TARGETED) | Q(sync_run__isnull=True))
     return query.aggregate(latest=Max("last_seen"))["latest"]
 
 

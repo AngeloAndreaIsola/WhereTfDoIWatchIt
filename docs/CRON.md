@@ -25,6 +25,27 @@ Or if running directly on the host / server environment:
 - **Audit Logging**: Each invocation automatically creates a `RefreshRun` audit record in PostgreSQL, accessible via the Django Admin interface under `RefreshRun`.
 - **Event-driven request drain**: before the background stale sweep, each run settles pending `RefreshRequest` rows first (manual actions, never-fetched titles, refresh-on-view, watchlist adds/imports, mark-watched), in user-intent priority order, through this same budget, the same rate limiter and the same `RefreshRun`. With a budget of 2 or more, one held-back unit is spent last on the longest-waiting request (bounded fairness), so an endless stream of detail views or watchlist adds cannot starve the low-priority backlog; the daily quota stays authoritative either way. A request left pending because the budget or quota ran out simply waits for the next drain — primarily the dedicated `worker` service (`docker compose` → `python manage.py refresh_worker`, a queue-only loop that drains events within seconds and never runs the sweep), with this scheduled run as its fallback. The JSON summary in the log carries `requests_drained` (requests settled this run) and `requests_pending` (backlog remaining).
 
+## Title availability cache
+
+JustWatch and Watchmode reuse a successful title check for seven days, keyed
+by typed title, country and source. Configure a different operational window
+per aggregator with `Source.configuration["title_refresh_interval_seconds"]`.
+Offer-evidence freshness and catalogue health still use
+`expected_refresh_interval_seconds`. A known catalogue traversal does not fill
+the title cache.
+
+When fresh first-party evidence confirms a departure, the eligible title
+aggregator checks become due every 24 hours within seven days. In the final
+24 hours, automation can perform one check per source. A check that already
+started in that window counts even if it failed. Disputed, withdrawn,
+expired and aggregator-only dates do not shorten the cache.
+
+Title opens enqueue local work. The manual detail action can recheck the
+selected title and market before the cache expires. A check attempted in the
+last ten minutes serves repeated clicks for the same scope. The worker
+continues to apply source-specific limits and its run budget. Empty or failed
+checks never remove last-known offers or make them current.
+
 ## Provider Catalogue Refresh
 
 Provider catalogues (CBC Gem, BBC iPlayer, Tubi, Prime Video, RaiPlay, Pluto TV, PBS, and ABC iview) are refreshed by a separate command: a catalogue source reports its whole configured scope through public catalogue endpoints, so **no API budget applies** and there is no `--budget` flag.

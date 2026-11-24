@@ -22,6 +22,7 @@ from unittest.mock import MagicMock, patch
 from django.test import TestCase
 from django.utils import timezone
 
+from availability.models import Source
 from availability.sources.base import SourceQuotaExceeded
 
 from tracker.models import (
@@ -414,7 +415,7 @@ class RefreshOnViewTests(TestCase):
         requests = RefreshRequest.objects.filter(movie=movie)
         self.assertEqual(
             set(requests.values_list("source", flat=True)),
-            set(title_level_source_slugs()),
+            set(title_level_source_slugs()) - {"watchmode"},
         )
         self.assertTrue(
             all(r.status == RefreshRequestStatus.PENDING for r in requests)
@@ -446,7 +447,7 @@ class RefreshOnViewTests(TestCase):
         )
         self.assertNotIn("streaming_availability", queued)
         self.assertIn("justwatch", queued)
-        self.assertIn("watchmode", queued)
+        self.assertNotIn("watchmode", queued)  # US is outside the configured Watchmode plan.
 
     @patch("tracker.views.enrich_movie_from_tmdb")
     def test_movie_detail_never_fetched_title_queues_new_priority(self, enrich):
@@ -458,7 +459,7 @@ class RefreshOnViewTests(TestCase):
         requests = RefreshRequest.objects.filter(movie=movie)
         self.assertEqual(
             set(requests.values_list("source", flat=True)),
-            set(title_level_source_slugs()),
+            set(title_level_source_slugs()) - {"watchmode"},
         )
         self.assertTrue(
             all(r.priority == RefreshPriority.NEW for r in requests)
@@ -573,7 +574,7 @@ class PrimeDetailFanOutTests(TestCase):
 
         self.assertEqual(resp.status_code, 200, resp.content)
         refresh_content.assert_not_called()
-        self.assertEqual(self._queued(movie), set(title_level_source_slugs()))
+        self.assertEqual(self._queued(movie), set(title_level_source_slugs()) - {"watchmode"})
 
     @patch("tracker.services.offer_pipeline.OfficialOffersPipeline")
     @patch(
@@ -592,7 +593,7 @@ class PrimeDetailFanOutTests(TestCase):
 
         self.assertEqual(resp.status_code, 200, resp.content)
         refresh_content.assert_not_called()
-        self.assertEqual(self._queued(series), set(title_level_source_slugs()))
+        self.assertEqual(self._queued(series), set(title_level_source_slugs()) - {"watchmode"})
 
     @patch("tracker.services.offer_pipeline.OfficialOffersPipeline")
     @patch(
@@ -612,7 +613,7 @@ class PrimeDetailFanOutTests(TestCase):
         queued = self._queued(movie)
         self.assertNotIn("streaming_availability", queued)
         self.assertIn("justwatch", queued)
-        self.assertIn("watchmode", queued)
+        self.assertNotIn("watchmode", queued)  # US is outside the configured Watchmode plan.
 
     @patch("tracker.services.offer_pipeline.OfficialOffersPipeline")
     @patch(
@@ -699,6 +700,11 @@ class ExplicitRefreshEndpointTests(TestCase):
     and never contacts a provider; the existing worker performs the actual
     refresh. Movies and series share the endpoint and the mechanism.
     """
+
+    def setUp(self):
+        # The endpoint retains its default-scope contract when the additional
+        # aggregator is disabled or does not serve the active market.
+        Source.objects.filter(slug="justwatch").update(enabled=False)
 
     def _post(self, tmdb_id):
         return self.client.post(
@@ -835,7 +841,7 @@ class ExplicitRefreshEndpointTests(TestCase):
     def test_enqueue_failure_surfaces_instead_of_looking_queued(self):
         movie = Movie.objects.create(tmdb_id=555, title="Doomed", year=2004)
 
-        with patch("tracker.views.request_availability_refresh", return_value=None):
+        with patch("tracker.services.refresh_requests.request_availability_refresh", return_value=None):
             resp = self._post(movie.tmdb_id)
 
         self.assertEqual(resp.status_code, 500)
@@ -984,7 +990,8 @@ class DrainTests(TestCase):
     @staticmethod
     def _request(movie, priority, source=""):
         return RefreshRequest.objects.create(
-            movie=movie, priority=priority, source=source
+            movie=movie, priority=priority, source=source,
+            country="NL" if source == "watchmode" else "",
         )
 
     def test_drains_in_priority_order(self):
@@ -1569,10 +1576,10 @@ class RefreshQueueCircuitTests(TestCase):
         first = Movie.objects.create(tmdb_id=991, title="WM Queue One", year=2020)
         second = Movie.objects.create(tmdb_id=992, title="WM Queue Two", year=2021)
         RefreshRequest.objects.create(
-            movie=first, priority=RefreshPriority.NEW, source="watchmode"
+            movie=first, priority=RefreshPriority.NEW, source="watchmode", country="NL"
         )
         RefreshRequest.objects.create(
-            movie=second, priority=RefreshPriority.WATCHLIST, source="watchmode"
+            movie=second, priority=RefreshPriority.WATCHLIST, source="watchmode", country="NL"
         )
 
         scoped = MagicMock()
