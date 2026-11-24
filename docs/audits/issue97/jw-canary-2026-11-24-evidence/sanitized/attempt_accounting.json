@@ -1,0 +1,86 @@
+{
+  "namespaces": {
+    "notte_validation_probe_invocations": {
+      "count": 1,
+      "limit": 3,
+      "items": [
+        {
+          "ref": "probe-01.json",
+          "status": "failed",
+          "reason": "invalid reference_market=nl; parameter validation before browser session"
+        }
+      ],
+      "measured": true
+    },
+    "notte_collection_invocations": {
+      "count": 3,
+      "limit": 6,
+      "items": [
+        {
+          "batch": 1,
+          "title": "Inception",
+          "status": "failed",
+          "reason": "deployed function ImportError",
+          "raw_ref": "call-01-inception.json"
+        },
+        {
+          "batch": 2,
+          "title": "Dune",
+          "status": "closed",
+          "records": 27,
+          "raw_ref": "call-02-dune.json",
+          "observed_at_utc_range": [
+            "2026-11-24T15:05:02.837313Z",
+            "2026-11-24T15:05:02.838794Z"
+          ]
+        },
+        {
+          "batch": 3,
+          "title": "Inception",
+          "status": "closed",
+          "records": 29,
+          "retry_of": "batch-01",
+          "raw_ref": "call-03-inception-retry.json",
+          "observed_at_utc_range": [
+            "2026-11-24T15:36:25.710081Z",
+            "2026-11-24T15:36:25.711435Z"
+          ]
+        }
+      ],
+      "measured": true
+    },
+    "per_title_attempt_index": {
+      "Inception": [
+        1,
+        2
+      ],
+      "Dune": [
+        1
+      ],
+      "source": "batch-01.json.attempt=1, batch-03.json.attempt=2, batch-02.json.attempt=1",
+      "measured": true
+    },
+    "global_collection_call_index": {
+      "Inception": [
+        1,
+        3
+      ],
+      "Dune": [
+        2
+      ],
+      "source": "coverage.json.attempt_history and batch numbers; batch-03 is call 3 overall",
+      "measured": true
+    },
+    "internal_justwatch_http_attempts": {
+      "measured_count": null,
+      "ledger_retained": false,
+      "status": "UNKNOWN",
+      "static_estimate": {
+        "nominal_actions_per_successful_invocation": 4,
+        "status": "ESTIMATE_NOT_MEASURED",
+        "basis": "Static inspection of the restricted Python export identified three browser navigation actions and one offers request in the nominal success path. Browser traffic, fallbacks and retries were not independently counted."
+      }
+    }
+  },
+  "d4_resolution": "Coverage attempt values are global collection call indices (1, 3). The retry checkpoint attempt value (2) is the per-title index."
+}

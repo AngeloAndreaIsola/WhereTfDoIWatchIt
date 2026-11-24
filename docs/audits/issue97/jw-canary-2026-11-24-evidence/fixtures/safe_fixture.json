@@ -1,0 +1,127 @@
+{
+  "fixture_id": "synthetic-dedup-self-test",
+  "warning": "Synthetic records only. No provider payload, credential, session id or real title/provider identifier.",
+  "records": [
+    {
+      "title": "SYNTH_A",
+      "jw_id": "synthetic:a",
+      "object_type": "movie",
+      "release_year": 1900,
+      "country": "NL",
+      "country_name": "Synthetic",
+      "available": true,
+      "provider": "SYNTH_P1",
+      "monetization_type": "subscription",
+      "quality": "HD",
+      "price": "0",
+      "currency": "EUR",
+      "audio_languages": [
+        "en"
+      ],
+      "subtitle_languages": [
+        "nl"
+      ],
+      "deeplink": "synthetic://a",
+      "source_url": "synthetic://a",
+      "observed_at": "2000-01-01T00:00:00Z",
+      "flags": [],
+      "source_labels": [
+        "SAME_SOURCE_ECHO",
+        "UNLICENSED"
+      ]
+    },
+    {
+      "title": "SYNTH_A",
+      "jw_id": "synthetic:a",
+      "object_type": "movie",
+      "release_year": 1900,
+      "country": "NL",
+      "country_name": "Synthetic",
+      "available": true,
+      "provider": "SYNTH_P1",
+      "monetization_type": "subscription",
+      "quality": "HD",
+      "price": "0",
+      "currency": "EUR",
+      "audio_languages": [
+        "en"
+      ],
+      "subtitle_languages": [
+        "nl"
+      ],
+      "deeplink": "synthetic://a",
+      "source_url": "synthetic://a",
+      "observed_at": "2000-01-01T00:00:00Z",
+      "flags": [],
+      "source_labels": [
+        "SAME_SOURCE_ECHO",
+        "UNLICENSED"
+      ]
+    },
+    {
+      "title": "SYNTH_B",
+      "jw_id": "synthetic:b",
+      "object_type": "movie",
+      "release_year": 1900,
+      "country": "NL",
+      "country_name": "Synthetic",
+      "available": true,
+      "provider": "SYNTH_P1",
+      "monetization_type": "subscription",
+      "quality": "HD",
+      "price": "0",
+      "currency": "EUR",
+      "audio_languages": [
+        "UNKNOWN"
+      ],
+      "subtitle_languages": [
+        "nl"
+      ],
+      "deeplink": "synthetic://b",
+      "source_url": "synthetic://b",
+      "observed_at": "2000-01-01T00:00:00Z",
+      "flags": [],
+      "source_labels": [
+        "SAME_SOURCE_ECHO",
+        "UNLICENSED"
+      ]
+    },
+    {
+      "title": "SYNTH_B",
+      "jw_id": "synthetic:b",
+      "object_type": "movie",
+      "release_year": 1900,
+      "country": "NL",
+      "country_name": "Synthetic",
+      "available": true,
+      "provider": "SYNTH_P2",
+      "monetization_type": "rent",
+      "quality": "SD",
+      "price": "1",
+      "currency": "EUR",
+      "audio_languages": [
+        "en"
+      ],
+      "subtitle_languages": [
+        "nl"
+      ],
+      "deeplink": "synthetic://c",
+      "source_url": "synthetic://c",
+      "observed_at": "2000-01-01T00:00:00Z",
+      "flags": [],
+      "source_labels": [
+        "SAME_SOURCE_ECHO",
+        "UNLICENSED"
+      ]
+    }
+  ],
+  "expected": {
+    "raw_count": 4,
+    "dedup_extended_kept": 3,
+    "dedup_extended_removed": 1,
+    "dedup_literal_kept": 2,
+    "dedup_literal_removed": 2,
+    "unknown_audio_lists": 1,
+    "unknown_subtitle_lists": 0
+  }
+}

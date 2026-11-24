@@ -1,0 +1,30 @@
+{
+  "created_at": "2026-11-24T13:50:51.371073Z",
+  "function_alias": "stage-a-notte-function",
+  "latest_version": "v20261124_135310",
+  "published": false,
+  "raw_bytes": 5586,
+  "raw_path": "~/.hermes/cache/scratch/anything-mcp-preflight/notte_function_show.json",
+  "raw_sha256": "123aa9000f175070e1037fcba01f87a83062b7aca5e32ca1410402bb41828d89",
+  "redactions": [
+    "Unpublished function and workflow identifiers, signed download URL, and full function configuration omitted."
+  ],
+  "required_secrets_count": 0,
+  "shared": false,
+  "source": "anything",
+  "status": "active",
+  "updated_at": "2026-11-24T13:53:11.148666Z",
+  "variable_names": [
+    "title",
+    "markets",
+    "reference_market",
+    "object_type",
+    "release_year"
+  ],
+  "versions": [
+    "v20261124_135051",
+    "v20261124_135131",
+    "v20261124_135152",
+    "v20261124_135310"
+  ]
+}
