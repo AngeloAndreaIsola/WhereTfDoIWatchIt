@@ -69,6 +69,10 @@ class SourceFetchError(Exception):
     """A source failed to retrieve data — never an empty (but valid) result."""
 
 
+class SourceFetchStopped(SourceFetchError):
+    """A denied or ambiguous attempt must not be automatically retried."""
+
+
 class SourceQuotaExceeded(SourceFetchError):
     """The source refused work because its own budget is spent.
 

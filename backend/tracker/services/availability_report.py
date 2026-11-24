@@ -398,6 +398,11 @@ def _movie_tmdb_map(movie_ids: list[int]) -> dict[int, int]:
 
 
 def _offer_is_current(offer, now=None) -> bool:
+    from availability.domain.enums import SyncMode
+    from availability.freshness import TITLE_AGGREGATORS
+
+    if offer.source.slug in TITLE_AGGREGATORS and offer.sync_run_id and offer.sync_run.mode == SyncMode.TARGETED:
+        return False
     if not getattr(offer, "currently_available", False):
         return False
     from django.utils import timezone as _tz
@@ -429,7 +434,7 @@ def _active_offers_by_source(movie_ids: list[int], country: str | None = None) -
     active: set[int] = set()
     qs = Offer.objects.filter(
         tmdb_id__in={k[0] for k in by_key}, currently_available=True
-    ).select_related("source")
+    ).select_related("source", "sync_run")
     if country:
         qs = qs.filter(country__code=country.upper())
     for offer in qs:
@@ -488,7 +493,7 @@ def _active_offer_count(movie_ids: list[int], country: str | None = None) -> dic
     counts: dict[int, int] = defaultdict(int)
     qs = Offer.objects.filter(
         tmdb_id__in={k[0] for k in by_key}, currently_available=True
-    ).select_related("source")
+    ).select_related("source", "sync_run")
     if country:
         qs = qs.filter(country__code=country.upper())
     for offer in qs:

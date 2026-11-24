@@ -163,6 +163,42 @@ describe("Reload reconstruction (P9)", () => {
     expect(screen.queryByText("Checking availability…")).not.toBeInTheDocument();
   });
 
+  it.each(["movie", "series"] as const)("shows aged %s source reports without claiming access or playback", async (kind) => {
+    const reported = {
+      ...offer("Netflix"),
+      country: "NL",
+      availability_evidence: "source_reported",
+      reporting_source: "justwatch",
+      observed_at: "2026-11-18T10:00:00Z",
+      last_checked_at: "2026-11-18T10:00:30Z",
+      is_entitled: null,
+      is_accessible: null,
+      playback_verified: false,
+    };
+    const fetchMock = vi.fn((url: string) => {
+      if (url.includes("/api/preferences/")) return Promise.resolve(response({ body: preferencesBody }));
+      if (url.includes("/api/v2/unofficial/")) return Promise.resolve(response({ body: unofficialBody }));
+      if (url.includes("/api/prime/")) {
+        const detail = kind === "movie" ? pendingMovieBody : pendingSeriesBody;
+        return Promise.resolve(response({
+          body: { ...detail, refresh_pending: false, source_reported_offers: [reported] },
+        }));
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(kind === "movie"
+      ? <MovieDetailPage params={{ tmdb_id: "550" }} />
+      : <SeriesDetailPage params={{ tmdb_id: "1396" }} />);
+    expect(await screen.findByText("Source-reported · JustWatch")).toBeInTheDocument();
+    expect(screen.getByText(/^Last checked/)).toHaveAttribute("datetime", reported.last_checked_at);
+    expect(screen.getByText(/^Observed/)).toHaveAttribute("datetime", reported.observed_at);
+    expect(screen.getByText("Your subscription access and playback are unverified.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Check provider" })).toHaveAttribute("href", reported.url);
+    expect(screen.queryByText("Best Match")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /^Watch$/ })).not.toBeInTheDocument();
+  });
+
   it("posts the active market and clears the spinner for a recent check", async () => {
     const refreshUrl = "/api/movie/550/refresh/?content_type=movie&current_country=NL";
     const fetchMock = vi.fn((url: string) => {

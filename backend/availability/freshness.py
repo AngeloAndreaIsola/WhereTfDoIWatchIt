@@ -124,7 +124,8 @@ def _configured_interval(configuration, key):
 def title_refresh_interval(slug: str, configuration=None) -> timedelta:
     """Operational cache lifetime for a title check, separate from offer evidence."""
     if slug in TITLE_AGGREGATORS:
-        return _configured_interval(configuration, TITLE_REFRESH_INTERVAL_KEY) or TITLE_REFRESH_INTERVAL
+        configured = _configured_interval(configuration, TITLE_REFRESH_INTERVAL_KEY)
+        return min(configured, TITLE_REFRESH_INTERVAL) if configured else TITLE_REFRESH_INTERVAL
     return freshness_for(slug, configuration)
 
 

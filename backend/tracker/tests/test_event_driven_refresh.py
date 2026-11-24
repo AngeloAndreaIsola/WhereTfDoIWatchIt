@@ -46,7 +46,7 @@ from tracker.services.refresh_requests import (
     request_availability_refresh,
     request_import_refresh,
 )
-from tracker.tests.availability_factories import local_offer
+from tracker.tests.availability_factories import local_offer, reviewed_test_sources
 
 REFRESH_CONTENT = "availability.services.refresh.AvailabilityRefreshService.refresh_content"
 
@@ -391,7 +391,11 @@ class RefreshOnViewTests(TestCase):
     fetch.
     """
 
-    @patch("tracker.views.enrich_movie_from_tmdb")
+    @classmethod
+    def setUpTestData(cls):
+        reviewed_test_sources()
+
+    @patch("tracker.services.enrichment.enrich_movie_from_tmdb")
     @patch(
         "tracker.services.source_policy.consult_metered_only_when_unresolved",
         return_value=False,
@@ -424,7 +428,7 @@ class RefreshOnViewTests(TestCase):
             all(r.priority == RefreshPriority.RECENTLY_VIEWED for r in requests)
         )
 
-    @patch("tracker.views.enrich_movie_from_tmdb")
+    @patch("tracker.services.enrichment.enrich_movie_from_tmdb")
     @patch(
         "tracker.services.source_policy.consult_metered_only_when_unresolved",
         return_value=True,
@@ -449,7 +453,7 @@ class RefreshOnViewTests(TestCase):
         self.assertIn("justwatch", queued)
         self.assertNotIn("watchmode", queued)  # US is outside the configured Watchmode plan.
 
-    @patch("tracker.views.enrich_movie_from_tmdb")
+    @patch("tracker.services.enrichment.enrich_movie_from_tmdb")
     def test_movie_detail_never_fetched_title_queues_new_priority(self, enrich):
         movie = Movie.objects.create(tmdb_id=302, title="Unseen", year=2020)
 
@@ -465,7 +469,7 @@ class RefreshOnViewTests(TestCase):
             all(r.priority == RefreshPriority.NEW for r in requests)
         )
 
-    @patch("tracker.views.enrich_movie_from_tmdb")
+    @patch("tracker.services.enrichment.enrich_movie_from_tmdb")
     def test_movie_detail_fresh_title_queues_nothing(self, enrich):
         movie = Movie.objects.create(tmdb_id=303, title="Fresh", year=2020)
         _fresh_every_title_level_scope(movie)
@@ -475,7 +479,7 @@ class RefreshOnViewTests(TestCase):
         self.assertEqual(resp.status_code, 200, resp.content)
         self.assertEqual(RefreshRequest.objects.count(), 0)
 
-    @patch("tracker.views.enrich_movie_from_tmdb")
+    @patch("tracker.services.enrichment.enrich_movie_from_tmdb")
     def test_repeated_opens_do_not_multiply_requests(self, enrich):
         """The fan-out is idempotent: opening twice must not duplicate rows."""
         movie = Movie.objects.create(tmdb_id=305, title="Reopened", year=2020)
@@ -500,7 +504,7 @@ class RefreshOnViewTests(TestCase):
             RefreshRequest.objects.filter(movie=movie).count(), len(first)
         )
 
-    @patch("tracker.services.offer_pipeline.enrich_movie_from_tmdb")
+    @patch("tracker.services.enrichment.enrich_movie_from_tmdb")
     def test_prime_detail_stale_title_queues_without_fetching(self, enrich):
         """Superseded by :class:`PrimeDetailFanOutTests`, kept as a light
         guard that the real offer pipeline path still enqueues and never
@@ -534,6 +538,10 @@ class PrimeDetailFanOutTests(TestCase):
     lookups as reaching it through ``/api/movie/<pk>/`` — otherwise the
     availability a user sees would depend on which route they used.
     """
+
+    @classmethod
+    def setUpTestData(cls):
+        reviewed_test_sources()
 
     def _prime_movie(self, tmdb_id, **extra):
         return Movie.objects.create(
@@ -704,6 +712,7 @@ class ExplicitRefreshEndpointTests(TestCase):
     def setUp(self):
         # The endpoint retains its default-scope contract when the additional
         # aggregator is disabled or does not serve the active market.
+        reviewed_test_sources()
         Source.objects.filter(slug="justwatch").update(enabled=False)
 
     def _post(self, tmdb_id):
@@ -976,6 +985,7 @@ class DrainTests(TestCase):
     """process_watchlist_refresh drains RefreshRequest rows first, budgeted."""
 
     def setUp(self):
+        reviewed_test_sources()
         self.refresh_service = MagicMock()
         self.limiter = MagicMock(spec=RateLimiter)
         self.limiter.remaining.return_value = 100
@@ -1228,6 +1238,9 @@ class DrainTests(TestCase):
         ), patch(
             "tracker.services.bulk_refresh.AvailabilityRefreshService",
             return_value=scoped,
+        ), patch(
+            "tracker.services.bulk_refresh.resolve_source_country",
+            return_value="NL",
         ), patch(
             "tracker.services.bulk_refresh.stale_refresh_scopes",
             return_value=["watchmode"],
@@ -1564,6 +1577,10 @@ class DrainTests(TestCase):
 
 class RefreshQueueCircuitTests(TestCase):
     """The worker's queue-only tick owns the same terminal-quota circuit."""
+
+    @classmethod
+    def setUpTestData(cls):
+        reviewed_test_sources()
 
     def test_terminal_plan_quota_suppresses_second_request_in_one_worker_tick(self):
         """``process_refresh_queue`` is a Watchmode path in its own right.

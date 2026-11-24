@@ -44,7 +44,7 @@ from tracker.services.bulk_refresh import (
 from tracker.services.rate_limit import RateLimiter
 from tracker.services.refresh_requests import request_availability_refresh
 from tracker.services.refresh_requests import process_refresh_queue
-from tracker.tests.availability_factories import local_offer
+from tracker.tests.availability_factories import local_offer, reviewed_test_sources
 
 PRIME = "prime_video"
 CATALOGUE_SLUGS = ("cbc_gem", "bbc_iplayer", "tubi", PRIME, "rai_play", "pluto_tv", "pbs", "abc_iview")
@@ -135,6 +135,7 @@ class ConfiguredFreshnessSchedulingTests(TestCase):
     """Schedulers use the same persisted source window as read verdicts."""
 
     def setUp(self):
+        reviewed_test_sources()
         self.movie = Movie.objects.create(
             tmdb_id=8210, title="Configured Window", year=2022
         )
@@ -147,7 +148,7 @@ class ConfiguredFreshnessSchedulingTests(TestCase):
         )
 
     def _set_interval(self, seconds):
-        self.source.configuration = {TITLE_REFRESH_INTERVAL_KEY: seconds}
+        self.source.configuration = {**self.source.configuration, TITLE_REFRESH_INTERVAL_KEY: seconds}
         self.source.save(update_fields=["configuration"])
 
     def _justwatch_offer(self, *, age=dt.timedelta(hours=2), content_type="movie"):

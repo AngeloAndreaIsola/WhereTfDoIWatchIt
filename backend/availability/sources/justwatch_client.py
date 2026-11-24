@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import logging
 import random
+import re
 import time
 from typing import Any, Optional
 
@@ -62,8 +63,28 @@ import requests
 
 
 def _requests_post(url, json=None, headers=None, timeout=None):
-    """Default transport with the seam's exact call signature."""
-    return requests.post(url, json=json, headers=headers, timeout=timeout)
+    from .base import SourceFetchStopped
+    from .justwatch_transport import post
+
+    documents = {
+        SEARCH_TITLES_QUERY: ("GetSearchTitles", "search"),
+        SEASONS_QUERY: ("GetTitleNode", "seasons"),
+        POPULAR_TITLES_QUERY: ("GetPopularTitles", "catalogue"),
+        PROVIDERS_QUERY: ("GetProviders", "providers"),
+        DETAILS_QUERY: ("GetTitleNode", "details"),
+        EPISODES_QUERY: ("GetTitleNode", "episodes"),
+    }
+    document = json["query"]
+    requested_name = json["operationName"]
+    expected_name, operation = documents.get(document, (None, None))
+    countries = [json["variables"].get("country")]
+    if requested_name == "GetTitleOffers":
+        countries = re.findall(r"(?m)^([A-Z]{2}): offers\(country: \1,", document)
+        if countries and document == offers_for_countries_query(countries):
+            expected_name, operation = "GetTitleOffers", "title_offers"
+    if requested_name != expected_name or not operation or not all(countries):
+        raise SourceFetchStopped("JustWatch GraphQL document or market is outside the reviewed scope")
+    return post(url, operation=operation, countries=countries, json=json, headers=headers, timeout=timeout)
 
 logger = logging.getLogger(__name__)
 

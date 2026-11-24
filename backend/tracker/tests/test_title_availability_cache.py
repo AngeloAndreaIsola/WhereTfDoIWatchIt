@@ -3,18 +3,19 @@ from unittest.mock import Mock, patch
 
 from django.test import TestCase
 
-from availability.domain.enums import FreshnessState, SyncMode
+from availability.domain.enums import FreshnessState, SyncMode, SyncStatus
 from availability.freshness import freshness_for, freshness_state
 from availability.models import Country, Offer, OfferEvidence, Source, SyncRun
 from availability.sources.watchmode_client import WatchmodeClient
 from tracker.models import (
     Movie, Provider, RefreshRequest, RefreshRequestOutcome, TitleAvailabilityCheck, WatchlistItem,
 )
-from tracker.services.availability_reads import get_offer_evidence
+from tracker.services.availability_reads import get_offer_evidence, get_title_offer_evidence
 from tracker.services.availability_report import title_source_report
 from tracker.services.bulk_refresh import is_stale, process_watchlist_refresh
 from tracker.services.rate_limit import RateLimiter
 from tracker.services.refresh_requests import process_refresh_queue, request_title_refresh
+from tracker.tests.availability_factories import reviewed_test_sources
 
 NOW = datetime(2026, 11, 24, 12, tzinfo=timezone.utc)
 JW = "justwatch"
@@ -28,6 +29,7 @@ class TitleAvailabilityCacheTests(TestCase):
         cls.movie = Movie.objects.create(tmdb_id=194, title="Film", content_type="movie")
         cls.series = Movie.objects.create(tmdb_id=194, title="Series", content_type="series")
         cls.nl = Country.objects.get(code="NL")
+        reviewed_test_sources(NOW)
         cls.provider, _ = Provider.objects.get_or_create(slug="tubi", defaults={"name": "Tubi"})
         cls.direct, _ = Source.objects.get_or_create(slug="tubi", defaults={"name": "Tubi"})
 
@@ -72,6 +74,133 @@ class TitleAvailabilityCacheTests(TestCase):
         current, last_known = get_offer_evidence(self.movie)
         self.assertEqual(current, [])
         self.assertEqual(last_known[0].last_seen_at, old.last_seen.isoformat())
+
+    def _title_report(self, source=JW, *, age=timedelta(days=3), title=None, country=None):
+        title = title or self.movie
+        country = country or self.nl
+        seen = NOW - age
+        run = SyncRun.objects.create(
+            provider=self.provider, country=country, source=Source.objects.get(slug=source),
+            mode=SyncMode.TARGETED, status=SyncStatus.SUCCEEDED,
+        )
+        row = self.offer(source, title=title, country=country, age=age, sync_run=run)
+        row.observed_at = seen
+        row.save(update_fields=["observed_at"])
+        check = TitleAvailabilityCheck.objects.create(
+            movie=title, tmdb_id=title.tmdb_id, content_type=title.content_type,
+            country=country.code, source=source,
+            last_attempted_at=seen, last_succeeded_at=seen + timedelta(seconds=1),
+            successful_run_ids=[run.pk],
+        )
+        return row, check
+
+    def test_title_report_is_visible_up_to_seven_days_with_original_times(self):
+        row, check = self._title_report(age=timedelta(days=7))
+        for age in (timedelta(hours=12), timedelta(hours=24), timedelta(days=3),
+                    timedelta(days=6), timedelta(days=7)):
+            with self.subTest(age=age):
+                self.clock.return_value = row.last_seen + age
+                evidence = get_title_offer_evidence(self.movie, country="NL")
+                self.assertEqual(evidence.current, [])
+                [report] = evidence.source_reported
+                self.assertEqual(report.availability_evidence, "source_reported")
+                self.assertEqual(report.last_seen_at, row.last_seen.isoformat())
+                self.assertEqual(report.observed_at, row.last_seen.isoformat())
+                self.assertEqual(report.last_checked_at, check.last_succeeded_at.isoformat())
+        self.clock.return_value += timedelta(microseconds=1)
+        evidence = get_title_offer_evidence(self.movie, country="NL")
+        self.assertEqual(evidence.source_reported, [])
+        self.assertEqual(evidence.last_known[0].availability_evidence, "stale")
+
+    def test_title_api_returns_source_report_without_access_or_playback_claim(self):
+        row, check = self._title_report(WM, age=timedelta(days=6))
+        with patch("tracker.views.resolve_or_create_movie", side_effect=AssertionError("remote metadata")):
+            data = self.client.get("/api/prime/movie/194/?current_country=NL").json()
+            other = self.client.get("/api/prime/movie/194/?current_country=US").json()
+            self.assertEqual(self.client.get("/api/prime/movie/999999/").status_code, 404)
+        [report] = data["source_reported_offers"]
+        self.assertEqual(report["reporting_source"], WM)
+        self.assertEqual(report["last_seen_at"], row.last_seen.isoformat())
+        self.assertEqual(report["last_checked_at"], check.last_succeeded_at.isoformat())
+        self.assertIsNone(report["is_entitled"])
+        self.assertIsNone(report["is_accessible"])
+        self.assertFalse(report["playback_verified"])
+        self.assertEqual(data["offers"], [])
+        self.assertEqual(other["source_reported_offers"], [])
+        self.jw_post.assert_not_called()
+        self.wm_get.assert_not_called()
+
+    def test_later_empty_failed_or_conflicting_check_never_reuses_positive(self):
+        row, check = self._title_report(age=timedelta(days=3))
+        self.offer("tubi", present=False)
+        self.assertEqual(get_title_offer_evidence(self.movie).source_reported, [])
+        Offer.objects.filter(source=self.direct).delete()
+        self.assertEqual(len(get_title_offer_evidence(self.movie).source_reported), 1)
+
+        # A later successful-but-empty check and a failed attempt both leave
+        # the original observation intact and visible only as history.
+        for completed in (False, True):
+            with self.subTest(completed=completed):
+                check.last_attempted_at = NOW
+                if completed:
+                    check.last_succeeded_at = NOW
+                    check.successful_run_ids = []
+                check.save()
+                evidence = get_title_offer_evidence(self.movie)
+                self.assertEqual(evidence.source_reported, [])
+                self.assertEqual(evidence.current, [])
+                self.assertEqual(evidence.last_known[0].last_seen_at, row.last_seen.isoformat())
+        row.refresh_from_db()
+        self.assertTrue(row.currently_available)
+        self.assertEqual(row.observed_at, row.last_seen)
+
+    def test_catalogue_and_unattributed_pilot_are_not_promoted(self):
+        pilot, check = self._title_report(age=timedelta(hours=1))
+        check.delete()  # TARGETED alone is not proof of the routine path.
+        run = SyncRun.objects.create(
+            provider=self.provider, country=self.nl, source=Source.objects.get(slug=WM),
+            mode=SyncMode.INCREMENTAL, status=SyncStatus.SUCCEEDED,
+        )
+        self.offer(WM, age=timedelta(days=3), sync_run=run)
+        self.offer("tubi", age=timedelta(days=3))
+        evidence = get_title_offer_evidence(self.movie)
+        self.assertEqual(evidence.source_reported, [])
+        self.assertEqual(evidence.current, [])
+        self.assertEqual(len(evidence.last_known), 1)
+        self.assertIn(pilot.last_seen.isoformat(), [offer.last_seen_at for offer in evidence.last_known])
+
+    def test_authorization_required_when_queueing_and_rechecked_before_execution(self):
+        from availability.services.source_permissions import PERMISSION_KEY
+
+        endpoint = "/api/movie/194/refresh/?content_type=movie&current_country=NL"
+        original = Source.objects.get(slug=JW).configuration
+        Source.objects.filter(slug__in=(JW, WM, "streaming_availability")).update(configuration={})
+        self.assertEqual(self.client.post(endpoint).status_code, 409)
+        self.assertEqual(self.queue_jw(), 0)
+        self.assertEqual(RefreshRequest.objects.count(), 0)
+
+        Source.objects.filter(slug=JW).update(configuration=original)
+        self.assertEqual(self.client.post(endpoint).status_code, 202)
+        self.assertEqual(RefreshRequest.objects.get().source, JW)
+        original[PERMISSION_KEY]["valid_until"] = NOW.isoformat()
+        Source.objects.filter(slug=JW).update(configuration=original)
+        self.assertEqual(process_refresh_queue(budget=1)["refreshed"], 0)
+        self.assertEqual(RefreshRequest.objects.get().blocked_reason, "source_disabled")
+        self.jw_post.assert_not_called()
+        self.wm_get.assert_not_called()
+
+    def test_interrupted_check_does_not_send_again(self):
+        check = TitleAvailabilityCheck.objects.create(
+            movie=self.movie, tmdb_id=self.movie.tmdb_id, content_type=self.movie.content_type,
+            country="NL", source=JW, last_attempted_at=NOW - timedelta(days=8),
+            in_progress=True,
+        )
+        RefreshRequest.objects.create(movie=self.movie, country="NL", source=JW)
+        self.assertEqual(process_refresh_queue(budget=1)["errors"], 1)
+        self.assertEqual(self.queue_jw(), 0)
+        check.refresh_from_db()
+        self.assertTrue(check.in_progress)
+        self.jw_post.assert_not_called()
 
     def test_catalogue_observation_does_not_fill_title_cache(self):
         run = SyncRun.objects.create(
@@ -118,7 +247,7 @@ class TitleAvailabilityCacheTests(TestCase):
         self.assertEqual(self.queue_jw(), 1)
 
     def test_detail_open_only_queues_the_active_title_and_market(self):
-        with patch("tracker.views.enrich_movie_from_tmdb"):
+        with patch("tracker.services.enrichment.enrich_movie_from_tmdb"):
             for _ in range(2):
                 response = self.client.get(f"/api/movie/{self.movie.pk}/?current_country=NL")
                 self.assertEqual(response.status_code, 200)

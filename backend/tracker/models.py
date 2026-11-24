@@ -1071,6 +1071,8 @@ class TitleAvailabilityCheck(models.Model):
     source = models.CharField(max_length=50)
     last_attempted_at = models.DateTimeField()
     last_succeeded_at = models.DateTimeField(null=True, blank=True)
+    successful_run_ids = models.JSONField(default=list)
+    in_progress = models.BooleanField(default=False)
 
     class Meta:
         constraints = [

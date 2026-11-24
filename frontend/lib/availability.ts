@@ -16,7 +16,7 @@ export function isUnverifiedOffer(
   offer?: Pick<PrimeOffer, "availability_evidence"> | null,
 ): boolean {
   const evidence = offer?.availability_evidence;
-  return evidence === "stale" || evidence === "unknown";
+  return evidence === "stale" || evidence === "unknown" || evidence === "source_reported";
 }
 
 /** Badge plus the newest positive observation, when we have one. */

@@ -31,6 +31,7 @@ layer and the report resolver all run for real against deterministic input.
 """
 from __future__ import annotations
 
+from tracker.tests.availability_factories import reviewed_test_sources
 from unittest.mock import MagicMock, patch
 
 from django.test import TestCase
@@ -50,7 +51,7 @@ from tracker.models import (
     WatchlistItem,
 )
 from tracker.services import availability_report as ar
-from tracker.services.availability_reads import get_local_offers
+from tracker.services.availability_reads import get_title_offer_evidence
 from tracker.services.bulk_refresh import title_level_source_slugs
 from tracker.services.refresh_requests import (
     process_refresh_queue,
@@ -129,6 +130,10 @@ class SchedulingEligibilityTests(TestCase):
     is never gated, so it runs freely. What used to exclude it was the
     capability discriminator, not its role.
     """
+
+    @classmethod
+    def setUpTestData(cls):
+        reviewed_test_sources()
 
     def test_justwatch_role_is_not_metered(self):
         from tracker.services import source_policy
@@ -218,6 +223,10 @@ class TitleFanOutTests(TestCase):
     collectors are structurally excluded and no catalogue crawl can happen.
     """
 
+    @classmethod
+    def setUpTestData(cls):
+        reviewed_test_sources()
+
     def test_fans_out_to_every_title_level_source(self):
         movie = _movie(tmdb_id=1100)
 
@@ -300,11 +309,15 @@ class TitleFanOutTests(TestCase):
 class CoordinatorEndToEndTests(TestCase):
     """The real coordinator: enqueue → drain → persist → report resolver."""
 
+    @classmethod
+    def setUpTestData(cls):
+        reviewed_test_sources()
+
     def _drain_justwatch(self, stub, *, country="NL"):
         movie = _movie()
         WatchlistItem.objects.create(user_id=1, movie=movie, source="letterboxd")
         request_availability_refresh(
-            movie, source=JW, if_stale=False
+            movie, source=JW, if_stale=False, country=country,
         )
         with patch(
             "tracker.services.refresh_requests.source_registry"
@@ -316,8 +329,7 @@ class CoordinatorEndToEndTests(TestCase):
             summary = process_refresh_queue(budget=99, service=MagicMock())
         return movie, summary
 
-    def test_a_successful_title_fetch_persists_and_resolves_the_report(self):
-        """The core fix: a JustWatch title fetch makes a title ``available``."""
+    def test_a_successful_title_fetch_persists_as_source_reported(self):
         offer = normalized_offer(
             provider_id="netflix",
             provider_content_id="nbk-nl",
@@ -337,15 +349,13 @@ class CoordinatorEndToEndTests(TestCase):
         # 2. The country hint travelled with the request (selected market).
         self.assertEqual(stub.countries, ["NL"])
 
-        # 3. The report resolver — the read path the detail page uses — now
-        #    says the title is available, resolved by JustWatch.
-        entry = ar.title_source_report([movie.pk])[movie.pk]
-        self.assertEqual(entry["state"], "available")
-        self.assertIn(JW, entry["resolved_sources"])
-        self.assertEqual(entry["reason"], "")
+        evidence = get_title_offer_evidence(movie, country="NL")
+        self.assertFalse(evidence.current)
+        [report] = evidence.source_reported
+        self.assertEqual(report.service, "netflix")
+        self.assertEqual(report.reporting_source, JW)
 
-    def test_the_report_endpoint_returns_the_available_verdict(self):
-        """End-to-end through HTTP, exactly what the detail page fetches."""
+    def test_the_detail_endpoint_returns_source_reports_separately(self):
         offer = normalized_offer(
             provider_id="netflix",
             provider_content_id="nbk-nl",
@@ -354,11 +364,13 @@ class CoordinatorEndToEndTests(TestCase):
         )
         self._drain_justwatch(_RecordingStub(response=fetch_result(offer)))
 
-        resp = self.client.get(f"/api/availability/report/{1000}/")
+        resp = self.client.get("/api/prime/movie/1000/?current_country=NL")
 
         self.assertEqual(resp.status_code, 200, resp.content)
-        self.assertEqual(resp.data["state"], "available")
-        self.assertIn(JW, resp.data["resolved_sources"])
+        self.assertEqual(resp.data["offers"], [])
+        [report] = resp.data["source_reported_offers"]
+        self.assertEqual(report["reporting_source"], JW)
+        self.assertEqual(report["availability_evidence"], "source_reported")
 
     def test_a_valid_empty_result_is_a_completed_answer_not_a_failure(self):
         """An empty fetch is success: the request is DONE, never FAILED."""
@@ -395,7 +407,7 @@ class CoordinatorEndToEndTests(TestCase):
         stub = _RecordingStub(response=fetch_result())
         movie = _movie()
         WatchlistItem.objects.create(user_id=1, movie=movie, source="letterboxd")
-        request_availability_refresh(movie, source=JW, if_stale=False)
+        request_availability_refresh(movie, source=JW, if_stale=False, country="NL")
 
         spent = MagicMock()
         spent.remaining.return_value = 0
@@ -427,8 +439,8 @@ class CoordinatorEndToEndTests(TestCase):
         )
         movie, _ = self._drain_justwatch(_RecordingStub(response=fetch_result(offer)))
 
-        nl = get_local_offers(movie, country="NL")
-        us = get_local_offers(movie, country="US")
+        nl = get_title_offer_evidence(movie, country="NL").source_reported
+        us = get_title_offer_evidence(movie, country="US").source_reported
 
         self.assertEqual(len(nl), 1)
         self.assertEqual(nl[0].country, "NL")

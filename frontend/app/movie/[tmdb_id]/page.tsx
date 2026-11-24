@@ -9,6 +9,7 @@ import { useCurrentLocation } from "@/components/CurrentLocationProvider";
 import MovieEditModal from "@/components/MovieEditModal";
 import RefreshAvailabilityButton from "@/components/RefreshAvailabilityButton";
 import AvailabilityState from "@/components/AvailabilityState";
+import SourceReportedOffers from "@/components/SourceReportedOffers";
 import LastKnownOffers from "@/components/LastKnownOffers";
 import CastList from "@/components/CastList";
 import type { PrimeOffer, PrimeMovieResponse } from "@/lib/api";
@@ -553,6 +554,8 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
               </div>
             )}
 
+            <SourceReportedOffers offers={data.source_reported_offers} currentCountry={currentCountry} />
+
             {data.offers.length === 0 ? (
               waitingForRefresh && !pollTimedOut ? (
                 <div className="rounded-xl border border-dashed border-blue-300 bg-blue-50/50 p-6 text-center text-sm text-blue-700 dark:border-blue-700 dark:bg-blue-900/20 dark:text-blue-300">
@@ -568,7 +571,7 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
                 // The empty-offers state is driven by the backend verdict, not
                 // assumed: an unchecked title must not read as "unavailable".
                 <>
-                  {(data.last_known_offers ?? []).length === 0 && (
+                  {(data.last_known_offers ?? []).length === 0 && !data.source_reported_offers?.length && (
                     <AvailabilityState
                       availability={data.availability}
                       refreshing={false}

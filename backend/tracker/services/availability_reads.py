@@ -9,10 +9,8 @@ effective offer per (content, provider, country, offer type) rather than every
 raw observation a source happened to write. Raw rows stay untouched; this
 module only projects the reconciled view onto the tracker representation.
 
-Freshness is applied here, not by rewriting rows: only ``verified`` offers are
-"current". Stale and uncorroborated positives are returned separately as
-``last_known`` so callers can show them as history ("last seen … needs
-recheck") without counting them as watchable now.
+Verified offers qualify for watchability. Recent title reports and older
+positive observations are returned separately with their original timestamps.
 """
 from __future__ import annotations
 
@@ -40,9 +38,19 @@ class OfferEvidence(NamedTuple):
     last_known: list[Offer]
 
 
-def get_offer_evidence(
+class TitleOfferEvidence(NamedTuple):
+    current: list[Offer]
+    last_known: list[Offer]
+    source_reported: list[Offer]
+
+    @property
+    def confirmed_and_history(self) -> OfferEvidence:
+        return OfferEvidence(self.current, self.last_known)
+
+
+def get_title_offer_evidence(
     movie, *, season: Optional[int] = None, country: Optional[str] = None
-) -> OfferEvidence:
+) -> TitleOfferEvidence:
     """Read one title's reconciled offers, split into current and last-known."""
     service = AvailabilityQueryService()
     if movie.content_type == "series" and season is not None:
@@ -52,6 +60,10 @@ def get_offer_evidence(
             movie.tmdb_id, movie.content_type or "movie", country
         )
     return _split(result.offers)
+
+
+def get_offer_evidence(movie, *, season=None, country=None) -> OfferEvidence:
+    return get_title_offer_evidence(movie, season=season, country=country).confirmed_and_history
 
 
 def get_local_offers(movie, *, season: Optional[int] = None, country: Optional[str] = None) -> list[Offer]:
@@ -76,7 +88,7 @@ def get_offer_evidence_bulk(movies) -> dict[int, OfferEvidence]:
     return {
         movie.id: _split(
             reconciled.get((movie.tmdb_id, movie.content_type or "movie"), [])
-        )
+        ).confirmed_and_history
         for movie in movie_list
     }
 
@@ -89,9 +101,10 @@ def get_local_offers_bulk(movies) -> dict[int, list[Offer]]:
     }
 
 
-def _split(offers) -> OfferEvidence:
+def _split(offers) -> TitleOfferEvidence:
     current: list[Offer] = []
     last_known: list[Offer] = []
+    source_reported: list[Offer] = []
     for offer in offers:
         # ``currently_available`` already excludes deactivated, out-of-window
         # and mapping-doubted rows (those may belong to another title).
@@ -99,19 +112,26 @@ def _split(offers) -> OfferEvidence:
             continue
         if offer.evidence == AvailabilityEvidence.VERIFIED:
             current.append(_tracker_offer(offer))
+        elif offer.evidence == AvailabilityEvidence.SOURCE_REPORTED:
+            source_reported.append(_tracker_offer(offer))
         else:
             last_known.append(_tracker_offer(offer))
-    return OfferEvidence(current, last_known)
+    return TitleOfferEvidence(current, last_known, source_reported)
 
 
 def _tracker_offer(offer: ReconciledOffer) -> Offer:
     last_seen = offer.last_verified_at or offer.last_seen_available_at
+    report = max(
+        (obs for obs in offer.observations if obs.evidence == AvailabilityEvidence.SOURCE_REPORTED),
+        key=lambda obs: (obs.last_seen, obs.source),
+        default=None,
+    ) if offer.evidence == AvailabilityEvidence.SOURCE_REPORTED else None
     return Offer(
         country=offer.country,
         service=offer.provider,
         offer_type=offer.offer_type,
         quality=offer.quality,
-        url=offer.provider_url,
+        url=report.provider_url if report else offer.provider_url,
         audio_languages=_as_list(offer.audio_languages),
         subtitle_languages=_as_list(offer.subtitle_languages),
         price=(
@@ -120,7 +140,10 @@ def _tracker_offer(offer: ReconciledOffer) -> Offer:
         ),
         prices=[_price_dict(price) for price in offer.prices],
         availability_evidence=str(offer.evidence),
-        last_seen_at=last_seen.isoformat() if last_seen else None,
+        last_seen_at=report.last_seen.isoformat() if report else last_seen.isoformat() if last_seen else None,
+        observed_at=report.observed_at.isoformat() if report and report.observed_at else None,
+        last_checked_at=report.title_checked_at.isoformat() if report else None,
+        reporting_source=report.source if report else "",
         available_from=_window_timestamp(offer, "available_from"),
         available_until=_window_timestamp(offer, "available_until"),
         season_number=offer.season_number,

@@ -241,7 +241,7 @@ class SeasonDetailEndpointTests(TestCase):
 
     def setUp(self):
         reads_patcher = patch("tracker.services.offer_pipeline.get_local_offers")
-        enrich_patcher = patch("tracker.services.offer_pipeline.enrich_movie_from_tmdb")
+        enrich_patcher = patch("tracker.services.enrichment.enrich_movie_from_tmdb")
         self.addCleanup(reads_patcher.stop)
         self.addCleanup(enrich_patcher.stop)
         mock_reads = reads_patcher.start()
@@ -321,7 +321,7 @@ class SeasonEndToEndEndpointTests(TestCase):
     """Request → pipeline → canonical offer reads → ranking and season filtering."""
 
     @patch("tracker.services.streaming_api.StreamingAvailabilityClient.get_availability")
-    @patch("tracker.services.offer_pipeline.enrich_movie_from_tmdb")
+    @patch("tracker.services.enrichment.enrich_movie_from_tmdb")
     def test_season_requests_filter_canonical_offers_without_upstream_calls(
         self, mock_enrich, mock_get
     ):
@@ -394,7 +394,7 @@ class SeriesSubscriptionFilterTests(TestCase):
 
     def setUp(self):
         reads_patcher = patch("tracker.services.offer_pipeline.get_local_offers")
-        enrich_patcher = patch("tracker.services.offer_pipeline.enrich_movie_from_tmdb")
+        enrich_patcher = patch("tracker.services.enrichment.enrich_movie_from_tmdb")
         self.addCleanup(reads_patcher.stop)
         self.addCleanup(enrich_patcher.stop)
         mock_reads = reads_patcher.start()

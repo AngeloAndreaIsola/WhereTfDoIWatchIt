@@ -84,8 +84,8 @@ export interface PrimeOffer {
   access_label?: string;
   locality?: OfferLocality;
   /** True only when the user is entitled, the language rule passes and the country is reachable. */
-  is_accessible?: boolean;
-  is_entitled?: boolean;
+  is_accessible?: boolean | null;
+  is_entitled?: boolean | null;
   requires_payment?: boolean;
   /** True when this offer is delivered as an add-on channel. */
   is_addon?: boolean;
@@ -106,6 +106,10 @@ export interface PrimeOffer {
   availability_evidence?: AvailabilityEvidence;
   /** ISO timestamp of the newest positive observation behind this offer. */
   last_seen_at?: string | null;
+  observed_at?: string | null;
+  last_checked_at?: string | null;
+  reporting_source?: string;
+  playback_verified?: false;
   /** Reconciled source-declared window, in UTC ISO 8601. Missing or null means unknown. */
   available_from?: string | null;
   /** End of the reported window. A confirmed catalogue departure requires separate evidence. */
@@ -114,7 +118,11 @@ export interface PrimeOffer {
   episode_number?: number | null;
 }
 
-export type AvailabilityEvidence = "verified" | "stale" | "unknown";
+export type SourceReportedOffer = Omit<PrimeOffer, "ranking" | "availability_evidence"> & {
+  availability_evidence: "source_reported";
+};
+
+export type AvailabilityEvidence = "verified" | "source_reported" | "stale" | "unknown";
 
 /** Stale/unverified positive evidence for a title — history, never "watchable now". */
 export interface LastKnownAvailability {
@@ -200,6 +208,7 @@ export interface PrimeMovieResponse {
    * never part of `offers`, never counted as watchable now.
    */
   last_known_offers?: PrimeOffer[];
+  source_reported_offers?: SourceReportedOffer[];
   /**
    * The backend's own verdict on this title. Present so an empty `offers`
    * list is not ambiguous: `unavailable` means checked-and-nothing,
@@ -260,6 +269,7 @@ export interface PrimeSeriesResponse {
    * never part of `offers`, never counted as watchable now.
    */
   last_known_offers?: PrimeOffer[];
+  source_reported_offers?: SourceReportedOffer[];
   /**
    * The backend's own verdict on this title. Present so an empty `offers`
    * list is not ambiguous: `unavailable` means checked-and-nothing,

@@ -50,6 +50,8 @@ from __future__ import annotations
 
 import logging
 import uuid
+
+from requests import RequestException
 from contextlib import contextmanager
 from typing import Optional
 
@@ -61,8 +63,9 @@ from availability.domain.enums import ContentType
 from availability.freshness import TITLE_AGGREGATORS, source_configuration_snapshot
 from availability.models import Offer
 from availability.services.refresh import AvailabilityRefreshService
+from availability.services.source_permissions import title_source_is_authorized
 from availability.sources import DEFAULT_SOURCE_SLUG, source_registry
-from availability.sources.base import SourceQuotaExceeded
+from availability.sources.base import SourceFetchStopped, SourceQuotaExceeded
 
 from ..models import (
     AvailabilityRefresh,
@@ -100,7 +103,7 @@ from .title_availability_cache import (
     departure_for_source,
     eligible_aggregator_sources,
     record_title_attempt,
-    record_title_success,
+    record_title_completion,
     title_attempted_recently,
     title_departures,
 )
@@ -429,7 +432,7 @@ def request_title_refresh(
         report_entry, applicable_slugs=base_sources,
         ladder_switch=(False if priority == RefreshPriority.EXPLICIT else None),
     )
-    eligible_aggregators = eligible_aggregator_sources(base_sources, country)
+    eligible_aggregators = eligible_aggregator_sources(base_sources, country, movie.content_type)
     allowed = [
         slug for slug in decision["allowed_sources"]
         if slug not in TITLE_AGGREGATORS or slug in eligible_aggregators
@@ -463,8 +466,12 @@ def request_title_refresh(
 
 def request_manual_title_refresh(movie, country):
     """Request the default and eligible aggregator checks for one title."""
-    sources = [DEFAULT_SOURCE_SLUG, *sorted(eligible_aggregator_sources(TITLE_AGGREGATORS, country))]
-    recent = title_attempted_recently(movie, country)
+    sources = sorted(eligible_aggregator_sources(TITLE_AGGREGATORS, country, movie.content_type))
+    if title_source_is_authorized(DEFAULT_SOURCE_SLUG, country, movie.content_type):
+        sources.insert(0, DEFAULT_SOURCE_SLUG)
+    if not sources:
+        return [], False, False
+    recent = title_attempted_recently(movie, country, sources=sources)
     requests = []
     for source in sources:
         if source in recent:
@@ -475,7 +482,7 @@ def request_manual_title_refresh(movie, country):
         )
         if row is not None:
             requests.append(row)
-    return requests, bool(recent)
+    return requests, bool(recent), True
 
 
 def request_watchlist_refresh(
@@ -933,12 +940,30 @@ def _drain_one(
     scope_limiter = _limiter_for_scope(source, limiter, limiter_overrides)
 
     country = request.country or resolve_source_country() or ""
-    if country and source in TITLE_AGGREGATORS and source not in eligible_aggregator_sources([source], country):
-        request.settle(RefreshRequestStatus.BLOCKED, blocked_reason=BlockedReason.SOURCE_DISABLED)
+    if source in TITLE_AGGREGATORS:
+        authorized = source in eligible_aggregator_sources([source], country, movie.content_type)
+    else:
+        authorized = not request.manual or title_source_is_authorized(source, country, movie.content_type)
+    if not authorized:
+        request.settle(
+            RefreshRequestStatus.BLOCKED, blocked_reason=BlockedReason.SOURCE_DISABLED,
+            error="Source disabled, market unsupported, or reviewed permission unavailable",
+        )
         summary.requests_drained += 1
         summary.blocked_by_reason[BlockedReason.SOURCE_DISABLED] = (
             summary.blocked_by_reason.get(BlockedReason.SOURCE_DISABLED, 0) + 1
         )
+        return rate_limit_hit
+
+    if (source in TITLE_AGGREGATORS or request.manual) and TitleAvailabilityCheck.objects.filter(
+        movie=movie, tmdb_id=movie.tmdb_id, content_type=movie.content_type,
+        country=country, source=source, in_progress=True,
+    ).exists():
+        request.settle(
+            RefreshRequestStatus.FAILED, error="Interrupted title check requires reconciliation",
+        )
+        summary.errors += 1
+        summary.requests_drained += 1
         return rate_limit_hit
 
     if (
@@ -1134,6 +1159,7 @@ def _drain_one(
         summary.skipped_budget_exhausted += 1
         return rate_limit_hit
 
+    check = None
     try:
         with source_budget(scope_limiter, source=source):
             # Charge attempts only after local source capacity is reserved.
@@ -1144,12 +1170,14 @@ def _drain_one(
             # answer per country (JustWatch) cannot be called without it, and
             # ones that answer globally (Streaming Availability) ignore it.
             source_scope = "" if request.manual and source == DEFAULT_SOURCE_SLUG else request.source
-            _service_for_scope(source_scope, service).refresh_content(movie, country=country or None)
+            result = _service_for_scope(source_scope, service).refresh_content(movie, country=country or None)
     except RateLimitExceeded:
+        record_title_completion(check)
         summary.note_rate_limited_source(source)
         summary.skipped_rate_limited += 1
         return source == DEFAULT_SOURCE_SLUG or rate_limit_hit
     except SourceQuotaExceeded as exc:
+        record_title_completion(check)
         # An *upstream* quota refusal, classified by the source itself. This is
         # deliberately not the same branch as ``RateLimitExceeded`` above
         # (which is our own local daily guard) and not the generic failure
@@ -1158,8 +1186,8 @@ def _drain_one(
         # - a spent plan is terminal until the plan resets. Settle it as
         #   ``blocked``/``quota_exhausted`` so it cannot masquerade as a
         #   failed source after MAX_ATTEMPTS.
-        # - a short rate window is retryable for ordinary checks. An automatic
-        #   departure check has already used this window's opportunity.
+        # - a short rate window is retryable for ordinary checks. Manual and
+        #   automatic departure checks settle after that attempted call.
         #
         # The diagnostic carries the body, status, Retry-After and quota
         # headers, so a monthly plan exhaustion can be told apart from a
@@ -1167,7 +1195,7 @@ def _drain_one(
         summary.note_rate_limited_source(source)
         summary.skipped_rate_limited += 1
         diagnostic = exc.diagnostic()
-        if exc.terminal or departure_for_source(source, departures):
+        if exc.terminal or request.manual or departure_for_source(source, departures):
             if exc.terminal and quota_circuit is not None:
                 quota_circuit.trip(source, diagnostic)
             request.settle(
@@ -1194,6 +1222,7 @@ def _drain_one(
             )
         return rate_limit_hit
     except UpstreamTitleNotFound as exc:
+        record_title_completion(check)
         # The upstream catalogue has no such title: a permanent answer, not a
         # fault. Fail on the first attempt — retrying can only re-earn the same
         # 404 while spending metered budget, which is exactly the waste this
@@ -1221,10 +1250,15 @@ def _drain_one(
         )
         return rate_limit_hit
     except Exception as exc:  # noqa: BLE001 - one bad title must not stop the run
+        record_title_completion(check)
         summary.errors += 1
         request.attempts += 1
         request.last_error = f"{type(exc).__name__}: {exc}"
-        if departure_for_source(source, departures) or request.attempts >= MAX_ATTEMPTS:
+        if (
+            isinstance(exc, SourceFetchStopped) or (request.manual and isinstance(exc, RequestException))
+            or departure_for_source(source, departures)
+            or request.attempts >= MAX_ATTEMPTS
+        ):
             request.status = RefreshRequestStatus.FAILED
             request.completed_at = timezone.now()
         request.save(
@@ -1237,7 +1271,7 @@ def _drain_one(
             exc_info=True,
         )
         return rate_limit_hit
-    record_title_success(check)
+    record_title_completion(check, result, succeeded=True)
     _finish(
         request,
         RefreshRequestStatus.DONE,

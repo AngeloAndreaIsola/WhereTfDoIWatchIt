@@ -2,6 +2,7 @@
 
 from datetime import timedelta
 
+from django.db.models import Q
 from django.utils import timezone
 
 from availability.domain.enums import ContentType
@@ -9,6 +10,7 @@ from availability.freshness import TITLE_AGGREGATORS, title_refresh_interval
 from availability.models import Offer, Source
 from availability.services.departures import confirmed_expiry, recorded_presence
 from availability.services.query import AvailabilityQueryService
+from availability.services.source_permissions import title_source_is_authorized
 from availability.sources import DEFAULT_SOURCE_SLUG
 
 from tracker.models import TitleAvailabilityCheck
@@ -22,18 +24,23 @@ ATTEMPT_COOLDOWN = timedelta(minutes=10)
 PROVIDER_SOURCES = {slug for slug, role in SOURCE_ROLES.items() if role == AvailabilityRole.COLLECTOR}
 
 
-def eligible_aggregator_sources(sources, country):
+def eligible_aggregator_sources(sources, country, content_type=None, *, configurations=None):
     """An explicitly disabled aggregator or an unsupported market is ineligible."""
     from availability.sources import source_registry
 
-    aggregators = TITLE_AGGREGATORS.intersection(sources)
-    disabled = set(Source.objects.filter(
-        slug__in=aggregators, enabled=False,
-    ).values_list("slug", flat=True))
+    candidates = TITLE_AGGREGATORS.intersection(sources)
+    if not country or not candidates:
+        return set()
+    if configurations is None:
+        source_rows = Source.objects.filter(slug__in=candidates, enabled=True)
+    else:
+        enabled = Source.objects.filter(slug__in=candidates, enabled=True).values_list("slug", flat=True)
+        source_rows = (Source(slug=slug, configuration=configurations.get(slug, {})) for slug in enabled)
     return {
-        slug for slug in aggregators - disabled
-        if country and (not (markets := source_registry.get(slug).capabilities.supported_countries)
-                        or country in markets)
+        source.slug for source in source_rows
+        if (not (markets := source_registry.get(source.slug).capabilities.supported_countries)
+            or country in markets)
+        and title_source_is_authorized(source.slug, country, content_type, source=source)
     }
 
 
@@ -84,6 +91,8 @@ def departure_for_source(source, departures):
 
 def title_check_is_due(source, configuration, observed_at, check, departures, now):
     """Use successful checks for the cache and actual attempts for priority caps."""
+    if check and check.in_progress:
+        return False
     attempted = check.last_attempted_at if check else None
     succeeded = check.last_succeeded_at if check else None
     observed = max(filter(None, (succeeded, observed_at)), default=None)
@@ -105,7 +114,8 @@ def title_attempted_recently(movie, country, *, sources=TRACKED_SOURCES):
     return set(TitleAvailabilityCheck.objects.filter(
         movie=movie, tmdb_id=movie.tmdb_id, content_type=movie.content_type,
         country=country or "", source__in=sources,
-        last_attempted_at__gt=timezone.now() - ATTEMPT_COOLDOWN,
+    ).filter(
+        Q(in_progress=True) | Q(last_attempted_at__gt=timezone.now() - ATTEMPT_COOLDOWN)
     ).values_list("source", flat=True))
 
 
@@ -117,12 +127,20 @@ def record_title_attempt(movie, source, country):
     check, _ = TitleAvailabilityCheck.objects.update_or_create(
         movie=movie, tmdb_id=movie.tmdb_id, content_type=movie.content_type,
         source=source, country=country or "",
-        defaults={"last_attempted_at": now},
+        defaults={"last_attempted_at": now, "in_progress": True},
     )
     return check
 
 
-def record_title_success(check):
-    if check is not None:
+def record_title_completion(check, result=None, *, succeeded=False):
+    if check is None:
+        return
+    fields = ["in_progress", "successful_run_ids"]
+    check.in_progress = False
+    check.successful_run_ids = []
+    if succeeded:
         check.last_succeeded_at = timezone.now()
-        check.save(update_fields=["last_succeeded_at"])
+        runs = getattr(result, "sync_runs", ())
+        check.successful_run_ids = [run.pk for run in runs if run.pk] if isinstance(runs, list) else []
+        fields.append("last_succeeded_at")
+    check.save(update_fields=fields)

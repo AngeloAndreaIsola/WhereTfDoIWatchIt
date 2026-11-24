@@ -101,7 +101,7 @@ from .title_availability_cache import (
     departures_for_titles,
     eligible_aggregator_sources,
     record_title_attempt,
-    record_title_success,
+    record_title_completion,
     title_check_is_due,
     title_departures,
 )
@@ -235,8 +235,10 @@ def stale_refresh_scopes(
     country = country.upper()
     moment = now or timezone.now()
     stale.difference_update(TITLE_AGGREGATORS)
-    if aggregators is None:
-        aggregators = eligible_aggregator_sources(refreshable, country)
+    aggregators = eligible_aggregator_sources(
+        refreshable if aggregators is None else aggregators, country, content_type,
+        configurations=configurations,
+    )
     checks = {
         check.source: check for check in TitleAvailabilityCheck.objects.filter(
             movie_id=movie_id, tmdb_id=tmdb_id, content_type=content_type,
@@ -615,6 +617,10 @@ def _process_watchlist_refresh_locked(
         if (tmdb_id, movie.content_type) in departures:
             scopes.sort(key=lambda slug: slug not in aggregators)
         for slug in scopes:
+            if slug in TITLE_AGGREGATORS and slug not in eligible_aggregator_sources(
+                [slug], current_country, movie.content_type,
+            ):
+                continue
             # The sweep has no queue row, but still spends the same metered
             # budget. Re-check the same policy immediately before execution.
             if _metered_source_is_unnecessary(
@@ -645,6 +651,7 @@ def _process_watchlist_refresh_locked(
                 if slug == DEFAULT_SOURCE_SLUG
                 else AvailabilityRefreshService(source=source_registry.get(slug))
             )
+            check = None
             try:
                 with source_budget(scope_limiter, source=slug):
                     # Acquisition owns the local quota ledger. The run limit
@@ -654,15 +661,17 @@ def _process_watchlist_refresh_locked(
                     check = record_title_attempt(movie, slug, current_country)
                     # Same as the request-drain path: the selected market is
                     # explicit, never inferred.
-                    scope_service.refresh_content(
+                    result = scope_service.refresh_content(
                         movie, country=current_country
                     )
-                record_title_success(check)
+                record_title_completion(check, result, succeeded=True)
                 summary.refreshed += 1
             except RateLimitExceeded:
+                record_title_completion(check)
                 summary.note_rate_limited_source(slug)
                 summary.skipped_rate_limited += 1
             except SourceQuotaExceeded as exc:
+                record_title_completion(check)
                 # An upstream refusal, not our local limiter. Plan exhaustion
                 # is terminal for the rest of this tick and costs no offer
                 # write; a short rate window stays retryable and never trips
@@ -683,6 +692,7 @@ def _process_watchlist_refresh_locked(
                         movie.tmdb_id, slug, exc.kind, exc.retry_after, exc.quota,
                     )
             except UpstreamTitleNotFound as exc:
+                record_title_completion(check)
                 # The same scoped evidence as a queued definitive miss. The
                 # shared history reader owns reuse and supersession policy;
                 # transient failures never enter this evidence path.
@@ -703,6 +713,7 @@ def _process_watchlist_refresh_locked(
                     movie.tmdb_id, slug, exc,
                 )
             except Exception as exc:
+                record_title_completion(check)
                 logger.exception(
                     "Unexpected error refreshing movie tmdb_id=%s source=%s: %s",
                     movie.tmdb_id, slug, exc,

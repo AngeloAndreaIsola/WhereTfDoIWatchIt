@@ -984,27 +984,17 @@ class MovieDetailEndpointTests(TestCase):
         self.assertTrue(v2_vpn_offer["is_accessible"])
 
     @patch("tracker.services.enrichment.TMDbClient")
-    def test_returns_full_detail(self, mock_tmdb_cls):
-        from tracker.services.tmdb import TMDbItem
+    def test_returns_full_local_detail(self, remote):
         movie = Movie.objects.create(
             tmdb_id=777, title="Test Film", year=2023,
             poster_path="/poster.jpg", overview="A test movie",
             genres=[{"id": 28, "name": "Action"}], genre_ids=[28],
             cast=[{"id": 1, "name": "Actor One", "character": "Role"}],
-            tmdb_rating=7.5,
+            director=["Jane Director"], tmdb_rating=7.5,
         )
-        mock_instance = mock_tmdb_cls.return_value
-        mock_instance.details.return_value = TMDbItem(
-            tmdb_id=777, title="Test Film", year=2023, content_type="movie",
-            overview="A test movie", poster_path="/poster.jpg",
-            genres=[{"id": 28, "name": "Action"}], genre_ids=[28],
-            cast=[{"id": 1, "name": "Actor One", "character": "Role"}],
-            seasons_data=[], rating=7.5,
-            director=["Jane Director"],
-        )
-        resp = self.client.get(f"/api/movie/{movie.id}/")
-        self.assertEqual(resp.status_code, 200)
-        data = resp.json()
+        response = self.client.get(f"/api/movie/{movie.id}/")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
         self.assertEqual(data["movie"]["tmdb_id"], 777)
         self.assertEqual(data["movie"]["title"], "Test Film")
         self.assertEqual(data["movie"]["tmdb_rating"], 7.5)
@@ -1012,34 +1002,18 @@ class MovieDetailEndpointTests(TestCase):
         self.assertEqual(data["movie"]["director"], ["Jane Director"])
         self.assertIsNone(data["user_data"])
         self.assertEqual(data["watch_events"], [])
+        remote.assert_not_called()
 
     @patch("tracker.services.enrichment.TMDbClient")
-    def test_updates_stale_fields(self, mock_tmdb_cls):
-        from tracker.services.tmdb import TMDbItem
-        movie = Movie.objects.create(
-            tmdb_id=888, title="Old Title", year=2020,
-            poster_path="", overview="", genres=[], genre_ids=[],
-            cast=[], tmdb_rating=None,
-        )
-        mock_instance = mock_tmdb_cls.return_value
-        mock_instance.details.return_value = TMDbItem(
-            tmdb_id=888, title="Same Title", year=2020, content_type="movie",
-            overview="New synopsis", poster_path="/new-poster.jpg",
-            genres=[{"id": 35, "name": "Comedy"}], genre_ids=[35],
-            cast=[{"id": 2, "name": "Comic Actor", "character": "Himself"}],
-            seasons_data=[], rating=8.0,
-        )
-        resp = self.client.get(f"/api/movie/{movie.id}/")
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json()["movie"]["title"], "Old Title")
+    def test_detail_get_does_not_refresh_stale_metadata(self, remote):
+        movie = Movie.objects.create(tmdb_id=888, title="Old Title", year=2020)
+        response = self.client.get(f"/api/movie/{movie.id}/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["movie"]["title"], "Old Title")
         movie.refresh_from_db()
-        self.assertEqual(movie.title, "Old Title")
-        self.assertEqual(movie.canonical_title, "Same Title")
-        self.assertFalse(movie.title_is_override)
-        self.assertEqual(movie.poster_path, "/new-poster.jpg")
-        self.assertEqual(movie.overview, "New synopsis")
-        self.assertEqual(movie.tmdb_rating, 8.0)
-        self.assertEqual(movie.cast, [{"id": 2, "name": "Comic Actor", "character": "Himself"}])
+        self.assertEqual(movie.canonical_title, "")
+        self.assertIsNone(movie.tmdb_rating)
+        remote.assert_not_called()
 
 
 class UnifiedCatalogEndpointTests(TestCase):

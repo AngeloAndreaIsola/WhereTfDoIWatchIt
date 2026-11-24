@@ -28,7 +28,7 @@ Or if running directly on the host / server environment:
 ## Title availability cache
 
 JustWatch and Watchmode reuse a successful title check for seven days, keyed
-by typed title, country and source. Configure a different operational window
+by typed title, country and source. Configure a shorter operational window
 per aggregator with `Source.configuration["title_refresh_interval_seconds"]`.
 Offer-evidence freshness and catalogue health still use
 `expected_refresh_interval_seconds`. A known catalogue traversal does not fill
@@ -45,6 +45,53 @@ selected title and market before the cache expires. A check attempted in the
 last ten minutes serves repeated clicks for the same scope. The worker
 continues to apply source-specific limits and its run budget. Empty or failed
 checks never remove last-known offers or make them current.
+
+### Source-reported title offers
+
+Only offers tied to the exact successful routine check's targeted sync runs
+can use the seven-day display window. Purpose-built audit or pilot runs and
+older rows without routine provenance stay in last-known history. The title response places these offers in
+`source_reported_offers` with source, original observation and last-seen
+timestamps, and the successful check time. They do not enter independently
+qualified availability or watchability counts. A newer failed, interrupted,
+empty or inconclusive check leaves older positives in last-known history.
+Disputed dates and conflicting reports do not gain current status.
+
+Detail GETs read local titles and metadata. A tracked title can enqueue due
+work for its country without waiting for a provider. The manual action
+bypasses the ordinary lifetime for the selected typed title and market.
+Quota, locks, the ten-minute cooldown and pending-request dedup still apply.
+
+### Reviewed upstream permissions
+
+An enabled Source row supplies no permission by itself. Set
+`Source.configuration["outbound_availability_permission"]` only after reviewing
+the current authorization. The review record holds:
+
+- `status` equal to `authorized`
+- Exact `endpoint`, approved ISO `countries` and explicit `operations`
+- Sanitized `evidence_reference`, `reviewed_by`, and timezone-aware
+  `valid_from` and `valid_until`
+- JustWatch only, a positive `maximum_requests` for the receipt and a positive
+  `minimum_interval_seconds` from the reviewed rate policy
+
+For JustWatch use `https://apis.justwatch.com/graphql`, with `search` for movies
+and `search` plus `seasons` for series. The default transport also tests the
+exact document and country for separately authorized `catalogue`, `providers`,
+`details`, `episodes` and `title_offers` operations. The Watchmode receipt uses
+`https://api.watchmode.com/v1`, `search` and `title_sources`. An explicit
+Streaming Availability check requires
+`https://streaming-availability.p.rapidapi.com` and `show_availability`.
+Existing credentials and quotas still apply. The receipt must cover the
+application's title workload for those markets. A narrow diagnostic approval
+does not authorize this workload. No receipt is seeded.
+
+The queue rechecks permission before execution. The ordinary JustWatch
+transport commits an attempt against the receipt before each HTTP POST. It
+does not follow redirects. Denials stop the reviewed receipt, rate limits
+honor the upstream retry window, and interrupted sends retain their
+reservation until separately reconciled. The bounded #97 experiment has
+its own authorization, transport and ledger.
 
 ## Provider Catalogue Refresh
 

@@ -102,7 +102,7 @@ from .services.bulk_refresh import (
     stale_catalogue_sources,
     title_level_source_slugs,
 )
-from .services.availability_reads import get_local_offers, get_offer_evidence
+from .services.availability_reads import get_local_offers, get_title_offer_evidence
 from .services.availability_metrics import (
     WINDOW_DAYS,
     availability_metrics as collect_availability_metrics,
@@ -152,7 +152,7 @@ from .services.letterboxd import (
 )
 from .services.ranking import rank_offers
 from .services.preferences import resolve_preferences
-from .services.enrichment import enrich_movie_from_tmdb, resolve_or_create_movie, sync_movie_fields
+from .services.enrichment import resolve_or_create_movie, sync_movie_fields
 from .services.tmdb import TMDbClient, TMDbItem, TMDbMovie
 from .services.watchlist_export import (
     FILENAME_BOTH,
@@ -614,7 +614,9 @@ def movie_availability(request, tmdb_id: int):
 
     preference = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
 
-    offers, last_known = get_offer_evidence(movie)
+    country = _active_country(request).strip().upper()
+    evidence = get_title_offer_evidence(movie)
+    offers, last_known = evidence.current, evidence.last_known
     ranked = rank_offers(offers, preference)
 
     user_data = UserMovieData.objects.filter(user_id=1, movie=movie).first()
@@ -631,6 +633,9 @@ def movie_availability(request, tmdb_id: int):
                 "offers": len(offers),
             },
             "offers": RankedOfferSerializer([offer.to_dict() for offer in ranked], many=True).data,
+            "source_reported_offers": [
+                offer.to_dict() for offer in evidence.source_reported if offer.country == country
+            ],
             # Stale/unverified positives: history ("last seen"), never current.
             "last_known_offers": RankedOfferSerializer(
                 [offer.to_dict() for offer in rank_offers(last_known, preference)], many=True
@@ -647,7 +652,9 @@ def refresh_availability(request, tmdb_id: int):
         return error
 
     country = _active_country(request).strip().upper()
-    rows, recently_attempted = request_manual_title_refresh(movie, country)
+    rows, recently_attempted, authorized = request_manual_title_refresh(movie, country)
+    if not authorized:
+        return Response({"error": "No availability source is authorized for this title and country."}, status=409)
     pending = RefreshRequest.objects.filter(
         movie=movie, country=country, status=RefreshRequestStatus.PENDING
     ).exists()
@@ -656,7 +663,7 @@ def refresh_availability(request, tmdb_id: int):
 
     return Response(
         {
-            "message": "Availability refresh queued" if pending else "Availability was checked recently",
+            "message": "Availability refresh queued" if pending else "This scope is on cooldown or needs reconciliation",
             "tmdb_id": movie.tmdb_id,
             "content_type": movie.content_type,
             "refresh_pending": pending,
@@ -2785,24 +2792,8 @@ def _active_country(request) -> str:
 
 
 def _load_content_item(tmdb_id: int, content_type: str) -> Movie | None:
-    """Load the tracked row for tmdb_id, resolving it through TMDb when missing.
-
-    Typed detail routes always select their own TMDb namespace. Missing rows
-    are resolved through the matching TMDb endpoint.
-    """
-    try:
-        item = Movie.objects.visible().get(tmdb_id=tmdb_id, content_type=content_type)
-    except (Movie.DoesNotExist, Movie.MultipleObjectsReturned):
-        item = None
-
-    if item is not None:
-        return item
-
-    try:
-        return resolve_or_create_movie(tmdb_id, content_type=content_type)
-    except Exception:
-        logger.exception("TMDb resolve failed for %s %s", content_type, tmdb_id)
-        return None
+    """Look up the tracked title in its own TMDb namespace locally."""
+    return Movie.objects.visible().filter(tmdb_id=tmdb_id, content_type=content_type).first()
 
 
 def _requested_season(request, item: Movie) -> int | None:
@@ -2956,7 +2947,8 @@ def _prime_detail_response(request, item: Movie, key: str) -> Response:
         request.query_params.get("current_country") or request.query_params.get("country")
         or access_pref.current_country
     )
-    current_offers, last_known_offers = get_offer_evidence(item, season=season)
+    evidence = get_title_offer_evidence(item, season=season)
+    current_offers, last_known_offers = evidence.current, evidence.last_known
     access_verdict = access_resolve_title(
         item,
         current_offers,
@@ -2971,12 +2963,23 @@ def _prime_detail_response(request, item: Movie, key: str) -> Response:
         item, last_known_offers, access_pref, current_country=access_country
     )
 
+    from tracker.services.presentation import present_offer
+
+    providers = {provider.slug: provider for provider in Provider.objects.all()} if evidence.source_reported else {}
+    source_reported = []
+    for offer in evidence.source_reported:
+        if offer.country != country:
+            continue
+        presented = present_offer(offer, providers)
+        source_reported.append({**offer.to_dict(), "service": presented.service_display})
+
     payload = {
         key: MovieDetailSerializer(item).data,
         "user_data": UserMovieDataSerializer(user_data).data if user_data else None,
         "is_in_watchlist": is_in_watchlist,
         "watch_events": MovieWatchEventSerializer(watch_events, many=True).data,
         "offers": _build_prime_offers(request, item, season=season),
+        "source_reported_offers": source_reported,
         # The single access verdict for this title, computed by the same
         # resolver the watchlist badge uses (tracker.services.access). The
         # detail page and the watchlist can therefore never disagree about
@@ -3027,7 +3030,7 @@ def prime_movie(request, tmdb_id: int):
             {
                 "movie": {"tmdb_id": tmdb_id, "title": None, "year": None},
                 "offers": [],
-                "message": "Movie not tracked and could not be resolved via TMDb.",
+                "message": "Movie not tracked.",
             },
             status=404,
         )
@@ -3038,8 +3041,8 @@ def prime_movie(request, tmdb_id: int):
 def prime_series(request, tmdb_id: int):
     """GET /api/prime/series/<tmdb_id>/ — ranked Prime Video offers for one series.
 
-    Mirrors prime_movie but resolves the row through the TMDb TV endpoint and
-    is keyed on ``series`` so callers can tell movies and series apart.
+    Mirrors prime_movie for local series rows. The response is keyed on
+    ``series`` so callers can tell movies and series apart.
 
     Series responses also carry ``seasons`` (TMDb season metadata for the
     selector) and ``selected_season``. The optional ``?season=N`` query param
@@ -3052,7 +3055,7 @@ def prime_series(request, tmdb_id: int):
             {
                 "series": {"tmdb_id": tmdb_id, "title": None, "year": None},
                 "offers": [],
-                "message": "Series not tracked and could not be resolved via TMDb.",
+                "message": "Series not tracked.",
             },
             status=404,
         )
@@ -3192,12 +3195,6 @@ def movie_detail(request, pk: int):
         movie = Movie.objects.visible().get(pk=pk)
     except Movie.DoesNotExist:
         return Response({"error": "movie not found"}, status=404)
-
-    # Fetch full TMDb metadata if missing or stale
-    try:
-        enrich_movie_from_tmdb(movie)
-    except Exception:
-        logger.exception("TMDb details fetch failed for movie %s", pk)
 
     # Refresh-on-view (Phase B): opening a title is meaningful user intent.
     # The local availability is served above; a stale/missing title only

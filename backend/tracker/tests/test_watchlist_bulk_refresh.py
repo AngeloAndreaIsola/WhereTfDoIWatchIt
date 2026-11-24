@@ -69,7 +69,7 @@ from tracker.services.refresh_requests import (
 )
 from tracker.services.watchability import RefreshState
 from tracker.services.access import AccessVerdict, _empty_result
-from tracker.tests.availability_factories import local_offer
+from tracker.tests.availability_factories import local_offer, reviewed_test_sources
 from tracker.tests.test_refresh_provider_catalogue import catalogue_slugs
 
 REFRESH_CONTENT = (
@@ -460,6 +460,10 @@ class BulkDrainEndToEndTests(TestCase):
     status endpoint reports the same aggregate.
     """
 
+    @classmethod
+    def setUpTestData(cls):
+        reviewed_test_sources()
+
     @gate_off
     def test_worker_drains_bulk_queue_and_status_reports_it(self):
         movie_a = _watchlist_movie(401)
@@ -516,6 +520,10 @@ class BulkDrainEndToEndTests(TestCase):
 
 class BatchStampingTests(TestCase):
     """One uuid per run, stamped onto every request the run touches."""
+
+    @classmethod
+    def setUpTestData(cls):
+        reviewed_test_sources()
 
     def test_service_returns_a_batch_id_and_stamps_its_rows(self):
         _watchlist_movie(411)
