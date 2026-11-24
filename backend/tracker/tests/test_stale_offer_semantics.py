@@ -147,7 +147,7 @@ class ReconciledEvidenceTests(_Base):
         self.assertEqual(get_offer_evidence(self.movie), ([], []))
 
 
-@patch("tracker.services.offer_pipeline.enrich_movie_from_tmdb")
+@patch("tracker.services.enrichment.enrich_movie_from_tmdb")
 class ApiAgreementTests(_Base):
     """Catalog, homepage, watchlist report and detail agree on one state."""
 

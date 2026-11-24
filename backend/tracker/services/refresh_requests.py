@@ -48,9 +48,10 @@ Contracts:
 """
 from __future__ import annotations
 
-import datetime as dt
 import logging
 import uuid
+
+from requests import RequestException
 from contextlib import contextmanager
 from typing import Optional
 
@@ -58,11 +59,13 @@ from django.db import IntegrityError, connection, connections
 from django.db.models import Q
 from django.utils import timezone
 
-from availability.freshness import source_configuration_snapshot
+from availability.domain.enums import ContentType
+from availability.freshness import TITLE_AGGREGATORS, source_configuration_snapshot
 from availability.models import Offer
 from availability.services.refresh import AvailabilityRefreshService
+from availability.services.source_permissions import title_source_is_authorized
 from availability.sources import DEFAULT_SOURCE_SLUG, source_registry
-from availability.sources.base import SourceQuotaExceeded
+from availability.sources.base import SourceFetchStopped, SourceQuotaExceeded
 
 from ..models import (
     AvailabilityRefresh,
@@ -75,6 +78,7 @@ from ..models import (
     RefreshRequestOutcome,
     RefreshRequestStatus,
     RefreshRun,
+    TitleAvailabilityCheck,
     WatchlistItem,
 )
 from .bulk_refresh import (
@@ -94,6 +98,15 @@ from .rate_limit import (
     source_budget,
 )
 from .streaming_api import UpstreamTitleNotFound
+from .title_availability_cache import (
+    ATTEMPT_COOLDOWN,
+    departure_for_source,
+    eligible_aggregator_sources,
+    record_title_attempt,
+    record_title_completion,
+    title_attempted_recently,
+    title_departures,
+)
 from .watchability import RefreshState
 
 logger = logging.getLogger(__name__)
@@ -128,12 +141,14 @@ MAX_SCAN_PAGES = 4
 # evidence), so without this window every detail view or frontend poll of an
 # unavailable title would enqueue — and the worker would spend — a brand-new
 # external fetch on each read.
-RECENT_ATTEMPT_WINDOW = dt.timedelta(minutes=10)
+RECENT_ATTEMPT_WINDOW = ATTEMPT_COOLDOWN
 
 
 def has_canonical_offers(movie) -> bool:
     """True when the canonical path has ever observed this title."""
-    return Offer.objects.filter(tmdb_id=movie.tmdb_id).exists()
+    return Offer.objects.filter(
+        tmdb_id=movie.tmdb_id, content_type=movie.content_type,
+    ).exists()
 
 
 def recently_attempted(movie, source: str = "", country: str = "") -> bool:
@@ -171,6 +186,8 @@ def request_availability_refresh(
     if_stale: bool = True,
     batch: uuid.UUID | None = None,
     source_configuration=None,
+    departures=None,
+    manual=False,
 ) -> RefreshRequest | None:
     """Request an asynchronous canonical availability refresh for *movie*.
 
@@ -214,16 +231,23 @@ def request_availability_refresh(
             source=source,
             country=country or None,
             configuration=source_configuration,
+            departures=departures,
         ):
             return None
         if if_stale and recently_attempted(movie, source, country):
-            # Already fetched (or failed) moments ago for this scope — the
-            # title may legitimately still be stale because the provider has
-            # nothing for it; do not open a new attempt on every read.
-            return None
+            # Old requests have no typed attempt timestamp. Keep their
+            # cooldown until this scope has a cache record. From then on the
+            # typed cache owns the cooldown, including after a TMDb relink.
+            if freshness_source not in TITLE_AGGREGATORS or not TitleAvailabilityCheck.objects.filter(
+                movie=movie, source=freshness_source, country=country,
+            ).exists():
+                return None
 
         effective_priority = priority
-        if not has_canonical_offers(movie):
+        if (
+            not has_canonical_offers(movie)
+            or (if_stale and departure_for_source(freshness_source, departures))
+        ):
             effective_priority = min(priority, RefreshPriority.NEW)
 
         # Empty source is a legacy alias for the default source. Let the
@@ -249,6 +273,11 @@ def request_availability_refresh(
                         status=RefreshRequestStatus.PENDING,
                         priority__gt=effective_priority,
                     ).update(priority=effective_priority)
+                    if manual:
+                        RefreshRequest.objects.filter(
+                            movie=movie, source=DEFAULT_SOURCE_SLUG, country=country,
+                            status=RefreshRequestStatus.PENDING,
+                        ).update(manual=True)
                     if batch is not None:
                         RefreshRequest.objects.filter(
                             movie=movie,
@@ -269,7 +298,7 @@ def request_availability_refresh(
                 source=source,
                 country=country,
                 status=RefreshRequestStatus.PENDING,
-                defaults={"priority": effective_priority, "batch": batch},
+                defaults={"priority": effective_priority, "batch": batch, "manual": manual},
             )
         except IntegrityError:
             # Concurrent event won the partial unique constraint; the row we
@@ -286,6 +315,8 @@ def request_availability_refresh(
                 status=RefreshRequestStatus.PENDING,
                 priority__gt=effective_priority,
             ).update(priority=effective_priority)
+            if manual:
+                RefreshRequest.objects.filter(pk=request.pk, status=RefreshRequestStatus.PENDING).update(manual=True)
             if batch is not None:
                 # Last bulk click owns progress without touching priority.
                 RefreshRequest.objects.filter(
@@ -302,7 +333,7 @@ def request_availability_refresh(
         return None
 
 
-def refresh_states_for(movie_ids) -> dict[int, str]:
+def refresh_states_for(movie_ids, *, country=None) -> dict[int, str]:
     """Derive each title's default-scope refresh state in one batched query.
 
     Returns ``{movie_id: RefreshState}`` — the queue-side evidence the read
@@ -332,9 +363,10 @@ def refresh_states_for(movie_ids) -> dict[int, str]:
     """
     movie_ids = list(movie_ids)
     per_movie: dict[int, set[str]] = {}
-    for movie_id, state in RefreshRequest.objects.filter(
-        movie_id__in=movie_ids,
-    ).values_list("movie_id", "status"):
+    requests = RefreshRequest.objects.filter(movie_id__in=movie_ids)
+    if country is not None:
+        requests = requests.filter(country=country)
+    for movie_id, state in requests.values_list("movie_id", "status"):
         per_movie.setdefault(movie_id, set()).add(state)
 
     states: dict[int, str] = {}
@@ -400,7 +432,15 @@ def request_title_refresh(
         report_entry, applicable_slugs=base_sources,
         ladder_switch=(False if priority == RefreshPriority.EXPLICIT else None),
     )
-    allowed = list(decision["allowed_sources"])
+    eligible_aggregators = eligible_aggregator_sources(base_sources, country, movie.content_type)
+    allowed = [
+        slug for slug in decision["allowed_sources"]
+        if slug not in TITLE_AGGREGATORS or slug in eligible_aggregators
+    ]
+    departures = (
+        title_departures(movie.tmdb_id, movie.content_type, country, timezone.now())
+        if if_stale and eligible_aggregators else {}
+    )
     source_configurations = source_configuration_snapshot(allowed)
 
     queued = 0
@@ -413,6 +453,7 @@ def request_title_refresh(
             batch=batch,
             country=country,
             source_configuration=source_configurations.get(source, {}),
+            departures=departures,
         )
         if row is not None:
             queued += 1
@@ -421,6 +462,27 @@ def request_title_refresh(
         "queued": queued,
         "skipped": decision["skipped_sources"],
     }
+
+
+def request_manual_title_refresh(movie, country):
+    """Request the default and eligible aggregator checks for one title."""
+    sources = sorted(eligible_aggregator_sources(TITLE_AGGREGATORS, country, movie.content_type))
+    if title_source_is_authorized(DEFAULT_SOURCE_SLUG, country, movie.content_type):
+        sources.insert(0, DEFAULT_SOURCE_SLUG)
+    if not sources:
+        return [], False, False
+    recent = title_attempted_recently(movie, country, sources=sources)
+    requests = []
+    for source in sources:
+        if source in recent:
+            continue
+        row = request_availability_refresh(
+            movie, priority=RefreshPriority.EXPLICIT, if_stale=False,
+            source=source, country=country, manual=True,
+        )
+        if row is not None:
+            requests.append(row)
+    return requests, bool(recent), True
 
 
 def request_watchlist_refresh(
@@ -696,19 +758,24 @@ def _finish(
     request.save(update_fields=["status", "completed_at", "last_error", "outcome"])
 
 
-def _successful_outcome(request: RefreshRequest, source: str) -> str:
+def _successful_outcome(request: RefreshRequest, source: str, country: str, check) -> str:
+    kind = request.movie.content_type
+    kinds = (kind,) if kind != ContentType.SERIES else (kind, ContentType.SEASON, ContentType.EPISODE)
     qs = Offer.objects.filter(
         tmdb_id=request.movie.tmdb_id,
+        content_type__in=kinds,
         source__slug=source,
         currently_available=True,
     )
-    if request.country:
-        qs = qs.filter(country__code=request.country)
-    return (
-        RefreshRequestOutcome.OFFERS_FOUND
-        if qs.exists()
-        else RefreshRequestOutcome.NO_OFFER
-    )
+    if country:
+        qs = qs.filter(country__code=country)
+    if source in TITLE_AGGREGATORS:
+        qs = qs.filter(last_seen__gte=check.last_attempted_at)
+    if qs.exists():
+        return RefreshRequestOutcome.OFFERS_FOUND
+    if source in TITLE_AGGREGATORS:
+        return RefreshRequestOutcome.INCONCLUSIVE
+    return RefreshRequestOutcome.NO_OFFER
 
 
 def _metered_source_is_unnecessary(
@@ -872,6 +939,51 @@ def _drain_one(
     source = resolve_request_source(request)
     scope_limiter = _limiter_for_scope(source, limiter, limiter_overrides)
 
+    country = request.country or resolve_source_country() or ""
+    if source in TITLE_AGGREGATORS:
+        authorized = source in eligible_aggregator_sources([source], country, movie.content_type)
+    else:
+        authorized = not request.manual or title_source_is_authorized(source, country, movie.content_type)
+    if not authorized:
+        request.settle(
+            RefreshRequestStatus.BLOCKED, blocked_reason=BlockedReason.SOURCE_DISABLED,
+            error="Source disabled, market unsupported, or reviewed permission unavailable",
+        )
+        summary.requests_drained += 1
+        summary.blocked_by_reason[BlockedReason.SOURCE_DISABLED] = (
+            summary.blocked_by_reason.get(BlockedReason.SOURCE_DISABLED, 0) + 1
+        )
+        return rate_limit_hit
+
+    if (source in TITLE_AGGREGATORS or request.manual) and TitleAvailabilityCheck.objects.filter(
+        movie=movie, tmdb_id=movie.tmdb_id, content_type=movie.content_type,
+        country=country, source=source, in_progress=True,
+    ).exists():
+        request.settle(
+            RefreshRequestStatus.FAILED, error="Interrupted title check requires reconciliation",
+        )
+        summary.errors += 1
+        summary.requests_drained += 1
+        return rate_limit_hit
+
+    if (
+        request.manual
+        and request.batch is None
+        and not request.attempts
+        and not request.last_error
+        and source in title_attempted_recently(movie, country, sources=[source])
+    ):
+        request.settle(RefreshRequestStatus.BLOCKED, blocked_reason=BlockedReason.SUPERSEDED)
+        summary.skipped_cached += 1
+        summary.requests_drained += 1
+        return rate_limit_hit
+
+    departures = (
+        title_departures(movie.tmdb_id, movie.content_type, country, timezone.now())
+        if source in TITLE_AGGREGATORS and request.priority != RefreshPriority.EXPLICIT
+        else {}
+    )
+
     # Source policy, re-checked at EXECUTION time, not just at enqueue.
     #
     # The enqueue gate (:func:`request_watchlist_refresh`) refuses to create a
@@ -910,6 +1022,15 @@ def _drain_one(
         summary.requests_drained += 1
         return rate_limit_hit
 
+    if (
+        request.priority != RefreshPriority.EXPLICIT
+        and request.attempts
+        and source in TITLE_AGGREGATORS
+        and source in title_attempted_recently(movie, country, sources=[source])
+    ):
+        # Let the retry wait out its cooldown without calling it a completed check.
+        return rate_limit_hit
+
     # Freshness is free: settle fresh scopes without touching the budget —
     # unless the user explicitly asked for a new check right now.
     if (
@@ -917,8 +1038,9 @@ def _drain_one(
         and not is_stale(
             movie,
             source=request.source,
-            country=request.country or None,
+            country=(country if source in TITLE_AGGREGATORS else request.country) or None,
             configuration=(source_configurations or {}).get(source, {}),
+            departures=departures,
         )
     ):
         _finish(request, RefreshRequestStatus.DONE)
@@ -1037,22 +1159,25 @@ def _drain_one(
         summary.skipped_budget_exhausted += 1
         return rate_limit_hit
 
+    check = None
     try:
         with source_budget(scope_limiter, source=source):
             # Charge attempts only after local source capacity is reserved.
             # source_budget already owns the quota ledger; do not reserve twice.
             summary.remaining_budget -= 1
+            check = record_title_attempt(movie, source, country)
             # The user's selected market travels with the request. Sources that
             # answer per country (JustWatch) cannot be called without it, and
             # ones that answer globally (Streaming Availability) ignore it.
-            _service_for_scope(request.source, service).refresh_content(
-                movie, country=request.country or resolve_source_country()
-            )
+            source_scope = "" if request.manual and source == DEFAULT_SOURCE_SLUG else request.source
+            result = _service_for_scope(source_scope, service).refresh_content(movie, country=country or None)
     except RateLimitExceeded:
+        record_title_completion(check)
         summary.note_rate_limited_source(source)
         summary.skipped_rate_limited += 1
         return source == DEFAULT_SOURCE_SLUG or rate_limit_hit
     except SourceQuotaExceeded as exc:
+        record_title_completion(check)
         # An *upstream* quota refusal, classified by the source itself. This is
         # deliberately not the same branch as ``RateLimitExceeded`` above
         # (which is our own local daily guard) and not the generic failure
@@ -1061,8 +1186,8 @@ def _drain_one(
         # - a spent plan is terminal until the plan resets. Settle it as
         #   ``blocked``/``quota_exhausted`` so it cannot masquerade as a
         #   failed source after MAX_ATTEMPTS.
-        # - a short rate window is retryable. Leave the row ``pending`` and do
-        #   not consume an attempt: a burst of 429s is not a broken title.
+        # - a short rate window is retryable for ordinary checks. Manual and
+        #   automatic departure checks settle after that attempted call.
         #
         # The diagnostic carries the body, status, Retry-After and quota
         # headers, so a monthly plan exhaustion can be told apart from a
@@ -1070,8 +1195,8 @@ def _drain_one(
         summary.note_rate_limited_source(source)
         summary.skipped_rate_limited += 1
         diagnostic = exc.diagnostic()
-        if exc.terminal:
-            if quota_circuit is not None:
+        if exc.terminal or request.manual or departure_for_source(source, departures):
+            if exc.terminal and quota_circuit is not None:
                 quota_circuit.trip(source, diagnostic)
             request.settle(
                 RefreshRequestStatus.BLOCKED,
@@ -1097,6 +1222,7 @@ def _drain_one(
             )
         return rate_limit_hit
     except UpstreamTitleNotFound as exc:
+        record_title_completion(check)
         # The upstream catalogue has no such title: a permanent answer, not a
         # fault. Fail on the first attempt — retrying can only re-earn the same
         # 404 while spending metered budget, which is exactly the waste this
@@ -1124,10 +1250,15 @@ def _drain_one(
         )
         return rate_limit_hit
     except Exception as exc:  # noqa: BLE001 - one bad title must not stop the run
+        record_title_completion(check)
         summary.errors += 1
         request.attempts += 1
         request.last_error = f"{type(exc).__name__}: {exc}"
-        if request.attempts >= MAX_ATTEMPTS:
+        if (
+            isinstance(exc, SourceFetchStopped) or (request.manual and isinstance(exc, RequestException))
+            or departure_for_source(source, departures)
+            or request.attempts >= MAX_ATTEMPTS
+        ):
             request.status = RefreshRequestStatus.FAILED
             request.completed_at = timezone.now()
         request.save(
@@ -1140,10 +1271,11 @@ def _drain_one(
             exc_info=True,
         )
         return rate_limit_hit
+    record_title_completion(check, result, succeeded=True)
     _finish(
         request,
         RefreshRequestStatus.DONE,
-        outcome=_successful_outcome(request, source),
+        outcome=_successful_outcome(request, source, country, check),
     )
     summary.refreshed += 1
     summary.requests_drained += 1
@@ -1248,6 +1380,7 @@ def _drain_refresh_requests_locked(
     represented_batches=None,
     quota_circuit: SourceQuotaCircuit | None = None,
     source_configurations=None,
+    sweep_country=None,
 ) -> set[tuple[int, str]]:
     """Process pending refresh requests in priority order, budget permitting.
 
@@ -1281,7 +1414,8 @@ def _drain_refresh_requests_locked(
     fully respected among *executable* requests, and a tick reads at most a
     few bounded pages, never the whole table.
 
-    Returns every typed TMDb identity the request queue owns this run — settled
+    Returns the typed TMDb identities the request queue owns in the sweep
+    market when supplied, or across markets otherwise. This includes settled
     (``done``/``failed``) **and** still-pending requests — so the caller's
     stale sweep neither re-attempts nor double-counts those titles (a pending
     request left for the next run is the queue's responsibility, not the
@@ -1355,6 +1489,8 @@ def _drain_refresh_requests_locked(
             if request.batch is not None:
                 drained_batches.add(request.batch)
             source = resolve_request_source(request)
+            if sweep_country is None or not request.country or request.country == sweep_country:
+                excluded.add((request.movie.tmdb_id, request.movie.content_type))
             rate_limit_hit = _drain_one(
                 request,
                 summary=summary,
@@ -1383,7 +1519,6 @@ def _drain_refresh_requests_locked(
                 blocked.add(source)
 
         for request in strict:
-            excluded.add((request.movie.tmdb_id, request.movie.content_type))
             _drain(request)
 
         if reserved is not None:
@@ -1392,7 +1527,6 @@ def _drain_refresh_requests_locked(
             # spendable again — only by this one request, and only under the
             # same guards.
             summary.remaining_budget += 1
-            excluded.add((reserved.movie.tmdb_id, reserved.movie.content_type))
             _drain(reserved)
 
         if summary.remaining_budget <= 0:

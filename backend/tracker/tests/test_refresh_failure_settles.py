@@ -20,6 +20,7 @@ Settled work is not successful work: a FAILED refresh is full of `done`,
 `failed` and `blocked`/`quota_exhausted` rows and is still `FAILED`, because the
 run-level failure is what the status records.
 """
+from tracker.tests.availability_factories import reviewed_test_sources
 import io
 import uuid
 from unittest.mock import patch
@@ -59,6 +60,7 @@ class FailureSettlesWorkBase(TestCase):
         # broke `test_policy_metered_reads_roles_not_rate_limits`, which asserts
         # a policy-metered source has *no* configured rate limit. Save and
         # restore, as the sibling policy-drain tests do.
+        reviewed_test_sources()
         self._saved_limits = dict(SOURCE_DAILY_LIMITS)
         SOURCE_DAILY_LIMITS[SA] = 100
         SOURCE_DAILY_LIMITS[WM] = 100
@@ -110,6 +112,7 @@ class FailureSettlesWorkBase(TestCase):
         return [
             RefreshRequest.objects.create(
                 movie=pool[i], source=source, status=status, batch=self.batch,
+                country="NL" if source == WM else "",
                 completed_at=None
                 if status == RefreshRequestStatus.PENDING
                 else timezone.now(),

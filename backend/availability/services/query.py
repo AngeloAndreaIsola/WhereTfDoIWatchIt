@@ -173,7 +173,7 @@ class AvailabilityQueryService:
             now=now,
         )
 
-    def get_reconciled_for_contents(self, contents, *, now=None):
+    def get_reconciled_for_contents(self, contents, *, country=None, now=None):
         """Return effective offers for many title identities in fixed queries.
 
         List/report surfaces need only offers, not per-title diagnostics.  By
@@ -190,7 +190,7 @@ class AvailabilityQueryService:
         invalid = {kind for _tmdb_id, kind in pairs if kind not in ContentType.values}
         if invalid:
             raise ValueError(f"Invalid content types: {sorted(invalid)!r}")
-        rows = list(self.repo.observations_for_contents(pairs))
+        rows = list(self.repo.observations_for_contents(pairs, country_code=country))
         result = {pair: [] for pair in pairs}
         if not rows:
             return result

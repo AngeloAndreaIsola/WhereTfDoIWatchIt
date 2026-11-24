@@ -54,6 +54,9 @@ class Offer:
     availability_evidence: str = "verified"
     #: ISO timestamp of the newest positive observation behind this offer.
     last_seen_at: Optional[str] = None
+    observed_at: Optional[str] = None
+    last_checked_at: Optional[str] = None
+    reporting_source: str = ""
     #: Source-declared availability window, serialized as UTC ISO 8601.
     available_from: Optional[str] = None
     available_until: Optional[str] = None
@@ -93,6 +96,9 @@ class Offer:
             prices=list(d.get("prices") or []),
             availability_evidence=d.get("availability_evidence") or "verified",
             last_seen_at=d.get("last_seen_at") or None,
+            observed_at=d.get("observed_at"),
+            last_checked_at=d.get("last_checked_at"),
+            reporting_source=d.get("reporting_source") or "",
             available_from=d.get("available_from"),
             available_until=d.get("available_until"),
             season_number=d.get("season_number"),
@@ -101,7 +107,7 @@ class Offer:
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize back to a legacy-compatible dict."""
-        return {
+        data = {
             "country": self.country,
             "service": self.service,
             "offer_type": self.offer_type,
@@ -125,3 +131,14 @@ class Offer:
             "season_number": self.season_number,
             "episode_number": self.episode_number,
         }
+
+        if self.reporting_source:
+            data.update(
+                observed_at=self.observed_at,
+                last_checked_at=self.last_checked_at,
+                reporting_source=self.reporting_source,
+                is_entitled=None,
+                is_accessible=None,
+                playback_verified=False,
+            )
+        return data

@@ -200,6 +200,10 @@ class WatchmodeTitleResult:
                 f"tmdb_id={self.tmdb_id!r})")
 
 
+def _requests_get(url, *, headers, timeout):
+    return requests.get(url, headers=headers, timeout=timeout, allow_redirects=False)
+
+
 class WatchmodeClient:
     """Transport-only Watchmode client with bounded retries and quota checks."""
 
@@ -208,7 +212,7 @@ class WatchmodeClient:
                  backoff=DEFAULT_BACKOFF, sleeper=None, budget=None):
         # ``http_get`` is the seam every test injects: callable
         # ``(url, headers, timeout)`` returning a requests-like response.
-        self._http_get = http_get or requests.get
+        self._http_get = http_get or _requests_get
         self.base_url = base_url.rstrip("/")
         # Read from the environment, never hard-coded; falls back to the
         # Django setting when one is configured.
@@ -287,9 +291,11 @@ class WatchmodeClient:
                     "WATCHMODE_API_KEY is not configured; refusing to call Watchmode"
                 )
             self._reserve_call()
-            response = self._http_get(
-                url, headers=self._headers(), timeout=self.timeout
-            )
+            try:
+                response = self._http_get(url, headers=self._headers(), timeout=self.timeout)
+            except requests.RequestException as exc:
+                from .base import SourceFetchStopped
+                raise SourceFetchStopped("Watchmode request interrupted") from exc
             try:
                 status = int(getattr(response, "status_code", 0))
             except (TypeError, ValueError):
@@ -297,7 +303,7 @@ class WatchmodeClient:
 
             self._record_quota(getattr(response, "headers", {}) or {})
 
-            if status in AUTH_STATUS:
+            if status in AUTH_STATUS or 300 <= status < 400:
                 raise WatchmodeAuthError(
                     f"Watchmode HTTP {status}: API key rejected or plan lacks access"
                 )

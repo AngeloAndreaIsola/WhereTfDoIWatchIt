@@ -7,7 +7,6 @@ from typing import Optional
 from django.conf import settings
 from tracker.models import Preference, Provider, ProviderCategory
 
-from .enrichment import enrich_movie_from_tmdb
 from .preferences import build_preference, resolve_preferences
 from .ranking import rank_offers
 from .presentation import present_offer
@@ -164,7 +163,6 @@ class OfficialOffersPipeline:
         provider_map = self._build_provider_map()
         provider_slug = getattr(settings, "DEFAULT_PREFERENCE_PROVIDER", self.default_provider_slug)
 
-        enrich_movie_from_tmdb(movie)
         offers = self.get_cached_offers(movie, season=season)
         qualifying = self._qualify_offers(offers, provider_map, provider_slug)
         # Ranking keeps the legacy preference (unchanged ordering); the shared

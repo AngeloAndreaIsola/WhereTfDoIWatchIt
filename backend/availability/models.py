@@ -140,6 +140,17 @@ class Source(models.Model):
         return self.name
 
 
+class JustWatchRequestBudget(models.Model):
+    """Durable, pre-send accounting for an ordinary reviewed permission receipt."""
+
+    evidence_reference = models.CharField(max_length=255, unique=True)
+    attempts = models.PositiveIntegerField(default=0)
+    last_reserved_at = models.DateTimeField(null=True, blank=True)
+    in_progress = models.BooleanField(default=False)
+    denied = models.BooleanField(default=False)
+    blocked_until = models.DateTimeField(null=True, blank=True)
+
+
 class AvailabilityExperiment(models.Model):
     """Durable budget state for one explicitly authorized experiment token."""
 

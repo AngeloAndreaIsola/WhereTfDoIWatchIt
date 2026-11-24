@@ -189,7 +189,7 @@ class LocalOffersReconciliationTests(ReconciliationFixtureMixin, TestCase):
         )
         self.assertEqual(len(get_local_offers(self.movie)), 2)
 
-    @patch("tracker.services.offer_pipeline.enrich_movie_from_tmdb")
+    @patch("tracker.services.enrichment.enrich_movie_from_tmdb")
     def test_series_detail_keeps_windows_at_their_season_and_episode_scope(self, enrich):
         series = Movie.objects.create(
             tmdb_id=900, title="Series", year=2020, content_type="series",
@@ -230,7 +230,7 @@ class LocalOffersReconciliationTests(ReconciliationFixtureMixin, TestCase):
         self.assertEqual(other_season["season_number"], 2)
         self.assertNotIn("available_until", other_season)
 
-    @patch("tracker.services.offer_pipeline.enrich_movie_from_tmdb")
+    @patch("tracker.services.enrichment.enrich_movie_from_tmdb")
     def test_movie_and_series_with_same_tmdb_id_keep_distinct_windows(self, enrich):
         tmdb_id = self.movie.tmdb_id
         Movie.objects.create(tmdb_id=tmdb_id, title="Series", year=2020, content_type="series")
@@ -252,7 +252,7 @@ class LocalOffersReconciliationTests(ReconciliationFixtureMixin, TestCase):
     def test_no_local_rows_returns_no_offers(self):
         self.assertEqual(get_local_offers(self.movie), [])
 
-    @patch("tracker.services.offer_pipeline.enrich_movie_from_tmdb")
+    @patch("tracker.services.enrichment.enrich_movie_from_tmdb")
     def test_availability_endpoint_serves_the_reconciled_view(self, enrich):
         self.offer(provider_content_id="sa-550", quality="4K")
         self.offer(provider_content_id="sb-550", source=self.source_b, quality="4K")

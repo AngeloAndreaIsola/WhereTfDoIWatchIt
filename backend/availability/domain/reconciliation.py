@@ -117,6 +117,9 @@ class OfferObservation:
     window_open: bool = True
     """Derived: the offer's availability window is open at ``now``."""
 
+    observed_at: Optional[datetime] = None
+    title_checked_at: Optional[datetime] = None
+
     @property
     def evidence(self) -> AvailabilityEvidence:
         """What this single observation says about "watchable right now".
@@ -126,6 +129,8 @@ class OfferObservation:
         positive observation uncorroborated rather than unavailable.
         """
         if self.available_now:
+            if self.title_checked_at is not None:
+                return AvailabilityEvidence.SOURCE_REPORTED
             if self.freshness == FreshnessState.FRESH:
                 return AvailabilityEvidence.VERIFIED
             if self.freshness == FreshnessState.STALE:
