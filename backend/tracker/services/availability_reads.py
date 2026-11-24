@@ -126,12 +126,15 @@ def _tracker_offer(offer: ReconciledOffer) -> Offer:
         key=lambda obs: (obs.last_seen, obs.source),
         default=None,
     ) if offer.evidence == AvailabilityEvidence.SOURCE_REPORTED else None
+    url = offer.provider_url
+    if report and (offer.price is None or offer.price.selected_variant is None):
+        url = report.provider_url
     return Offer(
         country=offer.country,
         service=offer.provider,
         offer_type=offer.offer_type,
         quality=offer.quality,
-        url=report.provider_url if report else offer.provider_url,
+        url=url,
         audio_languages=_as_list(offer.audio_languages),
         subtitle_languages=_as_list(offer.subtitle_languages),
         price=(

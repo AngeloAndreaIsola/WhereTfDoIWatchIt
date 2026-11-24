@@ -21,10 +21,12 @@ Tests cover:
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 from decimal import Decimal
 from unittest.mock import patch
 
 from django.test import TestCase
+from django.utils import timezone
 
 from availability.domain.enums import ContentType, MatchMethod, SourceType, SyncMode
 from availability.models import ContentMapping, Country, Offer as ModelOffer, OfferPrice, ProviderContent, Source
@@ -57,6 +59,7 @@ from tracker.services.provider_catalogue import (
     JUSTWATCH_INTEGRATION,
     sync_provider_catalogue,
 )
+from tracker.services.title_availability_cache import record_title_attempt, record_title_completion
 
 from . import aggregator_fixtures as fx
 
@@ -81,6 +84,80 @@ def source_with(post, **kwargs):
     return JustWatchSource(
         client=JustWatchClient(http_post=post, sleeper=sleeper), **kwargs
     )
+
+
+@patch("requests.sessions.Session.request", side_effect=AssertionError("Unexpected HTTP"))
+class JustWatchVariantPriceAPITests(TestCase):
+    def setUp(self):
+        Country.objects.get_or_create(code="NL", defaults={"name": "Netherlands", "enabled": True})
+        Provider.objects.get_or_create(
+            slug="netflix", defaults={"name": "Netflix", "is_enabled": True},
+        )
+        self.movie = Movie.objects.create(tmdb_id=98004, title="Variant prices", year=2025)
+        self.now = timezone.now()
+
+    def _rent(self, source_offer_id, amount, **kwargs):
+        offer = fx.offer(source_offer_id, "netflix", "Netflix", "nfx", monetization="RENT", **kwargs)
+        return {**offer, "retailPriceValue": amount}
+
+    def _refresh(self, *offers):
+        node = fx.title("tm98004", self.movie.title, tmdb_id=str(self.movie.tmdb_id), offers=offers)
+        payload = fx.envelope({"popularTitles": {"edges": fx.edges(node)}})
+        post = RecordingPost([fx.FakeResponse(payload=payload)])
+        check = record_title_attempt(self.movie, "justwatch", "NL")
+        result = AvailabilityRefreshService(source=source_with(post)).refresh_content(
+            self.movie, country="NL",
+        )
+        record_title_completion(check, result, succeeded=True)
+        self.assertEqual(len(post.payloads), 1)
+
+    def _reported_offer(self):
+        response = self.client.get(f"/api/movie/{self.movie.tmdb_id}/availability/?current_country=NL")
+        self.assertEqual(response.status_code, 200)
+        reported, = response.json()["source_reported_offers"]
+        return reported
+
+    def test_unpriced_refresh_preserves_historical_price_list_amount(self, http):
+        with patch("django.utils.timezone.now", return_value=self.now):
+            self._refresh(self._rent("priced", 3.99))
+            self.assertEqual(self._reported_offer()["price"]["amount"], "3.9900")
+        with patch("django.utils.timezone.now", return_value=self.now + timedelta(hours=1)):
+            self._refresh(self._rent("unpriced", None))
+            reported = self._reported_offer()
+
+        stored = OfferPrice.objects.get(tmdb_id=self.movie.tmdb_id)
+        self.assertEqual((stored.amount, stored.currency, stored.is_current),
+                         (Decimal("3.99"), "EUR", False))
+        self.assertIsNone(reported["price"])
+        historical, = reported["prices"]
+        self.assertEqual((historical["amount"], historical["currency"], historical["is_current"]),
+                         ("3.9900", "EUR", False))
+        http.assert_not_called()
+
+    def test_display_price_link_and_rendition_use_the_same_open_variant(self, http):
+        cheap = self._rent("z-cheapest", 1.99, presentation="SD")
+        expensive = self._rent("a-expensive", 4.99, presentation="HD")
+        self._refresh(cheap, expensive)
+
+        reported = self._reported_offer()
+        self.assertEqual((reported["price"]["amount"], reported["url"], reported["quality"]),
+                         ("1.9900", cheap["standardWebURL"], "sd"))
+        http.assert_not_called()
+
+    def test_price_after_variant_expiry_uses_surviving_source_offer_id(self, http):
+        expires = (self.now + timedelta(minutes=5)).isoformat()
+        cheap = self._rent("expiring-cheap", 1.99, available_to=expires)
+        expensive = self._rent("still-open", 4.99)
+        with patch("django.utils.timezone.now", return_value=self.now):
+            self._refresh(cheap, expensive)
+            self.assertEqual(self._reported_offer()["price"]["source_offer_id"], cheap["id"])
+        with patch("django.utils.timezone.now", return_value=self.now + timedelta(minutes=10)):
+            reported = self._reported_offer()
+
+        for price in (reported["price"], reported["prices"][0]):
+            self.assertEqual((price["amount"], price["source_offer_id"]), ("4.9900", expensive["id"]))
+        self.assertEqual(reported["url"], expensive["standardWebURL"])
+        http.assert_not_called()
 
 
 class JustWatchRegressionCoverageTests(TestCase):

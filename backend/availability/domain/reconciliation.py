@@ -77,6 +77,8 @@ class PriceObservation:
     validation_error: str = ""
     variants: tuple[dict, ...] = ()
     open_variants: tuple[dict, ...] = ()
+    selected_variant: Optional[dict] = None
+    """The open variant that supplied this observation's current scalar price."""
 
     @property
     def is_valid(self) -> bool:
