@@ -78,6 +78,8 @@ export default function OfferRow({
   );
 
   const watchUrl = offer.url || (tmdbId ? `/watch/${tmdbId}` : null);
+  const unverified = isUnverifiedOffer(offer);
+  const linkLabel = unverified ? (offer.url ? "Check provider" : "Verify availability") : "Watch";
 
   // A price is only shown when a source confirmed it for the latest
   // observation: a remembered (stale) value is never presented as fresh, and a
@@ -183,7 +185,7 @@ export default function OfferRow({
           >
             {offer.offer_type}
           </span>
-          {isUnverifiedOffer(offer) && (
+          {unverified && (
             <span
               data-testid="unverified-badge"
               data-verification-state={offer.availability_evidence}
@@ -273,7 +275,6 @@ export default function OfferRow({
           )}
         </div>
 
-        {/* Watch Button next to offer */}
         {watchUrl && (
           <a
             href={watchUrl}
@@ -281,8 +282,8 @@ export default function OfferRow({
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 py-1.5 text-xs font-semibold text-white shadow-xs hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600 transition-all"
           >
-            <span>▶</span>
-            <span>Watch</span>
+            {!unverified && <span aria-hidden="true">▶</span>}
+            <span>{linkLabel}</span>
           </a>
         )}
       </div>

@@ -21,6 +21,8 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from reconcile_watchmode_offline import load_cohort, load_identity_manifest, manifest_identity_fields
+
 HEADER = [
     "observation_id", "tmdb_id", "media_type", "country", "provider_slug",
     "offer_type", "observed_at_utc", "observation_kind", "source_name",
@@ -49,30 +51,6 @@ def iso_utc(value: str) -> bool:
     except ValueError:
         return False
     return True
-
-
-def load_cohort(path: Path | None) -> set[tuple[int, str, str]]:
-    if not path:
-        return set()
-    with path.open(newline="", encoding="utf-8") as handle:
-        return {
-            (int(row["tmdb_id"]), row["media_type"].strip().lower(),
-             row["country"].strip().upper())
-            for row in csv.DictReader(handle)
-            if row.get("tmdb_id", "").strip().isdigit()
-        }
-
-
-def load_blocked_identities(path: Path | None) -> set[tuple[int, str]]:
-    if not path:
-        return set()
-    blocked = set()
-    with path.open(newline="", encoding="utf-8") as handle:
-        for row in csv.DictReader(handle):
-            status = (row.get("decision") or row.get("status") or "").upper()
-            if status in {"YEAR_MISMATCH", "TITLE_ALIAS_REVIEW", "BLOCKED"}:
-                blocked.add((int(row["tmdb_id"]), row["media_type"].strip().lower()))
-    return blocked
 
 
 def load_app_echo_keys(path: Path | None) -> set[tuple[int, str, str, str, str, str]]:
@@ -110,7 +88,7 @@ def ingest(args) -> dict:
         rows = list(reader)
 
     cohort = load_cohort(args.cohort)
-    blocked = load_blocked_identities(args.identity_manifest)
+    manifest = load_identity_manifest(args.identity_manifest)
     echo_keys = load_app_echo_keys(args.app_snapshot)
     accepted: list[dict] = []
     rejected: list[dict] = []
@@ -128,7 +106,7 @@ def ingest(args) -> dict:
 
         try:
             tmdb_id = int(row["tmdb_id"])
-        except ValueError:
+        except (TypeError, ValueError):
             tmdb_id = -1
             reasons.append("NON_TYPED_IDENTITY")
         media = (row["media_type"] or "").strip().lower()
@@ -139,10 +117,14 @@ def ingest(args) -> dict:
             reasons.append("BAD_COUNTRY")
 
         key = (tmdb_id, media, country)
-        if cohort and key not in cohort:
+        if key not in cohort:
             reasons.append("NOT_IN_COHORT")
-        if (tmdb_id, media) in blocked:
-            reasons.append("IDENTITY_BLOCKED")
+        else:
+            entry = manifest.get((tmdb_id, media))
+            review = (manifest_identity_fields(cohort[key], entry)["identity_manifest_review"]
+                      if entry is not None else "IDENTITY_MANIFEST_MISSING")
+            if review:
+                reasons.extend(["IDENTITY_BLOCKED", *review.split(",")])
 
         provider = (row["provider_slug"] or "").strip().lower()
         offer_type = (row["offer_type"] or "").strip().lower()
@@ -222,12 +204,16 @@ def ingest(args) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--observations", type=Path, required=True)
-    parser.add_argument("--cohort", type=Path)
-    parser.add_argument("--identity-manifest", type=Path)
+    parser.add_argument("--cohort", type=Path, required=True, help="Corrected, typed title cohort CSV")
+    parser.add_argument("--identity-manifest", type=Path, required=True, help="Reviewed TMDb identity CSV")
     parser.add_argument("--app-snapshot", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
-    print(json.dumps(ingest(args), indent=2, sort_keys=True))
+    try:
+        summary = ingest(args)
+    except (OSError, ValueError) as exc:
+        parser.error(str(exc))
+    print(json.dumps(summary, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":

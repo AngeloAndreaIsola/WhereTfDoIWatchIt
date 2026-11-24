@@ -68,6 +68,9 @@ OBS-NL-01,1396,series,NL,netflix,subscription,2026-11-24T10:15:00+00:00,advertis
 
 ## Run the offline ingestion tool
 
+Run from the repository root with the corrected NL cohort and the reviewed TMDb
+identity manifest. Both CSVs are required.
+
 ```sh
 python3 scripts/ingest_owner_observations.py \
   --observations /private/path/owner_observations.csv \
@@ -76,12 +79,19 @@ python3 scripts/ingest_owner_observations.py \
   --output-dir /private/path/issue97-owner-ingest
 ```
 
-It makes **no network calls**, hashes every referenced artifact, writes
-`accepted.csv`, `rejected.csv` and `summary.json`, and refuses duplicate IDs,
-naive timestamps, non-typed identities, wrong offer classes, manifest-blocked titles
-and URLs carrying query strings or credentials. An application offer whose
-`source_slug` matches the external source is circular, never independent; pass
-`--app-snapshot <dir>/application_snapshot.csv` to enforce that exclusion.
+The tool validates both input CSVs and exits on malformed identity data. Each
+observation must match a cohort entry by TMDb ID, media type, and country. The
+manifest must agree with the cohort title and release or first-air year, using
+the reviewed aliases for the exact typed ID and year. Coherence (movie 220289)
+is rejected as `IDENTITY_BLOCKED` with `YEAR_MISMATCH` because the cohort has
+2013 and TMDb has 2014. The 13 previously accepted identities and the reviewed
+alias for *The Office US* remain eligible. [Identity decisions](issue97-identity-decisions.md)
+
+The command runs offline, hashes each observation artifact, and writes
+`accepted.csv`, `rejected.csv`, and `summary.json`. It also rejects duplicate IDs,
+naive timestamps, invalid offer classes, and URLs carrying query strings or
+credentials. To exclude same-source echoes, pass
+`--app-snapshot <dir>/application_snapshot.csv`.
 
 ## What this evidence can and cannot establish
 
