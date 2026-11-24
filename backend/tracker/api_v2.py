@@ -30,6 +30,7 @@ from tracker.models import (
     Provider,
     Subscription,
 )
+from tracker.ownership import resolve_personal_owner_id
 from tracker.scrapers.base import ScrapedItem, ContentMatcher
 from tracker.services.preferences import resolve_preferences
 from tracker.services.ranking import rank_offers
@@ -405,6 +406,7 @@ def unofficial_movie_offers(request, tmdb_id: int):
     answers ``offers: []`` with the season echoed in ``selected_season``.
     Non-integer values are ignored, and movie rows ignore the parameter.
     """
+    user_id = resolve_personal_owner_id()
     movies = Movie.objects.visible().filter(tmdb_id=tmdb_id)
     content_type = request.query_params.get("content_type")
     if content_type:
@@ -432,7 +434,7 @@ def unofficial_movie_offers(request, tmdb_id: int):
     country = (
         request.GET.get("current_country")
         or request.GET.get("country")
-        or resolve_preferences(user_id=1).get("current_country")
+        or resolve_preferences(user_id=user_id).get("current_country")
         or ""
     )
 
@@ -454,7 +456,7 @@ def unofficial_movie_offers(request, tmdb_id: int):
     from tracker.services.access import build_reach, build_user_access, classify_offer
     from tracker.services.preferences import build_preference
 
-    preference = build_preference(1)
+    preference = build_preference(user_id)
     preference.current_country = (country or preference.current_country).upper().strip()
 
     include_bvod = request.GET.get("include_bvod", "").lower() == "true"
@@ -471,7 +473,7 @@ def unofficial_movie_offers(request, tmdb_id: int):
     ranked = rank_offers(
         offers, preference, current_country=preference.current_country
     )
-    access = build_user_access(1)
+    access = build_user_access(user_id)
     reach = build_reach(preference, preference.current_country)
 
     # Format for frontend

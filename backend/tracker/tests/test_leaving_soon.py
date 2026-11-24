@@ -315,10 +315,9 @@ class LeavingSoonScopeTests(SimpleTestCase):
                 self.assertEqual(self.client.get("/api/leaving-soon/?" + query).status_code, 400)
         self.query.assert_not_called()
 
-    def test_anonymous_owner_follows_the_existing_watchlist_default(self):
-        field = WatchlistItem._meta.get_field("user_id")
-        with patch.object(field, "get_default", return_value=17), \
-             patch("tracker.views_leaving_soon.build_leaving_soon", return_value={}) as build:
+    @override_settings(WTDW_LEGACY_OWNER_ID=17)
+    def test_anonymous_owner_follows_the_server_setting(self):
+        with patch("tracker.views_leaving_soon.build_leaving_soon", return_value={}) as build:
             self.assertEqual(self.client.get("/api/leaving-soon/?country=NL&user_id=99").status_code, 200)
         self.assertEqual(build.call_args.kwargs["user_id"], 17)
 
@@ -539,21 +538,20 @@ class LeavingSoonDatabaseTests(TestCase):
                 self.get(query, status=400)
 
     @override_settings()
-    def test_anonymous_without_configured_owner_uses_watchlist_model_default(self):
+    def test_anonymous_without_configured_owner_uses_legacy_owner_one(self):
         del settings.WTDW_LEGACY_OWNER_ID
-        owner = WatchlistItem._meta.get_field("user_id").get_default()
         with patch("tracker.views_leaving_soon.build_leaving_soon", return_value={}) as build:
             self.get()
-        build.assert_called_once_with(user_id=owner, country="US", days=30)
+        build.assert_called_once_with(user_id=1, country="US", days=30)
 
-    def test_session_principal_selects_watchlist(self):
-        user = get_user_model().objects.create_user(username="fixture-owner")
+    def test_session_principal_does_not_switch_the_installation_watchlist(self):
+        user = get_user_model().objects.create_user(pk=71, username="fixture-owner")
         self.observation(self.title(832, owner=user.pk))
         self.observation(self.title(833))
         client = APIClient()
         client.force_authenticate(user=user)
-        data, _ = self.get("country=US&user_id=37", client=client)
-        self.assertEqual([item["movie"]["tmdb_id"] for item in data["items"]], [832])
+        data, _ = self.get("country=US&user_id=71", client=client)
+        self.assertEqual([item["movie"]["tmdb_id"] for item in data["items"]], [833])
         self.assertEqual(data["coverage"]["watchlist_titles"], 1)
 
     def test_persisted_entitlement_modes_and_qualifying_alternatives(self):

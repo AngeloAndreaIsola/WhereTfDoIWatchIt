@@ -28,6 +28,7 @@ from availability.domain.enums import ContentType
 from availability.services.catalogue_query import ProviderCatalogueQueryService
 from availability.services.normalize import normalize_content_type as _normalize_source_content_type
 
+from tracker.ownership import resolve_personal_owner_id
 from ..models import Movie, Provider, UserMovieData
 from .filtering import cast_matches_actors, parse_actor_filters
 
@@ -214,13 +215,14 @@ def identity_key(tmdb_id, content_type) -> Optional[tuple[int, str]]:
     return (parsed_id, media_type)
 
 
-def watched_identity_keys(items, *, user_id: int = 1) -> set[tuple[int, str]]:
+def watched_identity_keys(items, *, user_id: int | None = None) -> set[tuple[int, str]]:
     """Batched watched-state lookup for unofficial catalogue rows.
 
     Returns the identities (id + media type) this user has actually watched.
     One query regardless of the number of rows, and no lookup at all for rows
     with a missing or invalid media type.
     """
+    user_id = resolve_personal_owner_id() if user_id is None else user_id
     keys = {identity_key(item.get("tmdb_id"), item.get("content_type")) for item in items}
     keys.discard(None)
     if not keys:

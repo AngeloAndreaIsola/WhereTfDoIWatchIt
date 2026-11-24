@@ -82,15 +82,16 @@ class ExtensionApiTests(TestCase):
             "detectedAt": timezone.now().isoformat(),
         }
 
-    def _ingest(self, token):
+    def _ingest(self, token, **extra_metadata):
         return self.client.post(
             reverse("extension-titles-ingest"),
-            data=json.dumps(self._metadata()),
+            data=json.dumps({**self._metadata(), **extra_metadata}),
             content_type="application/json",
             HTTP_AUTHORIZATION=f"Bearer {token}",
             **self.headers,
         )
 
+    @override_settings(WTDW_LEGACY_OWNER_ID=97)
     def test_csrf_approval_scoped_exchange_and_persisted_ingestion(self):
         challenge = self._start_challenge()
         self._approve(challenge)
@@ -102,9 +103,10 @@ class ExtensionApiTests(TestCase):
             ExtensionCapability.objects.get().token_digest,
             hashlib.sha256(raw_token.encode()).hexdigest(),
         )
-        ingest = self._ingest(raw_token)
+        ingest = self._ingest(raw_token, user_id=1)
         self.assertEqual(ingest.status_code, 200, ingest.content)
         record = ExtensionPlaybackRecord.objects.get(pk=ingest.json()["id"])
+        self.assertEqual(record.user_id, 97)
         self.assertEqual(record.title, "The Test Film")
         self.assertEqual(record.playback_progress["progressPercent"], 20)
 

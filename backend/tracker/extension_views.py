@@ -17,6 +17,7 @@ from django.utils.dateparse import parse_datetime
 from django.views.decorators.csrf import csrf_exempt, csrf_protect, ensure_csrf_cookie
 
 from .models import ExtensionCapability, ExtensionHandshakeChallenge, ExtensionPlaybackRecord
+from .ownership import resolve_personal_owner_id
 
 _EXTENSION_HEADER = "WhereTfDoIWatchIt-Extension"
 _ALLOWED_SCOPES = {"title:send"}
@@ -267,6 +268,7 @@ def extension_titles_ingest(request: HttpRequest) -> HttpResponse:
         return _extension_error("Invalid detection timestamp.", 400, origin)
 
     record = ExtensionPlaybackRecord.objects.create(
+        user_id=resolve_personal_owner_id(),
         title=title.strip(),
         content_type=content_type,
         year=payload.get("year") if isinstance(payload.get("year"), int) else None,

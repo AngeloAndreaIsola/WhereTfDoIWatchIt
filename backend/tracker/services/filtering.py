@@ -6,6 +6,7 @@ from typing import Optional
 
 from django.db.models import Q, QuerySet
 from tracker.models import Movie, Preference, UserMovieData
+from tracker.ownership import resolve_personal_owner_id
 from tracker.services.availability_reads import (
     OfferEvidence,
     get_offer_evidence,
@@ -229,7 +230,7 @@ def apply_composable_filters(
     if watched_filter in ("watched", "unwatched"):
         watched_movie_ids = set(
             UserMovieData.objects.filter(
-                user_id=preference.user_id if preference else 1,
+                user_id=preference.user_id if preference else resolve_personal_owner_id(),
                 is_watched=True,
             ).values_list("movie_id", flat=True)
         )
@@ -297,7 +298,7 @@ def apply_composable_filters(
     access = (
         build_explicit_access(user_subscriptions)
         if user_subscriptions is not None
-        else build_user_access(getattr(preference, "user_id", 1) or 1)
+        else build_user_access(getattr(preference, "user_id", None) or None)
     )
     provider_map = {provider.slug: provider for provider in Provider.objects.all()}
 

@@ -44,6 +44,7 @@ from .models import (
     provider_domain_root,
     provider_domain_root_expr,
 )
+from .ownership import resolve_personal_owner_id
 from .serializers import (
     LanguageInfoSerializer,
     MovieDetailSerializer,
@@ -237,8 +238,9 @@ def genres_list(request):
 @api_view(["GET"])
 def homepage_feed(request):
     """GET /api/homepage/ — returns only watchable titles (🟢 Watchable here & 🟡 Watchable with VPN) with pagination."""
+    user_id = resolve_personal_owner_id()
     curr_country = _active_country(request)
-    pref = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
+    pref = Preference.objects.filter(user_id=user_id).first() or Preference(user_id=user_id)
 
     movies = Movie.objects.visible().order_by("-id")
     # The resolver builds the access map from ``Subscription`` rows, exactly as
@@ -274,8 +276,9 @@ def homepage_feed(request):
 @api_view(["GET"])
 def unified_catalog(request):
     """GET /api/catalog/unified/ — Unified catalog endpoint merging official and unofficial sources."""
+    user_id = resolve_personal_owner_id()
     curr_country = _active_country(request)
-    pref = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
+    pref = Preference.objects.filter(user_id=user_id).first() or Preference(user_id=user_id)
 
     scope = resolve_catalogue_scope(request.GET)
     allowed_provider_slugs = scope.allowed_provider_slugs
@@ -297,7 +300,7 @@ def unified_catalog(request):
     if include_official and watched_filter in ("watched", "unwatched", "all"):
         watched_movie_ids = set(
             UserMovieData.objects.filter(
-                user_id=1, is_watched=True
+                user_id=user_id, is_watched=True
             ).values_list("movie_id", flat=True)
         )
 
@@ -384,7 +387,7 @@ def unified_catalog(request):
             # movie's state to an unrelated series (or vice versa). Rows with
             # a missing/invalid media type never resolve and are never
             # claimed watched. One batched read serves the whole page.
-            watched_ids = watched_identity_keys(scraped_items)
+            watched_ids = watched_identity_keys(scraped_items, user_id=user_id)
             keep = []
             for item in scraped_items:
                 key = identity_key(item.get("tmdb_id"), item.get("content_type"))
@@ -606,18 +609,19 @@ def search(request):
 @api_view(["GET"])
 def movie_availability(request, tmdb_id: int):
     """Return ranked, cached availability for a movie."""
+    user_id = resolve_personal_owner_id()
     try:
         movie = Movie.objects.visible().get(tmdb_id=tmdb_id)
     except (Movie.DoesNotExist, Movie.MultipleObjectsReturned):
         return Response({"error": "movie not tracked yet"}, status=404)
 
-    preference = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
+    preference = Preference.objects.filter(user_id=user_id).first() or Preference(user_id=user_id)
 
     offers, last_known = get_offer_evidence(movie)
     ranked = rank_offers(offers, preference)
 
-    user_data = UserMovieData.objects.filter(user_id=1, movie=movie).first()
-    watch_events = MovieWatchEvent.objects.filter(user_id=1, movie=movie).order_by("-watched_date", "-created_at")
+    user_data = UserMovieData.objects.filter(user_id=user_id, movie=movie).first()
+    watch_events = MovieWatchEvent.objects.filter(user_id=user_id, movie=movie).order_by("-watched_date", "-created_at")
 
     return Response(
         {
@@ -696,13 +700,14 @@ def refresh_availability(request, tmdb_id: int):
 
 @api_view(["GET"])
 def providers_list(request):
-    """List canonical providers catalog with subscription state for user_id=1.
+    """List canonical providers catalog with subscription state for the installation owner.
 
     Also carries every operational field the square source cards render (last
     run, available items, refresh target, refreshing state) so the page can
     paint N cards from one response — see ``tracker.services.provider_status``
     for the batched computation and the refresh-target rules.
     """
+    user_id = resolve_personal_owner_id()
     category = request.GET.get("category")
     is_major = request.GET.get("is_major")
 
@@ -731,10 +736,10 @@ def providers_list(request):
     providers = list(qs)
 
     user_sub_provider_ids = set(
-        Subscription.objects.filter(user_id=1, provider__isnull=False).values_list("provider_id", flat=True)
+        Subscription.objects.filter(user_id=user_id, provider__isnull=False).values_list("provider_id", flat=True)
     )
     user_access_modes = dict(
-        Subscription.objects.filter(user_id=1, provider__isnull=False).values_list("provider_id", "access_mode")
+        Subscription.objects.filter(user_id=user_id, provider__isnull=False).values_list("provider_id", "access_mode")
     )
 
     serializer = ProviderSerializer(
@@ -845,6 +850,7 @@ def provider_toggle(request, slug: str):
     collected. Un-declaring leaves ``is_enabled`` alone — the service stays
     browsable, only the user's claim to it is removed.
     """
+    user_id = resolve_personal_owner_id()
     provider = get_object_or_404(
         Provider.objects.filter(
             Q(is_enabled=True) | Q(external_mappings__integration_name="justwatch")
@@ -859,7 +865,7 @@ def provider_toggle(request, slug: str):
             provider.is_enabled = True
             provider.save(update_fields=["is_enabled"])
 
-    sub = Subscription.objects.filter(user_id=1, provider=provider).first()
+    sub = Subscription.objects.filter(user_id=user_id, provider=provider).first()
 
     if "access_mode" not in data:
         if sub:
@@ -870,7 +876,7 @@ def provider_toggle(request, slug: str):
                 "access_mode": SubscriptionAccessMode.NONE,
                 "message": f"Unsubscribed from {provider.name}",
             })
-        Subscription.objects.create(user_id=1, provider=provider, name=provider.name)
+        Subscription.objects.create(user_id=user_id, provider=provider, name=provider.name)
         _activate()
         return Response({
             "provider": provider.slug,
@@ -903,7 +909,7 @@ def provider_toggle(request, slug: str):
         created = False
     else:
         sub = Subscription.objects.create(
-            user_id=1, provider=provider, name=provider.name, access_mode=requested
+            user_id=user_id, provider=provider, name=provider.name, access_mode=requested
         )
         created = True
 
@@ -1007,9 +1013,10 @@ def provider_refresh(request, slug: str):
 
 @api_view(["GET", "POST"])
 def subscriptions_list_create(request):
-    """List or create user subscriptions (single-user, user_id=1)."""
+    """List or create user subscriptions for the installation owner."""
+    user_id = resolve_personal_owner_id()
     if request.method == "GET":
-        subs = Subscription.objects.filter(user_id=1).order_by("id")
+        subs = Subscription.objects.filter(user_id=user_id).order_by("id")
         return Response(SubscriptionSerializer(subs, many=True).data)
 
     serializer = SubscriptionSerializer(data=request.data)
@@ -1020,7 +1027,7 @@ def subscriptions_list_create(request):
 
     if resolved_p:
         sub, created = Subscription.objects.get_or_create(
-            user_id=1,
+            user_id=user_id,
             provider=resolved_p,
             defaults={"name": resolved_p.name, "access_mode": access_mode},
         )
@@ -1030,7 +1037,7 @@ def subscriptions_list_create(request):
     else:
         name_clean = (validated.get("name") or "").strip()
         sub, created = Subscription.objects.get_or_create(
-            user_id=1,
+            user_id=user_id,
             name=name_clean,
             defaults={"access_mode": access_mode},
         )
@@ -1121,7 +1128,7 @@ def scraper_import_url(request):
 
     # Automatically subscribe/register user to this small provider source
     Subscription.objects.get_or_create(
-        user_id=1,
+        user_id=resolve_personal_owner_id(),
         provider=provider,
         defaults={"name": provider.name},
     )
@@ -1256,8 +1263,9 @@ def provider_delete(request, slug: str):
 @api_view(["GET"])
 def catalog_list(request):
     """GET /api/catalog/ — List all tracked catalog items with composable filters, watchability & pagination."""
+    user_id = resolve_personal_owner_id()
     curr_country = _active_country(request)
-    pref = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
+    pref = Preference.objects.filter(user_id=user_id).first() or Preference(user_id=user_id)
 
     movies = Movie.objects.visible().order_by("-id")
     evaluated, _ = apply_composable_filters(
@@ -1353,28 +1361,29 @@ def scraper_confirm_match(request):
 
 @api_view(["DELETE"])
 def subscription_detail(request, pk: int):
-    """Delete a subscription by primary key (single-user, user_id=1)."""
-    sub = get_object_or_404(Subscription, pk=pk, user_id=1)
+    """Delete a subscription by primary key for the installation owner."""
+    sub = get_object_or_404(Subscription, pk=pk, user_id=resolve_personal_owner_id())
     sub.delete()
     return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 @api_view(["GET", "PUT"])
 def preferences(request):
-    """Read or update user preferences (single-user, user_id=1).
+    """Read or update user preferences for the installation owner.
 
     In v0 the source of truth is server-side (settings.DEFAULT_PREFERENCE).
     On GET, if no Preference row exists, returns the hardcoded defaults
     via resolve_preferences() instead of creating an empty row.
     """
+    user_id = resolve_personal_owner_id()
     from .services.preferences import resolve_preferences
     if request.method == "GET":
-        pref_dict = resolve_preferences(user_id=1)
+        pref_dict = resolve_preferences(user_id=user_id)
         return Response(pref_dict)
     # PUT — update an existing or new preference row
-    pref_dict = resolve_preferences(user_id=1)
+    pref_dict = resolve_preferences(user_id=user_id)
     preference, _ = Preference.objects.get_or_create(
-        user_id=1,
+        user_id=user_id,
         defaults=pref_dict,
     )
     if pref_dict["audio_languages"] != list(preference.audio_languages) or \
@@ -1397,11 +1406,12 @@ def preferences(request):
 @parser_classes([MultiPartParser])
 def watchlist(request):
     """List or import watchlist items."""
+    user_id = resolve_personal_owner_id()
     if request.method == "GET":
         try:
             items = (
                 WatchlistItem.objects.select_related("movie")
-                .filter(user_id=1, movie__is_quarantined=False)
+                .filter(user_id=user_id, movie__is_quarantined=False)
                 .order_by("-added_at")
             )
             return Response(WatchlistItemSerializer(items, many=True).data)
@@ -1421,7 +1431,7 @@ def watchlist(request):
             return Response({"error": str(exc)}, status=400)
     else:
         rows = parse_file_or_zip(file_bytes, filename=filename)
-    result = import_rows(rows)
+    result = import_rows(rows, user_id=user_id)
     return Response(
         {
             "resolved": WatchlistItemSerializer(result.resolved, many=True).data,
@@ -1438,19 +1448,19 @@ def watchlist(request):
 @require_GET
 def export_watchlist(request):
     """Download the watchlist as a canonical WhereTfDoIWatchIt CSV backup."""
-    return csv_response(FILENAME_WATCHLIST, watchlist_export_rows(user_id=1))
+    return csv_response(FILENAME_WATCHLIST, watchlist_export_rows(user_id=resolve_personal_owner_id()))
 
 
 @require_GET
 def export_watched(request):
     """Download explicitly watched movies as a canonical CSV backup."""
-    return csv_response(FILENAME_WATCHED, watched_export_rows(user_id=1))
+    return csv_response(FILENAME_WATCHED, watched_export_rows(user_id=resolve_personal_owner_id()))
 
 
 @require_GET
 def export_combined(request):
     """Download watchlist and watched movies in one canonical CSV backup."""
-    return csv_response(FILENAME_BOTH, combined_export_rows(user_id=1))
+    return csv_response(FILENAME_BOTH, combined_export_rows(user_id=resolve_personal_owner_id()))
 
 
 @api_view(["POST"])
@@ -1493,6 +1503,7 @@ def watchlist_resolve(request):
             seen_ids.add(identity)
             unique_selections.append(item)
 
+    user_id = resolve_personal_owner_id()
     watchlist_items = []
     created_count = 0
     for sel in unique_selections:
@@ -1514,7 +1525,7 @@ def watchlist_resolve(request):
         # resolving an ambiguous import for a manually-added title must not
         # create a second row. Provenance of the first entry is preserved.
         item, item_created = get_or_create_watchlist_membership(
-            movie, user_id=1, source="letterboxd_resolved"
+            movie, user_id=user_id, source="letterboxd_resolved"
         )
         if item_created:
             created_count += 1
@@ -1539,13 +1550,14 @@ def watchlist_resolve(request):
 
 @api_view(["GET"])
 def watchlist_report(request):
-    """Return aggregated report for watchlist items (user_id=1) with full watchability evaluation, composable filters & pagination."""
+    """Report watchlist watchability with composable filters and pagination."""
+    user_id = resolve_personal_owner_id()
     curr_country = _active_country(request)
-    preference = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
+    preference = Preference.objects.filter(user_id=user_id).first() or Preference(user_id=user_id)
 
     items = (
         WatchlistItem.objects.select_related("movie")
-        .filter(user_id=1, movie__is_quarantined=False)
+        .filter(user_id=user_id, movie__is_quarantined=False)
         .order_by("-added_at")
     )
     watchlist_movies = [item.movie for item in items]
@@ -1573,7 +1585,7 @@ def watchlist_report(request):
     user_data_by_movie = {
         row.movie_id: row
         for row in UserMovieData.objects.filter(
-            user_id=1,
+            user_id=user_id,
             movie_id__in=[item["movie"].id for item in evaluated_filtered],
         )
     }
@@ -1671,8 +1683,9 @@ def watched_report(request):
     mark/unmark endpoints write), so there is no second watched-list model.
     Ordered most-recently-watched first, undated rows last.
     """
+    user_id = resolve_personal_owner_id()
     curr_country = _active_country(request)
-    preference = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
+    preference = Preference.objects.filter(user_id=user_id).first() or Preference(user_id=user_id)
     def positive_int(name, default, maximum=None):
         raw = request.GET.get(name, str(default))
         try:
@@ -1684,12 +1697,12 @@ def watched_report(request):
     page = positive_int("page", 1)
     page_size = positive_int("page_size", 24, 100)
     events = (
-        MovieWatchEvent.objects.filter(user_id=1, movie_id=OuterRef("movie_id"))
+        MovieWatchEvent.objects.filter(user_id=user_id, movie_id=OuterRef("movie_id"))
         .order_by().values("movie_id")
         .annotate(watch_count=Count("pk"), last_watched_at=Max("watched_date"))
     )
     watched_qs = UserMovieData.objects.filter(
-        user_id=1, is_watched=True, movie__is_quarantined=False
+        user_id=user_id, is_watched=True, movie__is_quarantined=False
     ).select_related("movie")
     if (request.GET.get("watched") or request.GET.get("watched_status") or "").strip().lower() == "unwatched":
         watched_qs = watched_qs.none()
@@ -2048,7 +2061,7 @@ def movie_language_info(request, tmdb_id: int):
 
 @api_view(["POST"])
 def watchlist_refresh(request):
-    """Trigger budgeted watchlist availability refresh (user_id=1)."""
+    """Trigger budgeted watchlist availability refresh for the installation owner's watchlist."""
     data = request.data if isinstance(request.data, dict) else {}
     budget_raw = data.get("budget", 10)
 
@@ -2070,7 +2083,7 @@ def watchlist_refresh(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    summary = process_watchlist_refresh(budget=budget_raw, user_id=1)
+    summary = process_watchlist_refresh(budget=budget_raw, user_id=resolve_personal_owner_id())
 
     if summary.get("rate_limited"):
         return Response(summary, status=status.HTTP_429_TOO_MANY_REQUESTS)
@@ -2106,7 +2119,7 @@ def watchlist_refresh_explicit(request):
     toward the status endpoint's progress, while earlier refreshes never do.
     """
     started_at = timezone.now()
-    result = request_watchlist_refresh(user_id=1, country=_active_country(request))
+    result = request_watchlist_refresh(user_id=resolve_personal_owner_id(), country=_active_country(request))
 
     if result["total_watchlist"] and not result["queued"]:
         # request_watchlist_refresh swallows enqueue failures (same contract
@@ -2204,7 +2217,7 @@ def watchlist_refresh_status(request):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-    watchlist_movie_ids = WatchlistItem.objects.filter(user_id=1).values("movie_id")
+    watchlist_movie_ids = WatchlistItem.objects.filter(user_id=resolve_personal_owner_id()).values("movie_id")
     # No ``source`` filter: a run owns one row per (title, source), and this
     # endpoint must aggregate all of them — the legacy ``source=""`` rows and
     # every explicit slug alike.
@@ -2338,7 +2351,7 @@ def watchlist_refresh_status(request):
 
 def _watchlist_movie_ids() -> list[int]:
     return list(
-        WatchlistItem.objects.filter(user_id=1).values_list("movie_id", flat=True)
+        WatchlistItem.objects.filter(user_id=resolve_personal_owner_id()).values_list("movie_id", flat=True)
     )
 
 
@@ -2424,7 +2437,7 @@ def availability_report(request):
     country = (
         request.GET.get("current_country")
         or request.GET.get("country")
-        or resolve_preferences(user_id=1).get("current_country")
+        or resolve_preferences(user_id=resolve_personal_owner_id()).get("current_country")
         or None
     )
     summary = build_run_summary(movie_ids, batch=batch, country=country)
@@ -2507,7 +2520,7 @@ def availability_title_report(request, tmdb_id: int):
     access_country = (
         request.query_params.get("current_country")
         or request.query_params.get("country")
-        or resolve_preferences(user_id=1).get("current_country")
+        or resolve_preferences(user_id=resolve_personal_owner_id()).get("current_country")
         or ""
     )
     report = title_source_report([movie.pk], country=str(access_country).upper() if access_country else None).get(movie.pk, {})
@@ -2580,7 +2593,7 @@ def availability_refresh_start(request):
     from the id rather than losing the run.
     """
     started_at = timezone.now()
-    result = request_watchlist_refresh(user_id=1, country=_active_country(request))
+    result = request_watchlist_refresh(user_id=resolve_personal_owner_id(), country=_active_country(request))
 
     if result["total_watchlist"] and not result["queued"]:
         return Response(
@@ -2787,7 +2800,7 @@ def _current_country(request) -> str:
     """Resolve the active country: explicit query param, then saved preference."""
     return (
         request.query_params.get("current_country")
-        or resolve_preferences(user_id=1).get("current_country")
+        or resolve_preferences(user_id=resolve_personal_owner_id()).get("current_country")
         or ""
     )
 
@@ -2805,7 +2818,7 @@ def _active_country(request) -> str:
     return (
         request.GET.get("current_country")
         or request.GET.get("country")
-        or resolve_preferences(user_id=1).get("current_country")
+        or resolve_preferences(user_id=resolve_personal_owner_id()).get("current_country")
         or "US"
     )
 
@@ -2883,6 +2896,7 @@ def _build_prime_offers(request, movie: Movie, season: int | None = None) -> lis
     recorded that season; the scraped BVOD block is skipped because scraper
     rows are show-level and carry no season signal.
     """
+    user_id = resolve_personal_owner_id()
     from tracker.models import ProviderCategory
     from tracker.services.presentation import present_offer
     from tracker.services.ranking import rank_offers
@@ -2893,7 +2907,7 @@ def _build_prime_offers(request, movie: Movie, season: int | None = None) -> lis
     from .services.offer_pipeline import OfficialOffersPipeline
 
     pipeline = OfficialOffersPipeline(
-        user_id=1,
+        user_id=user_id,
         default_provider_slug=getattr(settings, "DEFAULT_PREFERENCE_PROVIDER", "prime"),
         provider_category_set={ProviderCategory.OFFICIAL, ProviderCategory.BVOD, ProviderCategory.AVOD, ProviderCategory.TVOD, ProviderCategory.FAST},
     )
@@ -2912,9 +2926,9 @@ def _build_prime_offers(request, movie: Movie, season: int | None = None) -> lis
         movie, provider_categories=BVOD_CATEGORIES
     )
     if bvod_offers:
-        preference = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
-        classify_pref = build_preference(1)
-        access = build_user_access(1)
+        preference = Preference.objects.filter(user_id=user_id).first() or Preference(user_id=user_id)
+        classify_pref = build_preference(user_id)
+        access = build_user_access(user_id)
         reach = build_reach(classify_pref, current_country)
         ranked = rank_offers(bvod_offers, preference, current_country=current_country)
         for offer in ranked:
@@ -2944,6 +2958,7 @@ def _build_prime_offers(request, movie: Movie, season: int | None = None) -> lis
 
 def _prime_detail_response(request, item: Movie, key: str) -> Response:
     """Shared detail payload for prime_movie / prime_series, keyed by ``key``."""
+    user_id = resolve_personal_owner_id()
     # Refresh-on-view (Phase B): this is the title detail page the frontend
     # opens. Local offers are returned immediately; a stale/missing title
     # gets an asynchronous refresh request, never a synchronous fetch.
@@ -2959,9 +2974,9 @@ def _prime_detail_response(request, item: Movie, key: str) -> Response:
         country=_current_country(request),
     )
 
-    user_data = UserMovieData.objects.filter(user_id=1, movie=item).first()
-    is_in_watchlist = WatchlistItem.objects.filter(user_id=1, movie=item).exists()
-    watch_events = MovieWatchEvent.objects.filter(user_id=1, movie=item).order_by("-watched_date", "-created_at")
+    user_data = UserMovieData.objects.filter(user_id=user_id, movie=item).first()
+    is_in_watchlist = WatchlistItem.objects.filter(user_id=user_id, movie=item).exists()
+    watch_events = MovieWatchEvent.objects.filter(user_id=user_id, movie=item).order_by("-watched_date", "-created_at")
     season = _requested_season(request, item)
     pending = RefreshRequest.objects.filter(
         movie=item, status=RefreshRequestStatus.PENDING
@@ -2976,7 +2991,7 @@ def _prime_detail_response(request, item: Movie, key: str) -> Response:
 
     from tracker.services.watchability import describe_last_known, qualify_watchability_dict
 
-    access_pref = build_preference(1)
+    access_pref = build_preference(user_id)
     access_country = _current_country(request) or access_pref.current_country
     current_offers, last_known_offers = get_offer_evidence(item, season=season)
     access_verdict = access_resolve_title(
@@ -3126,6 +3141,7 @@ def _resolve_watch_item(tmdb_id: int) -> Movie | None:
 @api_view(["GET"])
 def watch_redirect(request, tmdb_id: int):
     """Resolve top ranked watch destination for a movie or series."""
+    user_id = resolve_personal_owner_id()
     movie = _resolve_watch_item(tmdb_id)
     if movie is None:
         return Response(
@@ -3137,10 +3153,10 @@ def watch_redirect(request, tmdb_id: int):
             status=404,
         )
 
-    preference = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
+    preference = Preference.objects.filter(user_id=user_id).first() or Preference(user_id=user_id)
 
     user_subs = list(
-        Subscription.objects.filter(user_id=1).values_list("provider__slug", "name")
+        Subscription.objects.filter(user_id=user_id).values_list("provider__slug", "name")
     )
     subscribed_slugs = set()
     for slug, name in user_subs:
@@ -3208,6 +3224,7 @@ def movie_detail(request, pk: int):
     with this GET-only detail route (HTTP 405). Delegate PATCH to
     update_movie with tmdb_id semantics; GET keeps local-pk semantics.
     """
+    user_id = resolve_personal_owner_id()
     if request.method == "PATCH":
         return _update_movie_impl(request, tmdb_id=pk)
     try:
@@ -3235,8 +3252,8 @@ def movie_detail(request, pk: int):
         country=_current_country(request),
     )
 
-    user_data = UserMovieData.objects.filter(user_id=1, movie=movie).first()
-    watch_events = MovieWatchEvent.objects.filter(user_id=1, movie=movie).order_by("-watched_date", "-created_at")
+    user_data = UserMovieData.objects.filter(user_id=user_id, movie=movie).first()
+    watch_events = MovieWatchEvent.objects.filter(user_id=user_id, movie=movie).order_by("-watched_date", "-created_at")
 
     return Response(
         {
@@ -3488,6 +3505,7 @@ def add_to_watchlist(request):
     membership from any source (import or resolution), that row is reused and
     HTTP 200 is returned instead of creating a duplicate.
     """
+    user_id = resolve_personal_owner_id()
     from .services.enrichment import resolve_or_create_movie
 
     data = request.data if isinstance(request.data, dict) else {}
@@ -3513,7 +3531,7 @@ def add_to_watchlist(request):
     try:
         with transaction.atomic():
             watchlist_item, created = get_or_create_watchlist_membership(
-                movie, user_id=1, source="manual"
+                movie, user_id=user_id, source="manual"
             )
             if created:
                 # Event-driven refresh (Phase B): local insert in the same
@@ -3533,7 +3551,7 @@ def add_to_watchlist(request):
 
         # Create UserMovieData entry if not exists
         user_data, _ = UserMovieData.objects.get_or_create(
-            user_id=1,
+            user_id=user_id,
             movie=movie,
             defaults={"is_watched": False},
         )
@@ -3550,7 +3568,7 @@ def add_to_watchlist(request):
 @api_view(["GET"])
 def watched_list(request):
     """GET /api/watched/ — Paginated list of titles the user has watched."""
-    user_id = 1
+    user_id = resolve_personal_owner_id()
 
     def positive_int(name, default):
         raw = request.GET.get(name, str(default))
@@ -3657,6 +3675,7 @@ def mark_movie_watched(request, tmdb_id: int):
         review (str, optional): review text
         rewatch (bool, optional): whether this is a rewatch (default false)
     """
+    user_id = resolve_personal_owner_id()
     movie, error = _resolve_movie_typed(tmdb_id, request.query_params.get("content_type"))
     if error is not None:
         return error
@@ -3678,7 +3697,7 @@ def mark_movie_watched(request, tmdb_id: int):
         with transaction.atomic():
             # Get or create UserMovieData
             user_data, created = UserMovieData.objects.get_or_create(
-                user_id=1,
+                user_id=user_id,
                 movie=movie,
                 defaults={
                     "is_watched": True,
@@ -3704,7 +3723,7 @@ def mark_movie_watched(request, tmdb_id: int):
 
             # Create watch event
             watch_event_data = {
-                "user_id": 1,
+                "user_id": user_id,
                 "movie": movie,
                 "rating": rating,
                 "review": review or "",
@@ -3717,7 +3736,7 @@ def mark_movie_watched(request, tmdb_id: int):
                 watch_event_data["letterboxd_uri"] = user_data.letterboxd_uri
 
             MovieWatchEvent.objects.update_or_create(
-                user_id=1,
+                user_id=user_id,
                 movie=movie,
                 watched_date=watch_event_data["watched_date"],
                 letterboxd_uri=watch_event_data.get("letterboxd_uri", ""),
@@ -3761,7 +3780,7 @@ def unmark_movie_watched(request, tmdb_id: int):
     try:
         with transaction.atomic():
             # Get UserMovieData for this movie
-            user_data = UserMovieData.objects.get(user_id=1, movie=movie)
+            user_data = UserMovieData.objects.get(user_id=resolve_personal_owner_id(), movie=movie)
 
             # Update the watched status
             user_data.is_watched = False
@@ -3794,7 +3813,7 @@ def remove_from_watchlist(request, tmdb_id: int):
 
     try:
         with transaction.atomic():
-            WatchlistItem.objects.filter(user_id=1, movie=movie).delete()
+            WatchlistItem.objects.filter(user_id=resolve_personal_owner_id(), movie=movie).delete()
 
         return Response({
             "message": "Movie removed from watchlist",
@@ -3850,7 +3869,6 @@ def google_interests_import(request):
         cookies (dict, required): Google cookies keyed by cookie name, e.g.
             {"CONSENT": "...", "NID": "...", "SOCS": "..."}.
         urls (list[str], required): one or more Interest list page URLs.
-        user_id (int, optional): defaults to 1.
 
     Returns the same import shape as the Letterboxd importer so the frontend
     watchlist UI can reuse it with a different source label.
@@ -3860,7 +3878,7 @@ def google_interests_import(request):
     data = request.data if isinstance(request.data, dict) else {}
     raw_cookies = data.get("cookies") or {}
     urls = data.get("urls") or []
-    user_id = data.get("user_id", 1)
+    user_id = resolve_personal_owner_id()
 
     if not isinstance(raw_cookies, dict):
         return Response({"error": "cookies must be a JSON object (or omitted for public pages)"}, status=400)
@@ -3938,7 +3956,6 @@ def letterboxd_url_import(request):
         type (str, optional): "watchlist" or "watched". Required when the URL
             is a bare profile URL; optional otherwise (the URL path wins only
             when ``type`` is omitted).
-        user_id (int, optional): defaults to 1.
 
     Fetches public paginated HTML (no Letterboxd login/cookies), normalizes it
     into LetterboxdRow objects and reuses import_rows() — the exact same TMDb
@@ -3951,10 +3968,7 @@ def letterboxd_url_import(request):
     data = request.data if isinstance(request.data, dict) else {}
     url = str(data.get("url") or "").strip()
     requested_type = str(data.get("type") or "").strip().lower()
-    try:
-        user_id = int(data.get("user_id", 1) or 1)
-    except (TypeError, ValueError):
-        user_id = 1
+    user_id = resolve_personal_owner_id()
 
     if not url:
         return Response({"error": "url is required"}, status=400)

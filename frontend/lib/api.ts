@@ -1406,7 +1406,6 @@ export interface GoogleInterestsImportResult {
 export interface GoogleInterestsImportPayload {
   cookies?: Record<string, string>;
   urls: string[];
-  user_id?: number;
 }
 
 export async function importGoogleInterests(
@@ -1447,7 +1446,6 @@ export interface LetterboxdUrlImportPayload {
   url: string;
   /** Required when `url` is a bare profile URL. */
   type?: LetterboxdImportType;
-  user_id?: number;
 }
 
 export async function importLetterboxdUrl(

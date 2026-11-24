@@ -12,6 +12,7 @@ from typing import Any
 from django.conf import settings
 
 from tracker.languages import normalize_language_code
+from tracker.ownership import resolve_personal_owner_id
 from ..models import Preference
 
 logger = logging.getLogger(__name__)
@@ -42,7 +43,7 @@ def get_default_ranking_preferences() -> dict[str, Any]:
     return dict(DEFAULT_RANKING_PREFERENCES)
 
 
-def resolve_preferences(user_id: int = 1) -> dict[str, Any]:
+def resolve_preferences(user_id: int | None = None) -> dict[str, Any]:
     """Return preference dict for a user.
 
     Keys: audio_languages, subtitle_languages, candidate_countries, current_country,
@@ -50,6 +51,7 @@ def resolve_preferences(user_id: int = 1) -> dict[str, Any]:
     Resolves each preference domain independently so that saving ranking preferences
     never wipes out server-side defaults for language configuration on a migration-seeded row.
     """
+    user_id = resolve_personal_owner_id() if user_id is None else user_id
     row = Preference.objects.filter(user_id=user_id).first()
     defaults = getattr(settings, "DEFAULT_PREFERENCE", {})
 
@@ -91,13 +93,14 @@ def resolve_preferences(user_id: int = 1) -> dict[str, Any]:
     }
 
 
-def build_preference(user_id: int = 1) -> Preference:
+def build_preference(user_id: int | None = None) -> Preference:
     """An (unsaved) ``Preference`` instance from :func:`resolve_preferences`.
 
     Shared so every read path (detail verdict, access classification) scores
     and filters with the exact same language rule, countries, VPN setting,
     and ranking preferences.
     """
+    user_id = resolve_personal_owner_id() if user_id is None else user_id
     data = resolve_preferences(user_id=user_id)
     return Preference(
         user_id=user_id,
@@ -111,7 +114,7 @@ def build_preference(user_id: int = 1) -> Preference:
     )
 
 
-def resolve_source_country(user_id: int = 1) -> str | None:
+def resolve_source_country(user_id: int | None = None) -> str | None:
     """The user's selected market, for sources that cannot answer without one.
 
     JustWatch is queried per market, so a title-targeted refresh has to say
@@ -131,6 +134,7 @@ def resolve_source_country(user_id: int = 1) -> str | None:
     Lives here rather than in either refresh path because both need it and
     one already imports the other.
     """
+    user_id = resolve_personal_owner_id() if user_id is None else user_id
     try:
         selected = resolve_preferences(user_id).get("current_country")
     except Exception:  # noqa: BLE001 - preferences must never break a refresh

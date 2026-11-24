@@ -72,6 +72,7 @@ from availability.sources.base import (
     accepts_kwarg,
 )
 
+from tracker.ownership import resolve_personal_owner_id
 from ..models import (
     CatalogueRefreshRequest,
     CatalogueRefreshStatus,
@@ -361,7 +362,7 @@ class BulkRefreshSummary:
 
 def process_watchlist_refresh(
     budget: int = 90,
-    user_id: int = 1,
+    user_id: int | None = None,
     refresh_service: Optional[AvailabilityRefreshService] = None,
     limiter: Optional[RateLimiter] = None,
     content_types: tuple[str, ...] | list[str] = ("movie", "series"),
@@ -375,6 +376,7 @@ def process_watchlist_refresh(
     """
     from .refresh_requests import title_drain_lock, _drain_lock_busy_summary
 
+    user_id = resolve_personal_owner_id() if user_id is None else user_id
     with title_drain_lock() as acquired:
         if not acquired:
             return _drain_lock_busy_summary(budget)
@@ -388,8 +390,9 @@ def process_watchlist_refresh(
 
 
 def _process_watchlist_refresh_locked(
+    *,
+    user_id: int,
     budget: int = 90,
-    user_id: int = 1,
     refresh_service: Optional[AvailabilityRefreshService] = None,
     limiter: Optional[RateLimiter] = None,
     content_types: tuple[str, ...] | list[str] = ("movie", "series"),
@@ -507,7 +510,7 @@ def _process_watchlist_refresh_locked(
     # by Movie identity, using exactly the report/worker's history policy.
     from .availability_report import _permanent_miss_sources
 
-    current_country = resolve_source_country()
+    current_country = resolve_source_country(user_id)
     permanent_misses = _permanent_miss_sources(list(movies_by_id), country=current_country)
 
     rate_limit_hit = summary.rate_limited
