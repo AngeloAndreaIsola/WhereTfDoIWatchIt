@@ -20,6 +20,23 @@ const baseOffer = {
 };
 
 describe("OfferRow", () => {
+  it("never shows an Unverified badge on a verified offer", () => {
+    render(<OfferRow offer={{ ...baseOffer, availability_evidence: "verified" }} />);
+    expect(screen.queryByTestId("unverified-badge")).not.toBeInTheDocument();
+  });
+
+  it("shows an explicit Unverified badge on stale and unknown offers", () => {
+    for (const evidence of ["stale", "unknown"] as const) {
+      const { unmount } = render(
+        <OfferRow offer={{ ...baseOffer, availability_evidence: evidence }} />
+      );
+      const badge = screen.getByTestId("unverified-badge");
+      expect(badge).toHaveTextContent("Unverified");
+      expect(badge).toHaveAttribute("data-verification-state", evidence);
+      unmount();
+    }
+  });
+
   it("shows Local badge for current country", () => {
     render(<OfferRow offer={baseOffer} currentCountry="IT" />);
     expect(screen.getByText("Local")).toBeInTheDocument();

@@ -175,7 +175,7 @@ class ApiAgreementTests(_Base):
         self.assertEqual(everything[550]["last_known"], None)
         stale = everything[551]
         self.assertEqual(stale["status"], "needs_recheck")
-        self.assertEqual(stale["status_label"], "Last seen available — needs recheck")
+        self.assertEqual(stale["status_label"], "Unverified availability — last seen, needs recheck")
         self.assertEqual(stale["availability_evidence"], "stale")
         self.assertEqual(stale["last_seen_at"], self.stale().isoformat())
         self.assertIsNone(stale["best_offer"])

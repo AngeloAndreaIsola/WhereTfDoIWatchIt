@@ -411,8 +411,10 @@ def _last_known_fields(last_known: Optional[LastKnownAvailability]) -> dict[str,
 
 
 def _needs_recheck_label(last_known: LastKnownAvailability) -> tuple[str, str]:
+    # The owner's #97 display contract: every unconfirmed positive is visibly
+    # Unverified. "Last seen" is extra detail, not a substitute for the badge.
     if last_known.evidence == "stale":
-        return "Last seen available — needs recheck", NEEDS_RECHECK_SYMBOL
+        return "Unverified availability — last seen, needs recheck", NEEDS_RECHECK_SYMBOL
     return "Unverified availability — needs recheck", NEEDS_RECHECK_SYMBOL
 
 

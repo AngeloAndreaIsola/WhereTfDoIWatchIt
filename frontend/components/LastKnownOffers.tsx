@@ -2,7 +2,7 @@
 
 import OfferRow from "@/components/OfferRow";
 import type { PrimeOffer } from "@/lib/api";
-import { formatLastSeen } from "@/lib/time";
+import { unverifiedOfferLabel } from "@/lib/availability";
 
 interface LastKnownOffersProps {
   offers?: PrimeOffer[];
@@ -40,9 +40,7 @@ export default function LastKnownOffers({
             data-testid="last-known-label"
             className="mb-1 text-xs font-semibold text-amber-700 dark:text-amber-400"
           >
-            {offer.availability_evidence === "unknown"
-              ? `Unverified · ${formatLastSeen(offer.last_seen_at)}`
-              : `Needs recheck · ${formatLastSeen(offer.last_seen_at)}`}
+            {unverifiedOfferLabel(offer)}
           </p>
           <OfferRow
             offer={offer}

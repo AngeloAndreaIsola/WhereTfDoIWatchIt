@@ -3,6 +3,7 @@
 import type { PrimeOffer } from "@/lib/api";
 import LanguageBadge from "@/components/LanguageBadge";
 import { normalizeLanguageCode } from "@/lib/languages";
+import { isUnverifiedOffer, UNVERIFIED_BADGE } from "@/lib/availability";
 
 export { PrimeOffer };
 
@@ -182,6 +183,16 @@ export default function OfferRow({
           >
             {offer.offer_type}
           </span>
+          {isUnverifiedOffer(offer) && (
+            <span
+              data-testid="unverified-badge"
+              data-verification-state={offer.availability_evidence}
+              className="rounded-md bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-900 dark:bg-amber-900/40 dark:text-amber-200"
+              title="Last seen or uncorroborated availability — recheck required. Not a confirmed current offer."
+            >
+              {UNVERIFIED_BADGE}
+            </span>
+          )}
           {offer.quality && (
             <span className="rounded-md bg-gray-200 px-2 py-0.5 font-mono text-xs font-bold text-gray-800 dark:bg-gray-600 dark:text-gray-200">
               {qualityLabel(offer.quality)}
