@@ -65,6 +65,7 @@ def quota_record(*, status="unmetered_public", remaining=None):
             "checked_at": checked_at,
             "evidence_reference": "fixture-reviewed-rate-policy",
             "max_burst": 6,
+            "minimum_interval_seconds": 0,
         },
         # Synthetic fixture only. This string is not real JustWatch permission.
         "access_permission": {
@@ -73,6 +74,9 @@ def quota_record(*, status="unmetered_public", remaining=None):
             "evidence_reference": "fixture-test-only-not-real-permission",
             "endpoint": "https://apis.justwatch.com/graphql",
             "maximum_requests": 6,
+            "operations": ["GetSearchTitles"],
+            "valid_from": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+            "valid_until": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
             "scope_ids": ["inception-nl-justwatch", "dune-nl-justwatch"],
         },
     }
@@ -451,6 +455,44 @@ class PostgreSQLReservationTests(TransactionTestCase):
         self.assertEqual(outcome.outcome, "failure")
         self.assertEqual(outcome.http_status, 429)
 
+    @patch("availability.services.experiment_runner.time.sleep")
+    @patch("availability.services.experiment_runner.requests.Session.post")
+    def test_pacing_survives_transport_recreation_and_denial_spends_one_attempt(self, post, sleep):
+        first = ReservedTransport(
+            authorization=self.authorization, scope=jw_scope(), source_slug="justwatch",
+        )
+        post.return_value = Mock(status_code=200)
+        first(jw_scope()["endpoint"], json=jw_payload())
+        previous = AvailabilityExperimentAttemptOutcome.objects.get()
+        second = ReservedTransport(
+            authorization=self.authorization, scope=dune_scope(), source_slug="justwatch",
+            minimum_interval=5,
+        )
+        post.return_value = Mock(status_code=403)
+        client = JustWatchClient(http_post=second, retries=3)
+        with patch("availability.services.experiment_runner.django_timezone.now",
+                   return_value=previous.recorded_at + timedelta(seconds=2)):
+            with self.assertRaisesRegex(ExperimentBlocked, "access denied"):
+                client.search_titles("Dune", country="NL", object_types=["MOVIE"])
+        sleep.assert_called_once_with(3)
+        self.assertEqual(post.call_count, 2)
+        self.assertEqual(
+            list(AvailabilityExperimentAttemptOutcome.objects.order_by("attempt__ordinal")
+                 .values_list("http_status", flat=True)),
+            [200, 403],
+        )
+
+    @patch("availability.services.experiment_runner.requests.Session.post")
+    def test_expired_review_evidence_cannot_reserve_or_send(self, post):
+        transport = ReservedTransport(
+            authorization=self.authorization, scope=jw_scope(), source_slug="justwatch",
+            evidence_expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+        )
+        with self.assertRaisesRegex(ExperimentBlocked, "reviewed evidence expired"):
+            transport(jw_scope()["endpoint"], json=jw_payload())
+        self.assertEqual(AvailabilityExperimentAttempt.objects.count(), 0)
+        post.assert_not_called()
+
     def test_ledger_rows_are_append_only(self):
         from django.db import DatabaseError, transaction
         row = _reserve_attempt(self.authorization, jw_scope(), "GetSearchTitles", "POST", "apis.justwatch.com")
@@ -605,6 +647,32 @@ class PostgreSQLPreflightTests(TransactionTestCase):
         os.environ["AVAILABILITY_EXPERIMENT_QUOTA_EVIDENCE"] = json.dumps({"justwatch": valid})
         self.assertEqual(_quota_evidence({"justwatch"})["justwatch"]["max_burst"], 6)
 
+    def test_missing_pacing_or_expired_permission_blocks_preflight(self):
+        for field in ("minimum_interval_seconds", "valid_until", "operations"):
+            evidence = quota_record()
+            if field == "minimum_interval_seconds":
+                evidence["rate_policy_evidence"].pop(field)
+            elif field == "valid_until":
+                evidence["access_permission"][field] = datetime.now(timezone.utc).isoformat()
+            else:
+                evidence["access_permission"][field] = ["GetTitleNode"]
+            with self.subTest(field=field), patch.dict(os.environ, {
+                "AVAILABILITY_EXPERIMENT_QUOTA_EVIDENCE": json.dumps({"justwatch": evidence}),
+            }):
+                self.assertEqual(read_only_preflight(self.manifest)["readiness"], "blocked")
+
+    def test_genuine_evidence_absence_leaves_read_only_disposable_preflight_blocked(self):
+        with patch.dict(os.environ, {"AVAILABILITY_EXPERIMENT_QUOTA_EVIDENCE": ""}):
+            report = read_only_preflight(self.manifest)
+        self.assertEqual(report["database_name"], "test_wtdwi_test")
+        self.assertTrue(report["database_identity"])
+        self.assertEqual(report["readiness"], "blocked")
+        self.assertEqual(report["reservations"]["total"], 0)
+        self.assertEqual(report["queue_scope_overlap"], 0)
+        self.assertEqual(report["worker_state"]["active_refresh_runs"], 0)
+        self.assertTrue(all("evidence" in blocker for blocker in report["blockers"]))
+        self.assertEqual(len(report["blockers"]), 4)
+
     def test_preflight_requires_current_express_permission_for_exact_endpoint_and_scopes(self):
         from availability.services.experiment_runner import _access_permission_evidence
 
@@ -687,8 +755,10 @@ class PostgreSQLPreflightTests(TransactionTestCase):
                     raise RuntimeError("test synchronization timed out")
             return None
         from availability.services import experiment_runner
+        readiness = read_only_preflight(self.manifest)
+        self.assertEqual(readiness["readiness"], "ready")
         with patch.object(experiment_runner, "database_identity", return_value="test-db"), \
-             patch.object(experiment_runner, "read_only_preflight", return_value={"readiness": "ready", "blockers": []}), \
+             patch.object(experiment_runner, "read_only_preflight", return_value=readiness), \
              patch.object(experiment_runner, "ReservedTransport", return_value=Mock(session=Mock())), \
              patch("availability.services.refresh.AvailabilityRefreshService.refresh_content", new=mock_refresh):
             with ThreadPoolExecutor(max_workers=1) as pool:
@@ -704,5 +774,7 @@ class PostgreSQLPreflightTests(TransactionTestCase):
                     execute_manifest(self.manifest, auth)
                 release.set()
                 result = first.result(timeout=10)
+            repeated = execute_manifest(self.manifest, auth)
         self.assertEqual(len(calls), 2)
         self.assertEqual([row["status"] for row in result], ["completed"] * 2)
+        self.assertEqual([row["status"] for row in repeated], ["already_completed"] * 2)
