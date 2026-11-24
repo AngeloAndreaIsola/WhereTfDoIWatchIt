@@ -13,6 +13,15 @@
 | Merge order | #201 is merged. Review and land **#197 → #199 → #200** in order. #198 can proceed independently after remediation, and #202 can proceed as a documentation package after reference corrections. [Cleanup][cleanup] [Evidence stack][ac] [#198 handoff][b] [#202 handoff][d] |
 | Owner decisions | ChatGPT Web owns final review and merges. The remaining decisions cover hosted CI, restricted evidence retention, the release cutover, Stage D's exact signed scope, and the Stage E comparison and acceptance design. Keep **#97 OPEN** and **#103 ON HOLD** pending representative evidence and separate decisions. [Prior integration review][prior] [Issue #97][issue] [Issue #103][hold] |
 
+## Post-review correction (resolved blockers)
+
+The two blockers recorded above were subsequently resolved and verified on GitHub:
+
+- **#198** corrected head `8f08a8e975bd5adfed071ce718fafcf7a929fc51`. All three remaining price/provenance regressions were fixed with API regressions. Disposable PostgreSQL: 216 focused tests (including the four original repros), 3,794 backend tests and 33 migration-preservation assertions passed; local PASS only. Handoff: https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/pull/198#issuecomment-7142806485. The prior `REQUEST_CHANGES` basis is resolved; ChatGPT Web review, hosted CI and the release owner's old-writer cutover decision remain gates.
+- **#202** corrected head `d5f12f33992d3ccd5e279e73e0776d9af004ce1b`. Stale custody link and stale "No Stage D PR" entry corrected. Offline manifest 4 passed / 1 expected skip; zero new restricted matches across 1,034 paths; zero live requests. Handoff: https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/pull/202#issuecomment-7142775139. Stage D remains blocked pending authorization.
+
+Merge order, owner decisions and all other verdicts above are unchanged. #97 stays OPEN and #103 stays ON HOLD.
+
 ## Evidence references
 
 - **Published heads and cleanup.** GitHub PR metadata and the fetched `refs/pull/*/head` refs agreed for all five open drafts. Handoffs on #197, #199, #200 and #202 give the exact SHA, tests, blockers and next action. #198's code and migration comments together cover those items. GitHub shows #201 merged at `d84308be248828bc9bcef07465eb7dd533e1f621`, also the fetched master tip. All 20 deletion paths are absent from master and from the five PR tips. The custody record is present on master and on the four drafts based on cleaned master. #198 predates that record. [#197 handoff][a] [#198 code handoff][bfix] [#198 migration handoff][b] [#199 handoff][c] [#200 handoff][ac] [#202 handoff][d] [Cleanup][cleanup] [Custody][custody]
