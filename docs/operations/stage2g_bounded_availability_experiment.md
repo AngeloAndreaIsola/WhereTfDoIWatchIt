@@ -1,5 +1,7 @@
 # Stage 2G bounded availability runner
 
+> **Current #97 tracking policy (2026-11-24; JustWatch only):** Obtaining or attaching a separate written upstream JustWatch permission grant is no longer an issue-level planning or acceptance requirement. This documentation change neither establishes external authorization nor changes execution behavior. The existing runner still requires its `access_permission` evidence and HMAC execution token and will block when those checks fail. Do not fabricate evidence, disable checks, or interpret this note as permission to make live calls. The instructions below describe the **unchanged runtime implementation**, including its actual blockers.
+
 The fixed example manifest is [stage2e_manifest.example.json](../experiments/stage2e_manifest.example.json). It is inert: adding or changing this file does not activate a source, queue work, start a worker, authorize a run, or contact a provider. The runner requires an exact match to its compiled-in manifest.
 
 ## Fixed execution scope
@@ -89,7 +91,7 @@ The engineering change does not set quota evidence, create an authorization toke
 
 ## Remaining execution gates
 
-- Obtain written JustWatch permission for the exact unofficial GraphQL endpoint, both fixed scopes, and at least six requests; obtain genuine current quota/rate-policy evidence adequate for that ceiling. A public endpoint with no billed API quota does not imply unlimited request capacity.
+- The **existing runner** continues to require its `access_permission`, quota, and rate-policy evidence to execute. Under the updated #97 tracking policy, obtaining a written upstream grant is not a new issue-level deliverable; the unresolved runtime gate must be reported as a current implementation blocker until separately changed. Do not synthesize approval records or assume that an unmetered endpoint has unlimited request capacity.
 - Run the read-only preflight against the actual target database and exact revised manifest. Confirm the cluster/database identity, migrations, empty or reconciled durable ledger, matching enabled source and Movie/Country rows, no pending exact-scope requests, no unfinished runs, no relevant advisory locks, and no ambiguous reservations.
 - Confirm ordinary worker/cron ownership and recheck queue/lock state immediately before any future authorized run; PostgreSQL cannot attest to processes outside its view.
 - Do not claim application/provider accuracy from this experiment. Independent official-provider evidence requires a separate task and authorization.

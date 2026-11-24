@@ -1,5 +1,7 @@
 # Issue #97 JustWatch collection preflight
 
+> **Issue-level policy update (2026-11-24; JustWatch only):** Issue #97 no longer requires a separate written upstream JustWatch permission reference as a task or acceptance artifact. The observations, `UNKNOWN` fields, and `LIVE_COLLECTION_BLOCKED` verdict below are retained as historical evidence of the 2026-11-24 offline run. The existing runtime permission checks and experiment preflight remain unchanged and can still block live execution. Do not invent permission evidence or treat this documentation update as approval to send requests.
+
 **LIVE_COLLECTION_BLOCKED.** The 15-title Netherlands plan and synthetic replay are ready for code review. Fresh collection and independent assessment remain pending. [Issue #97](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/issues/97) · [PR #86](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/pull/86)
 
 ## 1. Authorization and integration
