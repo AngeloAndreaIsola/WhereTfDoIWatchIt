@@ -11,11 +11,13 @@ import base64
 import hashlib
 import hmac
 import json
+import math
 import os
+import time
 from dataclasses import replace
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 from uuid import UUID, NAMESPACE_URL, uuid5
 
@@ -114,13 +116,13 @@ def validate_manifest(manifest):
         raise ExperimentBlocked("unsupported manifest schema or experiment id")
     if manifest["maximum_attempts"] != GLOBAL_LIMIT:
         raise ExperimentBlocked("manifest maximum must equal the fixed 6-attempt ceiling")
-    if manifest != APPROVED_MANIFEST:
+    if _canonical_json(manifest) != _canonical_json(APPROVED_MANIFEST):
         raise ExperimentBlocked("manifest differs from the fixed approved scope set")
     return True
 
 
 def validate_scope(scope):
-    if scope not in APPROVED_SCOPES:
+    if not any(_canonical_json(scope) == _canonical_json(item) for item in APPROVED_SCOPES):
         raise ExperimentBlocked("scope is not an exact member of the approved manifest")
     return True
 
@@ -204,10 +206,40 @@ def _scope_totals(manifest):
     return {scope["scope_id"]: scope["maximum_attempts"] for scope in manifest["scopes"]}
 
 
+def validate_search_payload(scope, payload):
+    """Require the fixed one-page GraphQL document and typed search variables."""
+    expected_filter = {
+        "includeTitlesWithoutUrl": True,
+        "packages": None,
+        "objectTypes": [{"movie": "MOVIE", "series": "SHOW"}[scope["media_type"]]],
+        "releaseYear": {"min": None, "max": None},
+        "searchQuery": scope["title"],
+    }
+    expected_variables = {
+        "filter": {"bestOnly": True},
+        "formatOfferIcon": "PNG",
+        "formatPoster": "JPG",
+        "profile": "S718",
+        "backdropProfile": "S1920",
+        "country": scope["country"],
+        "language": "en",
+        "first": 20,
+        "offset": None,
+        "popularTitlesFilter": expected_filter,
+        "searchTitlesFilter": expected_filter,
+    }
+    expected_payload = {
+        "query": SEARCH_TITLES_QUERY, "variables": expected_variables,
+        "operationName": "GetSearchTitles",
+    }
+    if _canonical_json(payload) != _canonical_json(expected_payload):
+        raise ExperimentBlocked("JustWatch title or country escaped manifest scope")
+
+
 class ReservedTransport:
     """Only approved POST operations reach requests; redirects are returned, never followed."""
 
-    def __init__(self, *, authorization, scope, source_slug):
+    def __init__(self, *, authorization, scope, source_slug, minimum_interval=0, evidence_expires_at=None):
         validate_scope(scope)
         if authorization.get("manifest_digest") != manifest_digest(APPROVED_MANIFEST):
             raise ExperimentBlocked("authorization is not bound to the approved manifest")
@@ -216,6 +248,8 @@ class ReservedTransport:
         self.authorization = authorization
         self.scope = scope
         self.source_slug = source_slug
+        self.minimum_interval = minimum_interval
+        self.evidence_expires_at = evidence_expires_at
         self.operation_attempts = {}
         self.session = requests.Session()
         self.session.trust_env = False
@@ -245,34 +279,26 @@ class ReservedTransport:
             raise ExperimentBlocked("unrecognized source operation")
         if self.authorization.get("manifest_digest") != manifest_digest(APPROVED_MANIFEST):
             raise ExperimentBlocked("authorization manifest digest is not approved")
-        variables = (json or {}).get("variables") or {}
-        expected_filter = {
-            "includeTitlesWithoutUrl": True,
-            "packages": None,
-            "objectTypes": ["MOVIE"],
-            "releaseYear": {"min": None, "max": None},
-            "searchQuery": scope["title"],
-        }
-        expected_variables = {
-            "filter": {"bestOnly": True},
-            "formatOfferIcon": "PNG",
-            "formatPoster": "JPG",
-            "profile": "S718",
-            "backdropProfile": "S1920",
-            "country": scope["country"],
-            "language": "en",
-            "first": 20,
-            "offset": None,
-            "popularTitlesFilter": expected_filter,
-            "searchTitlesFilter": expected_filter,
-        }
-        if json.get("query") != SEARCH_TITLES_QUERY or variables != expected_variables:
-            raise ExperimentBlocked("JustWatch title or country escaped manifest scope")
+        validate_search_payload(scope, json)
         self.operation_attempts[operation] = self.operation_attempts.get(operation, 0) + 1
         operation_limit = scope["maximum_attempts"]
         if self.operation_attempts[operation] > operation_limit:
             raise ExperimentBlocked("per-operation attempt limit exhausted")
 
+        if self.minimum_interval:
+            # Measure from the last recorded response so a slow send or restart
+            # cannot shorten the required interval. The runner holds its shared
+            # title lock throughout this delay, reservation and send.
+            previous = AvailabilityExperimentAttemptOutcome.objects.filter(
+                attempt__experiment_id=self.authorization["authorization_id"],
+                attempt__source_slug=self.source_slug,
+            ).order_by("-recorded_at").first()
+            if previous:
+                elapsed = (django_timezone.now() - previous.recorded_at).total_seconds()
+                if elapsed < self.minimum_interval:
+                    time.sleep(self.minimum_interval - elapsed)
+        if self.evidence_expires_at and django_timezone.now() >= self.evidence_expires_at:
+            raise ExperimentBlocked("reviewed evidence expired before attempt reservation")
         attempt = _reserve_attempt(self.authorization, scope, operation, "POST", expected_host)
         try:
             response = self.session.post(
@@ -290,6 +316,8 @@ class ReservedTransport:
         _record_outcome(attempt, "success" if 200 <= response.status_code < 300 else "failure", response.status_code)
         if self.source_slug == "justwatch" and response.status_code == 429:
             raise ExperimentBlocked("JustWatch HTTP 429 rate limit; attempt spent and scope stopped")
+        if response.status_code in (401, 403):
+            raise ExperimentBlocked("JustWatch access denied; attempt spent and scope stopped")
         if 300 <= response.status_code < 400:
             raise ExperimentBlocked("redirect response denied; no redirect hop was followed")
         return response
@@ -560,15 +588,20 @@ def _quota_evidence(source_slugs):
             if not isinstance(item, dict):
                 continue
             checked = datetime.fromisoformat(item["checked_at"].replace("Z", "+00:00"))
-            age = (now - checked.astimezone(timezone.utc)).total_seconds()
+            if checked.utcoffset() is None:
+                continue
+            age = (now - checked).total_seconds()
             if age < 0 or age > 3600 or item.get("status") not in ("unmetered_public", "available"):
                 continue
             policy = item.get("rate_policy_evidence")
             if not isinstance(policy, dict):
                 continue
             policy_checked = datetime.fromisoformat(policy["checked_at"].replace("Z", "+00:00"))
-            policy_age = (now - policy_checked.astimezone(timezone.utc)).total_seconds()
+            if policy_checked.utcoffset() is None:
+                continue
+            policy_age = (now - policy_checked).total_seconds()
             max_burst = policy.get("max_burst")
+            minimum_interval = policy.get("minimum_interval_seconds")
             if (
                 policy_age < 0
                 or policy_age > 3600
@@ -576,6 +609,9 @@ def _quota_evidence(source_slugs):
                 or isinstance(max_burst, bool)
                 or not isinstance(max_burst, int)
                 or max_burst < SOURCE_LIMITS[slug]
+                or type(minimum_interval) not in (int, float)
+                or not math.isfinite(minimum_interval)
+                or minimum_interval < 0
             ):
                 continue
             if item["status"] == "available" and (
@@ -590,6 +626,7 @@ def _quota_evidence(source_slugs):
                 "checked_at": checked.astimezone(timezone.utc).isoformat(),
                 "rate_policy_checked_at": policy_checked.astimezone(timezone.utc).isoformat(),
                 "max_burst": max_burst,
+                "minimum_interval_seconds": minimum_interval,
             }
         return valid
     except Exception:
@@ -613,7 +650,11 @@ def _access_permission_evidence(source_slugs):
             if not isinstance(permission, dict) or permission.get("status") != "authorized":
                 continue
             checked = datetime.fromisoformat(permission["checked_at"].replace("Z", "+00:00"))
-            age = (now - checked.astimezone(timezone.utc)).total_seconds()
+            if checked.utcoffset() is None:
+                continue
+            age = (now - checked).total_seconds()
+            valid_from = datetime.fromisoformat(permission["valid_from"])
+            valid_until = datetime.fromisoformat(permission["valid_until"])
             maximum_requests = permission.get("maximum_requests")
             expected_scope_ids = sorted(
                 scope["scope_id"] for scope in APPROVED_MANIFEST["scopes"]
@@ -624,6 +665,10 @@ def _access_permission_evidence(source_slugs):
                 age < 0
                 or age > 3600
                 or not str(permission.get("evidence_reference", "")).strip()
+                or valid_from.utcoffset() is None
+                or valid_until.utcoffset() is None
+                or not valid_from <= now < valid_until
+                or permission.get("operations") != ["GetSearchTitles"]
                 or permission.get("endpoint") != "https://apis.justwatch.com/graphql"
                 or isinstance(maximum_requests, bool)
                 or not isinstance(maximum_requests, int)
@@ -638,6 +683,9 @@ def _access_permission_evidence(source_slugs):
                 "endpoint": permission["endpoint"],
                 "maximum_requests": maximum_requests,
                 "scope_ids": expected_scope_ids,
+                "operations": permission["operations"],
+                "valid_from": valid_from.astimezone(timezone.utc).isoformat(),
+                "valid_until": valid_until.astimezone(timezone.utc).isoformat(),
                 "evidence_reference_present": True,
             }
         return valid
@@ -737,6 +785,14 @@ def execute_manifest(manifest, authorization):
     readiness = read_only_preflight(manifest)
     if readiness["readiness"] != "ready":
         raise ExperimentBlocked("preflight blocked: " + "; ".join(readiness["blockers"]))
+    quota = readiness["quota_evidence"]["justwatch"]
+    permission = readiness["access_permission_evidence"]["justwatch"]
+    evidence_expires_at = min(
+        datetime.fromisoformat(permission["valid_until"]),
+        *(datetime.fromisoformat(stamp) + timedelta(hours=1) for stamp in (
+            quota["checked_at"], quota["rate_policy_checked_at"], permission["checked_at"],
+        )),
+    )
     summaries = []
     # Hold the shared title-drain lock across the entire manifest. This makes
     # per-scope completion reads and reservations serial across restarts/runners.
@@ -776,7 +832,9 @@ def execute_manifest(manifest, authorization):
                 if movie.title != scope["title"] or movie.year != scope["year"]:
                     raise ExperimentBlocked("current Movie title/year differs from manifest")
                 transport = ReservedTransport(
-                    authorization=authorization, scope=scope, source_slug=scope["source_slug"]
+                    authorization=authorization, scope=scope, source_slug=scope["source_slug"],
+                    minimum_interval=quota["minimum_interval_seconds"],
+                    evidence_expires_at=evidence_expires_at,
                 )
                 if scope["source_slug"] == "justwatch":
                     client = JustWatchClient(http_post=transport, retries=scope["maximum_attempts"])
