@@ -1,16 +1,16 @@
 {
   "created_at": "2026-11-24T13:50:51.371073Z",
-  "function_id": "fe1b97b6-4d60-4371-ab9c-5a52f4f2d973",
+  "function_alias": "stage-a-notte-function",
   "latest_version": "v20261124_135310",
-  "name": "JustWatch Country Offers",
   "published": false,
   "raw_bytes": 5586,
-  "raw_path": "/Users/angeloandreaisola/.hermes/cache/scratch/anything-mcp-preflight/notte_function_show.json",
+  "raw_path": "~/.hermes/cache/scratch/anything-mcp-preflight/notte_function_show.json",
   "raw_sha256": "123aa9000f175070e1037fcba01f87a83062b7aca5e32ca1410402bb41828d89",
   "redactions": [
-    "url: presigned S3 artifact URL removed (sensitive identifier)"
+    "Unpublished function and workflow identifiers, signed download URL, and full function configuration omitted."
   ],
   "required_secrets_count": 0,
+  "shared": false,
   "source": "anything",
   "status": "active",
   "updated_at": "2026-11-24T13:53:11.148666Z",
