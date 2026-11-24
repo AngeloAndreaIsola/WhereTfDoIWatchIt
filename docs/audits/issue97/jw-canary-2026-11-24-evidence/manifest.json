@@ -1,4 +1,10 @@
 {
+  "artifact_refs": {
+    "attempt_accounting": "sanitized/attempt_accounting.json",
+    "identity_provenance": "sanitized/identity_provenance.json",
+    "original_show_redacted": "sanitized/function_show_original.json",
+    "provider_summary": "sanitized/provider_summary.json"
+  },
   "base_ref": "origin/master",
   "base_sha": "c2ead763bb8e49859e13e56a3cd8e80e6c0ee4d7",
   "budgets": {
@@ -48,13 +54,17 @@
   ],
   "declared_hashes": {
     "params_hash": {
+      "provenance": "Declared in runs/jw-canary-2026-11-24/manifest.json:47 (derived_from R2b-notte-cli).",
+      "reason": "Exhaustive scan of 22 retained evidence files and 11,631 scratch/cache files (<5MB), plus raw and four canonical JSON serializations of every JSON object and all recorded call/probe variables, produced no matching bytes. The exact serialized parameter object was not retained; value left unchanged, not corrected.",
       "reproduced_from": null,
-      "status": "NOT_REPRODUCIBLE_SERIALIZATION_UNKNOWN",
+      "status": "UNVERIFIABLE",
       "value": "d4c2880edbbd00d738229e737171998fdaa9a264ff7fc1a3e1b5dad2faf9ebf4"
     },
     "previous_spec_sha256": {
+      "provenance": "Declared in spec/manifest.json:4 and runs/jw-canary-2026-11-24/manifest.json:49; PENDING.md R3 records owner export of the current spec only.",
+      "reason": "Bytes of the pre-R3/previous spec are not retained anywhere searched; no file hashes to this value. Value left unchanged, not corrected.",
       "reproduced_from": null,
-      "status": "NOT_REPRODUCIBLE_MISSING_BYTES",
+      "status": "UNVERIFIABLE",
       "value": "05449a1c3f238bc09a08afee22db3c11ef2ebf8886b5cad19bcdecd32f136bd0"
     },
     "run_manifest_sha256": {
@@ -63,8 +73,10 @@
       "value": "f5d28b45a45b55ecdad1eb0895f4231b4bd0adffdcf9af7d38db39a02552f3b2"
     },
     "show_json_sha256": {
-      "reproduced_from": null,
-      "status": "NOT_REPRODUCIBLE_MISSING_BYTES",
+      "note": "Original pre-redeploy Notte function show output; raw bytes hash exactly to declared value. Raw file not published (presigned S3 URL); redacted derivative included as sanitized/function_show_original.json.",
+      "reproduced_bytes": 5586,
+      "reproduced_from": "/Users/angeloandreaisola/.hermes/cache/scratch/anything-mcp-preflight/notte_function_show.json",
+      "status": "VERIFIED",
       "value": "123aa9000f175070e1037fcba01f87a83062b7aca5e32ca1410402bb41828d89"
     },
     "source_code_sha256": {
@@ -88,8 +100,10 @@
       "value": "faf8b4ba69835f0428821b71a0c29f6072fe0aab0647016b8148120005e0a23f"
     },
     "tool_list_schema_sha256": {
+      "provenance": "Declared in spec/manifest.json:12, runs/manifest.json:61, spec/PENDING.md:11 and scratch anything-mcp-preflight/preflight.json + resume_report.json.",
+      "reason": "A tools/list artifact is retained (scratch/anything-mcp-preflight/tools.json and tools.raw.txt) but neither its raw bytes nor canonical variants of the list, its items, input/output schemas or SSE fragments reproduce the declared digest. The exact serialized object that was hashed was not retained; value left unchanged, not corrected.",
       "reproduced_from": null,
-      "status": "NOT_REPRODUCIBLE_MISSING_PAYLOAD",
+      "status": "UNVERIFIABLE",
       "value": "0e688edd1bd330f98bb4d89146c6497f5d0abb62a95654c5dcf09c64b9115705"
     }
   },
@@ -178,8 +192,48 @@
     "unknown_audio_lists": 2,
     "unknown_subtitle_lists": 2
   },
+  "findings_disposition": {
+    "D1": "RESOLVED_IN_PACKAGE — sanitized/provider_summary.json makes all 56 offers primary; 34-row literal-dedup view retained and labelled as a different denominator.",
+    "D2": "PARTIALLY_RESOLVED — show_json_sha256 VERIFIED against original retained bytes; params_hash, previous_spec_sha256 and tool_list_schema_sha256 explicitly UNVERIFIABLE with provenance/reason (no corrections invented).",
+    "D3": "DOCUMENTED — show lists six versions; event names two; intermediate v20261124_150411 not expanded because no extra event evidence exists.",
+    "D4": "RESOLVED — sanitized/attempt_accounting.json names each namespace: validation probes, collection calls, per-title attempts, global call index.",
+    "D5": "DOCUMENTED_OPEN — internal JustWatch HTTP attempts have no ledger; ≥8 remains an ESTIMATE_NOT_MEASURED static lower bound.",
+    "D6": "RESOLVED_AS_EXTERNAL_ATTRIBUTION — no TMDb id in canary records; hash-matched TMDb identity evidence exists in committed stage2b manifest and retained payloads, but the canary↔TMDb join is inferred by title/year/type, not a retained key.",
+    "D7": "DOCUMENTED — language-sentinel wrapping is asserted and tested by the offline verifier; originating run manifest was not edited.",
+    "D8": "DOCUMENTED — version-event detection timestamp follows the retry call; chronology retained as measured."
+  },
   "function_id": "fe1b97b6-4d60-4371-ab9c-5a52f4f2d973",
+  "hash_investigation": {
+    "files_hashed_total": 11631,
+    "matched": [
+      {
+        "bytes": 5586,
+        "hash_name": "show_json_sha256",
+        "result": "VERIFIED",
+        "retired_from": "/Users/angeloandreaisola/.hermes/cache/scratch/anything-mcp-preflight/notte_function_show.json",
+        "value": "123aa9000f175070e1037fcba01f87a83062b7aca5e32ca1410402bb41828d89"
+      }
+    ],
+    "methods": [
+      "raw SHA-256 of every retained evidence file",
+      "canonical JSON (compact, compact/non-ASCII, spaced, indent-2) of every JSON object",
+      "raw/canonical variants of scratch preflight artifacts including tools list and function show",
+      "full hash scan of 11,631 scratch/cache files under 5MB"
+    ],
+    "unverifiable": [
+      "params_hash",
+      "previous_spec_sha256",
+      "tool_list_schema_sha256"
+    ]
+  },
   "metrics_class": "MEASURED_AGAINST_UNVERIFIED_SOURCE (never PROVEN)",
+  "missing_evidence_updated": [
+    "params_hash, previous_spec_sha256 and tool_list_schema_sha256 source bytes/serializations (UNVERIFIABLE).",
+    "Per-request JustWatch HTTP ledger (D5).",
+    "Direct canary-record field joining a JustWatch id to a TMDb id (D6); external hash-matched identity evidence exists but the join is inferred.",
+    "Deployed function source artifact hash; presigned URL redacted.",
+    "Independent first-party comparator / entitlement / playback observation."
+  ],
   "package_id": "issue97-r2b-canary-2026-11-24-evidence",
   "run": "JW-CANARY-v1b",
   "run_date": "2026-11-24",

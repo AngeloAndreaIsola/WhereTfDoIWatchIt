@@ -5,7 +5,7 @@ No network, no database, no Django, no provider calls. Reads raw evidence only
 from an owner-supplied --evidence-root; writes nothing. Output contains only
 aggregates, hashes and PASS/FAIL rows -- never raw provider records or headers.
 """
-import argparse, collections, hashlib, json, sys
+import argparse, collections, hashlib, json, re, sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -124,6 +124,63 @@ def compare(expected, actual):
     return checks
 
 
+def sanitization_scan():
+    """High-risk credential/presigned-URL patterns in the publishable package."""
+    patterns = {
+        'presigned_url': re.compile(r'X-Amz-Algorithm|X-Amz-Signature|Signature='),
+        'bearer_token': re.compile(r'Bearer\s+[A-Za-z0-9._~+/=-]{8,}'),
+        'github_token': re.compile(r'gh[pousr]_[A-Za-z0-9]{20,}'),
+        'openai_key': re.compile(r'sk-[A-Za-z0-9]{20,}'),
+        'aws_access_key': re.compile(r'AKIA[0-9A-Z]{16}'),
+    }
+    hits = []
+    # The verifier itself contains the detector regexes and is not an artifact payload.
+    ignore = {'SHA256SUMS', 'verify_evidence.py'}
+    files = sorted(p for p in HERE.rglob('*') if p.is_file() and p.name not in ignore)
+    for p in files:
+        text = p.read_text(encoding='utf-8', errors='replace')
+        for name, pattern in patterns.items():
+            if pattern.search(text):
+                hits.append({'file': str(p.relative_to(HERE)), 'pattern': name})
+    return {'files_scanned': len(files), 'hits': hits, 'status': 'PASS' if not hits else 'FAIL'}
+
+
+def artifact_checks(manifest, actual):
+    """Cross-check the new sanitized artifacts against the measured metrics."""
+    checks = []
+    sdir = HERE / 'sanitized'
+    provider = load_json(sdir / 'provider_summary.json')
+    checks.append({'metric': 'provider_summary all-56 counts',
+                   'status': 'PASS' if provider['provider_counts_all_56'] == actual['provider_counts_full']
+                             and provider['counts_sum']['all_56'] == 56 else 'FAIL',
+                   'expected': '[56 offers]', 'actual': '[56 offers]' if provider['counts_sum']['all_56'] == 56 else provider['counts_sum']})
+    checks.append({'metric': 'provider_summary 34-row alternative',
+                   'status': 'PASS' if provider['provider_counts_literal_dedup_34'] == actual['provider_counts_literal_dedup']
+                             and provider['counts_sum']['literal_dedup_34'] == 34 else 'FAIL',
+                   'expected': '[34 rows]', 'actual': '[34 rows]' if provider['counts_sum']['literal_dedup_34'] == 34 else provider['counts_sum']})
+    att = load_json(sdir / 'attempt_accounting.json')['namespaces']
+    checks.append({'metric': 'collection invocations 3/6 and probes 1/3',
+                   'status': 'PASS' if (att['notte_collection_invocations']['count'], att['notte_collection_invocations']['limit']) == (3, 6)
+                             and (att['notte_validation_probe_invocations']['count'], att['notte_validation_probe_invocations']['limit']) == (1, 3) else 'FAIL',
+                   'expected': '3/6, 1/3', 'actual': '3/6, 1/3'})
+    jw = att['internal_justwatch_http_attempts']
+    checks.append({'metric': 'internal HTTP attempts unmeasured and estimate-labelled',
+                   'status': 'PASS' if jw['measured_count'] is None and jw['ledger_retained'] is False
+                             and jw['status'] == 'ESTIMATE_NOT_MEASURED' else 'FAIL',
+                   'expected': 'NOT MEASURED', 'actual': jw['status']})
+    ident = load_json(sdir / 'identity_provenance.json')
+    checks.append({'metric': 'TMDb ids absent from canary records; external evidence hash-matched',
+                   'status': 'PASS' if ident['tmdb_ids_in_canary_records'] is False
+                             and all(r['hash_match'] for r in ident['external_tmdb_evidence']['rows']) else 'FAIL',
+                   'expected': 'external-only', 'actual': 'external-only' if not ident['tmdb_ids_in_canary_records'] else 'present-in-records'})
+    for name, rec in manifest['declared_hashes'].items():
+        valid = (rec['status'] == 'VERIFIED' and rec.get('reproduced_from')) or \
+                (rec['status'] == 'UNVERIFIABLE' and rec.get('provenance') and rec.get('reason'))
+        checks.append({'metric': 'hash status qualified: ' + name,
+                       'status': 'PASS' if valid else 'FAIL', 'expected': 'qualified', 'actual': rec['status']})
+    return checks
+
+
 def self_test():
     fx = load_json(HERE / 'fixtures/safe_fixture.json')
     rows = fx['records']
@@ -138,8 +195,10 @@ def self_test():
         'unknown_subtitle_lists': sum(1 for r in rows if r['subtitle_languages'] == ['UNKNOWN']),
     }
     checks = compare(fx['expected'], actual)
-    ok = all(c['status'] == 'PASS' for c in checks)
+    sanitization = sanitization_scan()
+    ok = all(c['status'] == 'PASS' for c in checks) and sanitization['status'] == 'PASS'
     print(json.dumps({'mode': 'synthetic-self-test', 'checks': checks,
+                      'sanitization': sanitization,
                       'overall': 'PASS' if ok else 'FAIL'}, indent=2, ensure_ascii=False))
     return 0 if ok else 1
 
@@ -165,9 +224,12 @@ def main():
                    'expected': True, 'actual': actual['checkpoint_first_failed']})
     checks.append({'metric': 'checkpoint_retry_of batch-01', 'status': 'PASS' if actual['checkpoint_retry_of'] == 'batch-01' else 'FAIL',
                    'expected': 'batch-01', 'actual': actual['checkpoint_retry_of']})
-    ok = (files['FAIL'] == 0 and files['MISSING'] == 0 and all(c['status'] == 'PASS' for c in checks))
+    checks += artifact_checks(manifest, actual)
+    sanitization = sanitization_scan()
+    ok = (files['FAIL'] == 0 and files['MISSING'] == 0 and all(c['status'] == 'PASS' for c in checks)
+          and sanitization['status'] == 'PASS')
     print(json.dumps({'mode': 'offline-evidence-verification', 'evidence_root': '[redacted path]',
-                      'file_hashes': files, 'checks': checks,
+                      'file_hashes': files, 'checks': checks, 'sanitization': sanitization,
                       'overall': 'PASS' if ok else 'FAIL'}, indent=2, ensure_ascii=False))
     return 0 if ok else 1
 

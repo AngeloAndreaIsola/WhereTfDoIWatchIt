@@ -1,0 +1,32 @@
+{
+  "denominator_primary": "all 56 canary offers (runs/jw-canary-2026-11-24/offers.json)",
+  "denominator_alternative": "34 rows remaining after the literal brief dedup key (no title/jw_id)",
+  "why_two": "The extended key preserves title identity (0 removed); the literal brief key collapses 22 cross-title price/provider matches. Both are reproducible; only the 56-row view is the canary total.",
+  "provider_counts_all_56": {
+    "Amazon Video": 12,
+    "Apple TV Store": 12,
+    "Rakuten TV": 10,
+    "HBO Max": 6,
+    "HBO Max Amazon Channel": 6,
+    "Pathé Thuis": 4,
+    "Amazon Prime Video": 2,
+    "Netflix": 2,
+    "meJane": 2
+  },
+  "provider_counts_literal_dedup_34": {
+    "Amazon Video": 6,
+    "Apple TV Store": 6,
+    "Rakuten TV": 6,
+    "Pathé Thuis": 4,
+    "HBO Max": 3,
+    "HBO Max Amazon Channel": 3,
+    "Amazon Prime Video": 2,
+    "Netflix": 2,
+    "meJane": 2
+  },
+  "counts_sum": {
+    "all_56": 56,
+    "literal_dedup_34": 34
+  },
+  "correction": "summary.md provider table mixes the 34-row counts with 56-row headline totals; this artifact supplies the corrected 56-row table."
+}

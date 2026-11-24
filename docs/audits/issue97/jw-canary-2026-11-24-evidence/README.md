@@ -1,171 +1,173 @@
-# Issue #97 — R2b Notte canary evidence package (`JW-CANARY-v1b`, 2026-11-24)
+# Issue #97 — R2b Notte canary evidence package (`JW-CANARY-v1b`, 2026-11-24) — Stage A update
 
-**Verdict: SANITIZED EVIDENCE PREPARED — `READY_FOR_CHATGPT_REVIEW`.** This PR is a review
-artifact only. It does not close #97, does not prove availability accuracy, contains no
-provider calls, and changes no collection code, runtime permission check, production data
-or other agent's branch. Metrics class is `MEASURED_AGAINST_UNVERIFIED_SOURCE` — never
-`PROVEN`. Every collected record carries `SAME_SOURCE_ECHO` and `UNLICENSED`.
+**Verdict: Stage A complete. `READY_FOR_CHATGPT_REVIEW`.** This PR updates the original
+evidence package in place; it is still a draft, and #97 remains open and untouched. No
+provider calls, database access, deployment, merge or runtime-permission change occurred.
+Metrics class stays `MEASURED_AGAINST_UNVERIFIED_SOURCE` — never `PROVEN`. All 56 offers
+carry `SAME_SOURCE_ECHO` and `UNLICENSED`.
 
-Base: `origin/master` `c2ead763bb8e49859e13e56a3cd8e80e6c0ee4d7` (fresh isolated worktree).
-The uncommitted edit to `docs/operations/issue97_justwatch_collection_preflight.md` and the
-untracked `runs/`, `spec/`, `docs/source-permission/` trees present in the main worktree were
-observed, left untouched, and are **not** part of this PR; all source facts below come from
-the committed base plus byte-preserved hashes of those uncommitted evidence files.
+Base: `origin/master` `c2ead763bb8e49859e13e56a3cd8e80e6c0ee4d7`. Original failed batch and
+all checkpoints remain preserved by hash and metadata; raw unlicensed payloads remain
+outside the PR.
 
 ## 1. Acceptance items — measured status
 
 | # | Item | Status | Measured result |
 |---|---|---|---|
-| 1 | Inspect run dir, manifest and Notte specs | **PASS** | 22 evidence files inventoried with SHA-256 + byte counts in `manifest.json`; 2 source specs copied byte-identically; 1 redacted derivative. |
-| 2 | Checkpoint continuity | **PARTIAL** | batches 1→2→3 consistent with `raw_ref`s; failed batch-01 retained; batch-03 `retry_of=batch-01`; counts 0/27/29. Numbering namespace conflict noted as D4. |
-| 3 | Function versions | **PARTIAL** | event `v20261124_135310`→`v20261124_150434` agrees across both manifests; two downloaded sources are byte-identical (`b512a7be…`), so `source_hash_unchanged` is locally verifiable. Deployed artifact hash and 4 omitted versions are not evidenced (D3, M6). |
-| 4 | Source hashes | **PARTIAL** | spec YAML, both source-code copies and both manifests reproduce exactly (22/22 inventory hashes). `params_hash`, `show_json_sha256`, `previous_spec_sha256`, `tool_list_schema_sha256` have no retained payload/serialization and are **not reproducible** (D2). |
-| 5 | Call accounting | **PARTIAL** | Notte invocations measured exactly: 3/6 collection, 1/3 probes. Underlying JustWatch HTTP attempts have **no ledger**; only a static lower bound (D5). |
-| 6 | Typed title identities | **PARTIAL** | within each batch, title / object_type / release_year / JustWatch id are internally consistent (one value each). TMDb 27205 and 438631 are **not present** in any retained record, so the TMDb↔JustWatch link is asserted, not evidenced (D6). |
-| 7 | Reproduce totals and dedup offline | **PARTIAL** | all headline totals reproduce (56 = 27+29, 0 rejects, 0 extended-key duplicates, 22 literal-key collapses). `summary.md` provider table is drawn from the 34-row literal-dedup set, not the 56-row set (D1). |
-| 8 | Sanitized reproducible package | **PASS** | no API keys, presigned URLs, session/run UUIDs or raw provider payloads in the PR; source hashes and provenance preserved; offline verifier + synthetic fixture included. |
-| 9 | Draft PR, no merge/close | **PASS** | draft PR from this branch against `master`; #97 left open and untouched. |
+| 1 | D1 — provider totals | **RESOLVED** | `sanitized/provider_summary.json` makes the 56-offer table primary; the 34-row literal-dedup view is retained and explicitly relabelled. |
+| 2 | D2 — unreproducible hashes | **PARTIALLY_RESOLVED** | `show_json_sha256` VERIFIED against original retained bytes (exact SHA-256, 5,586 bytes). The other three are explicitly `UNVERIFIABLE` with provenance and reason; no value was invented. |
+| 3 | D4 — attempt namespaces | **RESOLVED** | `sanitized/attempt_accounting.json` names four distinct namespaces; no counter was changed or fabricated. |
+| 4 | HTTP accounting | **PASS** | 3/6 collection calls and 1/3 probes are measured; internal JustWatch attempts are `ESTIMATE_NOT_MEASURED`, never reported as usage. |
+| 5 | D6 — identity provenance | **RESOLVED_AS_EXTERNAL_ATTRIBUTION** | No TMDb field in canary records; hash-matched TMDb identity evidence exists in a committed manifest and retained payloads; the join to canary rows is inferred by title/year/type. |
+| 6 | Re-verify offline | **PASS** | verifier, file hashes, synthetic fixture and sanitization scan all re-run; see §8. |
+| 7 | PR #197 description updated | **PASS** | disposition recorded for every original finding. |
+| 8 | Scope boundaries | **PASS** | no provider calls, no DB/deploy/merge/issue edit; runtime permission requirements unchanged. |
 
-Status vocabulary: **PASS | PARTIAL | FAIL | BLOCKED**. No item is claimed `PASS` where a
-supporting artifact was not re-measured.
+## 2. Reproduced counts (unchanged, all 56 represented)
 
-## 2. Reproduced counts
+27 (Dune) + 29 (Inception retry) = **56** raw records / **56** offers; **0** rejects; **0**
+duplicates on the extended key; **22** collapses on the literal brief key (56 → 34); **56**
+`nl`→`NL` country normalizations; **0** near-duplicate price groups; **2** `['UNKNOWN']`
+audio and **2** `['UNKNOWN']` subtitle lists; all rows `NL`, `movie`, `available=true`,
+labelled `SAME_SOURCE_ECHO` + `UNLICENSED`. Monetization mix: buy 20, rent 20,
+subscription 16, free 0. `offers.json` equals the normalized raw call results as a
+multiset (country uppercased, 3 flags appended, labels added, scalar language sentinel
+wrapped as a list).
 
-| Metric | Reported | Independently measured | Match |
-|---|---:|---:|---|
-| Dune / Inception per-title records | 27 / 29 | 27 / 29 | yes |
-| Raw records / offers | 56 / 56 | 56 / 56 | yes |
-| Rejects | 0 | 0 (`[]`) | yes |
-| Extended-key duplicates removed | 0 | 0 (56 kept) | yes |
-| Literal-brief-key collapses | 22 | 22 (56 → 34) | yes |
-| Country normalizations | 56 | 56, all `nl`→`NL`, field `country` | yes |
-| Near-duplicate price groups | 0 | 0 | yes |
-| `audio_languages = ['UNKNOWN']` | 2 | 2 | yes |
-| `subtitle_languages = ['UNKNOWN']` | 2 | 2 | yes |
-| Countries / object types | NL / movie | `{'NL': 56}` / `{'movie': 56}` | yes |
-| `available = true` | — | 56/56 | measured |
-| Monetization mix | — | buy 20, rent 20, subscription 16, free 0 | measured |
-| Source labels | both on all rows | one distinct set on all 56 | yes |
-| `offers.json` = normalized raw results | not stated | **true** as a multiset | measured |
+### Corrected provider summary — all 56 offers (D1)
 
-The raw→offers derivation verified offline is: uppercase `country` (`nl`→`NL`), append flags
-`country_uppercased`, `SAME_SOURCE_ECHO`, `UNLICENSED`, add `source_labels`, and wrap the
-scalar language sentinel `"UNKNOWN"` as `['UNKNOWN']`. The last step is not recorded in the
-run manifest (D7). All 56 rows match after this transform; record order differs
-(`offers.json` starts with Inception, raw concatenation starts with Dune), which is why the
-verifier compares multisets, not list equality.
+| Provider | All 56 (primary) | Literal-dedup 34 (secondary) |
+|---|---:|---:|
+| Amazon Video | 12 | 6 |
+| Apple TV Store | 12 | 6 |
+| Rakuten TV | 10 | 6 |
+| HBO Max | 6 | 3 |
+| HBO Max Amazon Channel | 6 | 3 |
+| Pathé Thuis | 4 | 4 |
+| Amazon Prime Video | 2 | 2 |
+| Netflix | 2 | 2 |
+| meJane | 2 | 2 |
+| **Total** | **56** | **34** |
 
-### Provider counts — the source of D1
+Both columns sum correctly and are reproducible from `offers.json`. The 56-row column is
+the canary total; the 34-row column counts unique country/provider/type/quality/price/
+currency tuples after discarding title identity. The old `summary.md` table quoted the
+34-row numbers under 56-row headline totals — that is the D1 defect; this table corrects
+the presentation without altering any record.
 
-| Provider | Full 56-row set | Literal-dedup 34-row set | `summary.md` |
-|---|---:|---:|---:|
-| Amazon Video | 12 | 6 | 6 |
-| Apple TV Store | 12 | 6 | 6 |
-| Rakuten TV | 10 | 6 | 6 |
-| Pathé Thuis | 4 | 4 | 4 |
-| HBO Max | 6 | 3 | 3 |
-| HBO Max Amazon Channel | 6 | 3 | 3 |
-| Amazon Prime Video | 2 | 2 | 2 |
-| Netflix | 2 | 2 | 2 |
-| meJane | 2 | 2 | 2 |
+## 3. D2 — hash investigation and disposition
 
-`summary.md` headlines 56 records but its provider table is exactly the 34-row literal-key
-dedup view. Both views are reproducible; the table is simply mislabelled by its own context.
+Methods used: raw SHA-256 of every retained evidence file; four canonical JSON
+serializations of every JSON object in those files; raw/canonical variants of the scratch
+preflight artifacts (`tools.json`, `tools.raw.txt`, function-show files); full hash scan of
+**11,631** scratch/cache files under 5 MB.
 
-### Typed identity (per batch, all 56 records)
+| Hash | Declared value | Status | Provenance / reason |
+|---|---|---|---|
+| `show_json_sha256` | `123aa9000f175070e1037fcba01f87a83062b7aca5e32ca1410402bb41828d89` | **VERIFIED** | Original pre-redeploy show bytes at `~/.hermes/cache/scratch/anything-mcp-preflight/notte_function_show.json` (5,586 bytes) hash exactly. Raw file not published (presigned URL); redacted derivative `sanitized/function_show_original.json` included. |
+| `params_hash` | `d4c2880edbbd00d738229e737171998fdaa9a264ff7fc1a3e1b5dad2faf9ebf4` | **UNVERIFIABLE** | Declared at `runs/.../manifest.json:47`. No matching bytes/serialization found, including all call/probe variables and parameter permutations. Exact serialized input object not retained. |
+| `previous_spec_sha256` | `05449a1c3f238bc09a08afee22db3c11ef2ebf8886b5cad19bcdecd32f136bd0` | **UNVERIFIABLE** | Declared at `spec/manifest.json:4` and `runs/.../manifest.json:49`. Pre-R3 spec bytes not retained; PENDING.md documents only the owner-exported current spec. |
+| `tool_list_schema_sha256` | `0e688edd1bd330f98bb4d89146c6497f5d0abb62a95654c5dcf09c64b9115705` | **UNVERIFIABLE** | Declared at `spec/manifest.json:12`, `PENDING.md:11`, and scratch `preflight.json`/`resume_report.json`. A tools/list artifact exists but no raw or canonical serialization of it matches. Exact hashed payload not retained. |
 
-| Batch | Title | object_type | release_year | JustWatch id | country (raw → merged) |
-|---|---|---|---:|---|---|
-| 2 (Dune) | Dune — 1 distinct value | movie — 1 | 2021 — 1 | `tm305113` — 1 | `nl` → `NL` |
-| 3 (Inception retry) | Inception — 1 distinct value | movie — 1 | 2010 — 1 | `tm92641` — 1 | `nl` → `NL` |
+The other declared hashes — spec YAML `faf8b4ba…`, source code `b512a7be…` (both copies),
+both manifest files — remain **VERIFIED** against retained bytes. No UNVERIFIABLE value was
+"corrected": the declared value is preserved with its qualification.
 
-These are JustWatch-internal content ids, **not** TMDb ids. No field named `tmdb_id` exists
-in `offers.json`, the raw call results, the batch files or the validation log.
+## 4. Attempt accounting (D4 resolved)
 
-## 3. Notte invocations vs JustWatch HTTP attempts
+| Namespace | Count | Source | Status |
+|---|---:|---|---|
+| Notte validation probe invocations | **1 / 3** | `probe-01.json` — invalid `reference_market=nl`, failed at parameter validation | MEASURED |
+| Notte collection invocations | **3 / 6** | `call-01` failed import, `call-02` Dune closed, `call-03` Inception retry closed | MEASURED |
+| Per-title attempt index | Inception 1,2; Dune 1 | `batch-01.attempt=1`, `batch-03.attempt=2`, `batch-02.attempt=1` | MEASURED |
+| Global collection call index | Inception 1,3; Dune 2 | `coverage.json.attempt_history` + batch numbers | MEASURED |
+| Internal JustWatch HTTP attempts | **unknown** | no per-request ledger retained | **NOT MEASURED** |
 
-| Layer | Measured | Budget | Evidence |
-|---|---:|---:|---|
-| Notte validation function invocations | 1 | 3 | `probe-01.json`: invalid `reference_market=nl`, HTTP 200 / status `failed`, parameter error before any browser session per the decision record. |
-| Notte collection function invocations | 3 | 6 | `call-01` (failed import), `call-02` (closed, Dune), `call-03` (closed, Inception retry). Failed attempts count as spent. |
-| **Total Notte invocations** | **4** | 9 across both buckets | Distinct from HTTP attempts below. |
-| JustWatch HTTP attempts | **not ledgered** | owner's #97 proposal: 25 low-level attempts | No per-request ledger, response-status record or rate-limit header was retained. Static reading of `spec/fe1b97b6.py` shows, per successful invocation: 1 US search-page navigation, 1 US discovery-page navigation, 1 NL market-page navigation, 1 `apis.justwatch.com/graphql` POST inside `query_offers()` — **≥4**, with a retry loop and an embedded-data fallback that may add more. Two successful calls ⇒ **≥8 static lower bound, NOT MEASURED**. The probe and the import-error call made 0 by code position. |
+`coverage.json`'s `attempt: 1, 3` are global call indices; `batch-03.json`'s `attempt: 2`
+is the per-title retry index. They are not contradictory once named — that is the D4
+resolution. No counter was rewritten in the raw evidence.
 
-Do not equate "3 of 6 collection calls" with the 25-attempt low-level ceiling in #97: they
-are different units. The exact JustWatch attempt count is **Not proven**.
+**HTTP vs invocation:** the measured budgets apply to Notte function invocations only.
+Static reading of `spec/fe1b97b6.py` shows ≥4 underlying HTTP attempts per successful
+invocation (US search page, US discovery page, NL market page, GraphQL offers POST), so two
+successes imply **≥8**, but this is explicitly an **`ESTIMATE_NOT_MEASURED`** static lower
+bound, not observed usage. The owner's 25-low-level-attempt proposal in #97 is a different
+unit and is not comparable to 3/6 or 1/3. The probe and the import-error call made zero by
+code position; retry-loop and embedded-fallback additions are unledgered.
 
-## 4. Discrepancies
+## 5. Identity provenance (D6 resolved as external attribution)
 
-| ID | Severity | Finding |
+- Searched all 22 retained evidence files: **no** `27205`, `438631` or `tmdb_id` field in
+  `runs/` or `spec/`. The only occurrence in retained evidence is the operator brief line
+  `docs/source-permission/decision-2026-11-24.md:26`.
+- Canary records carry `title`, JustWatch `jw_id`, `object_type`, `release_year`, `country`.
+  One distinct value per batch: Inception / `tm92641` / movie / 2010; Dune / `tm305113` /
+  movie / 2021.
+- External identity evidence is retained and hash-matched: committed
+  `docs/audits/stage2b/identity_manifest_20261122.csv` rows for TMDb 27205 (movie,
+  Inception, 2010, `tmdb_direct_id_details`, hash `4d4a57db…`) and 438631 (movie, Dune,
+  2021, `tmdb_direct_id_details`, hash `03fd27dc…`); the corresponding retained TMDb JSON
+  payloads hash exactly to those values.
+- **Classification:** title/year/media-type are VERIFIED by external hash-matched evidence
+  and are consistent with the canary fields. The link from those TMDb ids to the canary
+  JustWatch ids is **INFERRED / EXTERNALLY_ATTACHED** by title+year+type because the canary
+  records contain no direct key. No production database cross-check was performed.
+
+## 6. Findings disposition (original audit)
+
+| ID | Disposition | Detail |
 |---|---|---|
-| D1 | medium | `summary.md` provider breakdown is computed on the 34-row literal-dedup set while its totals are on 56 rows (§2). No row was lost; the table is mis-scoped. |
-| D2 | high | `params_hash d4c2880e…`, `show_json_sha256 123aa900…` and `previous_spec_sha256 05449a1c…` cannot be reproduced. An exhaustive scan hashed every retained file as raw bytes and every JSON object with four serializations (compact/sorted, spaced/sorted, indent-2/sorted, `str()`) — zero matches. `tool_list_schema_sha256 0e688edd…` likewise has no retained payload. These are **missing artifacts**, not evidence of a wrong hash. |
-| D3 | low | `function_show_redeploy.json` lists six versions (`…135051`, `…135131`, `…135152`, `…135310`, `…150411`, `…150434`); the version event names only `…135310` and `…150434`, omitting `…150411`. |
-| D4 | low | `coverage.json.attempt_history` numbers Inception attempts 1 and 3 (global call index), while `batch-03.json.attempt` is 2 (per-title retry index). Both describe the same retry; the namespaces are unlabelled. |
-| D5 | medium | No JustWatch HTTP attempt ledger; the ≥8 figure is a static lower bound only. |
-| D6 | medium | TMDb ids 27205 / 438631 in the task context do not appear in any retained record; the title/type/year/JW-id chain is self-consistent but the TMDb↔JW mapping is unverified. |
-| D7 | low | `offers.json` wraps scalar `"UNKNOWN"` language sentinels into `['UNKNOWN']` for 2 rows; this derivation is not listed in the run manifest's deviations. Schema-valid (array branch), but undocumented. |
-| D8 | info | `version_event.detected_at` (15:36:40.818929Z) is ~14.6 s **after** the retry call's `at` (15:36:26.263905Z); the event was recorded at report-generation time, not before the retry. Redeploy `updated_at` (15:04:34.589983Z) precedes the successful Dune call (15:05:03.492511Z). |
+| D1 | **RESOLVED** | §2 provider table uses all 56; 34-row view kept with its own label. |
+| D2 | **PARTIALLY_RESOLVED** | §3: one hash VERIFIED, three `UNVERIFIABLE` with provenance/reason; no fabricated corrections. |
+| D3 | **DOCUMENTED** | Show lists six versions; event names two; intermediate `v20261124_150411` not expanded — no further event evidence retained. |
+| D4 | **RESOLVED** | §4 namespaces named; counters unchanged. |
+| D5 | **DOCUMENTED_OPEN** | No JustWatch HTTP ledger; ≥8 stays an estimate, not measured usage. |
+| D6 | **RESOLVED_AS_EXTERNAL_ATTRIBUTION** | §5: external hash-matched identity, inferred join. |
+| D7 | **DOCUMENTED** | Language-sentinel wrapping asserted and tested by verifier; originating run manifest not edited. |
+| D8 | **DOCUMENTED** | Version-event detection timestamp follows the retry; chronology unchanged. |
 
-## 5. Missing evidence / blocked claims
+## 7. Remaining blockers
 
-1. Bytes that produced `show_json_sha256`, `previous_spec_sha256`, `tool_list_schema_sha256`, and the exact serialization that produced `params_hash` (D2).
-2. Per-request JustWatch ledger: URLs/methods, statuses, retry attempts, rate-limit headers, actual attempt total (D5).
-3. TMDb identity export tying 27205→Inception(2010)/`tm92641` and 438631→Dune(2021)/`tm305113` (D6).
-4. Deployed function source artifact hash. The only remote handle is a presigned S3 URL inside `function_show_redeploy.json`; it is redacted here, and no content hash was retained. `source_hash_unchanged` is verified only between the two locally downloaded copies.
-5. Independent first-party comparator, entitlement or playback observation — none exists, so no accuracy rate is computable and none is claimed.
-6. Raw provider payloads are deliberately withheld from the PR (see §6); they remain available to the owner at the paths in `manifest.json` with hashes preserved.
+1. `params_hash`, `previous_spec_sha256`, `tool_list_schema_sha256` source bytes/serialization (`UNVERIFIABLE`).
+2. Per-request JustWatch HTTP ledger (D5).
+3. A direct canary-record key joining a JustWatch id to a TMDb id (D6); external evidence exists but the join is inferred.
+4. Deployed function source artifact hash (only a presigned URL existed; redacted).
+5. Independent first-party comparator / entitlement / playback observation — no accuracy rate is computable.
 
-## 6. Sanitization
+## 8. Sanitization and verification
 
-**Included:** this report; `manifest.json` (source inventory with hashes/byte counts, hashes,
-budgets, checkpoints, expected metrics, discrepancies); `verify_evidence.py`; a fully
-synthetic fixture; byte-identical copies of the function spec and source code (own code,
-no credentials); a redacted function-show derivative with `url` removed.
+**Included:** this report; `manifest.json` (22-file hash/byte inventory, qualified hashes,
+findings disposition); `verify_evidence.py`; synthetic fixture; byte-identical function
+spec/source copies; redacted function-show derivatives; `provider_summary.json`,
+`attempt_accounting.json`, `identity_provenance.json`; `SHA256SUMS`.
 
-**Excluded:** `offers.json`, `offers.csv`, `call-01/02/03` raw results (unlicensed provider
-payloads); `probe-01.json` and raw call headers (invocation metadata / identifiers);
-`function_show_redeploy.json` raw presigned URL; per-record rows of `validation_log.json`.
-No API keys appeared in any retained file: headers carry `Bearer ***` / a `<NOTTE...>`
-placeholder, and a regex sweep found the only credential-shaped artifact was the presigned
-URL. Run/session UUIDs are represented as SHA-256 prefixes where provenance needs
-correlation; the published function id is a public, non-credential identifier.
+**Excluded:** raw offers JSON/CSV, raw call results, raw headers/presigned URLs, per-record
+validation rows, raw TMDb payloads. Regex scan covers presigned-URL signatures, bearer
+tokens, GitHub/OpenAI/AWS key shapes; run/session UUIDs appear only as hash prefixes; the
+function id is public and non-credential.
 
-## 7. Reproduction commands
+Verification commands (stdlib only; no HTTP/DB/Django):
 
 ```bash
 BASE=c2ead763bb8e49859e13e56a3cd8e80e6c0ee4d7
-git fetch origin && git rev-parse origin/master          # $BASE
-
-# Synthetic self-test — no raw evidence, no network, no DB:
+git fetch origin && git rev-parse origin/master
 python3 docs/audits/issue97/jw-canary-2026-11-24-evidence/verify_evidence.py --self-test
-
-# Full offline verification — owner supplies the private evidence root containing
-# runs/jw-canary-2026-11-24/ and spec/. Reads only; writes nothing.
 python3 docs/audits/issue97/jw-canary-2026-11-24-evidence/verify_evidence.py \
   --manifest docs/audits/issue97/jw-canary-2026-11-24-evidence/manifest.json \
   --evidence-root /path/to/private/evidence/root
-
-# Package integrity:
 cd docs/audits/issue97/jw-canary-2026-11-24-evidence && shasum -a 256 -c SHA256SUMS
+# Independent hash confirmation for the VERIFIED show digest:
+shasum -a 256 ~/.hermes/cache/scratch/anything-mcp-preflight/notte_function_show.json
 ```
 
-The verifier uses only the Python 3 standard library, makes no HTTP/Django/database calls,
-and prints aggregates only (no raw records, headers or identifiers).
-
-## 8. Local verification actually executed
-
-- Synthetic self-test: **PASS**, 7/7 checks.
-- Full offline run against the private evidence root: **PASS**, 22/22 source-file SHA-256 +
-  byte-size checks and 27/27 derived-metric/checkpoint checks; exit code 0.
-- No CI claim is made. CI state, if any, must be read live from the PR; a local PASS is not a
-  GitHub Actions PASS.
-- `claude-roast` (required by repo `CLAUDE.md`) is not installed in this environment, so no
-  prompt score was fabricated.
+**Executed results:** synthetic self-test PASS (7 dedup checks + sanitization scan, 10 files
+scanned); offline verification PASS on 22/22 file hashes and 41/41 checks (27 derived
+metrics, 3 checkpoint checks, 11 artifact/hash-qualification checks); `SHA256SUMS` all OK;
+sanitization scan PASS with zero high-risk hits.
+No CI claim is made — a local PASS is not a GitHub Actions PASS. Repo `CLAUDE.md` requires
+`claude-roast`, which is not installed here; no score was fabricated.
 
 ## 9. Handoff
 
-Prepared by Hermes as evidence packaging only. Not approved, merged or closed by this agent;
-#97 was not edited. ChatGPT Web remains the sole final reviewer/merger. Required decision
-from review: accept D1–D7 as documentation corrections to the originating run, and decide
-whether M1–M5 must be supplied before #97 can move.
+Hermes prepared evidence only. ChatGPT Web remains the sole final reviewer/merger; PR #197
+stays in draft. Not approved, merged, deployed or closed by this agent.

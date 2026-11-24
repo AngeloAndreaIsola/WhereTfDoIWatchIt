@@ -1,0 +1,77 @@
+{
+  "namespaces": {
+    "notte_validation_probe_invocations": {
+      "count": 1,
+      "limit": 3,
+      "items": [
+        {
+          "ref": "probe-01.json",
+          "status": "failed",
+          "reason": "invalid reference_market=nl; parameter validation before browser session"
+        }
+      ],
+      "measured": true
+    },
+    "notte_collection_invocations": {
+      "count": 3,
+      "limit": 6,
+      "items": [
+        {
+          "batch": 1,
+          "title": "Inception",
+          "status": "failed",
+          "reason": "deployed function ImportError",
+          "raw_ref": "call-01-inception.json"
+        },
+        {
+          "batch": 2,
+          "title": "Dune",
+          "status": "closed",
+          "records": 27,
+          "raw_ref": "call-02-dune.json"
+        },
+        {
+          "batch": 3,
+          "title": "Inception",
+          "status": "closed",
+          "records": 29,
+          "retry_of": "batch-01",
+          "raw_ref": "call-03-inception-retry.json"
+        }
+      ],
+      "measured": true
+    },
+    "per_title_attempt_index": {
+      "Inception": [
+        1,
+        2
+      ],
+      "Dune": [
+        1
+      ],
+      "source": "batch-01.json.attempt=1, batch-03.json.attempt=2, batch-02.json.attempt=1",
+      "measured": true
+    },
+    "global_collection_call_index": {
+      "Inception": [
+        1,
+        3
+      ],
+      "Dune": [
+        2
+      ],
+      "source": "coverage.json.attempt_history and batch numbers; batch-03 is call 3 overall",
+      "measured": true
+    },
+    "internal_justwatch_http_attempts": {
+      "measured_count": null,
+      "ledger_retained": false,
+      "estimate_static_lower_bound_per_successful_invocation": 4,
+      "estimate_static_lower_bound_two_successes": 8,
+      "status": "ESTIMATE_NOT_MEASURED",
+      "basis": "spec/fe1b97b6.py: US search goto, US discovery goto, NL market goto, query_offers GraphQL POST; retry loop and embedded-data fallback may add more. Probe and import-error call made zero by code position.",
+      "owner_proposal_25_low_level_attempts": "different unit from Notte invocations; not comparable to 3/6 or 1/3"
+    }
+  },
+  "d4_resolution": "coverage.json \"attempt\" values are global collection call indices (1,3); batch-03.json \"attempt\":2 is the per-title retry index. No counter was fabricated or changed; the two namespaces are now named explicitly."
+}
