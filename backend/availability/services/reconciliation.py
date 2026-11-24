@@ -565,9 +565,9 @@ class AvailabilityReconciliationService:
         amounts = {price.amount for price in same_currency}
         for price in same_currency:
             amounts.update(
-                Decimal(variant["amount"]) for variant in price.variants
+                Decimal(variant["amount"]) for variant in price.open_variants
                 if variant["currency"] == currency and variant["amount"] is not None
-                and not variant["validation_error"] and _variant_window_open(variant, timezone.now())
+                and not variant["validation_error"]
             )
         return chosen, len(amounts) > 1
 
@@ -797,6 +797,7 @@ def _price_observation(row, *, now) -> PriceObservation:
         is_current=bool(row.is_current),
         validation_error=row.validation_error or "",
         variants=variants,
+        open_variants=open_variants,
     )
 
 

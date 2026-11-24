@@ -76,6 +76,7 @@ class PriceObservation:
     is_current: bool
     validation_error: str = ""
     variants: tuple[dict, ...] = ()
+    open_variants: tuple[dict, ...] = ()
 
     @property
     def is_valid(self) -> bool:
