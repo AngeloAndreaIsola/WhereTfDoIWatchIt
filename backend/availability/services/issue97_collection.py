@@ -120,6 +120,7 @@ def replay_scope(scope, search_response, *, seasons_response=None):
         "authoritative": False, "title_offers": [], "season_offers": [], "unresolved": [],
         "season_status": "not_requested", "status": "unknown",
     }
+    seen_offers = set()
 
     def record_offers(node, output, season_number=None):
         for offer in node.offers:
@@ -138,7 +139,13 @@ def replay_scope(scope, search_response, *, seasons_response=None):
                     "package": offer.package.technical_name,
                     "monetization_type": offer.monetization_type,
                 })
-            else:
+                continue
+            # The replay projects comparable offer facts. Price, rendition and
+            # the individual JustWatch offer ID are observation attributes.
+            key = (scope["media_type"], scope["tmdb_id"], scope["country"],
+                   season_number, provider, offer_class)
+            if key not in seen_offers:
+                seen_offers.add(key)
                 output.append(observation)
 
     try:
@@ -149,7 +156,7 @@ def replay_scope(scope, search_response, *, seasons_response=None):
         matches = [node for node in page.titles
                    if JustWatchSource._content_type(node) == scope["media_type"]
                    and node.tmdb_id_int == scope["tmdb_id"]]
-        if (len(matches) != 1 or not matches[0].id
+        if (len(matches) != 1 or not matches[0].has_native_id
                 or not titles_match(scope, normalized_title(scope["title"]), normalized_title(matches[0].title))
                 or matches[0].year != scope["year"]):
             report["reason"] = "typed_title_missing_ambiguous_or_label_mismatch"
@@ -164,7 +171,8 @@ def replay_scope(scope, search_response, *, seasons_response=None):
             seasons = client.seasons(match.id, country=scope["country"])
             season_counts = Counter(season.season_number for season in seasons)
             for season in seasons:
-                if (JustWatchSource._content_type(season) != ContentType.SEASON
+                if (not season.has_native_id
+                        or JustWatchSource._content_type(season) != ContentType.SEASON
                         or type(season.season_number) is not int or season.season_number < 0
                         or season_counts[season.season_number] != 1):
                     report["unresolved"].append({"reason": "invalid_season_identity"})

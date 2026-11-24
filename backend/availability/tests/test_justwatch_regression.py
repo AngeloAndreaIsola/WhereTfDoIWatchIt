@@ -21,12 +21,13 @@ Tests cover:
 from __future__ import annotations
 
 import logging
+from decimal import Decimal
 from unittest.mock import patch
 
 from django.test import TestCase
 
 from availability.domain.enums import ContentType, MatchMethod, SourceType, SyncMode
-from availability.models import ContentMapping, Country, Offer as ModelOffer, ProviderContent, Source
+from availability.models import ContentMapping, Country, Offer as ModelOffer, OfferPrice, ProviderContent, Source
 from availability.services.refresh import AvailabilityRefreshService
 from availability.sources.base import ContentRequest
 from availability.sources.justwatch import JustWatchSource
@@ -50,6 +51,7 @@ from tracker.services.access import (
     build_user_access,
     resolve_title,
 )
+from tracker.services.availability_reads import get_offer_evidence_bulk
 from tracker.services.offers import Offer as DomainOffer
 from tracker.services.provider_catalogue import (
     JUSTWATCH_INTEGRATION,
@@ -112,6 +114,74 @@ class JustWatchRegressionCoverageTests(TestCase):
         # Clear subscriptions and watchlists for a clean state
         Subscription.objects.all().delete()
         WatchlistItem.objects.all().delete()
+
+    @patch("requests.sessions.Session.request", side_effect=AssertionError("Unexpected HTTP"))
+    def test_equal_prices_and_repeated_catalogue_observations_keep_typed_offers(self, http):
+        def priced_offer(technical_name, name, package, offer_class, *, offer_id=None):
+            offer = fx.offer(offer_id, technical_name, name, package, monetization=offer_class)
+            return {**offer, "retailPriceValue": 4.99}
+
+        rent = priced_offer("netflix", "Netflix", "nfx", "RENT", offer_id="shared")
+        buy = priced_offer("netflix", "Netflix", "nfx", "BUY", offer_id="shared")
+        prime = priced_offer("amazonprimevideo", "Prime Video", "prv", "RENT")
+        nodes = [
+            fx.title("tm98001", "First Movie", tmdb_id="98001", offers=[rent, rent, buy, prime, prime]),
+            fx.title("tm98002", "Second Movie", tmdb_id="98002", offers=[rent]),
+            fx.title("ts98001", "First Series", object_type="SHOW", tmdb_id="98001", offers=[rent]),
+        ]
+        titles = [
+            Movie.objects.create(tmdb_id=int(node["content"]["externalIds"]["tmdbId"]),
+                                 content_type=kind, title=node["content"]["title"])
+            for node, kind in zip(nodes, ("movie", "movie", "series"))
+        ]
+        payload = fx.envelope({"popularTitles": {"edges": fx.edges(*nodes)}})
+        post = RecordingPost([fx.FakeResponse(payload=payload) for _ in range(3)])
+        service = AvailabilityRefreshService(source=source_with(post))
+        service.refresh_catalogue(country="NL")
+        service.refresh_catalogue(country="IT")
+        offer_pks = set(ModelOffer.objects.values_list("pk", flat=True))
+        price_pks = set(OfferPrice.objects.values_list("pk", flat=True))
+        service.refresh_catalogue(country="NL")
+
+        self.assertEqual(set(ModelOffer.objects.values_list("pk", flat=True)), offer_pks)
+        self.assertEqual(set(OfferPrice.objects.values_list("pk", flat=True)), price_pks)
+        self.assertEqual(len(offer_pks), 10)
+        self.assertEqual(len(price_pks), 10)
+        self.assertEqual(set(OfferPrice.objects.values_list("amount", "currency")), {(Decimal("4.99"), "EUR")})
+
+        expected = [
+            {("netflix", "rent"), ("netflix", "buy"), ("prime", "rent")},
+            {("netflix", "rent")},
+            {("netflix", "rent")},
+        ]
+        displayed = get_offer_evidence_bulk(titles)
+        for title, pairs in zip(titles, expected):
+            with self.subTest(title=title.title):
+                evidence = displayed[title.pk]
+                offers = evidence.current + evidence.last_known
+                keys = {(offer.country, offer.service, offer.offer_type) for offer in offers}
+                self.assertEqual(keys, {(country, service, kind)
+                                        for country in ("NL", "IT") for service, kind in pairs})
+                self.assertEqual(len(offers), len(keys))
+                self.assertEqual({(offer.price["amount"], offer.price["currency"]) for offer in offers},
+                                 {("4.9900", "EUR")})
+        http.assert_not_called()
+
+    def test_catalogue_skips_rows_without_a_native_title_id(self):
+        offer = fx.offer("o1", "netflix", "Netflix", "nfx")
+        nodes = [
+            fx.title(None, "Missing First", tmdb_id="98001", offers=[offer]),
+            fx.title("", "Missing Second", tmdb_id="98002", offers=[offer]),
+            fx.title("tm98003", "Identified", tmdb_id="98003", offers=[offer]),
+        ]
+        payload = fx.envelope({"popularTitles": {"edges": fx.edges(*nodes)}})
+        service = AvailabilityRefreshService(source=source_with(RecordingPost([fx.FakeResponse(payload=payload)])))
+        service.refresh_catalogue(provider="netflix", country="NL")
+
+        self.assertEqual(list(ModelOffer.objects.values_list("tmdb_id", "provider_content_id")),
+                         [(98003, "tm98003")])
+        self.assertEqual(list(ProviderContent.objects.values_list("provider_content_id", flat=True)),
+                         ["tm98003"])
 
     # -------------------------------------------------------------------------
     # 1. An offer on an unsubscribed but known service remains evidence/a possible

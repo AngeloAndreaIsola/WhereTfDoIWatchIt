@@ -538,6 +538,10 @@ class JustWatchTitle:
         self.offers = list(offers or [])
 
     @property
+    def has_native_id(self) -> bool:
+        return isinstance(self.id, str) and bool(self.id.strip())
+
+    @property
     def tmdb_id_int(self) -> Optional[int]:
         """TMDb id as an int, or ``None`` when JustWatch exposes none.
 

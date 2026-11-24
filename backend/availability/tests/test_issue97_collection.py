@@ -38,6 +38,18 @@ class Issue97ReplayTests(SimpleTestCase):
         self.assertEqual(report["provenance"], "SYNTHETIC_FIXTURE")
         http.assert_not_called()
 
+    def test_repeated_offer_facts_collapse_after_normalization(self):
+        search = deepcopy(FIXTURES[INCEPTION["scope_id"]]["search"])
+        offers = search["data"]["popularTitles"]["edges"][0]["node"]["offers"]
+        original = replay_scope(INCEPTION, search)["title_offers"]
+        # An identical observation and an alternate rendition/price describe
+        # the same comparable title, market, service and offer class.
+        repeated = deepcopy(offers[0])
+        offers.extend([repeated, {**repeated, "id": None, "presentationType": "SD",
+                                  "retailPriceValue": 5.99}])
+
+        self.assertEqual(replay_scope(INCEPTION, search)["title_offers"], original)
+
     def test_wrong_type_id_year_edition_or_duplicate_stays_unknown(self):
         for field, value in (
             ("objectType", "SHOW"), ("tmdbId", "438631"), ("tmdbId", ""),

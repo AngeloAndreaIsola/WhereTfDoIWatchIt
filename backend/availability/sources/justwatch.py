@@ -205,15 +205,14 @@ class JustWatchSource:
         result — never the first search hit.
         """
         request = content if isinstance(content, ContentRequest) else ContentRequest.from_content(content)
-        titles = self._search_titles(request, country=country)
-        if not titles:
+        title = self._search_title(request, country=country)
+        if title is None:
             logger.info(
                 "justwatch_title_not_found title=%r year=%s country=%s",
                 request.title, request.year, country,
             )
             return SourceFetchResult(sync_mode=SyncMode.TARGETED)
 
-        title = titles[0]
         tmdb_id = title.tmdb_id_int or (request.tmdb_id or None)
         contents, offers = [], []
         content_type = self._content_type(title)
@@ -224,8 +223,10 @@ class JustWatchSource:
 
         # A show's season offers are distinct rows in the canonical model, so
         # they are walked explicitly rather than collapsed onto the series.
-        if content_type == ContentType.SERIES and title.id:
+        if content_type == ContentType.SERIES:
             for season in self._seasons(title.id, country):
+                if not season.has_native_id:
+                    continue
                 season_type = self._content_type(season)
                 contents.append(self._content(season, season_type, country))
                 offers.extend(self._offers_for(
@@ -237,8 +238,8 @@ class JustWatchSource:
             contents=contents, offers=offers, sync_mode=SyncMode.TARGETED,
         )
 
-    def _search_titles(self, request, *, country):
-        """Find the JustWatch node(s) that provably match a content request.
+    def _search_title(self, request, *, country):
+        """Find the JustWatch node that matches a content request.
 
         Identity is established by evidence, never by result order:
 
@@ -251,51 +252,48 @@ class JustWatchSource:
         3. otherwise exact normalized title (+ year, when the request has one)
            must identify exactly one distinct node.
 
-        An unresolved or ambiguous search returns ``[]`` — the caller turns
-        that into an honest empty result. ``candidates[:1]`` used to make the
-        first search hit the requested title, which is how a remake or an
-        unrelated same-name result inherited another film's offers.
+        Either path must resolve to one typed, usable native identity.
+        Unresolved or ambiguous searches return ``None``.
         """
+        expected_type = self._requested_content_type(request)
         try:
             page = self.client.search_titles(
                 request.title or "",
                 country=country,
                 language=self.language,
                 count=min(self.page_size, 20),
-                object_types=(
-                    [self._requested_content_type(request).value.upper()]
-                    if self._requested_content_type(request) is not None else None
-                ),
+                object_types=[expected_type.value.upper()] if expected_type is not None else None,
                 best_only=self.best_only,
             )
         except JustWatchError as exc:
             raise self._as_fetch_error("search", exc) from exc
 
         candidates = list(page.titles)
-        if not candidates:
-            return []
-
-        expected_type = self._requested_content_type(request)
         if expected_type is not None:
             candidates = [
                 title for title in candidates
                 if self._content_type(title) == expected_type
             ]
-            if not candidates:
-                return []
-
         if request.tmdb_id:
             exact = [t for t in candidates if t.tmdb_id_int == request.tmdb_id]
             if exact:
-                return exact
+                return self._single_title_match(exact)
             # No candidate carries the requested id. Only candidates that state
             # *no* id may still be resolved on title/year evidence; one that
             # states a conflicting id is a different identity.
             candidates = [t for t in candidates if t.tmdb_id_int is None]
-            if not candidates:
-                return []
+        return self._single_title_match(self._title_evidence_matches(request, candidates))
 
-        return self._title_evidence_matches(request, candidates)
+    def _single_title_match(self, candidates):
+        if not candidates or any(not title.has_native_id for title in candidates):
+            return None
+        identities = {
+            (self._content_type(title), title.id, title.tmdb_id_int)
+            for title in candidates
+        }
+        if len(identities) != 1 or next(iter(identities))[0] is None:
+            return None
+        return candidates[0]
 
     @staticmethod
     def _requested_content_type(request):
@@ -314,7 +312,7 @@ class JustWatchSource:
         return " ".join(str(value or "").casefold().split())
 
     def _title_evidence_matches(self, request, candidates):
-        """Exact title (+ year) fallback for candidates without a usable id."""
+        """Use exact title and optional year when TMDb identity is absent."""
         if not request.title:
             return []
         wanted = self._normalized_title(request.title)
@@ -322,21 +320,8 @@ class JustWatchSource:
             title for title in candidates
             if self._normalized_title(title.title) == wanted
         ]
-        if not matches:
-            return []
         if request.year is not None:
             matches = [title for title in matches if title.year == request.year]
-            if not matches:
-                return []
-
-        # Equal title/year on two distinct identities is ambiguous, not a win
-        # for whichever result the search happened to return first.
-        identities = {
-            title.tmdb_id_int if title.tmdb_id_int is not None else ("node", title.id)
-            for title in matches
-        }
-        if len(identities) != 1:
-            return []
         return matches
 
     def _seasons(self, node_id, country):
@@ -444,6 +429,10 @@ class JustWatchSource:
                 break
 
             for title in page.titles:
+                if not title.has_native_id:
+                    logger.warning("justwatch_native_id_missing country=%s title=%r",
+                                   country, title.title)
+                    continue
                 resolved_type = self._content_type(title)
                 if resolved_type is None:
                     continue

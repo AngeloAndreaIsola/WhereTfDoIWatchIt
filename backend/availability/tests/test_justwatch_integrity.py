@@ -238,6 +238,44 @@ class TitleIdentityTests(SimpleTestCase):
 
         self.assertEqual(result.contents, [])
 
+    def test_distinct_native_nodes_claiming_the_same_typed_tmdb_id_are_ambiguous(self):
+        for node_ids in (("tm1", "tm2"), ("tm2", "tm1")):
+            with self.subTest(node_ids=node_ids):
+                source, _ = self.set_source(page(*(
+                    fx.title(node_id, "Fight Club", year=1999, tmdb_id="550",
+                             offers=[netflix_offer("o1")])
+                    for node_id in node_ids
+                )))
+                result = self.fetch(source, tmdb_id=550, title="Fight Club",
+                                    year=1999, content_type=MOVIE)
+
+                self.assertEqual(result.contents, [])
+                self.assertEqual(result.offers, [])
+
+    def test_repeated_native_node_still_resolves(self):
+        node = fx.title("tm1", "Fight Club", year=1999, tmdb_id="550",
+                        offers=[netflix_offer("o1")])
+        source, _ = self.set_source(page(node, node))
+        result = self.fetch(source, tmdb_id=550, title="Fight Club",
+                            year=1999, content_type=MOVIE)
+
+        self.assertEqual([offer.provider_content_id for offer in result.offers], ["tm1"])
+
+    def test_nodes_without_native_identity_are_unresolved(self):
+        for tmdb_id in ("550", None):
+            with self.subTest(tmdb_id=tmdb_id):
+                source, _ = self.set_source(page(
+                    fx.title(None, "Fight Club", year=1999, tmdb_id=tmdb_id,
+                             offers=[netflix_offer("o1")]),
+                    fx.title(None, "Fight Club", year=1999, tmdb_id=tmdb_id,
+                             offers=[netflix_offer("o2")]),
+                ))
+                result = self.fetch(source, tmdb_id=550, title="Fight Club",
+                                    year=1999, content_type=MOVIE)
+
+                self.assertEqual(result.contents, [])
+                self.assertEqual(result.offers, [])
+
     def test_multiple_ambiguous_candidates_stay_unresolved(self):
         source, _ = self.set_source(page(
             fx.title("tm1", "The Thing", year=1982, tmdb_id="1091"),
