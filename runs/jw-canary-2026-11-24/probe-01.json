@@ -1,0 +1,27 @@
+{
+  "probe": 1,
+  "at": "2026-11-24T15:03:33.010023+00:00",
+  "request": {
+    "method": "POST",
+    "url": "https://api.notte.cc/functions/fe1b97b6-4d60-4371-ab9c-5a52f4f2d973/runs/start",
+    "headers": [
+      "Authorization: Bearer <redacted>",
+      "x-notte-api-key: <redacted>",
+      "Content-Type: application/json"
+    ],
+    "body": {
+      "function_id": "fe1b97b6-4d60-4371-ab9c-5a52f4f2d973",
+      "variables": {
+        "title": "Inception",
+        "markets": "nl",
+        "reference_market": "nl",
+        "object_type": "movie",
+        "release_year": 2010
+      },
+      "stream": false
+    }
+  },
+  "http_status": "200",
+  "response_text": "{\"function_id\":\"fe1b97b6-4d60-4371-ab9c-5a52f4f2d973\",\"function_run_id\":\"1452f866-d0ed-4b8e-92ff-e2d6b7d2093f\",\"session_id\":null,\"result\":\"Script execution failed in unrestricted mode: Traceback (most recent call last):\\n  File \\\"<user_script.py>\\\", line 330, in run\\nValueError: reference_market must be us; discovery is US-only\\n\",\"status\":\"failed\",\"error\":{\"kind\":\"unexpected\",\"type\":\"ValueError\",\"mro\":[\"ValueError\",\"Exception\",\"BaseException\"],\"code\":\"value_error\",\"message\":\"reference_market must be us; discovery is US-only\",\"heal\":true,\"retry\":false,\"status_code\":500,\"source\":\"default\"},\"workflow_id\":\"fe1b97b6-4d60-4371-ab9c-5a52f4f2d973\",\"workflow_run_id\":\"1452f866-d0ed-4b8e-92ff-e2d6b7d2093f\"}",
+  "stderr": ""
+}

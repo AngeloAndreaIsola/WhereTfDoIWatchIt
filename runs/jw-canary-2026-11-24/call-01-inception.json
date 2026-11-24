@@ -1,0 +1,51 @@
+{
+  "at": "2026-11-24T15:04:21.396728+00:00",
+  "error": {
+    "code": "import_error",
+    "heal": true,
+    "kind": "unexpected",
+    "message": "cannot import name 'ExpectedFunctionError' from 'notte_sdk.errors' (/app/.venv/lib/python3.12/site-packages/notte_sdk/errors.py)",
+    "mro": [
+      "ImportError",
+      "Exception",
+      "BaseException"
+    ],
+    "retry": false,
+    "source": "default",
+    "status_code": 500,
+    "type": "ImportError"
+  },
+  "function_run_id": "d3653644-10f6-4549-9591-d36853fa8253",
+  "http_status": "200",
+  "poll": null,
+  "request": {
+    "body": {
+      "function_id": "fe1b97b6-4d60-4371-ab9c-5a52f4f2d973",
+      "stream": false,
+      "variables": {
+        "markets": "nl",
+        "object_type": "movie",
+        "reference_market": "us",
+        "release_year": 2010,
+        "title": "Inception"
+      }
+    },
+    "headers": [
+      "Authorization: Bearer <redacted>",
+      "x-notte-api-key: <redacted>",
+      "Content-Type: application/json"
+    ],
+    "method": "POST",
+    "url": "https://api.notte.cc/functions/fe1b97b6-4d60-4371-ab9c-5a52f4f2d973/runs/start"
+  },
+  "result": "Script execution failed in unrestricted mode: Traceback (most recent call last):\n  File \"<user_script.py>\", line 12, in <module>\nImportError: cannot import name 'ExpectedFunctionError' from 'notte_sdk.errors' (/app/.venv/lib/python3.12/site-packages/notte_sdk/errors.py)\n",
+  "status": "failed",
+  "title": "Inception",
+  "variables": {
+    "markets": "nl",
+    "object_type": "movie",
+    "reference_market": "us",
+    "release_year": 2010,
+    "title": "Inception"
+  }
+}

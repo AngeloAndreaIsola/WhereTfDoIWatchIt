@@ -1,0 +1,44 @@
+{
+  "attempt_history": [
+    {
+      "attempt": 1,
+      "market": "nl",
+      "status": "failed",
+      "title": "Inception"
+    },
+    {
+      "attempt": 3,
+      "market": "nl",
+      "status": "closed",
+      "title": "Inception"
+    }
+  ],
+  "failed_count": 0,
+  "failed_markets": [],
+  "missing_markets": [],
+  "requested_count": 2,
+  "requested_markets": [
+    {
+      "market": "nl",
+      "title": "Inception"
+    },
+    {
+      "market": "nl",
+      "title": "Dune"
+    }
+  ],
+  "returned_count": 2,
+  "returned_markets": [
+    {
+      "market": "nl",
+      "records": 27,
+      "title": "Dune"
+    },
+    {
+      "market": "nl",
+      "records": 29,
+      "title": "Inception"
+    }
+  ],
+  "verdict": "complete_after_retry"
+}

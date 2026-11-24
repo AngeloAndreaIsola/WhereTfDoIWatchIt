@@ -1,0 +1,187 @@
+function_id: fe1b97b6-4d60-4371-ab9c-5a52f4f2d973
+derived_from: R2b-notte-cli
+resolved_at: '2026-11-24T15:02:43.265875+00:00'
+resolution:
+  cli: notte v0.0.79
+  commands:
+  - notte functions list --include-deleted -o json
+  - notte functions show --function-id fe1b97b6-... -o json
+  - notte functions download spec/fe1b97b6.py --function-id fe1b97b6-...
+  latest_version: v20261124_150434
+  published: false
+variables:
+- name: title
+  annotation: str
+  default: The Matrix
+- name: markets
+  annotation: str
+  default: us
+- name: reference_market
+  annotation: str
+  default: us
+- name: object_type
+  annotation: str
+  default: UNKNOWN
+- name: release_year
+  annotation: int
+  default: 0
+variable_constraints:
+  reference_market: must equal 'us' (validated in run(); brief's 'nl' is invalid and would raise ValueError)
+  object_type: one of movie, tv-show, UNKNOWN
+  release_year: positive int or 0
+  markets: comma-separated ISO-2 lowercase codes or ALL, no duplicates
+  title: non-empty, no template placeholders
+selected_call_variables:
+  title: Inception
+  markets: nl
+  reference_market: us
+  object_type: movie
+  release_year: 2010
+response_format:
+  $defs:
+    OfferRecord:
+      properties:
+        audio_languages:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - const: UNKNOWN
+            type: string
+          title: Audio Languages
+        available:
+          title: Available
+          type: boolean
+        country:
+          title: Country
+          type: string
+        country_name:
+          title: Country Name
+          type: string
+        currency:
+          title: Currency
+          type: string
+        deeplink:
+          title: Deeplink
+          type: string
+        flags:
+          items:
+            type: string
+          title: Flags
+          type: array
+        jw_id:
+          title: Jw Id
+          type: string
+        monetization_type:
+          enum:
+          - subscription
+          - rent
+          - buy
+          - free
+          - free_ads
+          - UNKNOWN
+          title: Monetization Type
+          type: string
+        object_type:
+          enum:
+          - movie
+          - tv-show
+          - UNKNOWN
+          title: Object Type
+          type: string
+        observed_at:
+          title: Observed At
+          type: string
+        price:
+          title: Price
+          type: string
+        provider:
+          title: Provider
+          type: string
+        quality:
+          enum:
+          - SD
+          - HD
+          - 4K
+          - UNKNOWN
+          title: Quality
+          type: string
+        release_year:
+          anyOf:
+          - type: integer
+          - const: UNKNOWN
+            type: string
+          title: Release Year
+        source_url:
+          title: Source Url
+          type: string
+        subtitle_languages:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - const: UNKNOWN
+            type: string
+          title: Subtitle Languages
+        title:
+          title: Title
+          type: string
+      required:
+      - title
+      - jw_id
+      - object_type
+      - release_year
+      - country
+      - country_name
+      - available
+      - provider
+      - monetization_type
+      - quality
+      - price
+      - currency
+      - audio_languages
+      - subtitle_languages
+      - deeplink
+      - source_url
+      - observed_at
+      - flags
+      title: OfferRecord
+      type: object
+  items:
+    $ref: '#/$defs/OfferRecord'
+  title: OfferRecords
+  type: array
+invocation:
+  status: DOCUMENTED
+  source: https://docs.notte.cc/features/functions/invocations
+  start: POST https://api.notte.cc/functions/{function_id}/runs/start
+  headers:
+  - 'Authorization: Bearer <NOTTE_API_KEY>'
+  - 'x-notte-api-key: <NOTTE_API_KEY>'
+  - 'Content-Type: application/json'
+  body:
+    function_id: fe1b97b6-4d60-4371-ab9c-5a52f4f2d973
+    variables: <run signature variables>
+    stream: false
+  inline_result:
+    function_id: '...'
+    function_run_id: '...'
+    session_id: '...'
+    result: <OfferRecords array or traceback>
+    status: closed|failed
+  poll_method: SDK function.get_run(run_id) fetches status/result without waiting; TypeScript fn.getRun(runId)/fn.retrieve(runId).
+    HTTP start with stream=false returns a single JSON response.
+  terminal_states:
+  - closed
+  - failed
+  per_call_timeout_seconds: 600
+labels:
+- SAME_SOURCE_ECHO
+- UNLICENSED
+version_history:
+- version: v20261124_135310
+  status: superseded
+  note: runtime import error ExpectedFunctionError
+- version: v20261124_150434
+  status: active
+  redeployed_at: '2026-11-24T15:04:34.589983Z'
