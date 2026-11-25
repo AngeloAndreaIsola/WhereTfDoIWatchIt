@@ -18,6 +18,14 @@ TITLE_SEARCH_IDENTITY_SOURCES = frozenset({
 })
 
 
+def reviewed_provider_series_tmdb_id(provider_slug: str, provider_content_id: str) -> int | None:
+    """Return the reviewed TMDb series ID for a known provider programme."""
+    if provider_slug == "bbc_iplayer" and provider_content_id == "b00jd68z":
+        # Issue #190: the BBC brand and its descendants belong to the UK Office.
+        return 2996
+    return None
+
+
 def mapping_is_trusted(
     provider_slug: str,
     match_method: str,
