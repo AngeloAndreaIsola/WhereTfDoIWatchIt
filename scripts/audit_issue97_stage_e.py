@@ -8,6 +8,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from hashlib import sha256
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +17,25 @@ RECONCILIATION = "5389a6ca3fea89aab3fdac3655b3b2af2792807e"
 CANDIDATE = "docs/audits/issue97/stage-e-candidate-matrix.csv"
 ACCEPTED = "docs/audits/stage2b/issue97-accepted-observations.csv"
 MATRIX = "docs/audits/stage2b/issue97-reconciliation-matrix-template.csv"
+CANDIDATE_SHA256 = "ac1d37ecf5713e76ef7a146b2f9847e2312050890e769d2fa570ab3e46a4891d"
+
+# References to reviewed historical observations. Never use this inventory for dispatch.
+SCOPE_ANCHORS = {
+    "E-C1": "inception_nl-netflix-subscription",
+    "E-C2": "OBS-01-prime-subscription",
+    "E-C3": "OBS-06-rakuten_tv-rent",
+    "E-C4": "OBS-02-netflix-subscription",
+    "E-C5": "OBS-04-netflix-subscription",
+    "E-C6": "OBS-03-netflix-subscription",
+    "E-C7": "OBS-05-netflix-subscription",
+    "E-C8": "OBS-07-rakuten_tv-rent",
+}
+DOCUMENT_HOST = {
+    "netflix": "www.netflix.com",
+    "prime": "www.primevideo.com",
+    "max_amazon": "www.primevideo.com",
+    "rakuten_tv": "www.rakuten.tv",
+}
 
 
 def git_blob(commit, path):
@@ -36,8 +56,29 @@ def pair_key(row, *, year="year", market="country", provider="provider_slug"):
     return tuple(row[key] for key in ("media_type", "tmdb_id", year, market, provider, "offer_class"))
 
 
+def verify_document_scopes(candidates, observations):
+    """Resolve each row, including controls, to one historical native document offline."""
+    assert {row["capture_scope"] for row in candidates} == SCOPE_ANCHORS.keys()
+    for candidate in candidates:
+        scope = candidate["capture_scope"]
+        anchor = observations[SCOPE_ANCHORS[scope]]
+        target = urlsplit(anchor["public_url"])
+        assert target.scheme == "https" and target.netloc == DOCUMENT_HOST[candidate["provider_slug"]], scope
+        assert target.path.strip("/") and not target.query and not target.fragment, scope
+        assert anchor["provider_title_id"] and anchor["market_basis"], scope
+        for field, historical_field in (("media_type", "media_type"), ("tmdb_id", "tmdb_id"),
+                                        ("year", "canonical_year"), ("market", "country")):
+            assert candidate[field] == anchor[historical_field], f"{scope} historical {field} differs"
+        if candidate["prior_observation_id"]:
+            observed = observations[candidate["prior_observation_id"]]
+            for field in ("public_url", "provider_title_id", "raw_sha256", "observed_utc"):
+                assert observed[field] == anchor[field], f"{scope} historical document differs in {field}"
+    assert len({observations[ref]["public_url"] for ref in SCOPE_ANCHORS.values()}) == len(SCOPE_ANCHORS)
+
+
 def main():
     candidate_bytes = (ROOT / CANDIDATE).read_bytes()
+    assert sha256(candidate_bytes).hexdigest() == CANDIDATE_SHA256, "Frozen candidate panel changed"
     accepted_bytes = git_blob(STAGE_C, ACCEPTED)
     original_matrix_bytes = git_blob(STAGE_C, MATRIX)
     matrix_bytes = git_blob(RECONCILIATION, MATRIX)
@@ -46,6 +87,7 @@ def main():
 
     candidates = unique_index(rows(candidate_bytes), "candidate_id")
     observations = unique_index(rows(accepted_bytes), "id")
+    verify_document_scopes(candidates.values(), observations)
     original_pairs = unique_index(rows(original_matrix_bytes), "pair_id")
     pairs = unique_index(rows(matrix_bytes), "pair_id")
     assert len(candidates) == 15 and len(observations) == 13 and len(pairs) == 7
@@ -112,6 +154,7 @@ def main():
 
     print("CSV PASS: 15 candidates (A=9, B=6), 13 accepted observations, 7 Stage C pairs, 2 controls")
     print("Provenance PASS: 8 historical capture digests, 3 Stage C capture aliases, 7 ineligible / unadjudicated")
+    print("Scope PASS: all 15 candidates resolve to 8 distinct historical native documents (A=3, B=5)")
     print("Fresh adjudicated pairs: 0. Accuracy metrics: UNDEFINED.")
     for alias, data in (
         ("Stage E candidates", candidate_bytes), ("Stage C accepted observations", accepted_bytes),

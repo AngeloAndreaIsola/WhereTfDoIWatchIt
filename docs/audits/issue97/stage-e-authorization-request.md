@@ -14,6 +14,8 @@ Combined proposed caps are eight first-party GETs and seven low-level JustWatch 
 
 ## Approval record required before each batch
 
+The [offline first-party source review](stage-e-source-review.md) identifies the three Batch A documents, the missing access and retention decisions for each service, and the evidence required before owner issuance. Batch A is **BLOCKED**.
+
 Record the owner and approver, signed manifest digest, matrix digest, batch, operator, reviewer, expiry, absolute UTC slot for each typed title, and the source and app revisions. Sign the exact capture scope IDs, allowed HTTPS hosts and paths, methods, payload and context digests, market, title IDs, per-source and per-scope attempt ceilings, rate limits, quota class and spend ceiling. Record the authorized egress location and verified disposable database identity. Reference restricted evidence for details unsuitable for GitHub. A decision to reduce the panel identifies each omitted row and the reason in advance.
 
 | Sign-off | Required decision and evidence |
