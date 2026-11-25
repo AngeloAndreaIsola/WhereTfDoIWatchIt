@@ -296,6 +296,19 @@ class TitleIdentityTests(SimpleTestCase):
 
                 self.assertEqual(result.offers, [])
 
+    def test_sparse_anchor_does_not_hide_conflicts_in_other_edges(self):
+        anchor = fx.title("tm1", "", year=None, tmdb_id="550", offers=[netflix_offer("anchor")])
+        matching = fx.title("tm1", "Fight Club", year=1999, tmdb_id=None)
+        for title, year in (("Different film", 1999), ("Fight Club", 2005)):
+            with self.subTest(title=title, year=year):
+                conflict = fx.title("tm1", title, year=year, tmdb_id=None)
+                source, _ = self.set_source(page(anchor, matching, conflict))
+                result = self.fetch(source, tmdb_id=550, title="Fight Club",
+                                    year=1999, content_type=MOVIE)
+
+                self.assertEqual(result.contents, [])
+                self.assertEqual(result.offers, [])
+
     def test_fallback_with_an_indistinguishable_conflicting_title_is_unresolved(self):
         for conflicting_id in ("551", "-1", "invalid"):
             with self.subTest(conflicting_id=conflicting_id):

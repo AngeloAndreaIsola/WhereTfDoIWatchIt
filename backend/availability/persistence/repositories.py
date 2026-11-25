@@ -594,18 +594,19 @@ class OfferPriceRepository:
         row.episode_number = offer.episode_number
         row.offer_type = offer.offer_type
         row.provider_content_id = offer.provider_content_id
-        row.source_offer_id = source_offer_id or ""
         row.variants = list(variants)
         row.last_seen = now
         row.observed_at = observed_at or now
+        # Keep the source offer paired with any previously validated price.
+        if valid or row.amount is None:
+            row.source_offer_id = source_offer_id or ""
         if valid:
             row.amount = amount
             row.currency = currency
             row.is_current = True
             row.validation_error = ""
         else:
-            # Keep the last known amount/currency: absence or malformed data is
-            # not proof that the price disappeared, and zero would be a lie.
+            # Preserve the last known price as history.
             row.is_current = False
             row.validation_error = (error or "price not reported")[:100]
         row.save()

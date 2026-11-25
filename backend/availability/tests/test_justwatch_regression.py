@@ -29,7 +29,9 @@ from django.test import TestCase
 from django.utils import timezone
 
 from availability.domain.enums import ContentType, MatchMethod, SourceType, SyncMode
-from availability.models import ContentMapping, Country, Offer as ModelOffer, OfferPrice, ProviderContent, Source
+from availability.models import (
+    ContentMapping, Country, Offer as ModelOffer, OfferEvidence, OfferPrice, ProviderContent, Source,
+)
 from availability.services.refresh import AvailabilityRefreshService
 from availability.sources.base import ContentRequest
 from availability.sources.justwatch import JustWatchSource
@@ -132,6 +134,25 @@ class JustWatchVariantPriceAPITests(TestCase):
         historical, = reported["prices"]
         self.assertEqual((historical["amount"], historical["currency"], historical["is_current"]),
                          ("3.9900", "EUR", False))
+        self.assertEqual(historical["source_offer_id"], "priced")
+        self.assertEqual(historical["variants"][0]["source_offer_id"], "unpriced")
+        http.assert_not_called()
+
+    def test_last_price_stays_in_history_when_only_unpriced_variant_remains_open(self, http):
+        expires = (self.now + timedelta(minutes=5)).isoformat()
+        priced = self._rent("priced", 3.99, available_to=expires, presentation="SD")
+        unpriced = self._rent("unpriced", None, presentation="HD")
+        with patch("django.utils.timezone.now", return_value=self.now):
+            self._refresh(priced, unpriced)
+            self.assertEqual(self._reported_offer()["price"]["source_offer_id"], priced["id"])
+        with patch("django.utils.timezone.now", return_value=self.now + timedelta(minutes=10)):
+            reported = self._reported_offer()
+
+        self.assertIsNone(reported["price"])
+        historical, = reported["prices"]
+        self.assertEqual((historical["amount"], historical["source_offer_id"], historical["is_current"]),
+                         ("3.9900", priced["id"], False))
+        self.assertEqual((reported["url"], reported["quality"]), (unpriced["standardWebURL"], "hd"))
         http.assert_not_called()
 
     def test_display_price_link_and_rendition_use_the_same_open_variant(self, http):
@@ -146,17 +167,20 @@ class JustWatchVariantPriceAPITests(TestCase):
 
     def test_price_after_variant_expiry_uses_surviving_source_offer_id(self, http):
         expires = (self.now + timedelta(minutes=5)).isoformat()
-        cheap = self._rent("expiring-cheap", 1.99, available_to=expires)
-        expensive = self._rent("still-open", 4.99)
+        cheap = self._rent("expiring-cheap", 1.99, available_to=expires, presentation="SD")
+        expensive = self._rent("still-open", 4.99, presentation="HD")
         with patch("django.utils.timezone.now", return_value=self.now):
             self._refresh(cheap, expensive)
-            self.assertEqual(self._reported_offer()["price"]["source_offer_id"], cheap["id"])
+            initial = self._reported_offer()["price"]
+            self.assertEqual(initial["source_offer_id"], cheap["id"])
+            self.assertTrue(initial["is_from"])
         with patch("django.utils.timezone.now", return_value=self.now + timedelta(minutes=10)):
             reported = self._reported_offer()
 
         for price in (reported["price"], reported["prices"][0]):
             self.assertEqual((price["amount"], price["source_offer_id"]), ("4.9900", expensive["id"]))
-        self.assertEqual(reported["url"], expensive["standardWebURL"])
+        self.assertFalse(reported["price"]["is_from"])
+        self.assertEqual((reported["url"], reported["quality"]), (expensive["standardWebURL"], "hd"))
         http.assert_not_called()
 
 
@@ -290,13 +314,18 @@ class JustWatchRegressionCoverageTests(TestCase):
         service.refresh_catalogue(country="NL")
         price = OfferPrice.objects.get(tmdb_id=title.tmdb_id)
         self.assertTrue(price.is_current)
-        identities = (ModelOffer.objects.get(tmdb_id=title.tmdb_id).pk, price.pk)
+        offer = ModelOffer.objects.get(tmdb_id=title.tmdb_id)
+        evidence = OfferEvidence.objects.get(offer_identity=offer.identity, source=price.source)
+        identities = (offer.pk, price.pk, evidence.pk, offer.identity)
         snapshot = price.variants
         service.refresh_catalogue(country="NL")
 
         price = OfferPrice.objects.get(tmdb_id=title.tmdb_id)
         offer = ModelOffer.objects.get(tmdb_id=title.tmdb_id)
-        self.assertEqual((offer.pk, price.pk), identities)
+        evidence = OfferEvidence.objects.get(offer_identity=offer.identity, source=price.source)
+        self.assertEqual((offer.pk, price.pk, evidence.pk, offer.identity), identities)
+        self.assertEqual(price.offer_identity, offer.identity)
+        self.assertTrue(evidence.is_present)
         self.assertEqual(price.amount, Decimal("3.99"))
         self.assertTrue(price.is_current)
         self.assertEqual(offer.quality, "hd")

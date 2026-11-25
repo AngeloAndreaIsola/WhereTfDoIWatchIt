@@ -18,6 +18,26 @@ The probe used PostgreSQL **16.15** and Django **5.2.19**, with PostgreSQL on a 
 
 The seeded price represented a legacy row with `variants=[]`. The downgrade removes the column. A populated variant list would be lost on downgrade, and the upgrade restores the empty default.
 
+## Release runbook for availability 0018
+
+Migration `availability.0018_offerprice_variants` adds a `NOT NULL` JSONB column and drops the temporary database default once existing rows have been initialized. A process running the 0017 model omits `variants` from new price inserts, and PostgreSQL rejects those inserts. Use a stop-the-writers cutover for this release.
+
+1. Confirm the release revision, the Compose project and the database target. Stage the new images and record the previous application revision. Pause the `refresh_availability` and `refresh_provider_catalogue` cron entries and any other scheduled or manual refreshes. Drain in-flight writes, take the backend out of service and stop `backend`, `worker`, and `catalogue-worker` where deployed. Include any other replicas or standalone writers using the same database.
+2. Take a consistent database backup while writes are quiesced. Confirm that it can be restored and that the database is at availability 0017 before applying 0018. Use the new revision's guarded `migrate` service with the exact database and host confirmation in the [deployment guide](../DEPLOYMENT.md#schema-migrations). Check that `availability.0018_offerprice_variants` is applied and the runtime `migrate --check` passes.
+3. Recreate the backend and configured worker lanes from the new revision. Check backend health and a cached title response with existing price and provenance. Confirm the worker logs are healthy and check for insert errors before resuming scheduled writers. Use offline fixtures for any smoke test that needs to demonstrate a new variant write.
+
+If migration or startup fails, keep writers paused and inspect the migration state. If 0018 is applied, prefer recovering forward with an 0018-compatible build. If reverting is required, take a fresh backup or a protected export of the populated `variants` and their `(offer_identity, source_id)` keys before the downgrade. Check the reverse plan and use the guarded migration service from the 0018 revision with `--app-label availability --target 0017`. Confirm the schema before restarting 0017 code.
+
+The downgrade **deletes all stored variant payloads**. The scalar price, offer and price identities, evidence, and title-check provenance survive. Reapplying 0018 gives existing rows an empty array. Recover a lost payload from a compatible backup or a separately reviewed import from the protected export. Any restored payload needs to match the source, offer identity and observation represented by the row.
+
+## Integration checks
+
+- Merged PR #195 supplies availability 0017 and tracker 0063. The checked-in migration test seeds five linked rows on the historical 0017/0063 models and compares every stored field after upgrade, downgrade and re-upgrade. It also exercises an old-model INSERT against 0018 and verifies the loss of a populated variant payload on downgrade. The existing JustWatch regression exercises a mocked refresh of the same offer, price and evidence identities.
+- Draft PR #192 at `3456ef56fe49ffcd3e180875c1e6389e34e3789b` overlaps `availability/services/reconciliation.py` and `availability/services/refresh.py`. The merge preview reports conflicts in both. Reconciliation needs one observation call after the BBC identity quarantine, carrying title-check provenance, price rows and the reviewed identity flag. In refresh, preserve both the offer variant imports and the BBC identity-policy imports. Exercise #192's BBC identity tests and the #198 price, identity and #195 cache suites together when resolving that draft.
+- Season identity is tracked separately in #203 and PR #205.
+
+Run the checked-in migration regression on a disposable database with `./scripts/test-backend-isolated.sh availability.tests.test_offerprice_migration -v 2`. The continuation also reran the original four probe phases described below. All 33 assertions passed, the pre-downgrade and post-upgrade snapshots matched byte for byte, and the mocked refresh wrote both variants to the existing price row.
+
 ## Local evidence digests
 
 | Evidence | SHA-256 |

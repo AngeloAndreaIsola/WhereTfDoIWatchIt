@@ -99,6 +99,8 @@ both `--app-label tracker --target 0050` (or the intended app and target).
 The command refuses a mismatch or missing confirmation. Do not use a routine
 backend `run` command to apply migrations.
 
+For `availability.0018_offerprice_variants`, follow the [writer cutover and recovery runbook](operations/issue97_migration_preservation_verification.md#release-runbook-for-availability-0018).
+
 The backend service selects the runtime guard from the checked-out Compose
 configuration and bind-mounts it read-only. This also protects against an old
 image whose baked entrypoint may predate the guard. When updating an existing

@@ -327,24 +327,20 @@ class JustWatchSource:
         if (len(scopes) != 1 or next(iter(scopes))[0] is None
                 or len(tmdb_ids) > 1 or None in tmdb_ids):
             return None
+        # Claims on the same native identity must agree on any stated title and
+        # year: a sparse (title-less) anchor must not hide a conflict between
+        # two titled edges sharing the native id.
+        claim_titles = {title.title.casefold() for title in claims if title.title}
+        claim_years = {title.year for title in claims if title.year is not None}
+        if len(claim_titles) > 1 or len(claim_years) > 1:
+            return None
         selected = next((title for title in candidates if title.tmdb_id_int is not None), candidates[0])
         if tmdb_ids and selected.tmdb_id_int not in tmdb_ids:
             return None
-        # A complete title/year edge may resolve the native identity, but the
-        # API can split its offers over partial duplicate edges.  Admit those
-        # edges only when every stated label agrees with the resolved scope.
-        selected_title = (selected.title or "").casefold()
-        selected_year = selected.year
-        compatible = []
-        for title in claims:
-            if ((title.title and selected_title and title.title.casefold() != selected_title)
-                    or (title.year is not None and selected_year is not None and title.year != selected_year)):
-                return None
-            compatible.append(title)
-        if len(compatible) == 1:
+        if len(claims) == 1:
             return selected
         selected = copy(selected)
-        selected.offers = [offer for title in compatible for offer in title.offers]
+        selected.offers = [offer for title in claims for offer in title.offers]
         return selected
 
     @classmethod

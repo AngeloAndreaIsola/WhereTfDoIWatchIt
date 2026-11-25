@@ -790,6 +790,7 @@ def _price_observation(row, *, now) -> PriceObservation:
     amount, currency = row.amount, row.currency or ""
     source_offer_id = row.source_offer_id or ""
     chosen = None
+    effective_is_current = bool(row.is_current)
     if row.is_current and variants:
         usable = (
             variant for variant in open_variants if variant.get("amount") is not None
@@ -799,17 +800,19 @@ def _price_observation(row, *, now) -> PriceObservation:
             usable, key=lambda variant: (variant["currency"], Decimal(variant["amount"])),
             default=None,
         )
-        amount, currency = None, ""
         if chosen is not None:
             amount, currency = Decimal(chosen["amount"]), chosen["currency"]
             source_offer_id = chosen.get("source_offer_id") or ""
+        else:
+            # Keep the scalar in history when no priced variant is open.
+            effective_is_current = False
     return PriceObservation(
         source=row.source.slug,
         amount=amount,
         currency=currency,
         source_offer_id=source_offer_id,
         observed_at=_aware_opt(row.observed_at),
-        is_current=bool(row.is_current),
+        is_current=effective_is_current,
         validation_error=row.validation_error or "",
         variants=variants,
         open_variants=open_variants,
