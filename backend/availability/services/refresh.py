@@ -110,7 +110,7 @@ from django.db import transaction
 
 from tracker.models import ExternalProviderMapping, Provider
 
-from ..domain.enums import MatchMethod, SyncMode
+from ..domain.enums import ContentType, MatchMethod, SyncMode
 from .identity_policy import mapping_is_trusted
 from ..models import ContentMapping, Country, Source
 from ..sources.justwatch_providers import provider_slug_for_package
@@ -536,7 +536,17 @@ class AvailabilityRefreshService:
         non-numeric or falsy (``""``, ``"0"``) answers ``None``: a source that
         reports no id must not be recorded as TMDb 0, which would otherwise
         become a permanent mapping to a nonexistent movie.
+
+        For season/episode content the source's own TMDb id is the *child's*
+        id; the canonical mapping keys off the *parent* series id carried in
+        ``parent_tmdb_id``. A season must never map to its own child TMDb id
+        while its Offer row carries the parent series id — that mismatch is a
+        mapping conflict that poisons reconciliation (mapping_doubt) and hides
+        the offer from season reads.
         """
+        if content.content_type in (ContentType.SEASON, ContentType.EPISODE):
+            if content.parent_tmdb_id:
+                return content.parent_tmdb_id
         raw = (content.external_ids or {}).get("tmdb")
         if raw in (None, ""):
             return None

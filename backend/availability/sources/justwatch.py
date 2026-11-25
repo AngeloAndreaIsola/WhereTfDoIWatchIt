@@ -59,6 +59,8 @@ per call instead.
 from __future__ import annotations
 
 import logging
+from collections import defaultdict
+from copy import copy
 from datetime import date, datetime
 from datetime import timezone as dt_timezone
 from typing import Optional
@@ -225,13 +227,22 @@ class JustWatchSource:
         # A show's season offers are distinct rows in the canonical model, so
         # they are walked explicitly rather than collapsed onto the series.
         if content_type == ContentType.SERIES and title.id:
-            for season in self._seasons(title.id, country):
-                season_type = self._content_type(season)
-                contents.append(self._content(season, season_type, country))
-                offers.extend(self._offers_for(
-                    season, country=country, content_type=season_type,
+            for season in self._season_nodes(self._seasons(title.id, country)):
+                if season.id == title.id:
+                    continue
+                season_offers = self._offers_for(
+                    season, country=country, content_type=ContentType.SEASON,
                     tmdb_id=tmdb_id, content=season,
-                ))
+                )
+                # A separate native mapping supports each provider's offer.
+                providers = dict.fromkeys(offer.provider_id for offer in season_offers)
+                for provider in providers:
+                    contents.append(self._content(
+                        season, ContentType.SEASON, country,
+                        provider=provider, parent_tmdb_id=tmdb_id,
+                    ))
+                if tmdb_id is not None:
+                    offers.extend(season_offers)
 
         return SourceFetchResult(
             contents=contents, offers=offers, sync_mode=SyncMode.TARGETED,
@@ -353,6 +364,38 @@ class JustWatchSource:
                            node_id, country, exc)
             return []
 
+    @classmethod
+    def _season_nodes(cls, seasons):
+        """Resolve each slot to one consistent native season, keeping repeated offers."""
+        by_slot = defaultdict(list)
+        by_id = defaultdict(list)
+        for season in seasons:
+            by_id[season.id].append(season)
+            if (cls._content_type(season) == ContentType.SEASON
+                    and type(season.season_number) is int and season.season_number >= 0):
+                by_slot[season.season_number].append(season)
+
+        for slot, candidates in by_slot.items():
+            node_id = candidates[0].id
+            if (not isinstance(node_id, str) or not node_id or node_id != node_id.strip()
+                    or any(season.id != node_id for season in candidates)):
+                continue
+            claims = by_id[node_id]
+            if any(claim not in candidates for claim in claims):
+                continue
+            child_ids = {
+                claim.tmdb_id_int for claim in claims
+                if claim.tmdb_id is not None and str(claim.tmdb_id).strip() not in ("", "0")
+            }
+            if len(child_ids) > 1 or any(value is None or value <= 0 for value in child_ids):
+                logger.warning("justwatch_season_identity_conflict node=%s season=%s", node_id, slot)
+                continue
+            selected = next((claim for claim in claims if claim.tmdb_id_int), claims[0])
+            if len(claims) > 1:
+                selected = copy(selected)
+                selected.offers = [offer for claim in claims for offer in claim.offers]
+            yield selected
+
     # -- catalogue --------------------------------------------------------
     def _fetch_catalogue(self, *, country, provider, content_type, offset,
                          pages: int = 1, min_year=None, max_year=None,
@@ -454,6 +497,9 @@ class JustWatchSource:
                 all_contents.append(self._content(
                     title, resolved_type, country, provider=provider,
                 ))
+                if resolved_type == ContentType.SEASON:
+                    # Catalogue edges give only a child ID, with no confirmed series.
+                    continue
                 # Client-side offer filtering: the `packages` filter selects
                 # *titles*, so the offers inside each node still span every
                 # provider carrying that title. Filtering to the requested
@@ -571,7 +617,7 @@ class JustWatchSource:
             price_error=price.error,
         )
 
-    def _content(self, title, content_type, country, *, provider=None):
+    def _content(self, title, content_type, country, *, provider=None, parent_tmdb_id=None):
         """Provider-native content entry, identified by JustWatch's node id.
 
         ``external_ids`` carries the TMDb/IMDb ids when present, so a later
@@ -603,6 +649,7 @@ class JustWatchSource:
             description=title.description or "",
             external_ids=external_ids,
             source_id=self.slug,
+            parent_tmdb_id=parent_tmdb_id,
         )
 
     @staticmethod

@@ -50,6 +50,9 @@ class DiscoveredContent:
     source_id: str = ""
     #: Structured rights evidence for audit/revalidation; never implies availability.
     rights_provenance: dict = field(default_factory=dict)
+    #: Series TMDb ID for a season observed under that series. The season's own
+    #: TMDb ID, when reported, remains in external_ids.
+    parent_tmdb_id: Optional[int] = None
 
 
 @dataclass(frozen=True)
