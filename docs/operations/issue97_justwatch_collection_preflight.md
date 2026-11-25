@@ -44,11 +44,12 @@ The synthetic replay was run at 09:37:39 UTC on November 24, 2026. The six synth
 The offline replay's `title_offers` and `season_offers` count presence by
 `(media_type, tmdb_id, country, season_number, provider, offer_class)`.
 A presence row retains the confirmed JustWatch node ID and a `variants` array.
-The array keeps distinct observed prices and currencies, renditions, raw
-monetization and delivery types, provider packages, source offer IDs and
-links. Only identical variant payloads within that presence scope collapse.
-Use the presence rows for coverage and the nested variants for offer-level
-comparison. Unknown prices and missing source offer IDs remain visible.
+Identical source variants within that presence scope collapse before export.
+The exported variants contain provider, country, canonical offer class,
+quality, amount and currency. Variants that differ on source-only fields can
+therefore have identical public fields. Use presence rows for coverage and
+the projected variants for price and rendition comparisons. Unknown prices
+remain visible.
 
 The Notte canary archive contains offer-level evidence. Its original key
 grouped 56 observations into 34 keys by dropping title identity. Adding title
@@ -59,8 +60,9 @@ Application storage retains one offer per provider, territory, typed TMDb ID
 and season/episode slots, offer class and provider-native title ID, and one
 price row per offer and source. The additive `OfferPrice.variants` column
 preserves the distinct JustWatch variants returned together in the latest
-observation of that offer. It supports both the source's display price and the
-variant details in the tracker read payload. The representative prefers an
+observation of that offer. The tracker read payload projects the same public
+fields as the replay, plus an HTTP(S) display link with query and fragment
+removed. The representative prefers an
 open availability window and a validated price, sorting by currency code
 and then amount, with a stable variant tie break. Existing price and offer
 IDs carry forward. The migration starts older rows with empty variant lists

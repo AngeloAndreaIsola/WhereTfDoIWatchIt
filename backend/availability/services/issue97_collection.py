@@ -14,6 +14,7 @@ from availability.services.experiment_runner import (
     validate_search_payload,
 )
 from availability.services.normalize import normalize_justwatch_offer_type, normalize_price
+from availability.services.offer_variant_projection import public_offer_variant
 from availability.sources.justwatch import JustWatchSource, justwatch_offer_variant
 from availability.sources.justwatch_client import GRAPHQL_URL, SEASONS_QUERY, JustWatchClient, JustWatchError
 from availability.sources.justwatch_providers import is_addon_package, provider_slug_for_package
@@ -137,9 +138,9 @@ def replay_scope(scope, search_response, *, seasons_response=None):
             if not provider or offer_class == OfferType.UNKNOWN:
                 report["unresolved"].append({
                     **observation,
-                    "package": offer.package.technical_name,
-                    "monetization_type": offer.monetization_type,
-                    "variants": [variant],
+                    "variants": [public_offer_variant(
+                        variant, provider=provider, country=scope["country"], offer_class=offer_class,
+                    )],
                 })
                 continue
             # Compare service/class presence once. Retain the distinct source
@@ -149,7 +150,16 @@ def replay_scope(scope, search_response, *, seasons_response=None):
             fact, variants = presence.setdefault(key, (observation, {}))
             variants[offer_variant_key(variant)] = variant
         for fact, variants in presence.values():
-            output.append({**fact, "variants": [variants[key] for key in sorted(variants)]})
+            output.append({
+                **fact,
+                "variants": [
+                    public_offer_variant(
+                        variants[key], provider=fact["provider"], country=fact["country"],
+                        offer_class=fact["offer_class"],
+                    )
+                    for key in sorted(variants)
+                ],
+            })
 
     try:
         page = client.search_titles(

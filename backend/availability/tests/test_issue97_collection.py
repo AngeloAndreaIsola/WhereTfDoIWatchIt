@@ -67,14 +67,33 @@ class Issue97ReplayTests(SimpleTestCase):
         variants = fact["variants"]
         self.assertEqual(len(variants), 8)
         self.assertEqual({variant["amount"] for variant in variants}, {"3.9900", "4.9900", "5.9900"})
-        self.assertEqual({variant["presentation_type"] for variant in variants}, {"HD", "SD"})
-        self.assertEqual({variant["monetization_type"] for variant in variants}, {"RENT", "RENTAL"})
-        self.assertEqual({variant["source_offer_id"] for variant in variants},
-                         {"rent-hd", "", "another-provider-offer", "partial-edge-offer"})
-        self.assertIn(987, {variant["package_id"] for variant in variants})
+        self.assertEqual({variant["quality"] for variant in variants}, {"hd", "sd"})
+        self.assertEqual({variant["offer_class"] for variant in variants}, {"rent"})
         edges.reverse()
         self.assertEqual(next(row for row in replay_scope(INCEPTION, search)["title_offers"]
                               if row["offer_class"] == "rent"), fact)
+
+    def test_replay_audit_variants_exclude_signed_links_and_private_identifiers(self):
+        fixture = deepcopy(FIXTURES[BREAKING_BAD["scope_id"]])
+        title = fixture["search"]["data"]["popularTitles"]["edges"][0]["node"]
+        season = fixture["seasons"]["data"]["node"]["seasons"][0]
+        for offer in (title["offers"][0], season["offers"][0]):
+            offer.update(id="fixture-private-audit-offer",
+                         standardWebURL="https://example.test/audit?signature=fixture-audit-signature")
+            offer["package"].update(id="fixture-private-audit-node", packageId=923456789)
+        unresolved = deepcopy(title["offers"][0])
+        unresolved["package"].update(technicalName="fixture-private-audit-package", shortName="", slug="")
+        title["offers"].append(unresolved)
+
+        report = replay_scope(BREAKING_BAD, fixture["search"], seasons_response=fixture["seasons"])
+        for group in ("title_offers", "season_offers", "unresolved"):
+            [fact] = report[group]
+            [variant] = fact["variants"]
+            self.assertEqual(set(variant), {"provider", "country", "offer_class", "quality", "amount", "currency"})
+        serialized = json.dumps(report)
+        for secret in ("https://example.test/audit", "fixture-audit-signature", "fixture-private-audit-offer",
+                       "fixture-private-audit-node", "fixture-private-audit-package", "923456789"):
+            self.assertNotIn(secret, serialized)
 
     def test_wrong_type_id_year_edition_or_conflicting_identity_stays_unknown(self):
         for field, value in (

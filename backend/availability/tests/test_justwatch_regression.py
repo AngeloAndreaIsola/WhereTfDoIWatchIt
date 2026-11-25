@@ -102,22 +102,92 @@ class JustWatchVariantPriceAPITests(TestCase):
         offer = fx.offer(source_offer_id, "netflix", "Netflix", "nfx", monetization="RENT", **kwargs)
         return {**offer, "retailPriceValue": amount}
 
-    def _refresh(self, *offers):
+    def _refresh(self, *offers, catalogue=False):
         node = fx.title("tm98004", self.movie.title, tmdb_id=str(self.movie.tmdb_id), offers=offers)
         payload = fx.envelope({"popularTitles": {"edges": fx.edges(node)}})
         post = RecordingPost([fx.FakeResponse(payload=payload)])
-        check = record_title_attempt(self.movie, "justwatch", "NL")
-        result = AvailabilityRefreshService(source=source_with(post)).refresh_content(
-            self.movie, country="NL",
-        )
-        record_title_completion(check, result, succeeded=True)
+        service = AvailabilityRefreshService(source=source_with(post))
+        if catalogue:
+            service.refresh_catalogue(country="NL")
+        else:
+            check = record_title_attempt(self.movie, "justwatch", "NL")
+            result = service.refresh_content(self.movie, country="NL")
+            record_title_completion(check, result, succeeded=True)
         self.assertEqual(len(post.payloads), 1)
 
-    def _reported_offer(self):
+    def _availability_response(self):
         response = self.client.get(f"/api/movie/{self.movie.tmdb_id}/availability/?current_country=NL")
         self.assertEqual(response.status_code, 200)
-        reported, = response.json()["source_reported_offers"]
+        return response
+
+    def _reported_offer(self):
+        reported, = self._availability_response().json()["source_reported_offers"]
         return reported
+
+    def _assert_nested_variant_redaction(self, bucket, *, catalogue, elapsed=timedelta()):
+        public = self._rent("selected", 1.99, presentation="SD", url="https://example.test/rent/sd")
+        private = self._rent(
+            "fixture-private-offer", 4.99, presentation="HD",
+            url="https://example.test/rent/hd?signature=fixture-signature#fixture-fragment",
+        )
+        private["package"].update(id="fixture-private-package-node", packageId=912345678)
+        private["audioTechnology"] = ["https://example.test/fixture-raw-media"]
+        with patch("django.utils.timezone.now", return_value=self.now):
+            self._refresh(public, private, catalogue=catalogue)
+        with patch("django.utils.timezone.now", return_value=self.now + elapsed):
+            response = self._availability_response()
+
+        [offer] = response.json()[bucket]
+        self.assertEqual(offer["url"], public["standardWebURL"])
+        for price in (offer["price"], offer["prices"][0]):
+            self.assertEqual(price["source_offer_id"], public["id"])
+            self.assertCountEqual(price["variants"], [
+                {"provider": "netflix", "country": "NL", "offer_class": "rent", "quality": "sd",
+                 "amount": "1.9900", "currency": "EUR", "url": public["standardWebURL"]},
+                {"provider": "netflix", "country": "NL", "offer_class": "rent", "quality": "hd",
+                 "amount": "4.9900", "currency": "EUR", "url": "https://example.test/rent/hd"},
+            ])
+        response_body = response.content.decode()
+        for secret in ("signature=", "fixture-signature", "fixture-fragment", private["id"],
+                       private["package"]["id"], str(private["package"]["packageId"]),
+                       private["audioTechnology"][0]):
+            self.assertNotIn(secret, response_body)
+
+        stored = OfferPrice.objects.get(tmdb_id=self.movie.tmdb_id)
+        [stored_private] = [variant for variant in stored.variants if variant["source_offer_id"] == private["id"]]
+        self.assertEqual(stored_private["url"], private["standardWebURL"])
+        self.assertEqual(stored_private["package_node_id"], private["package"]["id"])
+        self.assertEqual(stored_private["package_id"], private["package"]["packageId"])
+
+    def test_current_http_nested_variants_strip_signed_query_and_private_identifiers(self, http):
+        self._assert_nested_variant_redaction("offers", catalogue=True)
+        http.assert_not_called()
+
+    def test_source_reported_http_nested_variants_strip_signed_query_and_private_identifiers(self, http):
+        self._assert_nested_variant_redaction("source_reported_offers", catalogue=False)
+        http.assert_not_called()
+
+    def test_last_known_http_nested_variants_strip_signed_query_and_private_identifiers(self, http):
+        self._assert_nested_variant_redaction("last_known_offers", catalogue=True, elapsed=timedelta(days=90))
+        http.assert_not_called()
+
+    def test_http_sanitizes_selected_variant_link_and_drops_unsafe_nested_links(self, http):
+        self._refresh(
+            self._rent("selected", 1.99, url="https://example.test/rent?signature=fixture-selected"),
+            self._rent("non-http", 3.99, url="data:text/plain,fixture-non-http"),
+            self._rent("credentials", 4.99, url="https://fixture-user:fixture-password@example.test/rent"),
+        )
+
+        response = self._availability_response()
+        [reported] = response.json()["source_reported_offers"]
+        self.assertEqual(reported["url"], "https://example.test/rent")
+        self.assertEqual(
+            {variant["amount"]: variant["url"] for variant in reported["price"]["variants"]},
+            {"1.9900": "https://example.test/rent", "3.9900": "", "4.9900": ""},
+        )
+        for secret in ("fixture-selected", "fixture-non-http", "fixture-user", "fixture-password"):
+            self.assertNotIn(secret, response.content.decode())
+        http.assert_not_called()
 
     def test_unpriced_refresh_preserves_historical_price_list_amount(self, http):
         with patch("django.utils.timezone.now", return_value=self.now):
@@ -135,7 +205,8 @@ class JustWatchVariantPriceAPITests(TestCase):
         self.assertEqual((historical["amount"], historical["currency"], historical["is_current"]),
                          ("3.9900", "EUR", False))
         self.assertEqual(historical["source_offer_id"], "priced")
-        self.assertEqual(historical["variants"][0]["source_offer_id"], "unpriced")
+        self.assertEqual(stored.variants[0]["source_offer_id"], "unpriced")
+        self.assertEqual(historical["variants"][0]["amount"], None)
         http.assert_not_called()
 
     def test_last_price_stays_in_history_when_only_unpriced_variant_remains_open(self, http):
@@ -344,7 +415,13 @@ class JustWatchRegressionCoverageTests(TestCase):
         displayed, = evidence.current + evidence.last_known
         self.assertEqual(displayed.price["amount"], "3.9900")
         self.assertTrue(displayed.price["is_from"])
-        self.assertEqual(displayed.prices[0]["variants"], snapshot)
+        self.assertCountEqual(
+            [(variant["amount"], variant["quality"], variant["url"])
+             for variant in displayed.prices[0]["variants"]],
+            [("3.9900", "hd", hd["standardWebURL"]), ("5.9900", "4k", uhd["standardWebURL"]),
+             ("3.9900", "hd", hd["standardWebURL"]), (None, "hd", hd["standardWebURL"]),
+             ("1.9900", "hd", hd["standardWebURL"])],
+        )
         http.assert_not_called()
 
     def test_conflicting_native_title_across_catalogue_pages_stays_unresolved(self):

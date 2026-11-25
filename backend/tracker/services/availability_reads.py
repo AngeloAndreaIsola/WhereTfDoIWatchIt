@@ -16,9 +16,11 @@ from __future__ import annotations
 
 from datetime import UTC
 from typing import Literal, NamedTuple, Optional
+from urllib.parse import urlsplit
 
 from availability.domain.enums import AvailabilityEvidence
 from availability.domain.reconciliation import ReconciledOffer
+from availability.services.offer_variant_projection import public_offer_variant
 from availability.services.query import AvailabilityQueryService
 
 from .offers import Offer
@@ -129,6 +131,8 @@ def _tracker_offer(offer: ReconciledOffer) -> Offer:
     url = offer.provider_url
     if report and (offer.price is None or offer.price.selected_variant is None):
         url = report.provider_url
+    if url and any(url == variant.get("url") for price in offer.prices for variant in price.variants):
+        url = _variant_display_url(url)
     return Offer(
         country=offer.country,
         service=offer.provider,
@@ -138,10 +142,10 @@ def _tracker_offer(offer: ReconciledOffer) -> Offer:
         audio_languages=_as_list(offer.audio_languages),
         subtitle_languages=_as_list(offer.subtitle_languages),
         price=(
-            _price_dict(offer.price, is_from=offer.price_is_from)
+            _price_dict(offer.price, offer, is_from=offer.price_is_from)
             if offer.price is not None else None
         ),
-        prices=[_price_dict(price) for price in offer.prices],
+        prices=[_price_dict(price, offer) for price in offer.prices],
         availability_evidence=str(offer.evidence),
         last_seen_at=report.last_seen.isoformat() if report else last_seen.isoformat() if last_seen else None,
         observed_at=report.observed_at.isoformat() if report and report.observed_at else None,
@@ -177,7 +181,22 @@ def _as_list(values):
     return None if values is None else list(values)
 
 
-def _price_dict(price, *, is_from: bool = False) -> dict:
+def _variant_display_url(value: object) -> str:
+    """Project an HTTP(S) destination without provider query or fragment data."""
+    if not isinstance(value, str) or any(char.isspace() or ord(char) < 32 for char in value):
+        return ""
+    try:
+        url = urlsplit(value)
+        if url.scheme not in ("http", "https") or not url.hostname or url.username is not None:
+            return ""
+    except ValueError:
+        return ""
+    if "\\" in url.netloc or "\\" in url.path:
+        return ""
+    return url._replace(query="", fragment="").geturl()
+
+
+def _price_dict(price, offer: ReconciledOffer, *, is_from: bool = False) -> dict:
     """Serializable price row: amount as a string so Decimal precision survives.
 
     The amount is sent as a decimal string (never a binary float) and the
@@ -198,5 +217,13 @@ def _price_dict(price, *, is_from: bool = False) -> dict:
         "validation_error": price.validation_error or "",
     }
     if price.variants:
-        result["variants"] = list(price.variants)
+        result["variants"] = [
+            {
+                **public_offer_variant(
+                    variant, provider=offer.provider, country=offer.country, offer_class=offer.offer_type,
+                ),
+                "url": _variant_display_url(variant.get("url")),
+            }
+            for variant in price.variants
+        ]
     return result
