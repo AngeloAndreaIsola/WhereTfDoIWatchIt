@@ -1,0 +1,142 @@
+{
+  "experiment_id": "issue97-stage-d",
+  "phase": "titles-v1",
+  "schema_version": 1,
+  "source": "justwatch",
+  "endpoint": "https://apis.justwatch.com/graphql",
+  "method": "POST",
+  "operation": "GetSearchTitles",
+  "document_sha256": "997e0b1f6ce3bafba0fd722cf62936762a2dfd5d0c2ad3305ad9a382da373f51",
+  "maximum_attempts": 12,
+  "maximum_retries": 0,
+  "maximum_in_flight": 1,
+  "burst": 1,
+  "minimum_interval_seconds": 5,
+  "batch_sizes": [
+    2,
+    5,
+    5
+  ],
+  "scopes": [
+    {
+      "scope_id": "movie-238-nl",
+      "tmdb_id": 238,
+      "media_type": "movie",
+      "country": "NL",
+      "title": "The Godfather",
+      "year": 1972,
+      "identity_evidence_sha256": "f81b13ca6d16aa8029de1cfeb83c3bb02cfc691c4a4b3ebbd9f39f4ca8f8ee2b",
+      "maximum_attempts": 1
+    },
+    {
+      "scope_id": "series-1396-nl",
+      "tmdb_id": 1396,
+      "media_type": "series",
+      "country": "NL",
+      "title": "Breaking Bad",
+      "year": 2008,
+      "identity_evidence_sha256": "7685411f05c8b2389ac7379f72b03912c5b3ce49f36b3a21c9e61fd6674c1f14",
+      "maximum_attempts": 1
+    },
+    {
+      "scope_id": "movie-496243-nl",
+      "tmdb_id": 496243,
+      "media_type": "movie",
+      "country": "NL",
+      "title": "Parasite",
+      "year": 2019,
+      "identity_evidence_sha256": "2abf986aa2a804acf87a7261b737b2a53b63b0f2c64d955c4b233bb52efd5e1c",
+      "maximum_attempts": 1
+    },
+    {
+      "scope_id": "movie-603-nl",
+      "tmdb_id": 603,
+      "media_type": "movie",
+      "country": "NL",
+      "title": "The Matrix",
+      "year": 1999,
+      "identity_evidence_sha256": "56b9dac0a197019f736dacffbaf3c4e1cfb1eb817d580c282421b75ae3ae0597",
+      "maximum_attempts": 1
+    },
+    {
+      "scope_id": "movie-619264-nl",
+      "tmdb_id": 619264,
+      "media_type": "movie",
+      "country": "NL",
+      "title": "The Platform",
+      "year": 2019,
+      "identity_evidence_sha256": "ed42eb367dcde44e78a4e44cecf28f65dd0ddcbfb1b6fdc9131fc27a3de57200",
+      "maximum_attempts": 1
+    },
+    {
+      "scope_id": "movie-840430-nl",
+      "tmdb_id": 840430,
+      "media_type": "movie",
+      "country": "NL",
+      "title": "The Holdovers",
+      "year": 2023,
+      "identity_evidence_sha256": "b4ba95858b37471f0c0821bf901f78346e189e8706e1bf0fb75014eb9d9a3db2",
+      "maximum_attempts": 1
+    },
+    {
+      "scope_id": "movie-565310-nl",
+      "tmdb_id": 565310,
+      "media_type": "movie",
+      "country": "NL",
+      "title": "The Farewell",
+      "year": 2019,
+      "identity_evidence_sha256": "3ed2c0c878ca14e9def342178d1927f2bf32a9ee739fec69ec1258ba5a9a9004",
+      "maximum_attempts": 1
+    },
+    {
+      "scope_id": "movie-116149-nl",
+      "tmdb_id": 116149,
+      "media_type": "movie",
+      "country": "NL",
+      "title": "Paddington",
+      "year": 2014,
+      "identity_evidence_sha256": "f6279b0663a8e62c1706f87f20c872030d0e9a8e7b94b71b711220b334ce4da1",
+      "maximum_attempts": 1
+    },
+    {
+      "scope_id": "series-70523-nl",
+      "tmdb_id": 70523,
+      "media_type": "series",
+      "country": "NL",
+      "title": "Dark",
+      "year": 2017,
+      "identity_evidence_sha256": "e029ca87bbb50a427bc545986c4e60a39f7301debbdc1d9f97973a9f3ae949f9",
+      "maximum_attempts": 1
+    },
+    {
+      "scope_id": "series-66732-nl",
+      "tmdb_id": 66732,
+      "media_type": "series",
+      "country": "NL",
+      "title": "Stranger Things",
+      "year": 2016,
+      "identity_evidence_sha256": "444e7addf56f5fea77d732bda4a0952b70e5ad67aa404987125e0b3ffb8fa220",
+      "maximum_attempts": 1
+    },
+    {
+      "scope_id": "series-2316-nl",
+      "tmdb_id": 2316,
+      "media_type": "series",
+      "country": "NL",
+      "title": "The Office",
+      "year": 2005,
+      "identity_evidence_sha256": "02188370e858933c0624382abf16edae9c5f7c0dd4a52586024a1ca8fa2af278",
+      "maximum_attempts": 1
+    },
+    {
+      "scope_id": "series-1438-nl",
+      "tmdb_id": 1438,
+      "media_type": "series",
+      "country": "NL",
+      "title": "The Wire",
+      "year": 2002,
+      "identity_evidence_sha256": "b15d8b5538d446f7794eb59c3baa66f8658efcafa709de37f5225e45f3bb62e4",
+      "maximum_attempts": 1
+    }
+  ]
+}
