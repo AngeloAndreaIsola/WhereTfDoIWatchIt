@@ -1,0 +1,16 @@
+candidate_id,batch,capture_scope,title,tmdb_id,media_type,year,market,provider_slug,offer_class,evidence_rule,prior_observation_id,stage_c_pair_id,fresh_status
+E01,A,E-C1,Inception,27205,movie,2010,NL,netflix,subscription,netflix_subscription,inception_nl-netflix-subscription,INC-27205-NL-netflix-subscription,pending_authorization
+E02,A,E-C2,Inception,27205,movie,2010,NL,prime,subscription,prime_subscription,OBS-01-prime-subscription,INC-27205-NL-prime-subscription,pending_authorization
+E03,A,E-C2,Inception,27205,movie,2010,NL,prime,rent,prime_transaction,OBS-01-prime-rent,INC-27205-NL-prime-rent,pending_authorization
+E04,A,E-C2,Inception,27205,movie,2010,NL,prime,buy,prime_transaction,OBS-01-prime-buy,INC-27205-NL-prime-buy,pending_authorization
+E05,A,E-C2,Inception,27205,movie,2010,NL,max_amazon,addon,prime_channel,OBS-01-max_amazon-addon,INC-27205-NL-max_amazon-addon,pending_authorization
+E06,A,E-C3,Dune,438631,movie,2021,NL,rakuten_tv,rent,rakuten_transaction,OBS-06-rakuten_tv-rent,DUNE-438631-NL-rakuten_tv-rent,pending_authorization
+E07,A,E-C3,Dune,438631,movie,2021,NL,rakuten_tv,buy,rakuten_transaction,OBS-06-rakuten_tv-buy,DUNE-438631-NL-rakuten_tv-buy,pending_authorization
+E08,A,E-C2,Inception,27205,movie,2010,NL,prime,free,free_class_control,,,pending_authorization
+E09,A,E-C3,Dune,438631,movie,2021,NL,rakuten_tv,free_with_ads,free_class_control,,,pending_authorization
+E10,B,E-C4,Breaking Bad,1396,series,2008,NL,netflix,subscription,netflix_subscription,OBS-02-netflix-subscription,,pending_authorization
+E11,B,E-C5,Dark,70523,series,2017,NL,netflix,subscription,netflix_subscription,OBS-04-netflix-subscription,,pending_authorization
+E12,B,E-C6,Stranger Things,66732,series,2016,NL,netflix,subscription,netflix_subscription,OBS-03-netflix-subscription,,pending_authorization
+E13,B,E-C7,The Platform,619264,movie,2019,NL,netflix,subscription,netflix_subscription,OBS-05-netflix-subscription,,pending_authorization
+E14,B,E-C8,The Holdovers,840430,movie,2023,NL,rakuten_tv,rent,rakuten_transaction,OBS-07-rakuten_tv-rent,,pending_authorization
+E15,B,E-C8,The Holdovers,840430,movie,2023,NL,rakuten_tv,buy,rakuten_transaction,OBS-07-rakuten_tv-buy,,pending_authorization
