@@ -75,6 +75,51 @@ class TypedApplicationReplay(TestCase):
         self.http.assert_not_called()
         return response
 
+    def reviewed_report(self):
+        pair, index, native = fixture()
+        pair = replace(pair, index=replace(pair.index, native_id="synthetic-MOVIE-27205",
+                                           package_id="netflix"),
+                       index_receipt=replace(pair.index_receipt, payload_digest=
+                                             "34803b1738c95fb61a8ffcbbbc158051d500ce2b8a45f84b171655d5b7a2b856"))
+        return pair, replace(index, binding=pair.index, payload_digest=self.source_digest), native
+
+    def score_report(self, pair, index, native, response):
+        return source_report_retrieval(pair, native, index, requested_scope=("movie", 27205, "NL"),
+                                       read=index.window, status=response.status_code, body=response.json(),
+                                       service_label=self.netflix.name)
+
+    def test_same_document_different_payloads_only_support_projection(self):
+        pair, index, native = self.reviewed_report()
+        pair = replace(pair, index=replace(pair.index, document_ref=native.binding.document_ref))
+        index = replace(index, binding=pair.index)
+        self.assertNotEqual(index.payload_digest, native.payload_digest)
+        self.assertEqual(adjudicate(pair, index, native).eligibility, "same_source_echo")
+        result = self.score_report(pair, index, native, self.read("movie"))
+        self.assertEqual((result.state, result.projection), ("same_source_echo", "displayed"))
+        self.assertEqual(display_rate([result]).denominator, 0)
+
+    def test_identical_payload_cannot_verify_a_typed_display_or_a_miss(self):
+        pair, index, native = self.reviewed_report()
+        pair = replace(pair, native_receipt=replace(pair.native_receipt, payload_digest=index.payload_digest))
+        native = replace(native, payload_digest=index.payload_digest)
+        for projection in ("displayed", "miss"):
+            result = self.score_report(pair, index, native, self.read("movie"))
+            self.assertEqual((result.state, result.projection), ("same_source_echo", projection))
+            self.assertEqual(display_rate([result]).value, "UNDEFINED")
+            if projection == "displayed":
+                self.original.delete()
+
+    def test_child_rows_do_not_verify_a_title_display(self):
+        pair, index, native = self.reviewed_report()
+        for episode in (None, 2):
+            Offer.objects.filter(pk=self.original.pk).update(season_number=1, episode_number=episode)
+            response = self.read("movie")
+            [row] = response.json()["source_reported_offers"]
+            self.assertEqual((row["season_number"], row["episode_number"]), (1, episode))
+            result = self.score_report(pair, index, native, response)
+            self.assertEqual((result.state, result.projection), ("unresolved", "unscored"))
+            self.assertEqual(display_rate([result]).denominator, 0)
+
     def test_source_report_is_typed_and_retains_its_original_source_and_observation(self):
         self.clock.return_value = STAMP + timedelta(minutes=1)
         response = self.read("movie")
@@ -92,12 +137,7 @@ class TypedApplicationReplay(TestCase):
         self.assertEqual(datetime.fromisoformat(row["observed_at"]), self.original.observed_at)
         self.assertEqual(datetime.fromisoformat(row["last_seen_at"]), STAMP)
         self.assertEqual(self.original.provider_content_id, "synthetic-MOVIE-27205")
-        pair, index, native = fixture()
-        pair = replace(pair, index=replace(pair.index, native_id="synthetic-MOVIE-27205",
-                                           package_id="netflix"),
-                       index_receipt=replace(pair.index_receipt, payload_digest=
-                                             "34803b1738c95fb61a8ffcbbbc158051d500ce2b8a45f84b171655d5b7a2b856"))
-        index = replace(index, binding=pair.index, payload_digest=self.source_digest)
+        pair, index, native = self.reviewed_report()
         observed = datetime.fromisoformat(row["observed_at"])
         source_window = replace(index.window, original=observed)
         local = Window(self.clock.return_value, self.clock.return_value, timedelta(0), self.clock.return_value)

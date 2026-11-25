@@ -6,7 +6,7 @@ There is no transport, scheduler, database access or live manifest here.
 """
 
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 import re
 
@@ -92,6 +92,13 @@ class CaptureReceipt:
 
 
 @dataclass(frozen=True)
+class ConflictReview:
+    index_name: str
+    availability: str | None = None  # Confirmed FP or FN
+    price_conflict: bool = False
+
+
+@dataclass(frozen=True)
 class ReviewedPair:
     candidate_id: str
     scope: Scope
@@ -100,6 +107,10 @@ class ReviewedPair:
     slot: datetime
     index_receipt: CaptureReceipt
     native_receipt: CaptureReceipt
+    # Second review of this sealed comparison, separate from reviewing either extraction.
+    conflict_review: ConflictReview | None = None
+    # Exact child row independently reviewed as covering this series-level scope.
+    title_display_mapping: tuple[int, int | None] | None = None
 
 
 @dataclass(frozen=True)
@@ -146,20 +157,24 @@ _ACTION = {"subscription": "subscription_action", "addon": "channel_benefit",
            "free_with_ads": "full_feature_free_with_ads"}
 
 
+def _valid_scope(scope):
+    return (isinstance(scope, Scope) and scope.provider in _OWNERS and scope.market == "NL"
+            and scope.media_type in {"movie", "series"}
+            and type(scope.tmdb_id) is int and scope.tmdb_id > 0
+            and type(scope.year) is int and scope.year > 0
+            and _known(scope.canonical_title) and _known(scope.edition)
+            and scope.offer_class in _ACTION
+            and (scope.offer_class == "addon") == (scope.provider == "max_amazon")
+            and scope.parent == ("prime" if scope.provider == "max_amazon" else None))
+
+
 def _verdict(pair, obs, *, native, index_name="justwatch"):
     expected = pair.first_party if native else pair.index
     receipt = pair.native_receipt if native else pair.index_receipt
     scope = pair.scope
-    owner = _OWNERS.get(scope.provider)
-    if (obs.scope != scope or not owner or scope.market != "NL"
-            or scope.media_type not in {"movie", "series"}
-            or type(scope.tmdb_id) is not int or scope.tmdb_id <= 0
-            or type(scope.year) is not int or scope.year <= 0
-            or not _known(scope.canonical_title) or not _known(scope.edition)
-            or scope.offer_class not in _ACTION
-            or (scope.offer_class == "addon") != (scope.provider == "max_amazon")
-            or scope.parent != ("prime" if scope.provider == "max_amazon" else None)):
+    if obs.scope != scope or not _valid_scope(scope):
         return "unsupported"
+    owner = _OWNERS[scope.provider]
     if (not expected or obs.binding != expected or not expected.complete()
             or obs.producer != (owner if native else index_name)
             or not _digest(obs.payload_digest)
@@ -191,7 +206,7 @@ def _verdict(pair, obs, *, native, index_name="justwatch"):
     if obs.disputed:
         return "needs_recheck"
     if obs.signal == "explicit_class_negative":
-        return "no" if not native or obs.second_review else "needs_recheck"
+        return "no" if obs.second_review is True else "needs_recheck"
     if obs.signal == _ACTION[scope.offer_class]:
         return "yes"
     return "unknown"
@@ -211,13 +226,15 @@ def _price_map(obs):
     return amounts
 
 
-def _prices(scope, outcome, index, first_party):
+def _prices(scope, outcome, index, first_party, review):
     if scope.offer_class not in {"rent", "buy"} or outcome != "TP":
         return "unscored"
     a, b = _price_map(index), _price_map(first_party)
     if a is None or b is None or a.keys() != b.keys():
         return "unknown"
-    return "agreement" if a == b else "conflict"
+    if a == b:
+        return "agreement"
+    return "conflict" if review and review.price_conflict is True else "needs_recheck"
 
 
 @dataclass(frozen=True)
@@ -236,6 +253,11 @@ _CELLS = {("yes", "yes"): "TP", ("no", "yes"): "FN",
           ("yes", "no"): "FP", ("no", "no"): "TN"}
 
 
+def _same_source(left, left_digest, right, right_digest):
+    return bool((left and right and (left.issuer == right.issuer or left.document_ref == right.document_ref))
+                or (left_digest and left_digest == right_digest))
+
+
 def adjudicate(pair, index, first_party, *, index_name="justwatch", app_read=None):
     """For app comparisons preserve the contributing index capture and add its local read."""
     idx = _verdict(pair, index, native=False, index_name=index_name)
@@ -246,10 +268,11 @@ def adjudicate(pair, index, first_party, *, index_name="justwatch", app_read=Non
         raise ValueError("use a named index and an application read only for application")
     else:
         state = time_state(pair.slot, index.window, first_party.window)
-    if ((index.binding and first_party.binding and
-         (index.binding.issuer == first_party.binding.issuer
-          or index.binding.document_ref == first_party.binding.document_ref))
-            or (index.payload_digest and index.payload_digest == first_party.payload_digest)):
+    cell = _CELLS.get((idx, fp))
+    review = pair.conflict_review
+    if review and review.index_name != index_name:
+        review = None
+    if _same_source(index.binding, index.payload_digest, first_party.binding, first_party.payload_digest):
         state = "same_source_echo"
     elif "unsupported" in (idx, fp):
         state = "unsupported"
@@ -257,10 +280,12 @@ def adjudicate(pair, index, first_party, *, index_name="justwatch", app_read=Non
         state = "stale"
     elif "needs_recheck" in (idx, fp):
         state = "needs_recheck"
+    elif state == "eligible" and cell in {"FP", "FN"} and (not review or review.availability != cell):
+        state = "needs_recheck"
     if state != "eligible":
         outcome = state
-    elif (idx, fp) in _CELLS:
-        outcome = _CELLS[idx, fp]
+    elif cell:
+        outcome = cell
     elif idx in {"yes", "no"}:
         outcome = "unresolved_positive" if idx == "yes" else "unresolved_negative"
     elif fp in {"yes", "no"}:
@@ -268,7 +293,7 @@ def adjudicate(pair, index, first_party, *, index_name="justwatch", app_read=Non
     else:
         outcome = "unresolved"
     return Decision(pair.candidate_id, index_name, pair.scope, idx, fp, state, outcome,
-                    _prices(pair.scope, outcome, index, first_party))
+                    _prices(pair.scope, outcome, index, first_party, review))
 
 
 @dataclass(frozen=True)
@@ -281,29 +306,57 @@ class Rate:
         return self.numerator / self.denominator if self.denominator else "UNDEFINED"
 
 
-def summarize(decisions):
-    """One named index, one decision per frozen pair. Keep marginal verdicts visible."""
+def _candidate_key(scope):
+    return scope.media_type, scope.tmdb_id, scope.market, scope.provider, scope.offer_class
+
+
+def summarize(decisions, *, expected_manifest=None):
+    """Match submitted decisions against independently supplied (candidate_id, Scope) records."""
     rows = list(decisions)
-    if (len({d.index_name for d in rows}) > 1
-            or len({d.candidate_id for d in rows}) != len(rows)
-            or len({(d.scope.media_type, d.scope.tmdb_id, d.scope.market,
-                     d.scope.provider, d.scope.offer_class) for d in rows}) != len(rows)):
+    submitted = {d.candidate_id for d in rows}
+    if (len({d.index_name for d in rows}) > 1 or len(submitted) != len(rows)
+            or any(not _known(key) for key in submitted)):
         raise ValueError("mixed indices or duplicate candidate")
+    planned = None
+    completeness = "unknown"
+    missing, extra, mismatched = [], [], []
+    if expected_manifest is not None:
+        manifest = list(expected_manifest)
+        expected = dict(manifest)
+        if (not manifest or len(expected) != len(manifest)
+                or any(not _known(key) or not _valid_scope(scope) for key, scope in manifest)
+                or len({_candidate_key(scope) for scope in expected.values()}) != len(expected)):
+            raise ValueError("invalid or duplicate frozen candidate")
+        planned = len(expected)
+        missing = sorted(expected.keys() - submitted)
+        extra = sorted(submitted - expected.keys())
+        mismatched = sorted(d.candidate_id for d in rows if d.candidate_id in expected
+                            and (not _valid_scope(d.scope) or d.scope != expected[d.candidate_id]))
+        matched_ids = (submitted & expected.keys()) - set(mismatched)
+        rows = [d for d in rows if d.candidate_id in matched_ids]
+        completeness = "incomplete" if missing or extra or mismatched else "complete"
+    if len({_candidate_key(d.scope) for d in rows}) != len(rows):
+        raise ValueError("invalid or duplicate candidate")
     cells = Counter(d.outcome for d in rows)
     prices = Counter(d.price for d in rows)
     tp, fp, fn, tn = (cells[k] for k in ("TP", "FP", "FN", "TN"))
     n = tp + fp + fn + tn
     recall = Rate(tp, tp + fn)
+    precision = Rate(tp, tp + fp)
+    eligible_panel = completeness == "complete" and all(d.eligibility == "eligible" for d in rows)
     return {
-        "planned": len(rows), "outcomes": cells,
+        "planned": planned, "submitted": len(submitted), "matched": len(rows) if planned else None,
+        "panel_completeness": completeness, "missing": missing, "extra": extra,
+        "scope_mismatches": mismatched, "outcomes": cells,
         "advertised": Counter(d.advertised for d in rows),
         "index": Counter(d.index for d in rows),
         "eligibility": Counter(d.eligibility for d in rows),
         "agreement": Rate(tp + tn, n), "conflict": Rate(fp + fn, n),
-        "precision": Rate(tp, tp + fp), "conditional_recall": recall,
-        "full_panel_recall": ("UNDEFINED" if any(
-            d.advertised == "yes" and d.outcome not in {"TP", "FN"} for d in rows
-        ) else recall.value),
+        "precision": precision, "conditional_precision": precision, "conditional_recall": recall,
+        "full_panel_precision": (precision.value if eligible_panel and all(
+            d.index == "no" or d.outcome in {"TP", "FP"} for d in rows) else "UNDEFINED"),
+        "full_panel_recall": (recall.value if eligible_panel and all(
+            d.advertised == "no" or d.outcome in {"TP", "FN"} for d in rows) else "UNDEFINED"),
         "false_positive_rate": Rate(fp, fp + tn), "false_negative_rate": Rate(fn, fn + tp),
         "prices": prices, "price_agreement": Rate(prices["agreement"],
                                                  prices["agreement"] + prices["conflict"]),
@@ -315,6 +368,7 @@ class DisplayDecision:
     candidate_id: str
     surface: str
     state: str
+    projection: str = "unscored"  # Fidelity to the sealed source report alone.
 
 
 def display_retrieval(pair, first_party, *, surface, read, typed_scope, status, present,
@@ -334,9 +388,16 @@ def display_retrieval(pair, first_party, *, surface, read, typed_scope, status, 
         state = "excluded"
     elif _verdict(pair, first_party, native=True) != "yes":
         state = "unscored"
+    elif not (pair.index and pair.index.complete() and pair.index_receipt
+              and _digest(pair.index_receipt.payload_digest)
+              and pair.index.issuer not in {"application", "untraceable"}):
+        state = "unscored"
+    elif _same_source(pair.index, pair.index_receipt.payload_digest,
+                      first_party.binding, first_party.payload_digest):
+        state = "same_source_echo"
     elif (typed_scope != (scope.media_type, scope.tmdb_id, scope.market)
           or status not in {200, 404} or type(present) is not bool
-          or (present and (not contributions or status != 200))):
+          or (present and (contributions != (pair.index_receipt.window,) or status != 200))):
         state = "unresolved"
     elif _read_time_state(pair.slot, first_party.window, read, contributions) != "eligible":
         state = "unscored"
@@ -345,7 +406,18 @@ def display_retrieval(pair, first_party, *, surface, read, typed_scope, status, 
     return DisplayDecision(pair.candidate_id, surface, state)
 
 
-def _source_report_present(pair, native, index, status, body, service_label):
+def _title_display_row(pair, row):
+    if "season_number" not in row or "episode_number" not in row:
+        return False
+    season, episode = row["season_number"], row["episode_number"]
+    if season is None and episode is None:
+        return True
+    return (pair.scope.media_type == "series" and type(season) is int and season >= 0
+            and (episode is None or (type(episode) is int and episode >= 0))
+            and (season, episode) == pair.title_display_mapping)
+
+
+def _source_report_present(pair, index, status, body, service_label):
     scope = pair.scope
     title = body.get(scope.media_type) if isinstance(body, dict) else None
     if not isinstance(title, dict) or title.get("tmdb_id") != scope.tmdb_id:
@@ -367,8 +439,8 @@ def _source_report_present(pair, native, index, status, body, service_label):
             matches.append(row)
     if not matches:
         return False
-    if (len(matches) != 1 or _verdict(pair, index, native=False) != "yes"
-            or index.payload_digest == native.payload_digest):
+    matches = [row for row in matches if _title_display_row(pair, row)]
+    if len(matches) != 1:
         return None
 
     row = matches[0]
@@ -389,10 +461,21 @@ def source_report_retrieval(pair, native, index, *, requested_scope, read, statu
     service_label is the catalogue display name resolved from the reviewed
     provider slug. The response does not carry the native document ID.
     """
-    present = _source_report_present(pair, native, index, status, body, service_label)
-    return display_retrieval(pair, native, surface="source_reported_offers", read=read,
-                             typed_scope=requested_scope, status=status, present=present,
-                             contributions=(index.window,) if present else ())
+    source = _verdict(pair, index, native=False)
+    present = None
+    if source in {"yes", "no"}:
+        present = _source_report_present(pair, index, status, body, service_label)
+    if present and source != "yes":
+        present = None
+    verified = display_retrieval(pair, native, surface="source_reported_offers", read=read,
+                                 typed_scope=requested_scope, status=status, present=present,
+                                 contributions=(index.window,))
+    projection = "unscored"
+    if (source == "yes" and present is not None
+            and requested_scope == (pair.scope.media_type, pair.scope.tmdb_id, pair.scope.market)
+            and _read_time_state(pair.slot, index.window, read, (index.window,)) == "eligible"):
+        projection = "displayed" if present else "miss"
+    return replace(verified, projection=projection)
 
 
 def display_rate(rows):

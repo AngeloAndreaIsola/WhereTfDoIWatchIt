@@ -5,7 +5,7 @@ from hashlib import sha256
 from unittest import TestCase
 
 from availability.services.issue97_stage_e_adjudication import (
-    Binding, CaptureReceipt, Observation, ReviewedPair, Scope, Variant, Window, adjudicate,
+    Binding, CaptureReceipt, ConflictReview, Observation, ReviewedPair, Scope, Variant, Window, adjudicate,
     display_rate, display_retrieval, source_report_retrieval, summarize, time_state,
 )
 
@@ -92,7 +92,8 @@ class BindingTests(TestCase):
         pair, idx, fp = fixture()
         no = replace(fp, signal="explicit_class_negative")
         self.assertEqual(adjudicate(pair, idx, no).advertised, "needs_recheck")
-        self.assertEqual(adjudicate(pair, idx, replace(no, second_review=True)).outcome, "FP")
+        reviewed = replace(pair, conflict_review=ConflictReview("justwatch", "FP"))
+        self.assertEqual(adjudicate(reviewed, idx, replace(no, second_review=True)).outcome, "FP")
         for signal in ("", "no_offers", "trial", "viewer_denied", "another_edition"):
             self.assertEqual(adjudicate(pair, idx, replace(fp, signal=signal)).advertised, "unknown")
 
@@ -184,7 +185,23 @@ class PriceTests(TestCase):
     def test_equal_multiple_prices_and_per_variant_conflict(self):
         self.assertEqual(self.price(), "agreement")
         self.assertEqual(self.price(fp=replace(self.fp, variants=(self.hd, replace(self.sd, amount_minor=399)))),
-                         "conflict")
+                         "needs_recheck")
+
+    def test_price_conflict_requires_specific_second_review_and_separate_denominator(self):
+        fp = replace(self.fp, variants=(self.hd, replace(self.sd, amount_minor=399)), second_review=True)
+        for review, price, denominator in (
+                (None, "needs_recheck", 0),
+                (ConflictReview("justwatch", "FP"), "needs_recheck", 0),
+                (ConflictReview("application", price_conflict=True), "needs_recheck", 0),
+                (ConflictReview("justwatch", price_conflict=True), "conflict", 1)):
+            row = adjudicate(replace(self.pair, conflict_review=review), self.idx, fp)
+            self.assertEqual((row.outcome, row.price), ("TP", price))
+            self.assertEqual(summarize([row])["price_agreement"].denominator, denominator)
+        reviewed = replace(self.pair, conflict_review=ConflictReview("justwatch", price_conflict=True))
+        for invalid in (replace(fp, scope=replace(fp.scope, media_type="series")),
+                        replace(fp, window=replace(fp.window, original=STAMP - timedelta(days=1)))):
+            self.assertEqual(adjudicate(reviewed, self.idx, invalid).price, "unscored")
+        self.assertEqual(adjudicate(reviewed, self.idx, replace(fp, variants=(self.hd,))).price, "unknown")
 
     def test_reject_subsets_duplicates_and_unknown_or_mismatched_conditions_on_either_side(self):
         variants = [(self.hd,), (self.hd, self.hd), ()]
@@ -209,11 +226,80 @@ class PriceTests(TestCase):
 
 
 class AccountingTests(TestCase):
+    def test_unreviewed_negative_never_enters_binary_denominators(self):
+        pair, idx, fp = fixture()
+        result = adjudicate(pair, replace(idx, signal="explicit_class_negative"), fp)
+        self.assertEqual(result.outcome, "needs_recheck")
+        counts = summarize([result], expected_manifest=[(pair.candidate_id, pair.scope)])
+        for name in ("agreement", "conflict", "precision", "conditional_recall",
+                     "false_positive_rate", "false_negative_rate"):
+            self.assertEqual(counts[name].denominator, 0)
+            self.assertEqual(counts[name].value, "UNDEFINED")
+        self.assertEqual(counts["full_panel_recall"], "UNDEFINED")
+
+    def test_only_review_of_matching_conflict_and_index_admits_fp_or_fn(self):
+        pair, idx, fp = fixture()
+        for cell, left, right in (("FN", replace(idx, signal="explicit_class_negative", second_review=True), fp),
+                                  ("FP", idx, replace(fp, signal="explicit_class_negative", second_review=True))):
+            for review in (None, ConflictReview("application", cell),
+                           ConflictReview("justwatch", "FP" if cell == "FN" else "FN")):
+                result = adjudicate(replace(pair, conflict_review=review), left, right)
+                self.assertEqual(result.outcome, "needs_recheck")
+                self.assertEqual(summarize([result])["conflict"].denominator, 0)
+            result = adjudicate(replace(pair, conflict_review=ConflictReview("justwatch", cell)), left, right)
+            self.assertEqual(result.outcome, cell)
+            self.assertEqual(summarize([result])["conflict"].value, 1)
+
+    def test_one_positive_is_conditional_when_other_candidates_or_manifest_are_missing(self):
+        pair, idx, fp = fixture()
+        row = adjudicate(pair, idx, fp)
+        manifest = [(row.candidate_id, row.scope), ("another", replace(row.scope, tmdb_id=1))]
+        for expected, planned, state, missing in ((None, None, "unknown", []),
+                                                  (manifest, 2, "incomplete", ["another"])):
+            result = summarize([row], expected_manifest=expected)
+            self.assertEqual((result["planned"], result["panel_completeness"], result["missing"]),
+                             (planned, state, missing))
+            for metric in ("precision", "recall"):
+                self.assertEqual(result["conditional_" + metric].value, 1)
+                self.assertEqual(result["full_panel_" + metric], "UNDEFINED")
+
+    def test_complete_manifest_has_full_panel_metrics(self):
+        pair, idx, fp = fixture()
+        row = adjudicate(pair, idx, fp)
+        result = summarize([row], expected_manifest=[(pair.candidate_id, pair.scope)])
+        self.assertEqual((result["matched"], result["panel_completeness"]), (1, "complete"))
+        self.assertEqual((result["full_panel_precision"], result["full_panel_recall"]), (1, 1))
+
+    def test_complete_panel_with_zero_positive_denominators(self):
+        pair, idx, fp = fixture()
+        negative = dict(signal="explicit_class_negative", second_review=True)
+        row = adjudicate(pair, replace(idx, **negative), replace(fp, **negative))
+        result = summarize([row], expected_manifest=[(pair.candidate_id, pair.scope)])
+        self.assertEqual(result["agreement"].value, 1)
+        self.assertEqual(result["outcomes"], {"TN": 1})
+        self.assertEqual(result["full_panel_precision"], "UNDEFINED")
+        self.assertEqual(result["full_panel_recall"], "UNDEFINED")
+
+    def test_manifest_rejects_duplicate_ids_and_scopes_and_reports_extra_and_mismatched_rows(self):
+        pair, idx, fp = fixture()
+        row = adjudicate(pair, idx, fp)
+        item = (pair.candidate_id, pair.scope)
+        for manifest in ([item, item], [item, ("alias", pair.scope)],
+                         [("", pair.scope)], [("bad", replace(pair.scope, media_type="unknown"))]):
+            with self.assertRaises(ValueError):
+                summarize([row], expected_manifest=manifest)
+        extra = replace(row, candidate_id="extra")
+        result = summarize([row, extra], expected_manifest=[(pair.candidate_id, replace(pair.scope, year=2020))])
+        self.assertEqual((result["extra"], result["scope_mismatches"]), (["extra"], [pair.candidate_id]))
+        self.assertEqual((result["matched"], result["panel_completeness"]), (0, "incomplete"))
+        self.assertEqual(result["conditional_precision"].denominator, 0)
+
     def test_source_report_trace_and_typed_route_must_match_before_scoring(self):
         pair, idx, fp = fixture()
         title = dict(content_type="movie", tmdb_id=27205, title="Inception", year=2010)
         row = dict(country="NL", service="Netflix", offer_type="subscription", reporting_source="justwatch",
-                   availability_evidence="source_reported", observed_at=STAMP.isoformat())
+                   availability_evidence="source_reported", observed_at=STAMP.isoformat(),
+                   season_number=None, episode_number=None)
         def score(body, status=200, requested=("movie", 27205, "NL")):
             return source_report_retrieval(pair, fp, idx, requested_scope=requested, read=idx.window,
                                            status=status, body=body, service_label="Netflix").state
@@ -228,6 +314,17 @@ class AccountingTests(TestCase):
                      [{**row, "observed_at": SLOT.isoformat()}], [{**row, "observed_at": None}],
                      [{**row, "availability_evidence": "stale"}]):
             self.assertEqual(score(body(rows)), "unresolved")
+        child = {**row, "season_number": 1, "episode_number": 2}
+        self.assertEqual(score(body([child, row])), "displayed")
+        series = replace(pair.scope, media_type="series")
+        for mapping, expected in ((None, "unresolved"), ((1, None), "unresolved"), ((1, 2), "displayed")):
+            result = source_report_retrieval(
+                replace(pair, scope=series, title_display_mapping=mapping), replace(fp, scope=series),
+                replace(idx, scope=series), requested_scope=("series", 27205, "NL"), read=idx.window,
+                status=200, body={"series": {**title, "content_type": "series"}, "source_reported_offers": [child]},
+                service_label="Netflix",
+            )
+            self.assertEqual(result.state, expected)
 
     def test_every_assertion_cell_and_marginal(self):
         pair, idx, fp = fixture()
@@ -238,8 +335,10 @@ class AccountingTests(TestCase):
         for i, left in enumerate(signals):
             for j, right in enumerate(signals):
                 scope = replace(pair.scope, tmdb_id=100 + i * 3 + j)
-                row = adjudicate(replace(pair, scope=scope, candidate_id=str(scope.tmdb_id)),
-                                 replace(idx, scope=scope, signal=left),
+                review = ConflictReview("justwatch", cells[i][j]) if cells[i][j] in {"FP", "FN"} else None
+                row = adjudicate(replace(pair, scope=scope, candidate_id=str(scope.tmdb_id),
+                                         conflict_review=review),
+                                 replace(idx, scope=scope, signal=left, second_review=True),
                                  replace(fp, scope=scope, signal=right, second_review=True))
                 self.assertEqual(row.outcome, cells[i][j])
                 rows.append(row)

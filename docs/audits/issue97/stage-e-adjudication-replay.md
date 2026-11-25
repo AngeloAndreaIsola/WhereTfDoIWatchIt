@@ -6,7 +6,7 @@ The frozen record still contains 56 JustWatch source-reported offers and seven h
 
 Pass a separately reviewed `ReviewedPair` for a frozen candidate and one sealed `Observation` per side. The panel supplies typed scope, canonical title/year, edition, NL market, service/class, channel parent and the approved UTC slot. Each role has its own native ID, reviewed title/alias, package ID, issuer, digest of the effective document locator and reviewed manifest digest. Its capture receipt pins the contributing payload digest and original observation bounds. A replay changing the original timestamp or substituting a different document fails the receipt check.
 
-The input boundary is a reviewed extraction. The reviewer establishes each binding, the document kind, the title-specific action, negative semantics, comparable price conditions and completeness before comparison. An observation from an unreviewed native ID or package cannot establish a mapping. A negative first-party verdict also needs its second review. This code consumes the results of those reviews. Fresh review records, authorized slots and a collection entry point are outstanding. The frozen historical pointers support document identification only. [Source review and custody prerequisites](stage-e-source-review.md)
+The input boundary is a reviewed extraction. The reviewer establishes each binding, the document kind, the title-specific action, negative semantics, comparable price conditions and completeness before comparison. Each explicit negative needs a second review. To score a disagreement, the sealed pair also needs a second-review disposition confirming the particular FP, FN or price conflict for the named index. Pending availability disputes contribute to the recheck count and pending price disputes contribute to the price recheck count. Fresh review records, authorized slots and a collection entry point are outstanding. The frozen historical pointers support document identification only. [Source review and custody prerequisites](stage-e-source-review.md)
 
 | Output | Admission and counting |
 | --- | --- |
@@ -15,7 +15,9 @@ The input boundary is a reviewed extraction. The reviewer establishes each bindi
 | Price | A positive rent/buy pair needs complete unique variant sets and exact per-variant EUR minor units, quality, basis, promotion and access conditions. Different comparable amounts are a price conflict. A partial set yields unknown. |
 | Display retrieval | Count displayed pairs over displayed plus missed pairs for one surface. Exclude hidden classes, stale history and unscorable reads. A verified typed 404 can yield a retrieval miss. On the report surface, validate typed identity, provider label, market, class, source lineage and original time. The source-reported bucket can satisfy report retrieval while the application's current assertion remains unknown. |
 
-Summaries include marginal verdicts, sample counts, separate conditional and full-panel recall, and numerators and denominators. A zero denominator yields `UNDEFINED`.
+For source-report retrieval, the typed adapter checks the source issuer, document and payload against the native comparator. An echo can show that the app displayed the sealed source report. It contributes zero to the independent display numerator and denominator. A title-level display requires a title-level row or an exact season/episode mapping separately reviewed for that series and sealed pair. The adapter reports display fidelity to the source in `projection` and the independently verified result in `state`.
+
+Pass the expected frozen sequence of candidate IDs and scopes to `summarize` independently of the submitted decisions. The audit loads all 15 scopes from the pinned candidate matrix and typed identity inventory. The summary reports planned, submitted and matched counts, missing IDs, unexpected IDs and scope mismatches. Conditional precision and recall use binary outcomes among the matching rows. Without a manifest, completeness is unknown and only conditional rates are available. Full-panel precision and recall require complete coverage and established denominators. A zero denominator yields `UNDEFINED`.
 
 ## Reproduction
 
@@ -36,9 +38,9 @@ sh scripts/rehearse_issue97_stage_e.sh \
   tracker.tests.test_issue97_availability_contract
 ```
 
-The standalone audit checks the existing provenance joins, the typed identity manifest and the retained observation ranges for both historical index titles. Its separate 2030 synthetic smoke exercises all 15 panel rows and rejects an older original timestamp on every row. The four historical-binding regressions and 17 adjudicator tests pass.
+The standalone audit checks the existing provenance joins, the typed identity manifest and the retained observation ranges for both historical index titles. Its 2030 synthetic smoke exercises all 15 panel rows, withholds full-panel metrics when 14 rows are omitted, and rejects an older original timestamp on every row. The four historical-binding regressions and 24 adjudicator tests pass.
 
-The focused suite ran **79 tests** on PostgreSQL 16.15, including two typed application replays and all 17 adjudicator tests. The backend rehearsal image ID was `sha256:b0fcbfe183cb9074a38fde01a487c3e0240b6a28f9cfa3c4b74f5e8e0dd487f4`. The replay parsed a synthetic JustWatch response through mocked HTTP, persisted its Netflix row and title-check provenance in the disposable database, and read the normal movie and series detail routes with Django's in-process HTTP client. Separate Prime fixtures exercised the current and purchase surfaces.
+The focused suite ran **89 tests** on PostgreSQL 16.15, including five typed application replays and all 24 adjudicator tests. The backend rehearsal image ID was `sha256:b0fcbfe183cb9074a38fde01a487c3e0240b6a28f9cfa3c4b74f5e8e0dd487f4`. The replay parsed a synthetic JustWatch response through mocked HTTP, persisted its Netflix row and title-check provenance in the disposable database, and read the normal movie and series detail routes with Django's in-process HTTP client. Separate Prime fixtures exercised the current and purchase surfaces.
 
 | Local read | Observed result |
 | --- | --- |

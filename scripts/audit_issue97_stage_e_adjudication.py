@@ -32,15 +32,19 @@ def historical_ranges():
             for r in items if r["status"] == "closed"}
 
 
-def synthetic_smoke(row, anchor, identity):
+def frozen_fixture_scope(row, identity):
     # Scope and document bindings come from the frozen matrix plus the independent
     # typed-title and accepted-document inventories. There is no fresh manifest.
     # Every package, edition, action, payload and slot below is a test fixture.
-    owner = "prime" if row["provider_slug"] == "max_amazon" else row["provider_slug"]
     scope = Scope(row["media_type"], int(row["tmdb_id"]), identity.canonical_title, identity.year,
                   "fixture-edition", row["market"], row["provider_slug"], row["offer_class"],
                   "prime" if row["provider_slug"] == "max_amazon" else None)
     assert (scope.canonical_title, scope.year) == (row["title"], int(row["year"]))
+    return scope
+
+
+def synthetic_smoke(row, anchor, scope):
+    owner = scope.parent or scope.provider
     jw = Binding("justwatch", digest("fixture-index-operation"), f"fixture-{scope.tmdb_id}",
                  scope.canonical_title, "fixture-package-" + scope.provider,
                  digest("fixture-index-" + row["candidate_id"]))
@@ -59,12 +63,13 @@ def synthetic_smoke(row, anchor, identity):
                       "justwatch", digest("fixture-index-bytes"))
     fp = Observation(scope, native, time, 200, "title", "explicit", "fresh", actions[scope.offer_class],
                      owner, digest("fixture-native-bytes"))
-    assert adjudicate(pair, idx, fp).outcome == "TP"
+    fresh = adjudicate(pair, idx, fp)
     historical_stamp = datetime.fromisoformat(anchor["observed_utc"])
     # Even fully favorable fixture claims fail when an old event is replayed.
     original = replace(time, original=historical_stamp)
-    return adjudicate(replace(pair, native_receipt=replace(pair.native_receipt, window=original)),
-                      idx, replace(fp, window=original))
+    stale = adjudicate(replace(pair, native_receipt=replace(pair.native_receipt, window=original)),
+                       idx, replace(fp, window=original))
+    return fresh, stale
 
 
 def main():
@@ -78,8 +83,10 @@ def main():
     accepted = historical.unique_index(historical.rows((ROOT / historical.ACCEPTED).read_bytes()), "id")
     ranges = historical_ranges()
     counts = Counter()
-    smoke = []
-    for row in rows:
+    manifest = [(row["candidate_id"], frozen_fixture_scope(
+        row, identities[int(row["tmdb_id"]), row["media_type"]])) for row in rows]
+    fresh, stale = [], []
+    for row, (_, scope) in zip(rows, manifest):
         anchor = accepted[historical.SCOPE_ANCHORS[row["capture_scope"]]]
         if row["stage_c_pair_id"]:
             observed = datetime.fromisoformat(accepted[row["prior_observation_id"]]["observed_utc"])
@@ -91,11 +98,21 @@ def main():
             counts["no_historical_index_pair"] += 1
         else:
             counts["unassigned_control"] += 1
-        identity = identities[int(row["tmdb_id"]), row["media_type"]]
-        smoke.append(synthetic_smoke(row, anchor, identity))
+        current, historical_time = synthetic_smoke(row, anchor, scope)
+        fresh.append(current)
+        stale.append(historical_time)
     assert counts == {"outside_window": 7, "no_historical_index_pair": 6, "unassigned_control": 2}
-    assert summarize(smoke)["outcomes"] == {"stale": 15}
-    assert summarize(smoke)["agreement"].value == "UNDEFINED"
+    complete = summarize(fresh, expected_manifest=manifest)
+    assert complete["outcomes"] == {"TP": 15}
+    assert complete["full_panel_precision"] == complete["full_panel_recall"] == 1
+    summary = summarize(stale, expected_manifest=manifest)
+    assert summary["panel_completeness"] == "complete" and summary["planned"] == summary["matched"] == 15
+    assert summary["outcomes"] == {"stale": 15}
+    assert summary["agreement"].value == summary["full_panel_recall"] == "UNDEFINED"
+    subset = summarize(fresh[:1], expected_manifest=manifest)
+    assert subset["panel_completeness"] == "incomplete" and len(subset["missing"]) == 14
+    assert subset["conditional_precision"].value == subset["conditional_recall"].value == 1
+    assert subset["full_panel_precision"] == subset["full_panel_recall"] == "UNDEFINED"
     print("Historical panel: 7 outside the window, 6 without paired index, 2 unassigned controls.")
     print("2030 synthetic smoke: all 15 scopes exercised; all 15 original-time substitutions excluded.")
     print("Historical baseline: 56 source-reported offers, 0 eligible comparisons, 0 confirmed negatives.")
