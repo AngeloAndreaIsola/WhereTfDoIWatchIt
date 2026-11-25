@@ -28,11 +28,12 @@ from unittest.mock import patch
 from django.test import TestCase
 from django.utils import timezone
 
-from availability.domain.enums import ContentType, MatchMethod, SourceType, SyncMode
+from availability.domain.enums import AvailabilityEvidence, ContentType, MatchMethod, SourceType, SyncMode
 from availability.models import (
     ContentMapping, Country, Offer as ModelOffer, OfferEvidence, OfferPrice, ProviderContent, Source,
 )
 from availability.services.refresh import AvailabilityRefreshService
+from availability.services.query import AvailabilityQueryService
 from availability.sources.base import ContentRequest
 from availability.sources.justwatch import JustWatchSource
 from availability.sources.justwatch_client import (
@@ -252,6 +253,39 @@ class JustWatchVariantPriceAPITests(TestCase):
             self.assertEqual((price["amount"], price["source_offer_id"]), ("4.9900", expensive["id"]))
         self.assertFalse(reported["price"]["is_from"])
         self.assertEqual((reported["url"], reported["quality"]), (expensive["standardWebURL"], "hd"))
+        http.assert_not_called()
+
+    def test_malformed_expiry_does_not_supply_the_current_price_or_rendition(self, http):
+        malformed = self._rent("unknown-window", 1.99, available_to="2026-02-30T12:00:00Z", presentation="SD")
+        valid = self._rent("known-window", 4.99, available_to=(self.now + timedelta(hours=1)).isoformat())
+        with patch("django.utils.timezone.now", return_value=self.now):
+            self._refresh(malformed, valid)
+            reported = self._reported_offer()
+
+        stored = OfferPrice.objects.get(tmdb_id=self.movie.tmdb_id)
+        self.assertEqual(stored.source_offer_id, valid["id"])
+        variants = {variant["source_offer_id"]: variant for variant in stored.variants}
+        self.assertEqual(variants[malformed["id"]]["available_to"], malformed["availableTo"])
+        self.assertFalse(variants[malformed["id"]]["window_open_at_observation"])
+        self.assertEqual((reported["price"]["amount"], reported["url"], reported["quality"]),
+                         ("4.9900", valid["standardWebURL"], "hd"))
+        self.assertFalse(reported["price"]["is_from"])
+        http.assert_not_called()
+
+    def test_only_malformed_expiry_is_retained_without_a_current_offer(self, http):
+        malformed = self._rent("unknown-window", 1.99, available_to=20991231)
+        self._refresh(malformed)
+
+        stored = OfferPrice.objects.get(tmdb_id=self.movie.tmdb_id)
+        [variant] = stored.variants
+        self.assertEqual(variant["available_to"], 20991231)
+        self.assertFalse(variant["window_open_at_observation"])
+        [offer] = AvailabilityQueryService().get_reconciled_for_content(self.movie.tmdb_id, "movie", "NL").offers
+        self.assertEqual(offer.evidence, AvailabilityEvidence.UNKNOWN)
+        self.assertIsNone(offer.price)
+        response = self._availability_response().json()
+        self.assertEqual(response["offers"], [])
+        self.assertEqual(response["source_reported_offers"], [])
         http.assert_not_called()
 
 

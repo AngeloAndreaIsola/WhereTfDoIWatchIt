@@ -128,7 +128,7 @@ from ..persistence.repositories import (
 from ..sources import DEFAULT_SOURCE_SLUG, ContentRequest, source_registry
 from ..sources.base import accepts_kwarg
 from .matching import match_local_catalog
-from .normalize import normalize_content_type, truncate_field
+from .normalize import normalize_content_type, offer_variant_window_open, truncate_field
 from .write_barrier import writer_barrier
 
 logger = logging.getLogger(__name__)
@@ -189,12 +189,17 @@ def _offer_observations(group, provider, country):
     now = timezone.now()
     for variants in by_identity.values():
         ordered = [variants[key] for key in sorted(variants)]
-        observations = [
-            (offer, (offer.available_from is None or offer.available_from <= now)
-             and (offer.available_until is None or offer.available_until > now))
-            for offer in ordered
-        ]
-        candidates = [offer for offer, window_open in observations if window_open] or ordered
+        snapshots = []
+        for offer in ordered:
+            snapshot = {
+                **offer.source_variant,
+                "available_from": offer.available_from.isoformat() if offer.available_from else None,
+                "available_until": offer.available_until.isoformat() if offer.available_until else None,
+            }
+            snapshot["window_open_at_observation"] = offer_variant_window_open(snapshot, now) is True
+            snapshots.append(snapshot)
+        candidates = [offer for offer, snapshot in zip(ordered, snapshots)
+                      if snapshot["window_open_at_observation"]] or ordered
         priced = [
             offer for offer in candidates
             if offer.price_amount is not None and offer.price_currency and not offer.price_error
@@ -204,10 +209,7 @@ def _offer_observations(group, provider, country):
         representative = min(
             priced, key=lambda offer: (offer.price_currency, offer.price_amount), default=candidates[0],
         )
-        yield representative, [
-            {**offer.source_variant, "available_from": offer.available_from.isoformat() if offer.available_from else None, "available_until": offer.available_until.isoformat() if offer.available_until else None, "window_open_at_observation": window_open}
-            for offer, window_open in observations
-        ]
+        yield representative, snapshots
 
 
 def _content_metadata(content) -> dict:

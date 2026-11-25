@@ -61,11 +61,8 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from copy import copy
-from datetime import date, datetime
-from datetime import timezone as dt_timezone
+from datetime import date
 from typing import Optional
-
-from django.utils import timezone
 
 from ..domain.enums import ContentType, SourceType, SyncMode
 from ..domain.models import DiscoveredContent, ProviderOffer
@@ -76,6 +73,7 @@ from ..services.normalize import (
     normalize_justwatch_quality,
     normalize_languages,
     normalize_price,
+    parse_availability_timestamp,
 )
 from .base import ContentRequest, SourceCapabilities, SourceFetchError, SourceFetchResult
 from .justwatch_client import (
@@ -714,16 +712,10 @@ class JustWatchSource:
 
     @staticmethod
     def _parse_datetime(value):
-        raw = str(value or "").strip()
-        if not raw:
-            return None
         try:
-            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            return parse_availability_timestamp(value)
         except ValueError:
             return None
-        if timezone.is_naive(parsed):
-            parsed = parsed.replace(tzinfo=dt_timezone.utc)
-        return parsed
 
     @staticmethod
     def _require_country(country):

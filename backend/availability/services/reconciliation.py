@@ -63,7 +63,7 @@ from .identity_policy import (
     EXTERNAL_ID_ASSERTION_SOURCES,
     TITLE_SEARCH_IDENTITY_SOURCES,
 )
-from .normalize import normalize_justwatch_quality
+from .normalize import normalize_justwatch_quality, offer_variant_window_open
 from ..persistence.repositories import (
     MappingRepository,
     OfferPriceRepository,
@@ -351,6 +351,7 @@ class AvailabilityReconciliationService:
             price=own_price,
             source_prices=source_prices,
             window_open=window_open,
+            window_unknown=bool(own_price and own_price.variant_window_unknown),
             observed_at=_aware_opt(row.observed_at),
             title_checked_at=title_checked_at,
         )
@@ -406,15 +407,16 @@ class AvailabilityReconciliationService:
         """Merge every observation of one offer_type into a single value."""
         conflicts: list[ReconciliationConflict] = []
 
-        if len({obs.available_now for obs in observations}) > 1:
+        known_availability = [obs for obs in observations if not obs.window_unknown or not obs.currently_available]
+        if len({obs.available_now for obs in known_availability}) > 1:
             conflicts.append(self._conflict(
                 ConflictKind.AVAILABILITY,
                 group=group,
-                offer_ids=[obs.offer_id for obs in observations],
-                sources=[obs.source for obs in observations],
+                offer_ids=[obs.offer_id for obs in known_availability],
+                sources=[obs.source for obs in known_availability],
                 facts=[
                     SourceFact(obs.source, "available" if obs.available_now else "unavailable")
-                    for obs in observations
+                    for obs in known_availability
                 ],
             ))
 
@@ -786,7 +788,8 @@ def _price_observation(row, *, now) -> PriceObservation:
     can supply a display price only through a priced variant open at read time.
     """
     variants = tuple(row.variants)
-    open_variants = tuple(variant for variant in variants if _variant_window_open(variant, now))
+    windows = [(variant, offer_variant_window_open(variant, now)) for variant in variants]
+    open_variants = tuple(variant for variant, window in windows if window is True)
     amount, currency = row.amount, row.currency or ""
     source_offer_id = row.source_offer_id or ""
     chosen = None
@@ -817,19 +820,8 @@ def _price_observation(row, *, now) -> PriceObservation:
         variants=variants,
         open_variants=open_variants,
         selected_variant=chosen,
+        variant_window_unknown=not open_variants and any(window is None for _, window in windows),
     )
-
-
-def _variant_window_open(variant, now):
-    def parsed(value):
-        if not value:
-            return None
-        try:
-            return _aware(datetime.fromisoformat(str(value).replace("Z", "+00:00")))
-        except (TypeError, ValueError):
-            return None
-    start, end = parsed(variant.get("available_from")), parsed(variant.get("available_until"))
-    return (start is None or start <= now) and (end is None or end > now)
 
 
 def _variant_presentation(variant):
