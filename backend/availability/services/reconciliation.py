@@ -62,6 +62,7 @@ from ..models import ContentMapping, ProviderContent
 from .identity_policy import (
     EXTERNAL_ID_ASSERTION_SOURCES,
     TITLE_SEARCH_IDENTITY_SOURCES,
+    reviewed_provider_series_tmdb_id,
 )
 from .normalize import normalize_justwatch_quality, offer_variant_window_open
 from ..persistence.repositories import (
@@ -217,13 +218,8 @@ class AvailabilityReconciliationService:
 
         title_checks = self._title_checks(rows)
         grouped: dict[ReconciliationGroup, dict[str, list[OfferObservation]]] = {}
+        conflicts: list[ReconciliationConflict] = []
         for row in rows:
-            observation = self._observe(
-                row,
-                now=now, mappings=mappings, claims=claims, statuses=statuses,
-                prices=prices_by_identity.get(row.identity, ()),
-                title_checks=title_checks,
-            )
             group = ReconciliationGroup(
                 content_type=row.content_type,
                 tmdb_id=row.tmdb_id,
@@ -232,10 +228,33 @@ class AvailabilityReconciliationService:
                 provider=row.provider.slug,
                 country=row.country.code,
             )
+            reviewed_series = reviewed_provider_series_tmdb_id(
+                group.provider, row.provider_content_id,
+            )
+            if reviewed_series is not None and (
+                row.tmdb_id != reviewed_series
+                or row.content_type not in (ContentType.SERIES, ContentType.SEASON, ContentType.EPISODE)
+            ):
+                conflicts.append(self._conflict(
+                    ConflictKind.MAPPING,
+                    group=group,
+                    offer_ids=[row.pk],
+                    sources=[row.source.slug],
+                    facts=[SourceFact(
+                        row.source.slug, f"programme belongs to tmdb series {reviewed_series}",
+                    )],
+                ))
+                continue
+            observation = self._observe(
+                row,
+                now=now, mappings=mappings, claims=claims, statuses=statuses,
+                prices=prices_by_identity.get(row.identity, ()),
+                title_checks=title_checks,
+                has_reviewed_identity=reviewed_series is not None,
+            )
             grouped.setdefault(group, {}).setdefault(row.offer_type, []).append(observation)
 
         offers: list[ReconciledOffer] = []
-        conflicts: list[ReconciliationConflict] = []
         for group, subgroups in grouped.items():
             group_offers, group_conflicts = self._reconcile_group(group, subgroups)
             offers.extend(group_offers)
@@ -267,12 +286,14 @@ class AvailabilityReconciliationService:
             )
         }
 
-    def _observe(self, row, *, now, mappings, claims, statuses, prices=(), title_checks=None) -> OfferObservation:
+    def _observe(self, row, *, now, mappings, claims, statuses, prices=(),
+                 title_checks=None, has_reviewed_identity=False) -> OfferObservation:
         detail = ""
         provider_content_id = row.provider_content_id
         identity_sensitive_provider = row.provider.slug in TITLE_SEARCH_IDENTITY_SOURCES
         has_trusted_source_identity = row.source.slug in EXTERNAL_ID_ASSERTION_SOURCES
-        if provider_content_id:
+        # A stored wrong-work claim cannot invalidate a correctly keyed row.
+        if provider_content_id and not has_reviewed_identity:
             key = (row.provider_id, provider_content_id)
             mapping = mappings.get(key)
             if key in mappings and mapping is None and not has_trusted_source_identity:
@@ -286,7 +307,7 @@ class AvailabilityReconciliationService:
             if others:
                 suffix = "also active for " + ", ".join(f"tmdb {other}" for other in others)
                 detail = f"{detail}; {suffix}" if detail else suffix
-        elif identity_sensitive_provider and not has_trusted_source_identity:
+        elif not provider_content_id and identity_sensitive_provider and not has_trusted_source_identity:
             detail = "provider-content mapping is unresolved"
 
         raw_window_open = (

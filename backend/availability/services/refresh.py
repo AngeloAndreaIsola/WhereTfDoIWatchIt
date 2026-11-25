@@ -111,9 +111,9 @@ from django.utils import timezone
 
 from tracker.models import ExternalProviderMapping, Provider
 
-from ..domain.enums import MatchMethod, SyncMode
+from ..domain.enums import ContentType, MatchMethod, SyncMode
 from ..domain.models import offer_variant_key
-from .identity_policy import mapping_is_trusted
+from .identity_policy import mapping_is_trusted, reviewed_provider_series_tmdb_id
 from ..models import ContentMapping, Country, Source, build_offer_identity
 from ..sources.justwatch_providers import provider_slug_for_package
 from ..persistence.repositories import (
@@ -705,6 +705,15 @@ class AvailabilityRefreshService:
                     )
                     and existing.content_type == content_type
                 )
+                reviewed_series = reviewed_provider_series_tmdb_id(*key)
+                if reviewed_series is not None:
+                    # Preserve any existing association for separately reviewed repair.
+                    allow_title_mapping = False
+                    trusted_existing = (
+                        trusted_existing
+                        and content_type == ContentType.SERIES
+                        and existing.tmdb_id == reviewed_series
+                    )
                 match = match_local_catalog(content) if allow_title_mapping else None
                 if existing is None and match is None:
                     logger.warning(
