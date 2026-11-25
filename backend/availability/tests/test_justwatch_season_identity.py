@@ -93,10 +93,11 @@ class JustWatchSeasonIdentityTests(TestCase):
         mapping = self.seed_mapping()
         # Before a direct parent ID assertion, the legacy conflict still hides the offer.
         self.refresh(self.season(), parent_id=None)
-        first_offer = Offer.objects.get(provider_content_id="tss1")
-        self.assertEqual(first_offer.tmdb_id, self.series.tmdb_id)
+        self.assertFalse(Offer.objects.filter(provider_content_id="tss1").exists())
         self.assertEqual(get_title_offer_evidence(self.series, season=1, country="NL").source_reported, [])
 
+        self.refresh(self.season())
+        first_offer = Offer.objects.get(provider_content_id="tss1")
         self.refresh(self.season())
         self.refresh_catalogue(self.season())
 
@@ -151,6 +152,30 @@ class JustWatchSeasonIdentityTests(TestCase):
         request = ContentRequest(tmdb_id=481992, content_type=ContentType.SEASON, title="Season 1")
         result = source_with(post).fetch(request, country="NL")
         self.assertEqual(result.offers, [])
+        self.assertEqual(len(result.contents), 1)
+        self.assertEqual(result.contents[0].external_ids["tmdb"], "481992")
+        self.assertIsNone(result.contents[0].parent_tmdb_id)
+
+    def test_title_year_fallback_cannot_create_an_exact_season_mapping(self):
+        self.refresh(self.season(), parent_id=None)
+        child = ProviderContent.objects.get(provider_content_id="tss1")
+        self.assertEqual(child.metadata["external_ids"]["tmdb"], "481992")
+        self.assertFalse(ContentMapping.objects.filter(provider_content_id="tss1").exists())
+        self.assertFalse(Offer.objects.filter(provider_content_id="tss1").exists())
+
+    def test_repeated_season_across_packages_preserves_provider_mapping_precedence(self):
+        self.seed_mapping(method=MatchMethod.MANUAL)
+        second = self.season(offers=[fx.offer("prime-season", "amazonprime", "Prime Video", "prv")])
+        self.refresh(self.season(), second)
+        self.refresh(second, self.season())
+        rows = dict(ContentMapping.objects.filter(provider_content_id="tss1").values_list(
+            "provider__slug", "tmdb_id",
+        ))
+        self.assertEqual(rows, {"netflix": 481992, "prime": self.series.tmdb_id})
+        self.assertEqual(Offer.objects.filter(provider_content_id="tss1").count(), 2)
+        evidence = get_title_offer_evidence(self.series, season=1, country="NL")
+        self.assertEqual(len(evidence.source_reported), 1)
+        self.assertEqual(evidence.source_reported[0].url, "https://example.test/prime-season")
 
     # -- missing native season id: child id absent but parent key still maps --
 

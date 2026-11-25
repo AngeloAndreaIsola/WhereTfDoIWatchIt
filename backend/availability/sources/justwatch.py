@@ -207,58 +207,50 @@ class JustWatchSource:
         result — never the first search hit.
         """
         request = content if isinstance(content, ContentRequest) else ContentRequest.from_content(content)
-        titles = self._search_titles(request, country=country)
-        if not titles:
+        title = self._search_title(request, country=country)
+        if title is None:
             logger.info(
                 "justwatch_title_not_found title=%r year=%s country=%s",
                 request.title, request.year, country,
             )
             return SourceFetchResult(sync_mode=SyncMode.TARGETED)
 
-        title = titles[0]
         tmdb_id = title.tmdb_id_int or (request.tmdb_id or None)
         contents, offers = [], []
         content_type = self._content_type(title)
 
         contents.append(self._content(title, content_type, country))
-        if content_type in (ContentType.SEASON, ContentType.EPISODE):
+        if content_type.uses_series_tmdb_id:
             return SourceFetchResult(contents=contents, sync_mode=SyncMode.TARGETED)
         offers.extend(self._offers_for(title, country=country, content_type=content_type,
                                        tmdb_id=tmdb_id, content=title))
 
         # A show's season offers are distinct rows in the canonical model, so
         # they are walked explicitly rather than collapsed onto the series.
-        if content_type == ContentType.SERIES and title.id:
-            parent_verified = (
-                self._requested_content_type(request) == ContentType.SERIES
-                and title.tmdb_id_int is not None and title.tmdb_id_int > 0
-                and isinstance(title.id, str) and title.id == title.id.strip()
-                and all(candidate.id == title.id for candidate in titles)
-            )
-            for season in self._season_nodes(self._seasons(title.id, country)):
-                if season.id == title.id:
+        if content_type == ContentType.SERIES:
+            for season in self._season_matches(self._seasons(title.id, country)):
+                if season is None or season.id == title.id:
                     continue
+                # Only the selected show can assert the series ID. A title/year
+                # fallback carries the request's ID, not an external assertion.
                 season_offers = self._offers_for(
                     season, country=country, content_type=ContentType.SEASON,
-                    tmdb_id=tmdb_id, content=season,
+                    tmdb_id=title.tmdb_id_int, content=season,
                 )
-                # A separate native mapping supports each provider's offer.
-                providers = dict.fromkeys(offer.provider_id for offer in season_offers)
-                for provider in providers:
+                for provider in dict.fromkeys(offer.provider_id for offer in season_offers):
                     contents.append(self._content(
-                        season, ContentType.SEASON, country,
-                        provider=provider, parent_tmdb_id=tmdb_id,
-                        parent_verified=parent_verified,
+                        season, ContentType.SEASON, country, provider=provider,
+                        parent_tmdb_id=title.tmdb_id_int,
                     ))
-                if tmdb_id is not None:
+                if title.tmdb_id_int is not None:
                     offers.extend(season_offers)
 
         return SourceFetchResult(
             contents=contents, offers=offers, sync_mode=SyncMode.TARGETED,
         )
 
-    def _search_titles(self, request, *, country):
-        """Find the JustWatch node(s) that provably match a content request.
+    def _search_title(self, request, *, country):
+        """Find the JustWatch node that matches a content request.
 
         Identity is established by evidence, never by result order:
 
@@ -271,55 +263,87 @@ class JustWatchSource:
         3. otherwise exact normalized title (+ year, when the request has one)
            must identify exactly one distinct node.
 
-        An unresolved or ambiguous search returns ``[]`` — the caller turns
-        that into an honest empty result. ``candidates[:1]`` used to make the
-        first search hit the requested title, which is how a remake or an
-        unrelated same-name result inherited another film's offers.
+        Either path must resolve to one typed, usable native identity. A known
+        typed ID can anchor a usable node even if another search edge omits its
+        native ID. Conflicting claims about the usable node prevent a match.
+        Unresolved or ambiguous searches return ``None``.
         """
+        expected_type = self._requested_content_type(request)
+        if expected_type is None:
+            return None
         try:
             page = self.client.search_titles(
                 request.title or "",
                 country=country,
                 language=self.language,
                 count=min(self.page_size, 20),
-                object_types=(
-                    [self._requested_content_type(request).value.upper()]
-                    if self._requested_content_type(request) is not None else None
-                ),
+                object_types=[{ContentType.SEASON: "SHOW_SEASON", ContentType.EPISODE: "SHOW_EPISODE"}.get(
+                    expected_type, expected_type.value.upper(),
+                )],
                 best_only=self.best_only,
             )
         except JustWatchError as exc:
             raise self._as_fetch_error("search", exc) from exc
 
-        candidates = list(page.titles)
-        if not candidates:
-            return []
-
-        expected_type = self._requested_content_type(request)
-        if expected_type is not None:
-            candidates = [
-                title for title in candidates
-                if self._content_type(title) == expected_type
-            ]
-            if not candidates:
-                return []
-
+        candidates = [title for title in page.titles if self._content_type(title) == expected_type]
         if request.tmdb_id:
             exact = [t for t in candidates if t.tmdb_id_int == request.tmdb_id]
             if exact:
-                return exact
-            # No candidate carries the requested id. Only candidates that state
-            # *no* id may still be resolved on title/year evidence; one that
-            # states a conflicting id is a different identity.
-            candidates = [t for t in candidates if t.tmdb_id_int is None]
-            if not candidates:
-                return []
+                native_ids = {t.id for t in exact if t.has_native_id}
+                return self._merge_title_matches(
+                    [t for t in candidates if t.has_native_id and t.id in native_ids], page.titles,
+                )
 
-        return self._title_evidence_matches(request, candidates)
+        matches = self._title_evidence_matches(request, candidates)
+        if request.tmdb_id and any(not title.tmdb_id_missing for title in matches):
+            return None
+        return self._merge_title_matches(matches, page.titles)
+
+    @classmethod
+    def _merge_title_matches(cls, candidates, observed_nodes):
+        """Resolve one native identity and combine offers from compatible edges."""
+        if not candidates or any(not title.has_native_id for title in candidates):
+            return None
+        if len({title.id for title in candidates}) != 1:
+            return None
+        native_id = candidates[0].id
+        claims = [title for title in observed_nodes if title.id == native_id]
+        scopes = {(cls._content_type(title), title.season_number, title.episode_number) for title in claims}
+        tmdb_ids = {title.tmdb_id_int for title in claims if not title.tmdb_id_missing}
+        if (len(scopes) != 1 or next(iter(scopes))[0] is None
+                or len(tmdb_ids) > 1 or None in tmdb_ids):
+            return None
+        # Claims on the same native identity must agree on any stated title and
+        # year: a sparse (title-less) anchor must not hide a conflict between
+        # two titled edges sharing the native id.
+        claim_titles = {title.title.casefold() for title in claims if title.title}
+        claim_years = {title.year for title in claims if title.year is not None}
+        if len(claim_titles) > 1 or len(claim_years) > 1:
+            return None
+        selected = next((title for title in candidates if title.tmdb_id_int is not None), candidates[0])
+        if tmdb_ids and selected.tmdb_id_int not in tmdb_ids:
+            return None
+        if len(claims) == 1:
+            return selected
+        selected = copy(selected)
+        selected.offers = [offer for title in claims for offer in title.offers]
+        return selected
+
+    @classmethod
+    def _season_matches(cls, seasons):
+        by_number = defaultdict(list)
+        for season in seasons:
+            if (cls._content_type(season) != ContentType.SEASON
+                    or type(season.season_number) is not int or season.season_number < 0):
+                yield None
+            else:
+                by_number[season.season_number].append(season)
+        for candidates in by_number.values():
+            yield cls._merge_title_matches(candidates, seasons)
 
     @staticmethod
     def _requested_content_type(request):
-        """Canonical movie/series type the request declares, or ``None``."""
+        """Canonical content type the request declares, or ``None``."""
         raw = getattr(request, "content_type", None)
         if not raw:
             return None
@@ -327,14 +351,14 @@ class JustWatchSource:
             value = normalize_content_type(raw)
         except ValueError:
             return None
-        return value if value in (ContentType.MOVIE, ContentType.SERIES) else None
+        return value
 
     @staticmethod
     def _normalized_title(value):
         return " ".join(str(value or "").casefold().split())
 
     def _title_evidence_matches(self, request, candidates):
-        """Exact title (+ year) fallback for candidates without a usable id."""
+        """Use exact title and optional year when TMDb identity is absent."""
         if not request.title:
             return []
         wanted = self._normalized_title(request.title)
@@ -342,21 +366,8 @@ class JustWatchSource:
             title for title in candidates
             if self._normalized_title(title.title) == wanted
         ]
-        if not matches:
-            return []
         if request.year is not None:
             matches = [title for title in matches if title.year == request.year]
-            if not matches:
-                return []
-
-        # Equal title/year on two distinct identities is ambiguous, not a win
-        # for whichever result the search happened to return first.
-        identities = {
-            title.tmdb_id_int if title.tmdb_id_int is not None else ("node", title.id)
-            for title in matches
-        }
-        if len(identities) != 1:
-            return []
         return matches
 
     def _seasons(self, node_id, country):
@@ -372,38 +383,6 @@ class JustWatchSource:
             logger.warning("justwatch_seasons_failed node=%s country=%s error=%s",
                            node_id, country, exc)
             return []
-
-    @classmethod
-    def _season_nodes(cls, seasons):
-        """Resolve each slot to one consistent native season, keeping repeated offers."""
-        by_slot = defaultdict(list)
-        by_id = defaultdict(list)
-        for season in seasons:
-            by_id[season.id].append(season)
-            if (cls._content_type(season) == ContentType.SEASON
-                    and type(season.season_number) is int and season.season_number >= 0):
-                by_slot[season.season_number].append(season)
-
-        for slot, candidates in by_slot.items():
-            node_id = candidates[0].id
-            if (not isinstance(node_id, str) or not node_id or node_id != node_id.strip()
-                    or any(season.id != node_id for season in candidates)):
-                continue
-            claims = by_id[node_id]
-            if any(claim not in candidates for claim in claims):
-                continue
-            child_ids = {
-                claim.tmdb_id_int for claim in claims
-                if claim.tmdb_id is not None and str(claim.tmdb_id).strip() not in ("", "0")
-            }
-            if len(child_ids) > 1 or any(value is None or value <= 0 for value in child_ids):
-                logger.warning("justwatch_season_identity_conflict node=%s season=%s", node_id, slot)
-                continue
-            selected = next((claim for claim in claims if claim.tmdb_id_int), claims[0])
-            if len(claims) > 1:
-                selected = copy(selected)
-                selected.offers = [offer for claim in claims for offer in claim.offers]
-            yield selected
 
     # -- catalogue --------------------------------------------------------
     def _fetch_catalogue(self, *, country, provider, content_type, offset,
@@ -437,7 +416,7 @@ class JustWatchSource:
         # ceiling, so neither an over-eager caller nor the depth wall can turn
         # this into an unbounded loop.
         remaining_pages = max(1, int(pages))
-        all_contents, all_offers = [], []
+        by_native_id = defaultdict(list)
         next_offset = offset
         exhausted = False
         # Page-size clamp state is local to *this* walk. Mutating
@@ -496,36 +475,35 @@ class JustWatchSource:
                 break
 
             for title in page.titles:
-                resolved_type = self._content_type(title)
-                if resolved_type is None:
+                if not title.has_native_id:
+                    logger.warning("justwatch_native_id_missing country=%s title=%r",
+                                   country, title.title)
                     continue
-                # The partition's provider owns the catalogue row. Falling
-                # back to the title's first mapped package attributed a
-                # Netflix-walked title to Prime Video whenever Prime's offer
-                # happened to come first in the payload.
-                all_contents.append(self._content(
-                    title, resolved_type, country, provider=provider,
-                ))
-                if resolved_type in (ContentType.SEASON, ContentType.EPISODE):
-                    # Catalogue children have no verified series. Keep native discovery only.
-                    continue
-                # Client-side offer filtering: the `packages` filter selects
-                # *titles*, so the offers inside each node still span every
-                # provider carrying that title. Filtering to the requested
-                # provider here is what makes a provider partition mean "this
-                # provider's catalogue" instead of "titles this provider
-                # happens to carry".
-                all_offers.extend(self._offers_for(
-                    title, country=country, content_type=resolved_type,
-                    tmdb_id=title.tmdb_id_int, content=title,
-                    only_provider=provider,
-                ))
+                by_native_id[title.id].append(title)
 
             next_offset += page_size
             remaining_pages -= 1
             if next_offset >= self.max_offset:
                 exhausted = True
                 break
+
+        all_contents, all_offers = [], []
+        for candidates in by_native_id.values():
+            title = self._merge_title_matches(candidates, candidates)
+            if title is None:
+                logger.warning("justwatch_native_id_unresolved country=%s id=%s",
+                               country, candidates[0].id)
+                continue
+            resolved_type = self._content_type(title)
+            # The partition owns the catalogue row. The package filter selects
+            # titles, so their offers also need filtering by partition provider.
+            all_contents.append(self._content(title, resolved_type, country, provider=provider))
+            if resolved_type.uses_series_tmdb_id:
+                continue
+            all_offers.extend(self._offers_for(
+                title, country=country, content_type=resolved_type,
+                tmdb_id=title.tmdb_id_int, content=title, only_provider=provider,
+            ))
 
         return SourceFetchResult(
             contents=all_contents,
@@ -627,7 +605,7 @@ class JustWatchSource:
         )
 
     def _content(self, title, content_type, country, *, provider=None,
-                 parent_tmdb_id=None, parent_verified=False):
+                 parent_tmdb_id=None):
         """Provider-native content entry, identified by JustWatch's node id.
 
         ``external_ids`` carries the TMDb/IMDb ids when present, so a later
@@ -648,12 +626,9 @@ class JustWatchSource:
             external_ids["imdb"] = str(title.imdb_id)
         identity_evidence = {}
         if content_type == ContentType.SEASON and parent_tmdb_id is not None:
-            # A targeted observation replaces the parent assertion. A catalogue
-            # observation carries no parent claim and leaves it alone.
-            identity_evidence["justwatch_season"] = (
-                {"series_tmdb_id": parent_tmdb_id, "child_tmdb_id": tmdb_id}
-                if parent_verified else {}
-            )
+            identity_evidence["justwatch_season"] = {
+                "series_tmdb_id": parent_tmdb_id, "child_tmdb_id": tmdb_id,
+            }
         return DiscoveredContent(
             provider_id=provider or self._dominant_provider_slug(title),
             provider_content_id=str(title.id or ""),

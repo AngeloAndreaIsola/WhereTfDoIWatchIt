@@ -110,7 +110,7 @@ from django.db import transaction
 
 from tracker.models import ExternalProviderMapping, Provider
 
-from ..domain.enums import ContentType, MatchMethod, SyncMode
+from ..domain.enums import MatchMethod, SyncMode
 from .identity_policy import mapping_is_trusted
 from ..models import ContentMapping, Country, Source
 from ..sources.justwatch_providers import provider_slug_for_package
@@ -541,7 +541,7 @@ class AvailabilityRefreshService:
         id. Use the explicitly associated series ID from ``parent_tmdb_id``.
         A child observed without a parent remains provider-native discovery.
         """
-        if normalize_content_type(content.content_type) in (ContentType.SEASON, ContentType.EPISODE):
+        if normalize_content_type(content.content_type).uses_series_tmdb_id:
             return content.parent_tmdb_id or None
         raw = (content.external_ids or {}).get("tmdb")
         if raw in (None, ""):
