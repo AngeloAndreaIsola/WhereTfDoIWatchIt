@@ -425,3 +425,41 @@ class ReconciliationCoreTests(ReconciliationFixtureMixin, TestCase):
         second = self.reconcile_movie()
 
         self.assertEqual(first, second)
+
+class VariantWindowRegressionTests(ReconciliationFixtureMixin, TestCase):
+    def test_representative_expiry_does_not_hide_remaining_open_variant(self):
+        from availability.models import OfferPrice
+
+        row = self.offer(available_until=self.now - timedelta(minutes=1), provider_url="https://expired.test")
+        OfferPrice.objects.create(
+            source=self.source_a, offer_identity=row.identity, provider_slug=self.netflix.slug,
+            country_code="US", content_type="movie", tmdb_id=550, offer_type="subscription",
+            provider_content_id=row.provider_content_id, amount="1.9900", currency="EUR", is_current=True,
+            variants=[
+                {"amount": "1.9900", "currency": "EUR", "validation_error": "", "url": "https://expired.test", "available_until": (self.now - timedelta(minutes=1)).isoformat()},
+                {"amount": "4.9900", "currency": "EUR", "validation_error": "", "url": "https://open.test", "available_until": (self.now + timedelta(days=1)).isoformat()},
+            ],
+        )
+
+        result = self.reconcile_movie()
+        offer = result.offers[0]
+        self.assertTrue(offer.currently_available)
+        self.assertEqual(offer.observations[0].provider_url, "https://open.test")
+        self.assertEqual(str(offer.price.amount), "4.9900")
+
+    def test_from_flag_uses_variants_open_at_read_time(self):
+        from availability.models import OfferPrice
+
+        row = self.offer()
+        OfferPrice.objects.create(
+            source=self.source_a, offer_identity=row.identity, provider_slug=self.netflix.slug,
+            country_code="US", content_type="movie", tmdb_id=550, offer_type="subscription",
+            provider_content_id=row.provider_content_id, amount="1.9900", currency="EUR", is_current=True,
+            variants=[
+                {"amount": "1.9900", "currency": "EUR", "validation_error": "", "available_until": (self.now - timedelta(minutes=1)).isoformat()},
+                {"amount": "4.9900", "currency": "EUR", "validation_error": "", "available_until": (self.now + timedelta(days=1)).isoformat()},
+            ],
+        )
+        result = self.reconcile_movie()
+        self.assertEqual(str(result.offers[0].price.amount), "4.9900")
+        self.assertFalse(result.offers[0].price_is_from)

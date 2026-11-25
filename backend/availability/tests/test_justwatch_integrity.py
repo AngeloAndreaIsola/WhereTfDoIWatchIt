@@ -238,6 +238,104 @@ class TitleIdentityTests(SimpleTestCase):
 
         self.assertEqual(result.contents, [])
 
+    def test_distinct_native_nodes_claiming_the_same_typed_tmdb_id_are_ambiguous(self):
+        for node_ids in (("tm1", "tm2"), ("tm2", "tm1")):
+            with self.subTest(node_ids=node_ids):
+                source, _ = self.set_source(page(*(
+                    fx.title(node_id, "Fight Club", year=1999, tmdb_id="550",
+                             offers=[netflix_offer("o1")])
+                    for node_id in node_ids
+                )))
+                result = self.fetch(source, tmdb_id=550, title="Fight Club",
+                                    year=1999, content_type=MOVIE)
+
+                self.assertEqual(result.contents, [])
+                self.assertEqual(result.offers, [])
+
+    def test_partial_edge_keeps_variants_after_title_year_fallback_resolves_native_id(self):
+        complete = fx.title("tm1", "Fight Club", year=1999, tmdb_id=None,
+                            offers=[netflix_offer("complete")])
+        partial = fx.title("tm1", "Fight Club", year=None, tmdb_id=None,
+                           offers=[netflix_offer("partial")])
+        source, _ = self.set_source(page(complete, partial))
+        result = self.fetch(source, tmdb_id=None, title="Fight Club", year=1999, content_type=MOVIE)
+        self.assertEqual([offer.source_record_id for offer in result.offers], ["complete", "partial"])
+
+    def test_repeated_native_node_keeps_offers_from_each_edge(self):
+        node = fx.title("tm1", "Fight Club", year=1999, tmdb_id="550",
+                        offers=[netflix_offer("o1")])
+        second = fx.title("tm1", "Fight Club", year=1999, tmdb_id=None,
+                          offers=[netflix_offer("o2")])
+        source, _ = self.set_source(page(node, second))
+        result = self.fetch(source, tmdb_id=550, title="Fight Club",
+                            year=1999, content_type=MOVIE)
+
+        self.assertEqual([content.provider_content_id for content in result.contents], ["tm1"])
+        self.assertEqual([offer.source_record_id for offer in result.offers], ["o1", "o2"])
+
+    def test_usable_exact_match_survives_an_edge_without_native_id(self):
+        source, _ = self.set_source(page(
+            fx.title(None, "Fight Club", year=1999, tmdb_id="550"),
+            fx.title("tm1", "Fight Club", year=1999, tmdb_id="550",
+                     offers=[netflix_offer("o1")]),
+        ))
+        result = self.fetch(source, tmdb_id=550, title="Fight Club",
+                            year=1999, content_type=MOVIE)
+
+        self.assertEqual([offer.provider_content_id for offer in result.offers], ["tm1"])
+
+    def test_conflicting_claims_for_same_native_title_stay_unresolved(self):
+        valid = fx.title("tm1", "Fight Club", year=1999, tmdb_id="550", offers=[netflix_offer("o1")])
+        for kind, tmdb_id in (("MOVIE", "551"), ("SHOW", "550"), ("MOVIE", "-1"), ("MOVIE", "invalid")):
+            with self.subTest(kind=kind, tmdb_id=tmdb_id):
+                conflict = fx.title("tm1", "Conflicting claim", year=1999,
+                                    object_type=kind, tmdb_id=tmdb_id)
+                source, _ = self.set_source(page(valid, conflict))
+                result = self.fetch(source, tmdb_id=550, title="Fight Club",
+                                    year=1999, content_type=MOVIE)
+
+                self.assertEqual(result.offers, [])
+
+    def test_sparse_anchor_does_not_hide_conflicts_in_other_edges(self):
+        anchor = fx.title("tm1", "", year=None, tmdb_id="550", offers=[netflix_offer("anchor")])
+        matching = fx.title("tm1", "Fight Club", year=1999, tmdb_id=None)
+        for title, year in (("Different film", 1999), ("Fight Club", 2005)):
+            with self.subTest(title=title, year=year):
+                conflict = fx.title("tm1", title, year=year, tmdb_id=None)
+                source, _ = self.set_source(page(anchor, matching, conflict))
+                result = self.fetch(source, tmdb_id=550, title="Fight Club",
+                                    year=1999, content_type=MOVIE)
+
+                self.assertEqual(result.contents, [])
+                self.assertEqual(result.offers, [])
+
+    def test_fallback_with_an_indistinguishable_conflicting_title_is_unresolved(self):
+        for conflicting_id in ("551", "-1", "invalid"):
+            with self.subTest(conflicting_id=conflicting_id):
+                source, _ = self.set_source(page(
+                    fx.title("tm1", "Fight Club", year=1999, tmdb_id=None, offers=[netflix_offer("o1")]),
+                    fx.title("tm2", "Fight Club", year=1999, tmdb_id=conflicting_id),
+                ))
+                result = self.fetch(source, tmdb_id=550, title="Fight Club",
+                                    year=1999, content_type=MOVIE)
+
+                self.assertEqual(result.offers, [])
+
+    def test_nodes_without_native_identity_are_unresolved(self):
+        for tmdb_id in ("550", None):
+            with self.subTest(tmdb_id=tmdb_id):
+                source, _ = self.set_source(page(
+                    fx.title(None, "Fight Club", year=1999, tmdb_id=tmdb_id,
+                             offers=[netflix_offer("o1")]),
+                    fx.title(None, "Fight Club", year=1999, tmdb_id=tmdb_id,
+                             offers=[netflix_offer("o2")]),
+                ))
+                result = self.fetch(source, tmdb_id=550, title="Fight Club",
+                                    year=1999, content_type=MOVIE)
+
+                self.assertEqual(result.contents, [])
+                self.assertEqual(result.offers, [])
+
     def test_multiple_ambiguous_candidates_stay_unresolved(self):
         source, _ = self.set_source(page(
             fx.title("tm1", "The Thing", year=1982, tmdb_id="1091"),

@@ -75,6 +75,11 @@ class PriceObservation:
     observed_at: Optional[datetime]
     is_current: bool
     validation_error: str = ""
+    variants: tuple[dict, ...] = ()
+    open_variants: tuple[dict, ...] = ()
+    selected_variant: Optional[dict] = None
+    """The open variant that supplied this observation's current scalar price."""
+    variant_window_unknown: bool = False
 
     @property
     def is_valid(self) -> bool:
@@ -116,6 +121,8 @@ class OfferObservation:
     row can never be attached to the wrong observation."""
     window_open: bool = True
     """Derived: the offer's availability window is open at ``now``."""
+    window_unknown: bool = False
+    """The source reported a window that could not be interpreted."""
 
     observed_at: Optional[datetime] = None
     title_checked_at: Optional[datetime] = None
@@ -136,7 +143,7 @@ class OfferObservation:
             if self.freshness == FreshnessState.STALE:
                 return AvailabilityEvidence.STALE
             return AvailabilityEvidence.UNKNOWN
-        if self.currently_available and self.window_open and self.mapping_doubt:
+        if self.currently_available and (self.window_unknown or (self.window_open and self.mapping_doubt)):
             return AvailabilityEvidence.UNKNOWN
         return AvailabilityEvidence.UNAVAILABLE
 

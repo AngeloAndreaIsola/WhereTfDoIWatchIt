@@ -38,18 +38,81 @@ class Issue97ReplayTests(SimpleTestCase):
         self.assertEqual(report["provenance"], "SYNTHETIC_FIXTURE")
         http.assert_not_called()
 
-    def test_wrong_type_id_year_edition_or_duplicate_stays_unknown(self):
+    def test_presence_collapses_exact_repeats_and_keeps_distinct_variants(self):
+        search = deepcopy(FIXTURES[INCEPTION["scope_id"]]["search"])
+        edges = search["data"]["popularTitles"]["edges"]
+        offers = edges[0]["node"]["offers"]
+        rent = next(offer for offer in offers if offer["monetizationType"] == "RENT")
+        rent.update(id="rent-hd", retailPriceValue=3.99, currency="EUR", presentationType="HD")
+        offers.extend([
+            deepcopy(rent),
+            {**rent, "id": None, "retailPriceValue": 5.99},
+            {**rent, "retailPriceValue": 4.99},
+            {**rent, "presentationType": "SD"},
+            {**rent, "monetizationType": "RENTAL"},
+            {**rent, "package": {**rent["package"], "packageId": 987}},
+        ])
+        repeated_edge = deepcopy(edges[0])
+        repeated_edge["node"]["content"]["externalIds"]["tmdbId"] = None
+        repeated_edge["node"]["offers"] = [{**rent, "id": "another-provider-offer"}]
+        edges.append(repeated_edge)
+        partial_edge = deepcopy(edges[0])
+        partial_edge["node"]["content"].pop("originalReleaseYear")
+        partial_edge["node"]["offers"] = [{**rent, "id": "partial-edge-offer"}]
+        edges.append(partial_edge)
+
+        report = replay_scope(INCEPTION, search)
+        self.assertEqual(len(report["title_offers"]), 6)
+        fact = next(row for row in report["title_offers"] if row["offer_class"] == "rent")
+        variants = fact["variants"]
+        self.assertEqual(len(variants), 8)
+        self.assertEqual({variant["amount"] for variant in variants}, {"3.9900", "4.9900", "5.9900"})
+        self.assertEqual({variant["quality"] for variant in variants}, {"hd", "sd"})
+        self.assertEqual({variant["offer_class"] for variant in variants}, {"rent"})
+        edges.reverse()
+        self.assertEqual(next(row for row in replay_scope(INCEPTION, search)["title_offers"]
+                              if row["offer_class"] == "rent"), fact)
+
+    def test_replay_audit_variants_exclude_signed_links_and_private_identifiers(self):
+        fixture = deepcopy(FIXTURES[BREAKING_BAD["scope_id"]])
+        title = fixture["search"]["data"]["popularTitles"]["edges"][0]["node"]
+        season = fixture["seasons"]["data"]["node"]["seasons"][0]
+        for offer in (title["offers"][0], season["offers"][0]):
+            offer.update(id="fixture-private-audit-offer",
+                         standardWebURL="https://example.test/audit?signature=fixture-audit-signature")
+            offer["package"].update(id="fixture-private-audit-node", packageId=923456789)
+        unresolved = deepcopy(title["offers"][0])
+        unresolved["package"].update(technicalName="fixture-private-audit-package", shortName="", slug="")
+        title["offers"].append(unresolved)
+
+        report = replay_scope(BREAKING_BAD, fixture["search"], seasons_response=fixture["seasons"])
+        for group in ("title_offers", "season_offers", "unresolved"):
+            [fact] = report[group]
+            [variant] = fact["variants"]
+            self.assertEqual(set(variant), {"provider", "country", "offer_class", "quality", "amount", "currency"})
+        serialized = json.dumps(report)
+        for secret in ("https://example.test/audit", "fixture-audit-signature", "fixture-private-audit-offer",
+                       "fixture-private-audit-node", "fixture-private-audit-package", "923456789"):
+            self.assertNotIn(secret, serialized)
+
+    def test_wrong_type_id_year_edition_or_conflicting_identity_stays_unknown(self):
         for field, value in (
-            ("objectType", "SHOW"), ("tmdbId", "438631"), ("tmdbId", ""),
-            ("originalReleaseYear", 2020), ("title", "Inception Redux"), ("duplicate", True),
+            ("objectType", "SHOW"), ("tmdbId", "438631"), ("tmdbId", ""), ("id", None),
+            ("originalReleaseYear", 2020), ("title", "Inception Redux"),
+            ("alternate_native_id", "tm-other"), ("conflicting_id", "438631"),
         ):
             with self.subTest(field=field, value=value):
                 search = deepcopy(FIXTURES[INCEPTION["scope_id"]]["search"])
                 edges = search["data"]["popularTitles"]["edges"]
                 node = edges[0]["node"]
-                if field == "duplicate":
-                    edges.append(deepcopy(edges[0]))
-                elif field == "objectType":
+                if field in ("alternate_native_id", "conflicting_id"):
+                    conflict = deepcopy(edges[0])
+                    if field == "alternate_native_id":
+                        conflict["node"]["id"] = value
+                    else:
+                        conflict["node"]["content"]["externalIds"]["tmdbId"] = value
+                    edges.append(conflict)
+                elif field in ("id", "objectType"):
                     node[field] = value
                 elif field == "tmdbId":
                     node["content"]["externalIds"][field] = value
@@ -129,3 +192,13 @@ class Issue97ReadIsolationTests(TestCase):
             [("netflix", "subscription", "stale")],
         )
         http.assert_not_called()
+
+    def test_offline_reviewed_anchor_rejects_conflicting_labels_on_coalesced_edge(self):
+        search = deepcopy(FIXTURES[INCEPTION["scope_id"]]["search"])
+        conflicting = deepcopy(search["data"]["popularTitles"]["edges"][0])
+        conflicting["node"]["content"]["externalIds"]["tmdbId"] = None
+        conflicting["node"]["content"]["title"] = "Wrong Inception"
+        search["data"]["popularTitles"]["edges"].append(conflicting)
+        report = replay_scope(INCEPTION, search)
+        self.assertEqual(report["status"], "unknown")
+        self.assertEqual(report["title_offers"], [])
