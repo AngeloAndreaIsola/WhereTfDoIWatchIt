@@ -39,3 +39,37 @@ def local_offer(movie, *, country="US", service="netflix", offer_type="subscript
         provider_content_id=provider_content_id,
         **kwargs,
     )
+
+
+def reviewed_test_sources(now=None, *, slugs=None):
+    """Synthetic permission records for tests that mock every outbound transport."""
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from availability.services.source_permissions import ENDPOINTS, PERMISSION_KEY
+
+    now = now or timezone.now()
+    operations = {
+        "justwatch": ["search", "seasons", "catalogue"],
+        "watchmode": ["search", "title_sources"],
+        "streaming_availability": ["show_availability"],
+    }
+    for slug in slugs or ENDPOINTS:
+        source, _ = Source.objects.get_or_create(slug=slug, defaults={"name": slug})
+        source.configuration = {
+            **source.configuration,
+            PERMISSION_KEY: {
+                "status": "authorized",
+                "endpoint": ENDPOINTS[slug],
+                "evidence_reference": f"synthetic-test-{slug}",
+                "reviewed_by": "test fixture",
+                "countries": ["AU", "CA", "GB", "IT", "JP", "NL", "US"],
+                "operations": operations[slug],
+                "valid_from": (now - timedelta(days=30)).isoformat(),
+                "valid_until": (now + timedelta(days=30)).isoformat(),
+                "maximum_requests": 100,
+                "minimum_interval_seconds": 1,
+            },
+        }
+        source.save(update_fields=["configuration"])

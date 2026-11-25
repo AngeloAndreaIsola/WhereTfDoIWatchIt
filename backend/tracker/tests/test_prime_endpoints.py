@@ -337,27 +337,14 @@ class PrimeMovieEndpointTests(TestCase):
         self.assertEqual(bbc["country"], "GB")
 
     @patch("tracker.services.enrichment.TMDbClient")
-    @patch("tracker.views.TMDbClient")
-    def test_auto_creates_movie_from_tmdb(self, mock_tmdb_cls, mock_enrich_tmdb_cls):
-        """If movie not in DB, prime_movie auto-creates from TMDb."""
-        from tracker.services.tmdb import TMDbMovie
+    def test_untracked_movie_is_not_created_or_fetched_by_detail_get(self, remote):
+        response = self.client.get("/api/prime/movie/999/")
 
-        mock_tmdb = mock_tmdb_cls.return_value
-        mock_tmdb.details.return_value = TMDbMovie(
-            tmdb_id=999, title="New Movie", year=2025
-        )
-        mock_enrich_tmdb_cls.return_value.details.return_value = TMDbMovie(
-            tmdb_id=999, title="New Movie", year=2025
-        )
-
-        from django.test import Client
-        response = Client().get("/api/prime/movie/999/")
-
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-        self.assertEqual(data["movie"]["tmdb_id"], 999)
-        self.assertEqual(data["offers"], [])
-        self.assertTrue(Movie.objects.filter(tmdb_id=999).exists())
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["movie"]["tmdb_id"], 999)
+        self.assertEqual(response.json()["offers"], [])
+        self.assertFalse(Movie.objects.filter(tmdb_id=999).exists())
+        remote.assert_not_called()
 
     @patch("tracker.services.enrichment.TMDbClient")
     @patch("tracker.views.TMDbClient")
@@ -580,31 +567,15 @@ class PrimeSeriesEndpointTests(TestCase):
         passed = mock_pipeline_cls.return_value.run.call_args[0][0]
         self.assertEqual(passed.content_type, "series")
 
-    @patch("tracker.services.offer_pipeline.OfficialOffersPipeline")
     @patch("tracker.services.enrichment.TMDbClient")
-    def test_resolves_unknown_id_through_tmdb_tv_endpoint(
-        self, mock_enrich_tmdb, mock_pipeline_cls
-    ):
-        """An untracked id is created from the TMDb TV details endpoint."""
-        from tracker.services.tmdb import TMDbItem
+    def test_untracked_series_is_not_created_or_fetched_by_detail_get(self, remote):
+        response = self.client.get("/api/prime/series/1399/")
 
-        mock_enrich_tmdb.return_value.details.return_value = TMDbItem(
-            tmdb_id=1399, title="New Series", year=2024, content_type="series",
-            overview="A series.", poster_path="/s.jpg", genre_ids=[18],
-        )
-        mock_pipeline_cls.return_value.run.return_value = MagicMock(offers_out=[])
-
-        from django.test import Client
-        response = Client().get("/api/prime/series/1399/")
-
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-        self.assertEqual(data["series"]["tmdb_id"], 1399)
-        self.assertEqual(data["series"]["content_type"], "series")
-        self.assertTrue(Movie.objects.filter(tmdb_id=1399, content_type="series").exists())
-        mock_enrich_tmdb.return_value.details.assert_called_once_with(
-            1399, content_type="series"
-        )
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["series"]["tmdb_id"], 1399)
+        self.assertEqual(response.json()["offers"], [])
+        self.assertFalse(Movie.objects.filter(tmdb_id=1399, content_type="series").exists())
+        remote.assert_not_called()
 
     @patch("tracker.services.offer_pipeline.OfficialOffersPipeline")
     @patch("tracker.services.enrichment.TMDbClient")

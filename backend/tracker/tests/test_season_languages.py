@@ -272,7 +272,7 @@ class SeasonLanguageEndpointTests(TestCase):
         )
 
     @patch("tracker.services.streaming_api.StreamingAvailabilityClient.get_availability")
-    @patch("tracker.services.offer_pipeline.enrich_movie_from_tmdb")
+    @patch("tracker.services.enrichment.enrich_movie_from_tmdb")
     def test_series_endpoint_serves_and_scores_season_languages(
         self, mock_enrich, mock_get
     ):

@@ -97,6 +97,7 @@ class AvailabilityEvidence(models.TextChoices):
     """
 
     VERIFIED = "verified", "Verified"
+    SOURCE_REPORTED = "source_reported", "Source-reported"
     STALE = "stale", "Last seen"
     UNKNOWN = "unknown", "Unverified"
     UNAVAILABLE = "unavailable", "Unavailable"

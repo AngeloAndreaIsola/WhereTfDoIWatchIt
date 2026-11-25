@@ -862,6 +862,7 @@ class RefreshRequestOutcome(models.TextChoices):
     UNKNOWN = "", "Not recorded / legacy row"
     OFFERS_FOUND = "offers_found", "Offers found"
     NO_OFFER = "no_offer", "Checked — no offer"
+    INCONCLUSIVE = "inconclusive", "Checked — availability inconclusive"
     TITLE_NOT_FOUND = "title_not_found", "Upstream title not found"
 
 
@@ -946,6 +947,7 @@ class RefreshRequest(models.Model):
         default=RefreshRequestStatus.PENDING,
         db_index=True,
     )
+    manual = models.BooleanField(default=False)
     attempts = models.IntegerField(default=0)
     last_error = models.TextField(blank=True, default="")
     outcome = models.CharField(
@@ -954,7 +956,7 @@ class RefreshRequest(models.Model):
         blank=True,
         default=RefreshRequestOutcome.UNKNOWN,
         db_index=True,
-        help_text="Definitive result of a successful source check; blank for failures or legacy rows.",
+        help_text="Result of a successful source check; blank for failures or legacy rows.",
     )
     #: Why this row was settled without being attempted. Only meaningful when
     #: ``status`` is ``blocked``, and constrained at the database level so the
@@ -1056,6 +1058,29 @@ class RefreshRequest(models.Model):
         self.save(
             update_fields=["status", "blocked_reason", "last_error", "completed_at"]
         )
+
+
+class TitleAvailabilityCheck(models.Model):
+    """Operational check timestamps for one typed title, market and source."""
+
+    movie = models.ForeignKey(Movie, on_delete=models.CASCADE)
+    # Linking a Movie to a different TMDb identity must not carry over its cache.
+    tmdb_id = models.IntegerField()
+    content_type = models.CharField(max_length=10)
+    country = models.CharField(max_length=2, blank=True)
+    source = models.CharField(max_length=50)
+    last_attempted_at = models.DateTimeField()
+    last_succeeded_at = models.DateTimeField(null=True, blank=True)
+    successful_run_ids = models.JSONField(default=list)
+    in_progress = models.BooleanField(default=False)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["movie", "tmdb_id", "content_type", "country", "source"],
+                name="uniq_title_availability_check_scope",
+            ),
+        ]
 
 
 class CatalogueRefreshStatus(models.TextChoices):

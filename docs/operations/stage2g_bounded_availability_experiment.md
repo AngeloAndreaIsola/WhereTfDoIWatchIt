@@ -1,5 +1,7 @@
 # Stage 2G bounded availability runner
 
+> **Current #97 tracking policy (2026-11-24; JustWatch only):** Obtaining or attaching a separate written upstream JustWatch permission grant is no longer an issue-level planning or acceptance requirement. This documentation change neither establishes external authorization nor changes execution behavior. The existing runner still requires its `access_permission` evidence and HMAC execution token and will block when those checks fail. Do not fabricate evidence, disable checks, or interpret this note as permission to make live calls. The instructions below describe the **unchanged runtime implementation**, including its actual blockers.
+
 The fixed example manifest is [stage2e_manifest.example.json](../experiments/stage2e_manifest.example.json). It is inert: adding or changing this file does not activate a source, queue work, start a worker, authorize a run, or contact a provider. The runner requires an exact match to its compiled-in manifest.
 
 ## Fixed execution scope
@@ -31,7 +33,7 @@ The runner takes the shared A7 title-drain advisory lock and the JustWatch catal
 
 All commands below run from `backend/`. `dry-run` is the default and makes no HTTP request or application write. Live execution requires a separate HMAC authorization bound to the revised manifest digest, actual database identity, exact six-attempt cap, and expiry. The authorization ID remains stable for this experiment/database so an older authorization cannot reset its durable counter; the old manifest digest cannot authorize this revised manifest. Configure `AVAILABILITY_EXPERIMENT_AUTH_KEY` with at least 32 characters only during a separately approved authorization step. This implementation task does not create a token.
 
-The runner requires three independent pieces of JustWatch evidence through `AVAILABILITY_EXPERIMENT_QUOTA_EVIDENCE`: (1) express permission to automate the exact GraphQL endpoint for both fixed scopes and at least six requests, (2) current quota classification, and (3) current rate-policy evidence. The public [JustWatch Terms of Use](https://support.justwatch.com/article/just-watchs-terms-of-use) prohibit data-mining, robots, scraping, or similar extraction unless expressly authorized. Public accessibility of the endpoint is not permission. A human must inspect the referenced written permission; the runner checks only the evidence fields and exact scope. Permission, quota classification, and rate-policy evidence must each have a `checked_at` timestamp within one hour. For `status: "available"`, `remaining` must be an integer of at least six. A `rate_policy_evidence` record must include a reviewed reference and `max_burst` of at least six; an unknown/undocumented burst allowance does not pass. `status: "unmetered_public"` records a current operator-checked no-billed-quota classification; it does **not** assert unlimited usage or absence of operational rate limits. Do not fabricate or prefill evidence. The official [Content Partner API](https://apis.justwatch.com/docs/api/) is separately documented and requires a concluded contract and partner token; it does not authorize use of this unofficial GraphQL endpoint.
+The runner requires three independent pieces of JustWatch evidence through `AVAILABILITY_EXPERIMENT_QUOTA_EVIDENCE`: (1) express permission to automate the exact GraphQL endpoint for both fixed scopes and at least six requests, (2) current quota classification, and (3) current rate-policy evidence. The public [JustWatch Terms of Use](https://support.justwatch.com/article/just-watchs-terms-of-use) prohibit data-mining, robots, scraping, or similar extraction unless expressly authorized. Public accessibility of the endpoint is not permission. A human must inspect the referenced written permission; the runner checks only the evidence fields and exact scope. Permission, quota classification, and rate-policy evidence must each have a timezone-aware `checked_at` timestamp within one hour. Written permission must also supply the current `valid_from` / `valid_until` window and explicitly cover `GetSearchTitles`. The runner stops before a new reservation when any of these evidence windows expires. For `status: "available"`, `remaining` must be an integer of at least six. A `rate_policy_evidence` record must include a reviewed reference and `max_burst` of at least six; an unknown/undocumented burst allowance does not pass. Supply the reviewed `minimum_interval_seconds` as a finite nonnegative number. Use zero only when the reviewed policy expressly imposes no minimum interval. Execution is serial under the shared title lock and waits the required interval from the last recorded response, including across retries, titles, and process restarts. `status: "unmetered_public"` records a current operator-checked no-billed-quota classification; it does **not** assert unlimited usage or absence of operational rate limits. Do not fabricate or prefill evidence. The official [Content Partner API](https://apis.justwatch.com/docs/api/) is separately documented and requires a concluded contract and partner token; it does not authorize use of this unofficial GraphQL endpoint.
 
 Required field shape only; the values below are placeholders, not evidence:
 
@@ -47,12 +49,16 @@ Required field shape only; the values below are placeholders, not evidence:
       "evidence_reference": "<reviewed written permission reference>",
       "endpoint": "https://apis.justwatch.com/graphql",
       "maximum_requests": "<integer >= 6 explicitly covered by permission>",
+      "operations": ["GetSearchTitles"],
+      "valid_from": "<timezone-aware start of written permission>",
+      "valid_until": "<timezone-aware end of written permission>",
       "scope_ids": ["dune-nl-justwatch", "inception-nl-justwatch"]
     },
     "rate_policy_evidence": {
       "checked_at": "<current UTC timestamp>",
       "evidence_reference": "<reviewed current source reference>",
-      "max_burst": "<integer >= 6 supported by the evidence>"
+      "max_burst": "<integer >= 6 supported by the evidence>",
+      "minimum_interval_seconds": "<reviewed finite nonnegative number>"
     }
   }
 }
@@ -85,9 +91,11 @@ The engineering change does not set quota evidence, create an authorization toke
 
 ## Remaining execution gates
 
-- Obtain written JustWatch permission for the exact unofficial GraphQL endpoint, both fixed scopes, and at least six requests; obtain genuine current quota/rate-policy evidence adequate for that ceiling. A public endpoint with no billed API quota does not imply unlimited request capacity.
+- The **existing runner** continues to require its `access_permission`, quota, and rate-policy evidence to execute. Under the updated #97 tracking policy, obtaining a written upstream grant is not a new issue-level deliverable; the unresolved runtime gate must be reported as a current implementation blocker until separately changed. Do not synthesize approval records or assume that an unmetered endpoint has unlimited request capacity.
 - Run the read-only preflight against the actual target database and exact revised manifest. Confirm the cluster/database identity, migrations, empty or reconciled durable ledger, matching enabled source and Movie/Country rows, no pending exact-scope requests, no unfinished runs, no relevant advisory locks, and no ambiguous reservations.
 - Confirm ordinary worker/cron ownership and recheck queue/lock state immediately before any future authorized run; PostgreSQL cannot attest to processes outside its view.
 - Do not claim application/provider accuracy from this experiment. Independent official-provider evidence requires a separate task and authorization.
 
 Never point tests at the `wheretfdoiwatchit_pgdata` volume. Use mocks or an isolated disposable PostgreSQL instance.
+
+For the separate 15-title offline preparation and its blockers, see the [issue #97 collection evidence](issue97_justwatch_collection_preflight.md).

@@ -52,7 +52,7 @@ class AvailabilityReadBoundaryTests(TestCase):
         refresh_catalogue.assert_not_called()
         return response
 
-    @patch("tracker.views.enrich_movie_from_tmdb")
+    @patch("tracker.services.enrichment.enrich_movie_from_tmdb")
     def test_movie_detail_does_not_refresh_availability(self, enrich):
         movie = Movie.objects.create(tmdb_id=101, title="Movie", year=2024)
         self.local_offer(movie)
@@ -68,7 +68,7 @@ class AvailabilityReadBoundaryTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.json()["offers"]), 1)
 
-    @patch("tracker.services.offer_pipeline.enrich_movie_from_tmdb")
+    @patch("tracker.services.enrichment.enrich_movie_from_tmdb")
     def test_prime_movie_reads_local_availability_without_refresh(self, enrich):
         movie = Movie.objects.create(tmdb_id=102, title="Movie", year=2024)
         self.local_offer(movie)
@@ -77,7 +77,7 @@ class AvailabilityReadBoundaryTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["offers"][0]["service"], "Netflix")
 
-    @patch("tracker.services.offer_pipeline.enrich_movie_from_tmdb")
+    @patch("tracker.services.enrichment.enrich_movie_from_tmdb")
     def test_prime_series_reads_local_availability_without_refresh(self, enrich):
         series = Movie.objects.create(tmdb_id=103, title="Series", year=2024, content_type="series")
         AvailabilityOffer.objects.create(
@@ -91,7 +91,7 @@ class AvailabilityReadBoundaryTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.json()["offers"]), 1)
 
-    @patch("tracker.services.offer_pipeline.enrich_movie_from_tmdb")
+    @patch("tracker.services.enrichment.enrich_movie_from_tmdb")
     def test_prime_reads_never_invoke_tmdb_watch_providers(self, enrich):
         """Retired Prime gap-fill: prime detail reads never call TMDb watch/providers.
 

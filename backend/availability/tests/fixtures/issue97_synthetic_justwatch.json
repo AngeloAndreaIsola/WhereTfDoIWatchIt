@@ -1,0 +1,134 @@
+{
+  "movie-27205-nl": {
+    "search": {
+      "data": {
+        "popularTitles": {
+          "edges": [
+            {
+              "node": {
+                "id": "synthetic-MOVIE-27205",
+                "objectType": "MOVIE",
+                "content": {
+                  "title": "Inception",
+                  "originalReleaseYear": 2010,
+                  "externalIds": {
+                    "tmdbId": "27205"
+                  }
+                },
+                "offers": [
+                  {
+                    "package": {
+                      "technicalName": "netflix"
+                    },
+                    "monetizationType": "FLATRATE"
+                  },
+                  {
+                    "package": {
+                      "technicalName": "amazonmubi"
+                    },
+                    "monetizationType": "FLATRATE"
+                  },
+                  {
+                    "package": {
+                      "technicalName": "amazonprimevideo"
+                    },
+                    "monetizationType": "RENT"
+                  },
+                  {
+                    "package": {
+                      "technicalName": "amazonprimevideo"
+                    },
+                    "monetizationType": "BUY"
+                  },
+                  {
+                    "package": {
+                      "technicalName": "wuaki"
+                    },
+                    "monetizationType": "ADS"
+                  },
+                  {
+                    "package": {
+                      "technicalName": "youtubefree"
+                    },
+                    "monetizationType": "FREE"
+                  },
+                  {
+                    "package": {
+                      "technicalName": "fixtureunknown"
+                    },
+                    "monetizationType": "FLATRATE"
+                  },
+                  {
+                    "package": {
+                      "technicalName": "netflix"
+                    },
+                    "monetizationType": "fixture_unknown"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "series-1396-nl": {
+    "search": {
+      "data": {
+        "popularTitles": {
+          "edges": [
+            {
+              "node": {
+                "id": "synthetic-SHOW-1396",
+                "objectType": "SHOW",
+                "content": {
+                  "title": "Breaking Bad",
+                  "originalReleaseYear": 2008,
+                  "externalIds": {
+                    "tmdbId": "1396"
+                  }
+                },
+                "offers": [
+                  {
+                    "package": {
+                      "technicalName": "netflix"
+                    },
+                    "monetizationType": "FLATRATE"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    "seasons": {
+      "data": {
+        "node": {
+          "seasons": [
+            {
+              "id": "synthetic-SEASON-1396",
+              "objectType": "SEASON",
+              "content": {
+                "title": "Season 1",
+                "originalReleaseYear": 2008,
+                "externalIds": {
+                  "tmdbId": "1396"
+                },
+                "seasonNumber": 1
+              },
+              "offers": [
+                {
+                  "package": {
+                    "technicalName": "netflix"
+                  },
+                  "monetizationType": "FLATRATE"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}

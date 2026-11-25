@@ -1,0 +1,60 @@
+{
+  "canary_record_identity_fields": [
+    "title",
+    "jw_id",
+    "object_type",
+    "release_year",
+    "country"
+  ],
+  "tmdb_ids_in_canary_records": false,
+  "search_result": "Canary records have no TMDb identifier field. The historical scope decision specifies the two TMDb title identifiers.",
+  "justwatch_ids": {
+    "Inception": "tm92641",
+    "Dune": "tm305113"
+  },
+  "canary_fields": {
+    "Inception": {
+      "title": "Inception",
+      "object_type": "movie",
+      "release_year": 2010,
+      "jw_id": "tm92641"
+    },
+    "Dune": {
+      "title": "Dune",
+      "object_type": "movie",
+      "release_year": 2021,
+      "jw_id": "tm305113"
+    }
+  },
+  "external_tmdb_evidence": {
+    "committed_file": "docs/audits/stage2b/identity_manifest_20261122.csv",
+    "rows": [
+      {
+        "tmdb_id": 27205,
+        "media_type": "movie",
+        "canonical_title": "Inception",
+        "year": 2010,
+        "source": "tmdb_direct_id_details",
+        "evidence_sha256": "4d4a57db6b0686ea7f2b3de9f95eb9467e11becefd551cd96de6091bd908589c",
+        "retained_payload": "~/.hermes/cache/scratch/issue97-final-workflow/tmdb-evidence/movie_27205.json",
+        "hash_match": true
+      },
+      {
+        "tmdb_id": 438631,
+        "media_type": "movie",
+        "canonical_title": "Dune",
+        "year": 2021,
+        "source": "tmdb_direct_id_details",
+        "evidence_sha256": "03fd27dc34b2711dc8aaaca1cdc66a02d00d080a93a3c981fd818e6f422a9230",
+        "retained_payload": "~/.hermes/cache/scratch/issue97-final-workflow/tmdb-evidence/movie_438631.json",
+        "hash_match": true
+      }
+    ],
+    "note": "Hashes of the retained TMDb payloads match the committed identity manifest exactly. Raw TMDb payloads are NOT published here."
+  },
+  "classification": {
+    "title_year_media_type": "VERIFIED by hash-matched external TMDb evidence; internally consistent across all canary rows",
+    "tmdb_id_to_canary_row": "INFERRED / EXTERNALLY_ATTACHED by title, release year and media type. Canary records have no direct TMDb join key.",
+    "production_db_cross_check": "NOT PERFORMED (no database access authorized in this stage)"
+  }
+}

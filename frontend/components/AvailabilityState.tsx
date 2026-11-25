@@ -37,6 +37,7 @@ const REASON_COPY: Record<string, string> = {
   source_unavailable: "the source could not be reached",
   quota_exhausted: "the source is out of requests for now",
   resolved: "checked",
+  unknown_reason: "availability could not be established",
 };
 
 function reasonCopy(reason: string | null | undefined): string | null {

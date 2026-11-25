@@ -101,12 +101,15 @@ class RakutenTitleFetchTests(TestCase):
             Offer.objects.filter(tmdb_id=241, provider__slug="apple").exists()
         )
 
-    def test_the_report_resolves_the_title_available_via_rakuten_tv(self):
+    def test_unattributed_targeted_fetch_is_not_current_in_application_report(self):
+        from tracker.services.availability_reads import get_title_offer_evidence
+
         self._refresh().refresh_content(self.movie, country="NL")
         report = ar.title_source_report([self.movie.pk])[self.movie.pk]
-
-        self.assertEqual(report["state"], "available")
-        self.assertIn("rakuten_tv", report["available_on"])
+        self.assertEqual(report["state"], "unknown")
+        evidence = get_title_offer_evidence(self.movie, country="NL")
+        self.assertFalse(evidence.source_reported)
+        self.assertEqual(evidence.last_known[0].service, "rakuten_tv")
 
     def test_an_unmapped_package_is_logged_at_warning(self):
         """A dropped provider must be observable, never silently lost."""

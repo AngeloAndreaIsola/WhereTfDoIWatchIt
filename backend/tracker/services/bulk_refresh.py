@@ -49,9 +49,11 @@ from django.utils import timezone
 
 from availability.domain.enums import ContentType
 from availability.freshness import (
+    TITLE_AGGREGATORS,
     freshness_for,
     source_configuration_snapshot,
     source_is_stale,
+    source_last_seen,
     stale_sources,
 )
 from availability.models import Country, Offer, Source
@@ -81,6 +83,7 @@ from ..models import (
     RefreshRequestOutcome,
     RefreshRun,
     RefreshPriority,
+    TitleAvailabilityCheck,
     WatchlistItem,
 )
 from .preferences import resolve_source_country
@@ -94,6 +97,14 @@ from .rate_limit import (
 from .refresh_attribution import (attribute_refresh_run, attribute_sync_runs,
                                   refreshes_for_marker)
 from .streaming_api import UpstreamTitleNotFound
+from .title_availability_cache import (
+    departures_for_titles,
+    eligible_aggregator_sources,
+    record_title_attempt,
+    record_title_completion,
+    title_check_is_due,
+    title_departures,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -104,15 +115,13 @@ def is_stale(
     source: str = "",
     country: Optional[str] = None,
     configuration=None,
+    departures=None,
     now=None,
 ) -> bool:
-    """True when *source*'s observation of the movie is missing or too old.
+    """True when this title source is due to check its own scope.
 
-    Freshness is evaluated **per source** against that source's declared
-    window (``availability.freshness``) — there is no shared global timeout:
-    the default scope and a catalogue source for the same title go stale
-    independently, so a fresh Prime Video observation never hides a stale
-    Streaming Availability one (and vice versa).
+    JustWatch and Watchmode use the title cache and confirmed-departure
+    policy. Other sources use their declared observation window.
 
     ``source=""`` is the default title-targeted scope
     (``DEFAULT_SOURCE_SLUG``).  When ``country`` is explicit it is a hard
@@ -120,6 +129,26 @@ def is_stale(
     US movie, NL movie, and same-id series cannot make one another fresh.
     ``country=None`` deliberately retains the legacy global read behaviour.
     """
+    slug = source or DEFAULT_SOURCE_SLUG
+    if slug in TITLE_AGGREGATORS and country:
+        moment = now or timezone.now()
+        country = country.upper()
+        if configuration is None:
+            configuration = source_configuration_snapshot([slug]).get(slug, {})
+        check = TitleAvailabilityCheck.objects.filter(
+            movie=movie, tmdb_id=movie.tmdb_id, content_type=movie.content_type,
+            source=slug, country=country,
+        ).first()
+        if departures is None:
+            departures = title_departures(movie.tmdb_id, movie.content_type, country, moment)
+        return title_check_is_due(
+            slug, configuration,
+            source_last_seen(
+                movie.tmdb_id, slug, country=country, content_type=movie.content_type,
+                targeted_only=True,
+            ),
+            check, departures, moment,
+        )
     return source_is_stale(
         movie.tmdb_id,
         source or DEFAULT_SOURCE_SLUG,
@@ -185,28 +214,51 @@ def stale_refresh_scopes(
     country: Optional[str] = None,
     content_type: Optional[str] = None,
     source_configurations=None,
+    movie_id=None,
+    departures=None,
+    aggregators=None,
     now=None,
 ) -> list[str]:
-    """Refreshable sources whose observation of the title is stale.
-
-    Each candidate is evaluated on its own freshness window, so one stale
-    source is selected while a fresh one for the same title is left alone —
-    and a fresh source never triggers a refresh of another scope. Catalogue
-    sources are classified by :func:`stale_sources` but dropped here: their
-    staleness belongs to the catalogue run, not the budgeted per-title sweep.
-    """
+    """Sources due for the sweep, evaluated independently in this title scope."""
     refreshable = set(refreshable_source_slugs())
-    return [
-        slug
-        for slug in stale_sources(
-            tmdb_id,
-            country=country,
-            content_type=content_type,
-            source_configurations=source_configurations,
-            now=now,
+    configurations = (
+        source_configuration_snapshot(refreshable)
+        if source_configurations is None else source_configurations
+    )
+    stale = set(stale_sources(
+        tmdb_id, country=country, content_type=content_type,
+        source_configurations=configurations, now=now,
+    )) & refreshable
+    if not country:
+        return sorted(stale if aggregators is None else stale - TITLE_AGGREGATORS)
+
+    country = country.upper()
+    moment = now or timezone.now()
+    stale.difference_update(TITLE_AGGREGATORS)
+    aggregators = eligible_aggregator_sources(
+        refreshable if aggregators is None else aggregators, country, content_type,
+        configurations=configurations,
+    )
+    checks = {
+        check.source: check for check in TitleAvailabilityCheck.objects.filter(
+            movie_id=movie_id, tmdb_id=tmdb_id, content_type=content_type,
+            country=country, source__in=aggregators,
         )
-        if slug in refreshable
-    ]
+    } if movie_id is not None else {}
+    if departures is None:
+        departures = title_departures(tmdb_id, content_type, country, moment)
+    for slug in aggregators:
+        observed = source_last_seen(
+            tmdb_id, slug, country=country, content_type=content_type, targeted_only=True,
+        )
+        check = checks.get(slug)
+        # A sweep revisits existing evidence/checks and confirmed departures.
+        # Detail and manual requests own previously unseen ordinary scopes.
+        if (observed or check or departures) and title_check_is_due(
+            slug, configurations.get(slug, {}), observed, check, departures, moment,
+        ):
+            stale.add(slug)
+    return sorted(stale)
 
 
 def _latest_checks(tmdb_ids) -> dict:
@@ -488,12 +540,14 @@ def _process_watchlist_refresh_locked(
         _metered_source_is_unnecessary,
     )
 
+    current_country = resolve_source_country()
     queue_owned = _drain_refresh_requests_locked(
         summary=summary,
         service=service,
         limiter=limiter,
         quota_circuit=quota_circuit,
         source_configurations=source_configurations,
+        sweep_country=current_country or "",
     )
 
     pairs = _order_candidates(_candidate_pairs(user_id, content_types))
@@ -507,23 +561,22 @@ def _process_watchlist_refresh_locked(
     # by Movie identity, using exactly the report/worker's history policy.
     from .availability_report import _permanent_miss_sources
 
-    current_country = resolve_source_country()
+    aggregators = eligible_aggregator_sources(refreshable_source_slugs(), current_country)
+    moment = timezone.now()
+    departures = departures_for_titles(
+        {(movie.tmdb_id, movie.content_type) for movie in movies_by_id.values()}, current_country, moment,
+    ) if aggregators else {}
+    departure_movie_ids = {
+        movie.pk for movie in movies_by_id.values()
+        if (movie.tmdb_id, movie.content_type) in departures
+    }
+    pairs.sort(key=lambda pair: pair[0] not in departure_movie_ids)
     permanent_misses = _permanent_miss_sources(list(movies_by_id), country=current_country)
 
-    rate_limit_hit = summary.rate_limited
-    default_limiter_spent = _is_spent(limiter)
     for movie_id, tmdb_id in pairs:
         movie = movies_by_id.get(movie_id)
         if not movie or (tmdb_id, movie.content_type) in queue_owned:
             # The request drain owns this typed identity for this run.
-            continue
-
-        # The only run-wide bail-out left is the caller's *default* limiter
-        # being spent upfront. Per-scope quota is handled below, source by
-        # source, so an exhausted Streaming Availability budget never
-        # short-circuits the titles other sources can still refresh.
-        if rate_limit_hit and default_limiter_spent:
-            summary.skipped_rate_limited += 1
             continue
 
         if summary.remaining_budget <= 0:
@@ -541,7 +594,11 @@ def _process_watchlist_refresh_locked(
             tmdb_id,
             country=current_country,
             content_type=movie.content_type,
+            movie_id=movie.pk,
             source_configurations=source_configurations,
+            departures=departures.get((tmdb_id, movie.content_type), {}),
+            aggregators=aggregators,
+            now=moment,
         )
         if not stale_scopes:
             summary.skipped_cached += 1
@@ -556,7 +613,14 @@ def _process_watchlist_refresh_locked(
         # titles: the loop continues with the remaining scopes of this title
         # and the next titles, instead of the run-wide bail-out the single
         # shared limiter used to force here.
+        # Give confirmed departures priority over ordinary scopes on this title.
+        if (tmdb_id, movie.content_type) in departures:
+            scopes.sort(key=lambda slug: slug not in aggregators)
         for slug in scopes:
+            if slug in TITLE_AGGREGATORS and slug not in eligible_aggregator_sources(
+                [slug], current_country, movie.content_type,
+            ):
+                continue
             # The sweep has no queue row, but still spends the same metered
             # budget. Re-check the same policy immediately before execution.
             if _metered_source_is_unnecessary(
@@ -587,22 +651,27 @@ def _process_watchlist_refresh_locked(
                 if slug == DEFAULT_SOURCE_SLUG
                 else AvailabilityRefreshService(source=source_registry.get(slug))
             )
+            check = None
             try:
                 with source_budget(scope_limiter, source=slug):
                     # Acquisition owns the local quota ledger. The run limit
                     # separately bounds attempts, including upstream failures.
                     summary.remaining_budget -= 1
                     requested_at = timezone.now()
+                    check = record_title_attempt(movie, slug, current_country)
                     # Same as the request-drain path: the selected market is
                     # explicit, never inferred.
-                    scope_service.refresh_content(
+                    result = scope_service.refresh_content(
                         movie, country=current_country
                     )
+                record_title_completion(check, result, succeeded=True)
                 summary.refreshed += 1
             except RateLimitExceeded:
+                record_title_completion(check)
                 summary.note_rate_limited_source(slug)
                 summary.skipped_rate_limited += 1
             except SourceQuotaExceeded as exc:
+                record_title_completion(check)
                 # An upstream refusal, not our local limiter. Plan exhaustion
                 # is terminal for the rest of this tick and costs no offer
                 # write; a short rate window stays retryable and never trips
@@ -623,6 +692,7 @@ def _process_watchlist_refresh_locked(
                         movie.tmdb_id, slug, exc.kind, exc.retry_after, exc.quota,
                     )
             except UpstreamTitleNotFound as exc:
+                record_title_completion(check)
                 # The same scoped evidence as a queued definitive miss. The
                 # shared history reader owns reuse and supersession policy;
                 # transient failures never enter this evidence path.
@@ -643,6 +713,7 @@ def _process_watchlist_refresh_locked(
                     movie.tmdb_id, slug, exc,
                 )
             except Exception as exc:
+                record_title_completion(check)
                 logger.exception(
                     "Unexpected error refreshing movie tmdb_id=%s source=%s: %s",
                     movie.tmdb_id, slug, exc,
@@ -893,8 +964,8 @@ def stale_catalogue_sources(now=None) -> list[str]:
     ``process_catalogue_refresh`` writes for every attempted source (``error``
     set when the attempt failed): the newest error-free ``finished_at`` per
     slug — a slug with no such row has never synced and is stale by
-    definition. Each slug is measured against its own freshness window
-    (``availability.freshness``), the same policy the title scopes use, and
+    definition. Each slug is measured against its own catalogue freshness
+    window (``availability.freshness``), and
     disabled sources are excluded exactly like the bare catalogue run does.
 
     One aggregate query regardless of how many catalogue sources exist —

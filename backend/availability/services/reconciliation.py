@@ -37,10 +37,10 @@ from collections import Counter
 from datetime import datetime
 from typing import Iterable, Optional
 
-from django.db.models import Exists, OuterRef, Q
+from django.db.models import F, Exists, OuterRef, Q
 from django.utils import timezone
 
-from ..domain.enums import AvailabilityEvidence, ConflictKind, ContentType, FreshnessState, MatchMethod, SyncStatus
+from ..domain.enums import AvailabilityEvidence, ConflictKind, ContentType, FreshnessState, MatchMethod, SyncMode, SyncStatus
 from ..domain.reconciliation import (
     OfferObservation,
     PriceObservation,
@@ -54,7 +54,8 @@ from ..domain.reconciliation import (
 )
 # Shared with the refresh path: one declared freshness policy per source.
 # Re-exported here so existing importers keep working.
-from ..freshness import FRESHNESS_INTERVAL_KEY, freshness_state
+from ..freshness import FRESHNESS_INTERVAL_KEY, TITLE_AGGREGATORS, freshness_state, title_refresh_interval
+from .departures import UNSAFE_CONFLICTS
 from ..models import ContentMapping, ProviderContent
 from .identity_policy import (
     EXTERNAL_ID_ASSERTION_SOURCES,
@@ -212,6 +213,7 @@ class AvailabilityReconciliationService:
         for price in self.prices.for_identities({row.identity for row in rows}):
             prices_by_identity.setdefault(price.offer_identity, []).append(price)
 
+        title_checks = self._title_checks(rows)
         grouped: dict[ReconciliationGroup, dict[str, list[OfferObservation]]] = {}
         conflicts: list[ReconciliationConflict] = []
         for row in rows:
@@ -244,6 +246,7 @@ class AvailabilityReconciliationService:
                 row,
                 now=now, mappings=mappings, claims=claims, statuses=statuses,
                 prices=prices_by_identity.get(row.identity, ()),
+                title_checks=title_checks,
                 has_reviewed_identity=reviewed_series is not None,
             )
             grouped.setdefault(group, {}).setdefault(row.offer_type, []).append(observation)
@@ -261,8 +264,27 @@ class AvailabilityReconciliationService:
         conflicts.sort(key=lambda c: (c.provider, c.country, str(c.kind), c.offer_ids))
         return offers, conflicts, statuses
 
+    @staticmethod
+    def _title_checks(rows):
+        from tracker.models import TitleAvailabilityCheck
+
+        ids = {
+            row.tmdb_id for row in rows
+            if row.source.slug in TITLE_AGGREGATORS and row.sync_run_id
+            and row.sync_run.mode == SyncMode.TARGETED
+        }
+        if not ids:
+            return {}
+        return {
+            (check.tmdb_id, check.content_type, check.country, check.source): check
+            for check in TitleAvailabilityCheck.objects.filter(
+                tmdb_id__in=ids, source__in=TITLE_AGGREGATORS,
+                tmdb_id=F("movie__tmdb_id"), content_type=F("movie__content_type"),
+            )
+        }
+
     def _observe(self, row, *, now, mappings, claims, statuses, prices=(),
-                 has_reviewed_identity=False) -> OfferObservation:
+                 title_checks=None, has_reviewed_identity=False) -> OfferObservation:
         detail = ""
         provider_content_id = row.provider_content_id
         identity_sensitive_provider = row.provider.slug in TITLE_SEARCH_IDENTITY_SOURCES
@@ -295,6 +317,24 @@ class AvailabilityReconciliationService:
             now=now,
         )
 
+        title_checked_at = None
+        if row.source.slug in TITLE_AGGREGATORS and row.sync_run_id and row.sync_run.mode == SyncMode.TARGETED:
+            # Only a completed routine check can vouch for this exact run.
+            # An empty, failed or interrupted check leaves older positives as history.
+            freshness = FreshnessState.STALE
+            kind = ContentType.SERIES if row.content_type in (ContentType.SEASON, ContentType.EPISODE) else row.content_type
+            check = (title_checks or {}).get((row.tmdb_id, kind, row.country.code, row.source.slug))
+            if (
+                check and not check.in_progress and check.last_succeeded_at
+                and check.last_succeeded_at >= check.last_attempted_at
+                and row.sync_run_id in check.successful_run_ids
+                and row.sync_run.status == SyncStatus.SUCCEEDED
+                and now - title_refresh_interval(row.source.slug, row.source.configuration)
+                    <= (_aware_opt(row.observed_at) or _aware(row.last_seen)) <= now
+                and _aware(row.last_seen) <= now
+            ):
+                title_checked_at = check.last_succeeded_at
+
         source_prices = tuple(_price_observation(price) for price in prices)
         own_source = row.source.slug
         own_price = next(
@@ -323,6 +363,8 @@ class AvailabilityReconciliationService:
             price=own_price,
             source_prices=source_prices,
             window_open=window_open,
+            observed_at=_aware_opt(row.observed_at),
+            title_checked_at=title_checked_at,
         )
 
     def _reconcile_group(self, group, subgroups):
@@ -448,6 +490,11 @@ class AvailabilityReconciliationService:
             conflicts.append(price_conflict)
 
         evidence, last_verified_at, last_seen_available_at = _evidence_values(observations)
+        all_conflicts = tuple(_dedupe(list(conflicts) + list(extra_conflicts)))
+        if evidence == AvailabilityEvidence.SOURCE_REPORTED and any(
+            conflict.kind in UNSAFE_CONFLICTS for conflict in all_conflicts
+        ):
+            evidence = AvailabilityEvidence.UNKNOWN
 
         return ReconciledOffer(
             provider=group.provider,
@@ -469,7 +516,7 @@ class AvailabilityReconciliationService:
             sources=tuple(sorted({obs.source for obs in observations})),
             offer_ids=tuple(sorted(obs.offer_id for obs in observations)),
             observations=tuple(observations),
-            conflicts=tuple(_dedupe(list(conflicts) + list(extra_conflicts))),
+            conflicts=all_conflicts,
             price=price,
             price_is_from=price_is_from,
             prices=prices,
@@ -674,11 +721,12 @@ class AvailabilityReconciliationService:
 
 _EVIDENCE_STRENGTH = (
     AvailabilityEvidence.VERIFIED,
+    AvailabilityEvidence.SOURCE_REPORTED,
     AvailabilityEvidence.STALE,
     AvailabilityEvidence.UNKNOWN,
     AvailabilityEvidence.UNAVAILABLE,
 )
-_POSITIVE_EVIDENCE = frozenset(_EVIDENCE_STRENGTH[:3])
+_POSITIVE_EVIDENCE = frozenset(_EVIDENCE_STRENGTH[:-1])
 
 
 def _evidence_values(observations):

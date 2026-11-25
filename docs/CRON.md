@@ -25,6 +25,74 @@ Or if running directly on the host / server environment:
 - **Audit Logging**: Each invocation automatically creates a `RefreshRun` audit record in PostgreSQL, accessible via the Django Admin interface under `RefreshRun`.
 - **Event-driven request drain**: before the background stale sweep, each run settles pending `RefreshRequest` rows first (manual actions, never-fetched titles, refresh-on-view, watchlist adds/imports, mark-watched), in user-intent priority order, through this same budget, the same rate limiter and the same `RefreshRun`. With a budget of 2 or more, one held-back unit is spent last on the longest-waiting request (bounded fairness), so an endless stream of detail views or watchlist adds cannot starve the low-priority backlog; the daily quota stays authoritative either way. A request left pending because the budget or quota ran out simply waits for the next drain — primarily the dedicated `worker` service (`docker compose` → `python manage.py refresh_worker`, a queue-only loop that drains events within seconds and never runs the sweep), with this scheduled run as its fallback. The JSON summary in the log carries `requests_drained` (requests settled this run) and `requests_pending` (backlog remaining).
 
+## Title availability cache
+
+JustWatch and Watchmode reuse a successful title check for seven days, keyed
+by typed title, country and source. Configure a shorter operational window
+per aggregator with `Source.configuration["title_refresh_interval_seconds"]`.
+Offer-evidence freshness and catalogue health still use
+`expected_refresh_interval_seconds`. A known catalogue traversal does not fill
+the title cache.
+
+When fresh first-party evidence confirms a departure, the eligible title
+aggregator checks become due every 24 hours within seven days. In the final
+24 hours, automation can perform one check per source. A check that already
+started in that window counts even if it failed. Disputed, withdrawn,
+expired and aggregator-only dates do not shorten the cache.
+
+Title opens enqueue local work. The manual detail action can recheck the
+selected title and market before the cache expires. A check attempted in the
+last ten minutes serves repeated clicks for the same scope. The worker
+continues to apply source-specific limits and its run budget. Empty or failed
+checks never remove last-known offers or make them current.
+
+### Source-reported title offers
+
+Only offers tied to the exact successful routine check's targeted sync runs
+can use the seven-day display window. Purpose-built audit or pilot runs and
+older rows without routine provenance stay in last-known history. The title response places these offers in
+`source_reported_offers` with source, original observation and last-seen
+timestamps, and the successful check time. They do not enter independently
+qualified availability or watchability counts. A newer failed, interrupted,
+empty or inconclusive check leaves older positives in last-known history.
+Disputed dates and conflicting reports do not gain current status.
+
+Detail GETs read local titles and metadata. A tracked title can enqueue due
+work for its country without waiting for a provider. The manual action
+bypasses the ordinary lifetime for the selected typed title and market.
+Quota, locks, the ten-minute cooldown and pending-request dedup still apply.
+
+### Reviewed upstream permissions
+
+An enabled Source row supplies no permission by itself. Set
+`Source.configuration["outbound_availability_permission"]` only after reviewing
+the current authorization. The review record holds:
+
+- `status` equal to `authorized`
+- Exact `endpoint`, approved ISO `countries` and explicit `operations`
+- Sanitized `evidence_reference`, `reviewed_by`, and timezone-aware
+  `valid_from` and `valid_until`
+- JustWatch only, a positive `maximum_requests` for the receipt and a positive
+  `minimum_interval_seconds` from the reviewed rate policy
+
+For JustWatch use `https://apis.justwatch.com/graphql`, with `search` for movies
+and `search` plus `seasons` for series. The default transport also tests the
+exact document and country for separately authorized `catalogue`, `providers`,
+`details`, `episodes` and `title_offers` operations. The Watchmode receipt uses
+`https://api.watchmode.com/v1`, `search` and `title_sources`. An explicit
+Streaming Availability check requires
+`https://streaming-availability.p.rapidapi.com` and `show_availability`.
+Existing credentials and quotas still apply. The receipt must cover the
+application's title workload for those markets. A narrow diagnostic approval
+does not authorize this workload. No receipt is seeded.
+
+The queue rechecks permission before execution. The ordinary JustWatch
+transport commits an attempt against the receipt before each HTTP POST. It
+does not follow redirects. Denials stop the reviewed receipt, rate limits
+honor the upstream retry window, and interrupted sends retain their
+reservation until separately reconciled. The bounded #97 experiment has
+its own authorization, transport and ledger.
+
 ## Provider Catalogue Refresh
 
 Provider catalogues (CBC Gem, BBC iPlayer, Tubi, Prime Video, RaiPlay, Pluto TV, PBS, and ABC iview) are refreshed by a separate command: a catalogue source reports its whole configured scope through public catalogue endpoints, so **no API budget applies** and there is no `--budget` flag.

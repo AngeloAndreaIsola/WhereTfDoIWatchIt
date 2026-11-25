@@ -1,4 +1,5 @@
 """Final B2 quota/evidence regressions; PostgreSQL and mocked providers only."""
+from tracker.tests.availability_factories import reviewed_test_sources
 from contextlib import ExitStack
 from unittest.mock import MagicMock, patch
 
@@ -23,6 +24,7 @@ WM = "watchmode"
 class RunBudgetCases:
     """Exercise both public entry points with real daily/monthly ledgers."""
     def setUp(self):
+        reviewed_test_sources()
         self.assertEqual(connection.vendor, "postgresql")
         ApiCallCounter.objects.filter(service__in=[SA, WM]).delete()
         ApiCallLedger.objects.filter(service__in=[SA, WM]).delete()
@@ -240,6 +242,7 @@ class SweepNegativeEvidenceTests(TestCase):
         self.assertNotIn(self.series.pk, report._permanent_miss_sources([self.movie.pk, self.series.pk], country="NL"))
 
     def test_other_source_is_not_suppressed(self):
+        reviewed_test_sources(slugs=[WM])
         self.record_miss()
         other = MagicMock()
         with patch.object(bulk, "AvailabilityRefreshService", return_value=other), \

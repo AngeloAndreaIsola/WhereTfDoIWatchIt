@@ -87,13 +87,13 @@ from ..services.normalize import (
 from .base import (
     ContentRequest,
     SourceCapabilities,
-    SourceFetchError,
+    SourceFetchError, SourceFetchStopped,
     SourceFetchResult,
     SourceQuotaExceeded,
 )
 from .watchmode_client import (
     WatchmodeClient,
-    WatchmodeError,
+    WatchmodeAuthError, WatchmodeError,
     WatchmodeQuotaExceeded,
     WatchmodeRegionUnsupported,
 )
@@ -277,6 +277,8 @@ class WatchmodeSource:
             # SourceFetchError is what made the scheduler record a spent plan
             # as a transient failure and retry it three times.
             raise _as_source_quota_error(exc) from exc
+        except WatchmodeAuthError as exc:
+            raise SourceFetchStopped("Watchmode denied access") from exc
         except WatchmodeError as exc:
             raise SourceFetchError(f"watchmode search failed: {exc}") from exc
 
@@ -300,6 +302,8 @@ class WatchmodeSource:
             raise
         except WatchmodeQuotaExceeded as exc:
             raise _as_source_quota_error(exc) from exc
+        except WatchmodeAuthError as exc:
+            raise SourceFetchStopped("Watchmode denied access") from exc
         except WatchmodeError as exc:
             raise SourceFetchError(f"watchmode title_sources failed: {exc}") from exc
 

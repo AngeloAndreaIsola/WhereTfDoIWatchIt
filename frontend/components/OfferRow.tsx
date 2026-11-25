@@ -53,7 +53,7 @@ export function formatPrice(amount: string, currency: string, locale?: string): 
 }
 
 interface OfferRowProps {
-  offer: PrimeOffer;
+  offer: Omit<PrimeOffer, "ranking"> & Partial<Pick<PrimeOffer, "ranking">>;
   tmdbId?: number;
   isBest?: boolean;
   preferredAudio?: string[];
@@ -77,7 +77,8 @@ export default function OfferRow({
     (preferredSubtitles || []).map((c) => normalizeLanguageCode(c))
   );
 
-  const watchUrl = offer.url || (tmdbId ? `/watch/${tmdbId}` : null);
+  const reported = offer.availability_evidence === "source_reported";
+  const watchUrl = offer.url || (!reported && tmdbId ? `/watch/${tmdbId}` : null);
   const unverified = isUnverifiedOffer(offer);
   const linkLabel = unverified ? (offer.url ? "Check provider" : "Verify availability") : "Watch";
 
@@ -102,8 +103,8 @@ export default function OfferRow({
   // availability — show it, muted and labelled, rather than hiding it. This is
   // the movie-194 fix: the offer list used to drop unowned services entirely,
   // which made "available elsewhere" look like "nothing found".
-  const notEntitled = offer.is_entitled === false;
-  const notAccessible = offer.is_accessible === false;
+  const notEntitled = !reported && offer.is_entitled === false;
+  const notAccessible = !reported && offer.is_accessible === false;
   // Why the row is muted. An unowned service is the common case; an offer the
   // user *does* own can still be unreachable (wrong country) or unusable
   // (language rules), and saying "not reachable" for a language block is
@@ -135,7 +136,7 @@ export default function OfferRow({
   return (
     <div
       data-testid="offer-row"
-      data-entitled={notEntitled ? "false" : "true"}
+      data-entitled={reported ? "unknown" : notEntitled ? "false" : "true"}
       className={`
         rounded-xl border p-4 text-sm transition-all
         ${notAccessible
@@ -190,15 +191,33 @@ export default function OfferRow({
               data-testid="unverified-badge"
               data-verification-state={offer.availability_evidence}
               className="rounded-md bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-900 dark:bg-amber-900/40 dark:text-amber-200"
-              title="Last seen or uncorroborated availability — recheck required. Not a confirmed current offer."
+              title={reported
+                ? "An availability report from the named source"
+                : "Last seen or uncorroborated availability — recheck required. Not a confirmed current offer."}
             >
-              {UNVERIFIED_BADGE}
+              {reported ? "Source-reported" : UNVERIFIED_BADGE}
+              {reported && offer.reporting_source === "justwatch" && " · JustWatch"}
+              {reported && offer.reporting_source === "watchmode" && " · Watchmode"}
             </span>
           )}
           {offer.quality && (
             <span className="rounded-md bg-gray-200 px-2 py-0.5 font-mono text-xs font-bold text-gray-800 dark:bg-gray-600 dark:text-gray-200">
               {qualityLabel(offer.quality)}
             </span>
+          )}
+          {reported && offer.observed_at && offer.observed_at !== offer.last_checked_at && (
+            <time className="text-xs text-gray-500 dark:text-gray-400" dateTime={offer.observed_at}>
+              Observed {new Date(offer.observed_at).toLocaleString(undefined, {
+                dateStyle: "medium", timeStyle: "short", timeZone: "UTC",
+              })} UTC
+            </time>
+          )}
+          {reported && offer.last_checked_at && (
+            <time className="text-xs text-gray-500 dark:text-gray-400" dateTime={offer.last_checked_at}>
+              Last checked {new Date(offer.last_checked_at).toLocaleString(undefined, {
+                dateStyle: "medium", timeStyle: "short", timeZone: "UTC",
+              })} UTC
+            </time>
           )}
           {priceApplicable && confirmedPrice && priceText && (
             <span
