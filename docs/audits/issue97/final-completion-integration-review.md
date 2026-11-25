@@ -2,6 +2,15 @@
 
 2026-11-25 UTC
 
+## Post-review correction (resolved blockers)
+
+Two blockers identified below were subsequently resolved and verified on GitHub:
+
+- **#198 HTTP projection** corrected head `c5d146923e9a292de0d5398d6c975cc85177144c`. The HTTP and offline audit variant projections are allowlisted and sanitized; synthetic signed-query links and private identifiers no longer appear in nested responses. Disposable PostgreSQL: 316 focused tests, 3,802 full backend tests, migration drift and offline audit field checks passed (local PASS only). Handoff: https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/pull/198#issuecomment-7156709289. Independent exact-head review and hosted CI remain gates.
+- **#205 existing season mappings** corrected head `37bb898935dd12dd45ea5282b8739abcb54970c7`. The verified parent-keyed season read is restored while mapping precedence is preserved; child-only discovery remains provenance. Disposable PostgreSQL: 23 focused and 3,787 full tests passed, plus 148 passing on a scratch integration at the previously assigned #198 head. Handoffs: https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/pull/205#issuecomment-7156744709 and https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/issues/203#issuecomment-7156748422. Serving-row impact is NOT PROVEN; any repair of historical child-keyed rows needs a separate owner decision and data mutation approval.
+
+All other findings, the merge sequence, the cutover recommendation, the Stage D/E approval requests and the acceptance checklist below are unchanged. #97 remains OPEN and #103 ON HOLD.
+
 **Acceptance remains incomplete. Keep #97 open and #103 on hold.** The reviewed branches provide local implementation evidence and an independent comparison design. Stage D execution and Stage E capture remain blocked. Fresh independent comparable pairs and confirmed feature-level negatives both stand at zero. ChatGPT Web owns final review and merge decisions. [Issue #97][i97] · [Issue #103][i103] · [Historical acceptance checklist][historical] · [Stage E protocol][e-protocol]
 
 ## GitHub provenance and executed checks
