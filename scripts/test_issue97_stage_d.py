@@ -3,6 +3,7 @@
 import argparse
 import csv
 import json
+import re
 import unittest
 from collections import Counter
 from pathlib import Path
@@ -14,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PILOT = ROOT / "docs/audits/stage2b/nl_pilot_cohort_20261122_v2.csv"
 IDENTITIES = PILOT.with_name("identity_manifest_20261122.csv")
 REMAINING = PILOT.parent.parent / "issue97/stage-d-remaining-cohort.csv"
+OFFLINE_REPORT = REMAINING.with_name("stage-d-offline-verification.md")
 RUNNER_MANIFEST = ROOT / "backend/availability/services/issue97_stage_d_titles.json"
 # The cleaned repository deliberately contains no raw canary payloads.  These
 # are the two independently reviewed typed identities excluded from the
@@ -122,6 +124,23 @@ class StageDManifestTests(unittest.TestCase):
                 "title": row["canonical_title"], "year": int(row["canonical_year"]),
                 "identity_evidence_sha256": row["identity_evidence_sha256"], "maximum_attempts": 1,
             })
+
+    def test_report_batch1_signing_scope_matches_ordered_policy(self):
+        manifest = json.loads(RUNNER_MANIFEST.read_text(encoding="utf-8"))
+        batch_size = manifest["batch_sizes"][0]
+        self.assertEqual(batch_size, 2, "Batch 1 must contain exactly 2 scopes")
+        batch1_scopes = manifest["scopes"][:batch_size]
+        identities = [(scope["media_type"], scope["tmdb_id"], scope["country"]) for scope in batch1_scopes]
+        self.assertEqual(identities, [("movie", 238, "NL"), ("series", 1396, "NL")])
+        scope_ids = [scope["scope_id"] for scope in batch1_scopes]
+        self.assertEqual(scope_ids, ["movie-238-nl", "series-1396-nl"])
+
+        signing_gates = [
+            line for line in OFFLINE_REPORT.read_text(encoding="utf-8").splitlines()
+            if "**Signed Batch 1 manifest and expiry**" in line
+        ]
+        self.assertEqual(len(signing_gates), 1, "Expected one published Batch 1 signing gate")
+        self.assertEqual(re.findall(r"`([^`]+)`", signing_gates[0]), scope_ids)
 
     def test_raw_tmdb_bytes_match_manifest_and_payloads(self):
         if self.evidence_dir is None:
