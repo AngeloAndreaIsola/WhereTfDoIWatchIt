@@ -211,6 +211,35 @@ class AvailabilityExperimentScope(models.Model):
         ]
 
 
+class AvailabilityStageDRun(models.Model):
+    """Exclusive JustWatch ownership on one disposable Stage D database."""
+
+    experiment = models.OneToOneField(
+        AvailabilityExperiment, primary_key=True, on_delete=models.PROTECT,
+    )
+    grant = models.ForeignKey(JustWatchRequestBudget, on_delete=models.PROTECT)
+    initial_grant_attempts = models.PositiveIntegerField()
+
+
+class AvailabilityStageDAttemptEvent(models.Model):
+    """Append-only evidence for a reservation, handoff, response or checkpoint."""
+
+    attempt = models.ForeignKey(
+        AvailabilityExperimentAttempt, on_delete=models.PROTECT, related_name="stage_d_events",
+    )
+    kind = models.CharField(max_length=11, choices=[
+        ("reservation", "Reservation"), ("handoff", "Handoff"), ("response", "Response"),
+        ("checkpoint", "Checkpoint"),
+    ])
+    occurred_at = models.DateTimeField(default=timezone.now)
+    evidence = models.JSONField(default=dict)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("attempt", "kind"), name="uniq_stage_d_attempt_event"),
+        ]
+
+
 class SyncRun(models.Model):
     provider = models.ForeignKey(
         "tracker.Provider", on_delete=models.PROTECT, related_name="sync_runs"

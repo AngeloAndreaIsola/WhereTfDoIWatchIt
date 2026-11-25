@@ -244,6 +244,8 @@ class JustWatchSource:
         content_type = self._content_type(title)
 
         contents.append(self._content(title, content_type, country))
+        if content_type.uses_series_tmdb_id:
+            return SourceFetchResult(contents=contents, sync_mode=SyncMode.TARGETED)
         offers.extend(self._offers_for(title, country=country, content_type=content_type,
                                        tmdb_id=tmdb_id, content=title))
 
@@ -251,13 +253,21 @@ class JustWatchSource:
         # they are walked explicitly rather than collapsed onto the series.
         if content_type == ContentType.SERIES:
             for season in self._season_matches(self._seasons(title.id, country)):
-                if season is None:
+                if season is None or season.id == title.id:
                     continue
-                contents.append(self._content(season, ContentType.SEASON, country))
-                offers.extend(self._offers_for(
+                # Only the selected show can assert the series ID. A title/year
+                # fallback carries the request's ID, not an external assertion.
+                season_offers = self._offers_for(
                     season, country=country, content_type=ContentType.SEASON,
-                    tmdb_id=tmdb_id, content=season,
-                ))
+                    tmdb_id=title.tmdb_id_int, content=season,
+                )
+                for provider in dict.fromkeys(offer.provider_id for offer in season_offers):
+                    contents.append(self._content(
+                        season, ContentType.SEASON, country, provider=provider,
+                        parent_tmdb_id=title.tmdb_id_int,
+                    ))
+                if title.tmdb_id_int is not None:
+                    offers.extend(season_offers)
 
         return SourceFetchResult(
             contents=contents, offers=offers, sync_mode=SyncMode.TARGETED,
@@ -291,7 +301,9 @@ class JustWatchSource:
                 country=country,
                 language=self.language,
                 count=min(self.page_size, 20),
-                object_types=[expected_type.value.upper()],
+                object_types=[{ContentType.SEASON: "SHOW_SEASON", ContentType.EPISODE: "SHOW_EPISODE"}.get(
+                    expected_type, expected_type.value.upper(),
+                )],
                 best_only=self.best_only,
             )
         except JustWatchError as exc:
@@ -355,7 +367,7 @@ class JustWatchSource:
 
     @staticmethod
     def _requested_content_type(request):
-        """Canonical movie/series type the request declares, or ``None``."""
+        """Canonical content type the request declares, or ``None``."""
         raw = getattr(request, "content_type", None)
         if not raw:
             return None
@@ -363,7 +375,7 @@ class JustWatchSource:
             value = normalize_content_type(raw)
         except ValueError:
             return None
-        return value if value in (ContentType.MOVIE, ContentType.SERIES) else None
+        return value
 
     @staticmethod
     def _normalized_title(value):
@@ -510,6 +522,8 @@ class JustWatchSource:
             # The partition owns the catalogue row. The package filter selects
             # titles, so their offers also need filtering by partition provider.
             all_contents.append(self._content(title, resolved_type, country, provider=provider))
+            if resolved_type.uses_series_tmdb_id:
+                continue
             all_offers.extend(self._offers_for(
                 title, country=country, content_type=resolved_type,
                 tmdb_id=title.tmdb_id_int, content=title, only_provider=provider,
@@ -615,7 +629,8 @@ class JustWatchSource:
             source_variant=justwatch_offer_variant(offer, price),
         )
 
-    def _content(self, title, content_type, country, *, provider=None):
+    def _content(self, title, content_type, country, *, provider=None,
+                 parent_tmdb_id=None):
         """Provider-native content entry, identified by JustWatch's node id.
 
         ``external_ids`` carries the TMDb/IMDb ids when present, so a later
@@ -629,24 +644,32 @@ class JustWatchSource:
         context.
         """
         external_ids = {}
-        if title.tmdb_id_int:
-            external_ids["tmdb"] = str(title.tmdb_id_int)
+        tmdb_id = title.tmdb_id_int
+        if tmdb_id:
+            external_ids["tmdb"] = str(tmdb_id)
         if title.imdb_id:
             external_ids["imdb"] = str(title.imdb_id)
+        identity_evidence = {}
+        if content_type == ContentType.SEASON and parent_tmdb_id is not None:
+            identity_evidence["justwatch_season"] = {
+                "series_tmdb_id": parent_tmdb_id, "child_tmdb_id": tmdb_id,
+            }
         return DiscoveredContent(
             provider_id=provider or self._dominant_provider_slug(title),
             provider_content_id=str(title.id or ""),
             content_type=content_type,
             title=title.title,
             release_date=self._parse_date(title),
-            season_number=title.season_number if content_type == ContentType.SEASON else None,
+            season_number=title.season_number if content_type in (ContentType.SEASON, ContentType.EPISODE) else None,
             episode_number=title.episode_number if content_type == ContentType.EPISODE else None,
             duration=title.runtime,
             url=title.url or "",
             poster=title.poster or "",
             description=title.description or "",
             external_ids=external_ids,
+            identity_evidence=identity_evidence,
             source_id=self.slug,
+            parent_tmdb_id=parent_tmdb_id,
         )
 
     @staticmethod

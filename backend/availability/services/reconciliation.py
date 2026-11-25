@@ -62,6 +62,7 @@ from ..models import ContentMapping, ProviderContent
 from .identity_policy import (
     EXTERNAL_ID_ASSERTION_SOURCES,
     TITLE_SEARCH_IDENTITY_SOURCES,
+    reviewed_provider_series_tmdb_id,
 )
 from .normalize import normalize_justwatch_quality, offer_variant_window_open
 from ..persistence.repositories import (
@@ -203,7 +204,7 @@ class AvailabilityReconciliationService:
     def _reconcile_rows(self, rows, *, now):
         """Group raw rows, then reconcile each group. Returns offers,
         deduped conflicts, and the latest sync status per observed scope."""
-        mappings = self.mappings.tmdb_ids_for_provider_content(rows)
+        mappings = self.mappings.trusted_for_provider_content(rows)
         claims = self.offers.alternate_content_claims(rows)
         statuses = self.sync_runs.latest_by_scope(
             (row.provider_id, row.source_id, row.country_id) for row in rows
@@ -217,13 +218,8 @@ class AvailabilityReconciliationService:
 
         title_checks = self._title_checks(rows)
         grouped: dict[ReconciliationGroup, dict[str, list[OfferObservation]]] = {}
+        conflicts: list[ReconciliationConflict] = []
         for row in rows:
-            observation = self._observe(
-                row,
-                now=now, mappings=mappings, claims=claims, statuses=statuses,
-                prices=prices_by_identity.get(row.identity, ()),
-                title_checks=title_checks,
-            )
             group = ReconciliationGroup(
                 content_type=row.content_type,
                 tmdb_id=row.tmdb_id,
@@ -232,10 +228,33 @@ class AvailabilityReconciliationService:
                 provider=row.provider.slug,
                 country=row.country.code,
             )
+            reviewed_series = reviewed_provider_series_tmdb_id(
+                group.provider, row.provider_content_id,
+            )
+            if reviewed_series is not None and (
+                row.tmdb_id != reviewed_series
+                or row.content_type not in (ContentType.SERIES, ContentType.SEASON, ContentType.EPISODE)
+            ):
+                conflicts.append(self._conflict(
+                    ConflictKind.MAPPING,
+                    group=group,
+                    offer_ids=[row.pk],
+                    sources=[row.source.slug],
+                    facts=[SourceFact(
+                        row.source.slug, f"programme belongs to tmdb series {reviewed_series}",
+                    )],
+                ))
+                continue
+            observation = self._observe(
+                row,
+                now=now, mappings=mappings, claims=claims, statuses=statuses,
+                prices=prices_by_identity.get(row.identity, ()),
+                title_checks=title_checks,
+                has_reviewed_identity=reviewed_series is not None,
+            )
             grouped.setdefault(group, {}).setdefault(row.offer_type, []).append(observation)
 
         offers: list[ReconciledOffer] = []
-        conflicts: list[ReconciliationConflict] = []
         for group, subgroups in grouped.items():
             group_offers, group_conflicts = self._reconcile_group(group, subgroups)
             offers.extend(group_offers)
@@ -267,25 +286,28 @@ class AvailabilityReconciliationService:
             )
         }
 
-    def _observe(self, row, *, now, mappings, claims, statuses, prices=(), title_checks=None) -> OfferObservation:
+    def _observe(self, row, *, now, mappings, claims, statuses, prices=(),
+                 title_checks=None, has_reviewed_identity=False) -> OfferObservation:
         detail = ""
         provider_content_id = row.provider_content_id
         identity_sensitive_provider = row.provider.slug in TITLE_SEARCH_IDENTITY_SOURCES
         has_trusted_source_identity = row.source.slug in EXTERNAL_ID_ASSERTION_SOURCES
-        if provider_content_id:
+        # A stored wrong-work claim cannot invalidate a correctly keyed row.
+        if provider_content_id and not has_reviewed_identity:
             key = (row.provider_id, provider_content_id)
-            mapped_tmdb = mappings.get(key)
-            if key in mappings and mapped_tmdb is None and not has_trusted_source_identity:
+            mapping = mappings.get(key)
+            if key in mappings and mapping is None and not has_trusted_source_identity:
                 detail = "provider-content mapping provenance is unverified"
-            elif mapped_tmdb is not None and mapped_tmdb != row.tmdb_id:
-                detail = f"mapping points to tmdb {mapped_tmdb}"
+            elif mapping is not None and mapping.tmdb_id != row.tmdb_id:
+                if not _is_justwatch_season_child_mapping(row, mapping):
+                    detail = f"mapping points to tmdb {mapping.tmdb_id}"
             elif identity_sensitive_provider and key not in mappings and not has_trusted_source_identity:
                 detail = "provider-content mapping is unresolved"
             others = sorted(claims.get(key, set()) - {row.tmdb_id})
             if others:
                 suffix = "also active for " + ", ".join(f"tmdb {other}" for other in others)
                 detail = f"{detail}; {suffix}" if detail else suffix
-        elif identity_sensitive_provider and not has_trusted_source_identity:
+        elif not provider_content_id and identity_sensitive_provider and not has_trusted_source_identity:
             detail = "provider-content mapping is unresolved"
 
         raw_window_open = (
@@ -725,6 +747,31 @@ _EVIDENCE_STRENGTH = (
     AvailabilityEvidence.UNAVAILABLE,
 )
 _POSITIVE_EVIDENCE = frozenset(_EVIDENCE_STRENGTH[:-1])
+
+
+def _is_justwatch_season_child_mapping(row, mapping):
+    """Recognize the legacy child key only when the typed parent is corroborated."""
+    if (
+        row.content_type != ContentType.SEASON or row.source.slug != "justwatch"
+        or not row.sync_run_id or row.sync_run.mode != SyncMode.TARGETED
+        or row.sync_run.status != SyncStatus.SUCCEEDED
+        or mapping.content_type != ContentType.SEASON or mapping.source.slug != "justwatch"
+        or mapping.match_method != MatchMethod.EXTERNAL_ID
+    ):
+        return False
+    content = mapping.content
+    return bool(
+        content is not None and content.source and content.source.slug == "justwatch"
+        and content.provider_id == row.provider_id
+        and content.provider_content_id == row.provider_content_id
+        and content.content_type == row.content_type
+        and content.season_number == row.season_number
+        and content.episode_number == row.episode_number
+        and content.metadata.get("identity_evidence", {}).get("justwatch_season") == {
+            "series_tmdb_id": row.tmdb_id, "child_tmdb_id": mapping.tmdb_id,
+        }
+        and content.metadata.get("external_ids", {}).get("tmdb") == str(mapping.tmdb_id)
+    )
 
 
 def _evidence_values(observations):
