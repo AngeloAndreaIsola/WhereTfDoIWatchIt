@@ -70,7 +70,7 @@ JUSTWATCH_QUALITIES = {
 }
 
 
-def normalize_content_type(value: str) -> str:
+def normalize_content_type(value: str) -> ContentType:
     try:
         return CONTENT_TYPES[str(value).strip().lower()]
     except KeyError as exc:
