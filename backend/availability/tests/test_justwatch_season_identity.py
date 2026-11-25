@@ -1,0 +1,264 @@
+from django.test import TestCase
+from django.utils import timezone
+
+from availability.domain.enums import ContentType, MatchMethod
+from availability.models import ContentMapping, Country, Offer, ProviderContent, Source
+from availability.services.refresh import EXTERNAL_ID_CONFIDENCE, AvailabilityRefreshService
+from availability.sources import ContentRequest
+from tracker.models import Movie, Provider, ProviderCategory, TitleAvailabilityCheck
+from tracker.services.availability_reads import get_title_offer_evidence
+
+from . import aggregator_fixtures as fx
+from .test_justwatch_regression import RecordingPost, source_with
+
+
+class JustWatchSeasonIdentityTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        Country.objects.get_or_create(code="NL", defaults={"name": "Netherlands"})
+        cls.netflix, _ = Provider.objects.get_or_create(
+            slug="netflix", defaults={"name": "Netflix", "category": ProviderCategory.OFFICIAL},
+        )
+        cls.series = Movie.objects.create(
+            tmdb_id=481991, title="Synthetic Series", year=2025, content_type=ContentType.SERIES,
+        )
+
+    def season(self, node_id="tss1", *, slot=1, child_id="481992", offers=None):
+        if offers is None:
+            offers = [fx.offer("season-offer", "netflix", "Netflix", "nfx")]
+        return fx.title(
+            node_id, f"Season {slot}", object_type="SEASON", tmdb_id=child_id,
+            imdb_id=None, season_number=slot, offers=offers,
+        )
+
+    def refresh(self, *seasons, parent_id="481991"):
+        show = fx.title("ts1", self.series.title, object_type="SHOW", tmdb_id=parent_id)
+        post = RecordingPost([
+            fx.FakeResponse(payload=fx.envelope({"popularTitles": {"edges": fx.edges(show)}})),
+            fx.FakeResponse(payload=fx.envelope({"node": {"seasons": list(seasons)}})),
+        ])
+        started = timezone.now()
+        result = AvailabilityRefreshService(source=source_with(post)).refresh_content(
+            self.series, country="NL",
+        )
+        if result.sync_runs:
+            TitleAvailabilityCheck.objects.update_or_create(
+                movie=self.series, country="NL", source="justwatch",
+                defaults={
+                    "tmdb_id": self.series.tmdb_id, "content_type": self.series.content_type,
+                    "last_attempted_at": started, "last_succeeded_at": timezone.now(),
+                    "successful_run_ids": [run.pk for run in result.sync_runs],
+                },
+            )
+        return post
+
+    def refresh_catalogue(self, *nodes):
+        post = RecordingPost([
+            fx.FakeResponse(payload=fx.envelope({"popularTitles": {"edges": fx.edges(*nodes)}})),
+        ])
+        return AvailabilityRefreshService(source=source_with(post)).refresh_catalogue(
+            provider="netflix", country="NL",
+        )
+
+    def seed_mapping(self, tmdb_id=481992, *, method=MatchMethod.EXTERNAL_ID):
+        return ContentMapping.objects.create(
+            provider=self.netflix, source=Source.objects.get(slug="justwatch"),
+            provider_content_id="tss1", content_type=ContentType.SEASON,
+            tmdb_id=tmdb_id, confidence=EXTERNAL_ID_CONFIDENCE, match_method=method,
+        )
+
+    # -- core invariant: parent-keyed canonical offer, child id stays provenance --
+
+    def test_child_tmdb_id_is_distinct_from_parent_key_used_by_season_read(self):
+        post = self.refresh(self.season())
+        self.assertEqual(post.payloads[1]["variables"]["nodeId"], "ts1")
+        content = ProviderContent.objects.get(provider_content_id="tss1")
+        # Child's own TMDb id survives as provenance in ProviderContent metadata.
+        self.assertEqual(content.metadata["external_ids"]["tmdb"], "481992")
+        offer = Offer.objects.get(provider_content_id="tss1")
+        # Canonical offer keys off the parent series id, never the child season id.
+        self.assertEqual((offer.content_type, offer.tmdb_id, offer.season_number),
+                         (ContentType.SEASON, self.series.tmdb_id, 1))
+        evidence = get_title_offer_evidence(self.series, season=1, country="NL")
+        self.assertEqual(evidence.current, [])
+        mapping = ContentMapping.objects.get(provider_content_id="tss1")
+        self.assertEqual(
+            ([item.season_number for item in evidence.source_reported], mapping.tmdb_id),
+            ([1], self.series.tmdb_id),
+        )
+        self.assertEqual(mapping.content_id, content.pk)
+        self.assertEqual(mapping.match_method, MatchMethod.EXTERNAL_ID)
+
+    def test_existing_child_mapping_keeps_precedence_and_verified_parent_offer_is_readable(self):
+        mapping = self.seed_mapping()
+        # Before a direct parent ID assertion, the legacy conflict still hides the offer.
+        self.refresh(self.season(), parent_id=None)
+        self.assertFalse(Offer.objects.filter(provider_content_id="tss1").exists())
+        self.assertEqual(get_title_offer_evidence(self.series, season=1, country="NL").source_reported, [])
+
+        self.refresh(self.season())
+        first_offer = Offer.objects.get(provider_content_id="tss1")
+        self.refresh(self.season())
+        self.refresh_catalogue(self.season())
+
+        persisted = ContentMapping.objects.get(provider_content_id="tss1")
+        self.assertEqual((persisted.pk, persisted.tmdb_id, persisted.revision, persisted.match_method),
+                         (mapping.pk, mapping.tmdb_id, mapping.revision, mapping.match_method))
+        offer = Offer.objects.get(provider_content_id="tss1")
+        self.assertEqual((offer.pk, offer.identity, offer.first_seen),
+                         (first_offer.pk, first_offer.identity, first_offer.first_seen))
+        evidence = get_title_offer_evidence(self.series, season=1, country="NL")
+        self.assertEqual(evidence.current, [])
+        self.assertEqual([item.season_number for item in evidence.source_reported], [1])
+
+    def test_manual_and_unrelated_mapping_conflicts_still_hide_offer(self):
+        for method, tmdb_id in ((MatchMethod.MANUAL, 481992), (MatchMethod.EXTERNAL_ID, 481993)):
+            with self.subTest(method=method, tmdb_id=tmdb_id):
+                mapping = self.seed_mapping(tmdb_id, method=method)
+                self.refresh(self.season())
+                mapping.refresh_from_db()
+                self.assertEqual((mapping.tmdb_id, mapping.match_method), (tmdb_id, method))
+                evidence = get_title_offer_evidence(self.series, season=1, country="NL")
+                self.assertEqual(evidence.current, [])
+                self.assertEqual(evidence.source_reported, [])
+                mapping.delete()
+
+    def test_alternate_active_parent_claim_still_hides_offer(self):
+        self.seed_mapping()
+        self.refresh(self.season())
+        Offer.objects.create(
+            provider=self.netflix, country=Country.objects.get(code="NL"),
+            source=Source.objects.get(slug="justwatch"), provider_content_id="tss1",
+            content_type=ContentType.SEASON, tmdb_id=481993, season_number=1,
+            offer_type="subscription",
+        )
+        evidence = get_title_offer_evidence(self.series, season=1, country="NL")
+        self.assertEqual(evidence.current, [])
+        self.assertEqual(evidence.source_reported, [])
+
+    def test_child_only_catalogue_discovery_keeps_provenance_without_mapping_or_offer(self):
+        result = self.refresh_catalogue(self.season(slot=0))
+        content = ProviderContent.objects.get(provider=self.netflix, provider_content_id="tss1")
+        self.assertEqual((content.content_type, content.season_number), (ContentType.SEASON, 0))
+        self.assertEqual(content.metadata["external_ids"]["tmdb"], "481992")
+        self.assertEqual(result.created, 0)
+        self.assertFalse(ContentMapping.objects.filter(provider_content_id="tss1").exists())
+        self.assertFalse(Offer.objects.filter(provider_content_id="tss1").exists())
+
+    def test_direct_child_search_emits_no_canonical_offers(self):
+        post = RecordingPost([
+            fx.FakeResponse(payload=fx.envelope({"popularTitles": {"edges": fx.edges(self.season())}})),
+        ])
+        request = ContentRequest(tmdb_id=481992, content_type=ContentType.SEASON, title="Season 1")
+        result = source_with(post).fetch(request, country="NL")
+        self.assertEqual(result.offers, [])
+        self.assertEqual(len(result.contents), 1)
+        self.assertEqual(result.contents[0].external_ids["tmdb"], "481992")
+        self.assertIsNone(result.contents[0].parent_tmdb_id)
+
+    def test_title_year_fallback_cannot_create_an_exact_season_mapping(self):
+        self.refresh(self.season(), parent_id=None)
+        child = ProviderContent.objects.get(provider_content_id="tss1")
+        self.assertEqual(child.metadata["external_ids"]["tmdb"], "481992")
+        self.assertFalse(ContentMapping.objects.filter(provider_content_id="tss1").exists())
+        self.assertFalse(Offer.objects.filter(provider_content_id="tss1").exists())
+
+    def test_repeated_season_across_packages_preserves_provider_mapping_precedence(self):
+        self.seed_mapping(method=MatchMethod.MANUAL)
+        second = self.season(offers=[fx.offer("prime-season", "amazonprime", "Prime Video", "prv")])
+        self.refresh(self.season(), second)
+        self.refresh(second, self.season())
+        rows = dict(ContentMapping.objects.filter(provider_content_id="tss1").values_list(
+            "provider__slug", "tmdb_id",
+        ))
+        self.assertEqual(rows, {"netflix": 481992, "prime": self.series.tmdb_id})
+        self.assertEqual(Offer.objects.filter(provider_content_id="tss1").count(), 2)
+        evidence = get_title_offer_evidence(self.series, season=1, country="NL")
+        self.assertEqual(len(evidence.source_reported), 1)
+        self.assertEqual(evidence.source_reported[0].url, "https://example.test/prime-season")
+
+    # -- missing native season id: child id absent but parent key still maps --
+
+    def test_season_missing_child_tmdb_id_still_maps_to_parent(self):
+        """Season node reports no child TMDb id => parent series id still used for mapping."""
+        no_child = self.season(child_id=None)
+        self.refresh(no_child)
+        content = ProviderContent.objects.get(provider_content_id="tss1")
+        self.assertIsNone(content.metadata.get("external_ids", {}).get("tmdb"))
+        offer = Offer.objects.get(provider_content_id="tss1")
+        self.assertEqual((offer.content_type, offer.tmdb_id, offer.season_number),
+                         (ContentType.SEASON, self.series.tmdb_id, 1))
+        mapping = ContentMapping.objects.get(provider_content_id="tss1")
+        self.assertEqual(mapping.tmdb_id, self.series.tmdb_id)
+
+    # -- conflicting child ids for the same season slot are skipped --
+
+    def test_conflicting_season_ids_are_skipped_without_collapsing(self):
+        """Two seasons with same slot but different child TMDb ids -> neither persists."""
+        s1 = self.season(node_id="tss-a", child_id="481992")
+        s2 = self.season(node_id="tss-b", child_id="481993")
+        self.refresh(s1, s2)
+        # Neither season's content row exists (slot was ambiguous -> skipped).
+        self.assertFalse(
+            ProviderContent.objects.filter(provider_content_id__in=("tss-a", "tss-b")).exists()
+        )
+        self.assertFalse(Offer.objects.filter(provider_content_id__in=("tss-a", "tss-b")).exists())
+        self.assertFalse(
+            ContentMapping.objects.filter(provider_content_id__in=("tss-a", "tss-b")).exists()
+        )
+
+    # -- specials (season_number=0) --
+
+    def test_special_season_number_zero_maps_to_parent(self):
+        """Season 0 (specials) maps to the parent series id like any other season."""
+        special = self.season(node_id="tss0", slot=0, child_id="481994")
+        self.refresh(special)
+        content = ProviderContent.objects.get(provider_content_id="tss0")
+        self.assertEqual(content.season_number, 0)
+        offer = Offer.objects.get(provider_content_id="tss0")
+        self.assertEqual((offer.content_type, offer.tmdb_id, offer.season_number),
+                         (ContentType.SEASON, self.series.tmdb_id, 0))
+        mapping = ContentMapping.objects.get(provider_content_id="tss0")
+        self.assertEqual(mapping.tmdb_id, self.series.tmdb_id)
+        self.assertEqual(content.metadata["external_ids"]["tmdb"], "481994")
+
+    # -- repeated observations of the same season dedupe --
+
+    def test_repeated_season_observations_merge_into_one_row(self):
+        """Same season node observed twice in one fetch -> one content row, merged offers."""
+        s1 = self.season(node_id="tss-dup", child_id="481992")
+        s2 = self.season(node_id="tss-dup", child_id="481992",
+                         offers=[fx.offer("season-offer-2", "netflix", "Netflix", "nfx")])
+        self.refresh(s1, s2)
+        # One ProviderContent row.
+        contents = ProviderContent.objects.filter(provider_content_id="tss-dup")
+        self.assertEqual(contents.count(), 1)
+        # One Offer row (offers merged under one canonical identity).
+        offers = Offer.objects.filter(provider_content_id="tss-dup")
+        self.assertEqual(offers.count(), 1)
+        mapping = ContentMapping.objects.get(provider_content_id="tss-dup")
+        self.assertEqual(mapping.tmdb_id, self.series.tmdb_id)
+
+    # -- stable persistence identities across repeated refreshes --
+
+    def test_stable_persistence_identity_across_refreshes(self):
+        """Repeated refreshes of the same season reuse the same ProviderContent PK."""
+        self.refresh(self.season())
+        first_content = ProviderContent.objects.get(provider_content_id="tss1")
+        first_mapping = ContentMapping.objects.get(provider_content_id="tss1")
+        first_offer = Offer.objects.get(provider_content_id="tss1")
+
+        # Second refresh of the same season.
+        self.refresh(self.season())
+
+        second_content = ProviderContent.objects.get(provider_content_id="tss1")
+        second_mapping = ContentMapping.objects.get(provider_content_id="tss1")
+        second_offer = Offer.objects.get(provider_content_id="tss1")
+
+        self.assertEqual(first_content.pk, second_content.pk)
+        self.assertEqual(first_mapping.pk, second_mapping.pk)
+        self.assertEqual(first_offer.pk, second_offer.pk)
+        # first_seen never moves.
+        self.assertEqual(first_content.first_seen, second_content.first_seen)
+        # last_seen advances on re-observation.
+        self.assertGreaterEqual(second_content.last_seen, first_content.last_seen)
