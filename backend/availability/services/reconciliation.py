@@ -35,12 +35,14 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime
+from decimal import Decimal
 from typing import Iterable, Optional
 
 from django.db.models import F, Exists, OuterRef, Q
 from django.utils import timezone
 
 from ..domain.enums import AvailabilityEvidence, ConflictKind, ContentType, FreshnessState, MatchMethod, SyncMode, SyncStatus
+from ..domain.models import offer_variant_key
 from ..domain.reconciliation import (
     OfferObservation,
     PriceObservation,
@@ -61,6 +63,7 @@ from .identity_policy import (
     EXTERNAL_ID_ASSERTION_SOURCES,
     TITLE_SEARCH_IDENTITY_SOURCES,
 )
+from .normalize import normalize_justwatch_quality, offer_variant_window_open
 from ..persistence.repositories import (
     MappingRepository,
     OfferPriceRepository,
@@ -285,10 +288,23 @@ class AvailabilityReconciliationService:
         elif identity_sensitive_provider and not has_trusted_source_identity:
             detail = "provider-content mapping is unresolved"
 
-        window_open = (
+        raw_window_open = (
             (row.available_from is None or _aware(row.available_from) <= now)
             and (row.available_until is None or _aware(row.available_until) > now)
         )
+        source_prices = tuple(_price_observation(price, now=now) for price in prices)
+        own_price = next(
+            (price for price in source_prices if price.source == row.source.slug),
+            None,
+        )
+        # Legacy prices have no variant snapshot and retain their scalar window.
+        window_open = bool(own_price.open_variants) if own_price and own_price.variants else raw_window_open
+        provider_url, quality = row.provider_url or "", row.quality or ""
+        if own_price and own_price.open_variants:
+            variant = own_price.selected_variant or min(
+                own_price.open_variants, key=lambda variant: not variant.get("url"),
+            )
+            provider_url, quality = _variant_presentation(variant)
         freshness = freshness_state(
             row.source.slug,
             row.last_seen,
@@ -314,20 +330,13 @@ class AvailabilityReconciliationService:
             ):
                 title_checked_at = check.last_succeeded_at
 
-        source_prices = tuple(_price_observation(price) for price in prices)
-        own_source = row.source.slug
-        own_price = next(
-            (price for price in source_prices if price.source == own_source),
-            None,
-        )
-
         return OfferObservation(
             offer_id=row.pk,
             source=row.source.slug,
             sync_run_id=row.sync_run_id,
             provider_content_id=provider_content_id,
-            provider_url=row.provider_url or "",
-            quality=row.quality or "",
+            provider_url=provider_url,
+            quality=quality,
             audio_languages=_languages(row.audio_languages),
             subtitle_languages=_languages(row.subtitle_languages),
             available_from=_aware_opt(row.available_from),
@@ -342,6 +351,7 @@ class AvailabilityReconciliationService:
             price=own_price,
             source_prices=source_prices,
             window_open=window_open,
+            window_unknown=bool(own_price and own_price.variant_window_unknown),
             observed_at=_aware_opt(row.observed_at),
             title_checked_at=title_checked_at,
         )
@@ -397,15 +407,16 @@ class AvailabilityReconciliationService:
         """Merge every observation of one offer_type into a single value."""
         conflicts: list[ReconciliationConflict] = []
 
-        if len({obs.available_now for obs in observations}) > 1:
+        known_availability = [obs for obs in observations if not obs.window_unknown or not obs.currently_available]
+        if len({obs.available_now for obs in known_availability}) > 1:
             conflicts.append(self._conflict(
                 ConflictKind.AVAILABILITY,
                 group=group,
-                offer_ids=[obs.offer_id for obs in observations],
-                sources=[obs.source for obs in observations],
+                offer_ids=[obs.offer_id for obs in known_availability],
+                sources=[obs.source for obs in known_availability],
                 facts=[
                     SourceFact(obs.source, "available" if obs.available_now else "unavailable")
-                    for obs in observations
+                    for obs in known_availability
                 ],
             ))
 
@@ -467,6 +478,8 @@ class AvailabilityReconciliationService:
         )
         if price_conflict is not None:
             conflicts.append(price_conflict)
+        if price and price.selected_variant is not None:
+            provider_url, quality = _variant_presentation(price.selected_variant)
 
         evidence, last_verified_at, last_seen_available_at = _evidence_values(observations)
         all_conflicts = tuple(_dedupe(list(conflicts) + list(extra_conflicts)))
@@ -553,8 +566,14 @@ class AvailabilityReconciliationService:
             same_currency,
             key=lambda price: (price.amount, price.source, price.source_offer_id),
         )
-        is_from = len({price.amount for price in same_currency}) > 1
-        return chosen, is_from
+        amounts = {price.amount for price in same_currency}
+        for price in same_currency:
+            amounts.update(
+                Decimal(variant["amount"]) for variant in price.open_variants
+                if variant["currency"] == currency and variant["amount"] is not None
+                and not variant["validation_error"]
+            )
+        return chosen, len(amounts) > 1
 
     def _quality_value(self, group, observations):
         """Known quality wins over unknown; two known values cannot be ranked."""
@@ -762,17 +781,51 @@ def _dedupe(conflicts: Iterable[ReconciliationConflict]) -> list[ReconciliationC
     return unique
 
 
-def _price_observation(row) -> PriceObservation:
-    """Adapt one stored ``OfferPrice`` row to its derived value object."""
+def _price_observation(row, *, now) -> PriceObservation:
+    """Adapt one stored ``OfferPrice`` row to its derived value object.
+
+    Historical rows retain their last reported scalar. A current snapshot
+    can supply a display price only through a priced variant open at read time.
+    """
+    variants = tuple(row.variants)
+    windows = [(variant, offer_variant_window_open(variant, now)) for variant in variants]
+    open_variants = tuple(variant for variant, window in windows if window is True)
+    amount, currency = row.amount, row.currency or ""
+    source_offer_id = row.source_offer_id or ""
+    chosen = None
+    effective_is_current = bool(row.is_current)
+    if row.is_current and variants:
+        usable = (
+            variant for variant in open_variants if variant.get("amount") is not None
+            and variant.get("currency") and not variant.get("validation_error")
+        )
+        chosen = min(
+            usable, key=lambda variant: (variant["currency"], Decimal(variant["amount"])),
+            default=None,
+        )
+        if chosen is not None:
+            amount, currency = Decimal(chosen["amount"]), chosen["currency"]
+            source_offer_id = chosen.get("source_offer_id") or ""
+        else:
+            # Keep the scalar in history when no priced variant is open.
+            effective_is_current = False
     return PriceObservation(
         source=row.source.slug,
-        amount=row.amount,
-        currency=row.currency or "",
-        source_offer_id=row.source_offer_id or "",
+        amount=amount,
+        currency=currency,
+        source_offer_id=source_offer_id,
         observed_at=_aware_opt(row.observed_at),
-        is_current=bool(row.is_current),
+        is_current=effective_is_current,
         validation_error=row.validation_error or "",
+        variants=variants,
+        open_variants=open_variants,
+        selected_variant=chosen,
+        variant_window_unknown=not open_variants and any(window is None for _, window in windows),
     )
+
+
+def _variant_presentation(variant):
+    return variant.get("url") or "", normalize_justwatch_quality(variant.get("presentation_type"))
 
 
 def _dedupe_prices(prices: Iterable[PriceObservation]) -> tuple[PriceObservation, ...]:
@@ -791,6 +844,7 @@ def _dedupe_prices(prices: Iterable[PriceObservation]) -> tuple[PriceObservation
             price.amount,
             price.currency,
             price.is_current,
+            tuple(offer_variant_key(variant) for variant in price.variants),
         )
         if key in seen:
             continue

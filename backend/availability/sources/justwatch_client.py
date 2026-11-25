@@ -538,6 +538,14 @@ class JustWatchTitle:
         self.offers = list(offers or [])
 
     @property
+    def has_native_id(self) -> bool:
+        return isinstance(self.id, str) and bool(self.id) and self.id == self.id.strip()
+
+    @property
+    def tmdb_id_missing(self) -> bool:
+        return self.tmdb_id is None or str(self.tmdb_id).strip() in {"", "0"}
+
+    @property
     def tmdb_id_int(self) -> Optional[int]:
         """TMDb id as an int, or ``None`` when JustWatch exposes none.
 
@@ -554,7 +562,7 @@ class JustWatchTitle:
             value = int(text)
         except (TypeError, ValueError):
             return None
-        return value or None
+        return value if value > 0 else None
 
     def __repr__(self):
         return (f"JustWatchTitle(id={self.id!r}, object_type={self.object_type!r}, "
@@ -959,7 +967,7 @@ def _parse_title(node):
         description=content.get("shortDescription") or "",
         genres=[g.get("shortName") for g in (content.get("genres") or []) if g],
         imdb_id=external_ids.get("imdbId") or None,
-        tmdb_id=external_ids.get("tmdbId") or None,
+        tmdb_id=external_ids.get("tmdbId"),
         poster=f"{IMAGES_URL}{poster}" if poster else "",
         full_path=full_path,
         url=f"{DETAILS_URL}{full_path}" if full_path else "",

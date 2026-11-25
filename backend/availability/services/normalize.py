@@ -8,6 +8,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Iterable, Optional
 
@@ -109,6 +110,32 @@ def normalize_country(value: str) -> str:
     if len(code) != 2 or not code.isalpha():
         raise ValueError(f"Unsupported country code: {value!r}")
     return code
+
+
+def parse_availability_timestamp(value: object) -> datetime | None:
+    """Parse an ISO timestamp, keeping absent and malformed values distinct."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("Availability timestamp must be an ISO string")
+    raw = value.strip()
+    if not raw:
+        return None
+    parsed = datetime.fromisoformat(raw)
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+def offer_variant_window_open(variant: dict, now: datetime) -> bool | None:
+    """Check the window, including the raw JustWatch expiry on older snapshots."""
+    raw_expiry = variant.get("available_to")
+    try:
+        start = parse_availability_timestamp(variant.get("available_from"))
+        end = parse_availability_timestamp(
+            raw_expiry if raw_expiry is not None else variant.get("available_until"),
+        )
+    except ValueError:
+        return None
+    return (start is None or start <= now) and (end is None or end > now)
 
 
 #: Prices are stored to four decimal places so a source's sub-cent precision is

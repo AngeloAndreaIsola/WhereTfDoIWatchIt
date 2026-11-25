@@ -442,7 +442,7 @@ class Offer(models.Model):
 
 
 class OfferPrice(models.Model):
-    """One source's most recent *validated* price for one canonical offer.
+    """One source's latest price observation for one canonical offer.
 
     Why a separate table instead of columns on ``Offer``
     ----------------------------------------------------
@@ -503,6 +503,9 @@ class OfferPrice(models.Model):
     amount = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True)
     currency = models.CharField(max_length=3, blank=True, default="")
     source_offer_id = models.CharField(max_length=150, blank=True, default="")
+    # Distinct variants from the latest positive batch. The scalar price
+    # represents that set for existing readers.
+    variants = models.JSONField(default=list, blank=True)
 
     # False means "last known value, no longer confirmed by a fresh
     # observation": it is kept for audit and is never displayed as current.

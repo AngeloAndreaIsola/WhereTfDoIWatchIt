@@ -9,6 +9,7 @@ Two directions, one convention (boundary value vs stored row):
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
@@ -95,6 +96,12 @@ class ProviderOffer:
     #: Why a mentioned price is not usable (blank when there is no price or it
     #: is valid). Persisted so an ambiguous observation is inspectable.
     price_error: str = ""
+    source_variant: Optional[dict] = None
+
+
+def offer_variant_key(variant: dict) -> str:
+    """Exact observation fingerprint within an already resolved offer scope."""
+    return json.dumps(variant, sort_keys=True)
 
 
 @dataclass(frozen=True)

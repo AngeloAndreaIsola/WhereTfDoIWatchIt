@@ -188,11 +188,12 @@ class OfferPriceRepositoryTests(TestCase):
         self.assertEqual(row.validation_error, "invalid currency")
 
     def test_ambiguous_observation_without_prior_value_still_records_reason(self):
-        row = self._record(None, "", error="display-only price")
+        row = self._record(None, "", error="display-only price", source_offer_id="o1")
         self.assertIsNotNone(row)
         self.assertIsNone(row.amount)
         self.assertFalse(row.is_current)
         self.assertEqual(row.validation_error, "display-only price")
+        self.assertEqual(row.source_offer_id, "o1")
 
     def test_no_price_and_no_prior_value_records_nothing(self):
         self.assertIsNone(self._record(None, "", error=""))
