@@ -538,15 +538,11 @@ class AvailabilityRefreshService:
         become a permanent mapping to a nonexistent movie.
 
         For season/episode content the source's own TMDb id is the *child's*
-        id; the canonical mapping keys off the *parent* series id carried in
-        ``parent_tmdb_id``. A season must never map to its own child TMDb id
-        while its Offer row carries the parent series id — that mismatch is a
-        mapping conflict that poisons reconciliation (mapping_doubt) and hides
-        the offer from season reads.
+        id. Use the explicitly associated series ID from ``parent_tmdb_id``.
+        A child observed without a parent remains provider-native discovery.
         """
-        if content.content_type in (ContentType.SEASON, ContentType.EPISODE):
-            if content.parent_tmdb_id:
-                return content.parent_tmdb_id
+        if normalize_content_type(content.content_type) in (ContentType.SEASON, ContentType.EPISODE):
+            return content.parent_tmdb_id or None
         raw = (content.external_ids or {}).get("tmdb")
         if raw in (None, ""):
             return None
@@ -590,16 +586,18 @@ class AvailabilityRefreshService:
         without a second lookup; an entry discovery skipped simply links
         nothing.
         """
-        exact: dict[tuple[str, str], int] = {}
+        exact: dict[tuple, int] = {}
         for content in result.contents:
             tmdb_id = self._exact_tmdb_id(content)
             if tmdb_id is not None:
-                exact[(content.provider_id, content.provider_content_id)] = tmdb_id
+                exact[(content.provider_id, content.provider_content_id, content.content_type,
+                       content.season_number, content.episode_number)] = tmdb_id
 
         if exact and result.contents:
             try:
                 for content in result.contents:
-                    key = (content.provider_id, content.provider_content_id)
+                    key = (content.provider_id, content.provider_content_id, content.content_type,
+                           content.season_number, content.episode_number)
                     tmdb_id = exact.get(key)
                     if tmdb_id is None:
                         continue

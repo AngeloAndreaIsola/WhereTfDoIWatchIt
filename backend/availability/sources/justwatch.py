@@ -221,12 +221,20 @@ class JustWatchSource:
         content_type = self._content_type(title)
 
         contents.append(self._content(title, content_type, country))
+        if content_type in (ContentType.SEASON, ContentType.EPISODE):
+            return SourceFetchResult(contents=contents, sync_mode=SyncMode.TARGETED)
         offers.extend(self._offers_for(title, country=country, content_type=content_type,
                                        tmdb_id=tmdb_id, content=title))
 
         # A show's season offers are distinct rows in the canonical model, so
         # they are walked explicitly rather than collapsed onto the series.
         if content_type == ContentType.SERIES and title.id:
+            parent_verified = (
+                self._requested_content_type(request) == ContentType.SERIES
+                and title.tmdb_id_int is not None and title.tmdb_id_int > 0
+                and isinstance(title.id, str) and title.id == title.id.strip()
+                and all(candidate.id == title.id for candidate in titles)
+            )
             for season in self._season_nodes(self._seasons(title.id, country)):
                 if season.id == title.id:
                     continue
@@ -240,6 +248,7 @@ class JustWatchSource:
                     contents.append(self._content(
                         season, ContentType.SEASON, country,
                         provider=provider, parent_tmdb_id=tmdb_id,
+                        parent_verified=parent_verified,
                     ))
                 if tmdb_id is not None:
                     offers.extend(season_offers)
@@ -497,8 +506,8 @@ class JustWatchSource:
                 all_contents.append(self._content(
                     title, resolved_type, country, provider=provider,
                 ))
-                if resolved_type == ContentType.SEASON:
-                    # Catalogue edges give only a child ID, with no confirmed series.
+                if resolved_type in (ContentType.SEASON, ContentType.EPISODE):
+                    # Catalogue children have no verified series. Keep native discovery only.
                     continue
                 # Client-side offer filtering: the `packages` filter selects
                 # *titles*, so the offers inside each node still span every
@@ -617,7 +626,8 @@ class JustWatchSource:
             price_error=price.error,
         )
 
-    def _content(self, title, content_type, country, *, provider=None, parent_tmdb_id=None):
+    def _content(self, title, content_type, country, *, provider=None,
+                 parent_tmdb_id=None, parent_verified=False):
         """Provider-native content entry, identified by JustWatch's node id.
 
         ``external_ids`` carries the TMDb/IMDb ids when present, so a later
@@ -631,23 +641,33 @@ class JustWatchSource:
         context.
         """
         external_ids = {}
-        if title.tmdb_id_int:
-            external_ids["tmdb"] = str(title.tmdb_id_int)
+        tmdb_id = title.tmdb_id_int
+        if tmdb_id:
+            external_ids["tmdb"] = str(tmdb_id)
         if title.imdb_id:
             external_ids["imdb"] = str(title.imdb_id)
+        identity_evidence = {}
+        if content_type == ContentType.SEASON and parent_tmdb_id is not None:
+            # A targeted observation replaces the parent assertion. A catalogue
+            # observation carries no parent claim and leaves it alone.
+            identity_evidence["justwatch_season"] = (
+                {"series_tmdb_id": parent_tmdb_id, "child_tmdb_id": tmdb_id}
+                if parent_verified else {}
+            )
         return DiscoveredContent(
             provider_id=provider or self._dominant_provider_slug(title),
             provider_content_id=str(title.id or ""),
             content_type=content_type,
             title=title.title,
             release_date=self._parse_date(title),
-            season_number=title.season_number if content_type == ContentType.SEASON else None,
+            season_number=title.season_number if content_type in (ContentType.SEASON, ContentType.EPISODE) else None,
             episode_number=title.episode_number if content_type == ContentType.EPISODE else None,
             duration=title.runtime,
             url=title.url or "",
             poster=title.poster or "",
             description=title.description or "",
             external_ids=external_ids,
+            identity_evidence=identity_evidence,
             source_id=self.slug,
             parent_tmdb_id=parent_tmdb_id,
         )

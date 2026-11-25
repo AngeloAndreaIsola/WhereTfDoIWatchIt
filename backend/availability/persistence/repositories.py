@@ -1021,12 +1021,11 @@ class MappingRepository:
             mapping.save(update_fields=["content", "updated_at"])
         return mapping
 
-    def tmdb_ids_for_provider_content(self, observations):
-        """Bulk mapping lookup: ``{(provider_id, pcid): tmdb_id}`` for observed keys.
+    def trusted_for_provider_content(self, observations):
+        """Bulk lookup of trusted mappings and their linked discovery evidence.
 
-        An absent key means "no stored mapping yet", which is a first-class
-        state (a title can be watched before anything matched it), never an
-        error.
+        The keys are ``(provider_id, provider_content_id)``. An absent key
+        means no stored mapping and a ``None`` value means unverified provenance.
         """
         keys = {
             (row.provider_id, row.provider_content_id)
@@ -1038,7 +1037,7 @@ class MappingRepository:
         provider_ids = {provider_id for provider_id, _ in keys}
         pcids = {pcid for _, pcid in keys}
         resolved = {}
-        rows = ContentMapping.objects.select_related("provider", "source").filter(
+        rows = ContentMapping.objects.select_related("provider", "source", "content__source").filter(
             provider_id__in=provider_ids,
             provider_content_id__in=pcids,
         )
@@ -1046,7 +1045,7 @@ class MappingRepository:
             key = (mapping.provider_id, mapping.provider_content_id)
             if key in keys:
                 resolved[key] = (
-                    mapping.tmdb_id
+                    mapping
                     if mapping_is_trusted(
                         mapping.provider.slug, mapping.match_method, mapping.source.slug
                     )
@@ -1057,7 +1056,7 @@ class MappingRepository:
     def summaries_for_provider_content(self, observations) -> dict:
         """Bulk mapping read: ``{(provider_id, pcid): (tmdb_id, confidence, match_method)}``.
 
-        Same keys and cross-match guards as ``tmdb_ids_for_provider_content``,
+        Same keys and cross-match guards as ``trusted_for_provider_content``,
         carrying the provenance the unified catalogue's unofficial section
         surfaces (resolution outcome plus how it was matched). An absent key
         means unresolved — first-class state, never an error.
