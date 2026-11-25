@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PILOT = ROOT / "docs/audits/stage2b/nl_pilot_cohort_20261122_v2.csv"
 IDENTITIES = PILOT.with_name("identity_manifest_20261122.csv")
 REMAINING = PILOT.parent.parent / "issue97/stage-d-remaining-cohort.csv"
+RUNNER_MANIFEST = ROOT / "backend/availability/services/issue97_stage_d_titles.json"
 # The cleaned repository deliberately contains no raw canary payloads.  These
 # are the two independently reviewed typed identities excluded from the
 # remaining manifest; this offline check does not claim to verify a response.
@@ -103,6 +104,24 @@ class StageDManifestTests(unittest.TestCase):
         admitted = [row for row in self.remaining if row["identity_status"].startswith("VERIFIED_")]
         self.assertEqual(len(admitted), 12)
         self.assertEqual(sum(bool(row["season_operation"]) for row in admitted), 5)
+
+    def test_runner_manifest_matches_exact_admitted_title_evidence(self):
+        manifest = json.loads(RUNNER_MANIFEST.read_text(encoding="utf-8"))
+        admitted = {row["scope_id"]: row for row in self.remaining if row["identity_status"].startswith("VERIFIED_")}
+        self.assertEqual(len(manifest["scopes"]), len(admitted))
+        self.assertEqual({scope["scope_id"] for scope in manifest["scopes"]}, admitted.keys())
+        self.assertEqual(manifest["operation"], "GetSearchTitles")
+        self.assertEqual(manifest["maximum_attempts"], 12)
+        self.assertEqual(manifest["maximum_retries"], 0)
+        self.assertEqual(manifest["batch_sizes"], [2, 5, 5])
+        for scope in manifest["scopes"]:
+            row = admitted[scope["scope_id"]]
+            self.assertEqual(scope, {
+                "scope_id": row["scope_id"], "tmdb_id": int(row["tmdb_id"]),
+                "media_type": row["media_type"], "country": row["country"],
+                "title": row["canonical_title"], "year": int(row["canonical_year"]),
+                "identity_evidence_sha256": row["identity_evidence_sha256"], "maximum_attempts": 1,
+            })
 
     def test_raw_tmdb_bytes_match_manifest_and_payloads(self):
         if self.evidence_dir is None:
