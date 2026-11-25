@@ -7,6 +7,10 @@ class ContentType(models.TextChoices):
     SEASON = "season", "Season"
     EPISODE = "episode", "Episode"
 
+    @property
+    def uses_series_tmdb_id(self):
+        return self in (ContentType.SEASON, ContentType.EPISODE)
+
 
 class OfferType(models.TextChoices):
     SUBSCRIPTION = "subscription", "Subscription"

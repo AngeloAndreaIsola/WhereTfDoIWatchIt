@@ -71,14 +71,19 @@ class StreamingAvailabilitySource:
                 for offer in season.offers or []:
                     content_id = f"{result.tmdb_id}:season:{number}"
                     offers.append(self._offer(offer, result.tmdb_id, ContentType.SEASON, number, content_id))
-                    contents.append(self._content(offer.service_id, content_id, ContentType.SEASON, request, number))
+                    contents.append(self._content(
+                        offer.service_id, content_id, ContentType.SEASON, request, number,
+                        parent_tmdb_id=result.tmdb_id,
+                    ))
         return SourceFetchResult(contents=contents, offers=offers, sync_mode=SyncMode.TARGETED)
 
     @staticmethod
-    def _content(provider_id, provider_content_id, content_type, request, season_number=None):
+    def _content(provider_id, provider_content_id, content_type, request, season_number=None,
+                 *, parent_tmdb_id=None):
         return DiscoveredContent(provider_id=str(provider_id).lower(), provider_content_id=provider_content_id,
             content_type=content_type, title=request.title, season_number=season_number,
-            external_ids={"tmdb": str(request.tmdb_id)}, source_id=StreamingAvailabilitySource.slug)
+            external_ids={"tmdb": str(request.tmdb_id)}, source_id=StreamingAvailabilitySource.slug,
+            parent_tmdb_id=parent_tmdb_id)
 
     @staticmethod
     def _offer(offer, tmdb_id, content_type, season_number=None, provider_content_id=None):
