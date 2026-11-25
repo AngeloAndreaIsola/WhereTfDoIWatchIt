@@ -30,6 +30,7 @@ from availability.models import (
     AvailabilityExperimentAttempt,
     AvailabilityExperimentAttemptOutcome,
     AvailabilityExperimentScope,
+    AvailabilityStageDRun,
     Country,
     Offer,
     Source,
@@ -206,8 +207,8 @@ def _scope_totals(manifest):
     return {scope["scope_id"]: scope["maximum_attempts"] for scope in manifest["scopes"]}
 
 
-def validate_search_payload(scope, payload):
-    """Require the fixed one-page GraphQL document and typed search variables."""
+def search_payload_for_scope(scope):
+    """Build the fixed one-page GraphQL document and typed search variables."""
     expected_filter = {
         "includeTitlesWithoutUrl": True,
         "packages": None,
@@ -228,11 +229,14 @@ def validate_search_payload(scope, payload):
         "popularTitlesFilter": expected_filter,
         "searchTitlesFilter": expected_filter,
     }
-    expected_payload = {
+    return {
         "query": SEARCH_TITLES_QUERY, "variables": expected_variables,
         "operationName": "GetSearchTitles",
     }
-    if _canonical_json(payload) != _canonical_json(expected_payload):
+
+
+def validate_search_payload(scope, payload):
+    if _canonical_json(payload) != _canonical_json(search_payload_for_scope(scope)):
         raise ExperimentBlocked("JustWatch title or country escaped manifest scope")
 
 
@@ -799,6 +803,8 @@ def execute_manifest(manifest, authorization):
     with title_drain_lock() as acquired:
         if not acquired:
             raise ExperimentBlocked("shared A7 title-drain lock is held")
+        if AvailabilityStageDRun.objects.exists():
+            raise ExperimentBlocked("the disposable Stage D run owns JustWatch on this database")
         experiment, _ = AvailabilityExperiment.objects.get_or_create(
             authorization_id=authorization["authorization_id"],
             defaults={
