@@ -151,6 +151,7 @@ class OfficialOffersPipeline:
         offers=None,
         access=None,
         classify_pref=None,
+        reach=None,
     ):
         pref = self.get_pref()
         provider_map = self._build_provider_map()
@@ -164,7 +165,7 @@ class OfficialOffersPipeline:
         # annotate eligibility, never to reorder or drop offers here.
         classify_pref = classify_pref or build_preference(self.user_id)
         access = access or build_user_access(self.user_id, offers=offers)
-        reach = build_reach(classify_pref, current_country)
+        reach = reach or build_reach(classify_pref, current_country)
         offers_out = self.rank_and_present(
             qualifying, pref, provider_map, current_country=current_country,
             access=access, reach=reach, classify_preference=classify_pref,

@@ -65,6 +65,40 @@ class ProductFixture:
 
 
 class SelectionApiTests(ProductFixture, TestCase):
+    def test_stale_write_precedes_catalogue_membership_validation(self):
+        self.assertEqual(self.put().status_code, 200)
+        saved = self.put(revision=1, plan_id="premium")
+        self.assertEqual(saved.status_code, 200)
+        EntitlementPlan.objects.filter(pk=self.plan.pk).update(ends_at=self.now)
+
+        stale = self.put(revision=1)
+        self.assertEqual(stale.status_code, 409, stale.data)
+        self.assertEqual(stale.json()["selection"], saved.json())
+        self.assertEqual(self.put(revision=2).status_code, 400)
+        self.assertEqual(self.put(revision="1").status_code, 400)
+
+    def test_channel_edit_can_preserve_only_the_saved_retired_plan(self):
+        self.assertEqual(self.put().status_code, 200)
+        EntitlementPlan.objects.filter(pk=self.plan.pk).update(ends_at=self.now, display_name="Aster Base")
+        channels = [{"package_id": "orbit", "holding": "yes"}]
+        for plan_id in ("invented", "premium", "paid-ads"):
+            with self.subTest(plan_id=plan_id):
+                self.assertEqual(self.put(revision=1, plan_state="unsupported", plan_id=plan_id,
+                                          channels=channels).status_code, 400)
+        response = self.put(revision=1, plan_state="unsupported", channels=channels)
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.json(), {
+            "holding": "yes", "plan_state": "unsupported", "plan_id": "base",
+            "plan_display_name": "Aster Base", "channels": channels, "revision": 2,
+        })
+        self.assertEqual(self.put(revision=1, plan_state="unsupported", channels=channels).json(), response.json())
+        [selection] = [row["selection"] for row in self.client.get("/api/providers/?billing_country=NL").json()
+                       if row["slug"] == self.host.slug]
+        self.assertEqual(selection, response.json())
+        unlisted = self.put(revision=2, plan_state="unsupported", plan_id=None)
+        self.assertEqual(unlisted.status_code, 200)
+        self.assertIsNone(unlisted.json()["plan_id"])
+
     def test_catalogue_uses_market_and_preserves_retired_selection(self):
         legacy = Subscription.objects.create(provider=self.host, name="Aster")
         result = self.client.get("/api/providers/?billing_country=NL").json()
@@ -214,6 +248,130 @@ class OfferProjectionTests(ProductFixture, TestCase):
             starts_at=self.starts, ends_at=self.ends, observed_at=self.now, fresh_until=self.ends,
             source_label="Reviewed title rule", provenance_reference="synthetic.private.reference",
         )
+
+    def detail(self, params="current_country=NL"):
+        response = self.client.get(f"/api/prime/movie/{self.movie.tmdb_id}/?{params}")
+        self.assertEqual(response.status_code, 200)
+        return response.json()
+
+    def watchable_report(self):
+        response = self.client.get("/api/watchlist/report/?watchable=1&audio_languages=EN")
+        self.assertEqual(response.status_code, 200)
+        return response.json()["report"]
+
+    @patch("tracker.views.request_title_refresh")
+    def test_missing_audio_cannot_be_borrowed_from_an_unreviewed_package(self, refresh):
+        WatchlistItem.objects.create(movie=self.movie)
+        self.assertEqual(self.put().status_code, 200)
+        covered, package = self.offer(variant="variant-a")
+        covered.audio_languages = None
+        covered.save(update_fields=["audio_languages"])
+        self.rule(covered, package, variant="variant-a")
+        self.assertEqual(self.detail()["watchability"]["verdict"], "unknown")
+        self.offer(variant="variant-b", review=False, freshness=self.now - timedelta(minutes=3))
+
+        detail = self.detail()
+        rows = {row["source_package_id"]: row for row in detail["offers"]}
+        with self.subTest(surface="detail row"):
+            self.assertEqual(rows[covered.provider_content_id]["audio_languages"], [])
+            self.assertFalse(rows[covered.provider_content_id]["is_accessible"])
+            self.assertEqual(rows[covered.provider_content_id]["entitlement"]["verdict"], "INCLUDED")
+            self.assertEqual(len(rows), 2)
+            [other] = [row for key, row in rows.items() if key != covered.provider_content_id]
+            self.assertEqual(other["audio_languages"], ["EN"])
+            self.assertFalse(other["is_accessible"])
+        with self.subTest(surface="title verdict"):
+            self.assertEqual(detail["watchability"]["verdict"], "unknown")
+        with self.subTest(surface="filtered report"):
+            self.assertEqual(len(self.watchable_report()), 0)
+
+    @patch("tracker.views.request_title_refresh")
+    def test_covered_package_survives_denied_alternative_in_either_order(self, refresh):
+        WatchlistItem.objects.create(movie=self.movie)
+        self.assertEqual(self.put().status_code, 200)
+        older = self.now - timedelta(minutes=3)
+        covered, package_a = self.offer(variant="variant-a", freshness=older)
+        self.rule(covered, package_a, variant="variant-a")
+        self.assertEqual(self.detail()["watchability"]["verdict"], "available_here")
+        blocked, package_b = self.offer(variant="variant-b")
+        self.rule(blocked, package_b, effect="deny", variant="variant-b")
+
+        for newest in (blocked, covered):
+            detail = self.detail()
+            with self.subTest(newest=newest.provider_content_id, surface="detail rows"):
+                self.assertEqual(
+                    {row["source_package_id"]: (row["entitlement"]["verdict"], row["is_accessible"])
+                     for row in detail["offers"]},
+                    {covered.provider_content_id: ("INCLUDED", True), blocked.provider_content_id: ("BLOCKED", False)},
+                )
+            with self.subTest(newest=newest.provider_content_id, surface="title verdict"):
+                self.assertEqual(detail["watchability"]["verdict"], "available_here")
+            with self.subTest(newest=newest.provider_content_id, surface="filtered report"):
+                reports = self.watchable_report()
+                self.assertEqual(len(reports), 1)
+                [report] = reports
+                self.assertEqual(report["watchability"]["status"], "watchable_here")
+                self.assertEqual(report["watchability"]["best_offer"]["source_package_id"], covered.provider_content_id)
+            covered.last_seen, blocked.last_seen = self.now, older
+            covered.save(update_fields=["last_seen"])
+            blocked.save(update_fields=["last_seen"])
+
+    @patch("tracker.views.request_title_refresh")
+    def test_one_observation_keeps_each_variant_and_its_reported_audio(self, refresh):
+        from availability.models import OfferPrice
+
+        WatchlistItem.objects.create(movie=self.movie)
+        self.assertEqual(self.put().status_code, 200)
+        row, package = self.offer(variant="variant-a")
+        self.rule(row, package, variant="variant-a", effect="deny")
+        self.rule(row, package, variant="variant:b")
+        snapshot = OfferPrice.objects.get(offer_identity=row.identity)
+        variant_a = {**snapshot.variants[0], "audio_languages": ["en"]}
+        variant_b = {**variant_a, "source_offer_id": "variant:b", "url": "https://example.test/alternate"}
+
+        for audio, verdict in ((["de"], "available_elsewhere"), (["en"], "available_here")):
+            with self.subTest(audio=audio):
+                snapshot.variants = [variant_a, {**variant_b, "audio_languages": audio}]
+                snapshot.save(update_fields=["variants"])
+                detail = self.detail()
+                rows = {offer["url"]: offer for offer in detail["offers"]}
+                self.assertEqual(set(rows), {variant_a["url"], variant_b["url"]})
+                self.assertEqual(rows[variant_a["url"]]["audio_languages"], ["EN"])
+                self.assertEqual(rows[variant_a["url"]]["entitlement"]["verdict"], "BLOCKED")
+                self.assertEqual(rows[variant_b["url"]]["audio_languages"], [audio[0].upper()])
+                self.assertEqual(rows[variant_b["url"]]["entitlement"]["verdict"], "INCLUDED")
+                self.assertEqual(rows[variant_b["url"]]["is_accessible"], audio == ["en"])
+                self.assertEqual(detail["watchability"]["verdict"], verdict)
+                self.assertEqual(len(self.watchable_report()), int(audio == ["en"]))
+
+    @patch("tracker.views.request_title_refresh")
+    def test_typed_detail_uses_current_country_for_rows_and_title(self, refresh):
+        self.preference.vpn_enabled = False
+        self.preference.save(update_fields=["vpn_enabled"])
+        self.assertEqual(self.put().status_code, 200)
+        row, package = self.offer()
+        self.rule(row, package)
+
+        for params in ("current_country=DE", "current_country=DE&country=NL", "country=DE"):
+            with self.subTest(params=params):
+                detail = self.detail(params)
+                [offer] = detail["offers"]
+                self.assertEqual(detail["watchability"]["verdict"], "available_elsewhere")
+                self.assertEqual(offer["locality"], "out_of_reach")
+                self.assertFalse(offer["is_accessible"])
+
+    def test_invalid_only_language_filter_excludes_official_and_unofficial_entries(self):
+        from tracker.tests.test_unofficial_api import _ingest, _make_provider
+
+        self.offer()
+        _ingest(_make_provider("synthetic-scraper"), None)
+        for path, count in (("/api/catalog/", 1), ("/api/catalog/unified/", 2)):
+            with self.subTest(path=path):
+                self.assertEqual(len(self.client.get(f"{path}?audio_languages=EN,not-a-language").json()["results"]), count)
+                for name in ("audio_languages", "subtitle_languages"):
+                    response = self.client.get(f"{path}?{name}=not-a-language")
+                    self.assertEqual(response.status_code, 200)
+                    self.assertEqual(len(response.json()["results"]), 0)
 
     @patch("tracker.views.request_title_refresh")
     def test_detail_report_mixed_offers_and_same_row_filters(self, refresh):

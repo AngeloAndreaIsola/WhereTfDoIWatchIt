@@ -4,22 +4,26 @@ HTTP read paths use this adapter while the response/ranking layer continues to
 consume its established ``tracker.services.offers.Offer`` representation.
 It deliberately performs no cache lookup, refresh, or network activity.
 
-Rows are read through the reconciliation layer, so what a viewer sees is one
-effective offer per (content, provider, country, offer type) rather than every
-raw observation a source happened to write. Raw rows stay untouched; this
-module only projects the reconciled view onto the tracker representation.
+Rows are read through the reconciliation layer. Current streaming alternatives
+with recorded renditions retain the scope of their own source observation so
+each can be evaluated independently for entitlement and language.
 
 Verified offers qualify for watchability. Recent title reports and older
 positive observations are returned separately with their original timestamps.
 """
 from __future__ import annotations
 
+from collections import Counter
+from dataclasses import replace
 from datetime import UTC
 from typing import Literal, NamedTuple, Optional
 from urllib.parse import urlsplit
 
-from availability.domain.enums import AvailabilityEvidence
+from availability.domain.enums import AvailabilityEvidence, OfferType
 from availability.domain.reconciliation import ReconciledOffer
+from availability.services.normalize import (
+    normalize_justwatch_quality, normalize_languages, normalize_price, parse_availability_timestamp,
+)
 from availability.services.offer_variant_projection import public_offer_variant
 from availability.services.query import AvailabilityQueryService
 
@@ -120,12 +124,98 @@ def _split(offers) -> TitleOfferEvidence:
         if not offer.currently_available:
             continue
         if offer.evidence == AvailabilityEvidence.VERIFIED:
-            current.append(_tracker_offer(offer))
+            current.extend(_current_offers(offer))
         elif offer.evidence == AvailabilityEvidence.SOURCE_REPORTED:
             source_reported.append(_tracker_offer(offer))
         else:
             last_known.append(_tracker_offer(offer))
     return TitleOfferEvidence(current, last_known, source_reported)
+
+
+def _current_offers(offer: ReconciledOffer) -> list[Offer]:
+    if offer.offer_type not in {OfferType.SUBSCRIPTION, OfferType.ADDON, OfferType.FREE, OfferType.FREE_WITH_ADS}:
+        return [_tracker_offer(offer)]
+
+    verified = [obs for obs in offer.observations if obs.evidence == AvailabilityEvidence.VERIFIED]
+    scoped = [(obs, _current_variant_snapshot(obs)) for obs in verified]
+    if not any(snapshot for _, snapshot in scoped):
+        return [_tracker_offer(offer)]
+
+    rows = []
+    for observation, snapshot in scoped:
+        if snapshot is None:
+            rows.append(_stream_offer(offer, observation))
+            continue
+        counts = Counter(str(variant.get("source_offer_id") or "") for variant in snapshot.variants)
+        for variant in snapshot.open_variants:
+            variant_id = str(variant.get("source_offer_id") or "")
+            rows.append(_stream_offer(
+                offer, observation, variant,
+                variant_id=variant_id if counts[variant_id] == 1 else "",
+                inherit_languages=len(snapshot.variants) == 1,
+            ))
+    return rows
+
+
+def _current_variant_snapshot(observation):
+    snapshot = observation.price
+    if (snapshot and snapshot.open_variants and snapshot.observed_at is not None
+            and snapshot.observed_at >= (observation.observed_at or observation.last_seen)):
+        return snapshot
+    return None
+
+
+def _stream_offer(offer, observation, variant=None, *, variant_id="", inherit_languages=True):
+    """Project a current streaming action with fields from one observation."""
+    snapshot = observation.price
+    audio = _as_list(observation.audio_languages)
+    subtitles = _as_list(observation.subtitle_languages)
+    url, quality = observation.provider_url, observation.quality
+    start, end = observation.available_from, observation.available_until
+    price = snapshot if snapshot and snapshot.is_current and snapshot.is_valid and not snapshot.variants else None
+    if variant is not None:
+        audio = _variant_languages(variant, "audio_languages", audio if inherit_languages else None)
+        subtitles = _variant_languages(variant, "subtitle_languages", subtitles if inherit_languages else None)
+        url = _variant_display_url(variant.get("url"))
+        quality = normalize_justwatch_quality(variant.get("presentation_type"))
+        start = parse_availability_timestamp(variant.get("available_from"))
+        expiry = variant.get("available_to")
+        end = parse_availability_timestamp(expiry if expiry is not None else variant.get("available_until"))
+        normalized = normalize_price(variant.get("amount"), variant.get("currency"))
+        error = variant.get("validation_error") or normalized.error
+        snapshot = replace(
+            snapshot, amount=normalized.amount, currency=normalized.currency,
+            source_offer_id=_safe_package_value(variant_id), variants=(variant,), open_variants=(variant,),
+            selected_variant=variant, is_current=snapshot.is_current and not error,
+            validation_error=error,
+        )
+        price = snapshot if snapshot.is_current else None
+    elif snapshot and any(variant.get("url") == url for variant in snapshot.variants):
+        url = _variant_display_url(url)
+    return Offer(
+        country=offer.country, service=offer.provider, offer_type=offer.offer_type,
+        quality=quality, url=url, audio_languages=audio, subtitle_languages=subtitles,
+        price=_price_dict(price, offer) if price else None,
+        prices=[_price_dict(snapshot, offer)] if snapshot else [],
+        availability_evidence=str(offer.evidence), last_seen_at=observation.last_seen.isoformat(),
+        available_from=start.astimezone(UTC).isoformat() if start else None,
+        available_until=end.astimezone(UTC).isoformat() if end and observation.source != "justwatch" else None,
+        season_number=offer.season_number, episode_number=offer.episode_number,
+        lineage=OfferLineage(
+            content_type=offer.content_type, title_id=offer.tmdb_id,
+            identity=observation.offer_identity, source=observation.source,
+            observed_at=observation.observed_at or observation.last_seen,
+            package_id=_safe_package_value((variant or {}).get("package_id")),
+            package_label=_safe_package_value((variant or {}).get("package")), variant_id=variant_id,
+        ),
+    )
+
+
+def _variant_languages(variant, key, fallback):
+    if key not in variant:
+        return fallback
+    values = variant[key]
+    return normalize_languages(values) if isinstance(values, list) else None
 
 
 def _tracker_offer(offer: ReconciledOffer) -> Offer:

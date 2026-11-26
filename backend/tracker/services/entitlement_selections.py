@@ -135,11 +135,10 @@ class SelectionInput(serializers.Serializer):
         return value
 
     def validate(self, data):
-        if data["plan_state"] == "selected":
-            if data["holding"] != "yes" or data["plan_id"] is None:
-                raise serializers.ValidationError("A selected plan requires a held base and an exact plan ID.")
-        elif data["plan_id"] is not None:
-            raise serializers.ValidationError("Use a null plan ID for an unlisted or unspecified plan.")
+        if data["plan_state"] == "selected" and data["plan_id"] is None:
+            raise serializers.ValidationError("A selected plan requires an exact plan ID.")
+        if data["plan_id"] is not None and (data["holding"] != "yes" or data["plan_state"] == "unspecified"):
+            raise serializers.ValidationError("A plan ID requires a held base and a selected or retired plan.")
         ids = [row["package_id"] for row in data["channels"]]
         if len(ids) != len(set(ids)):
             raise serializers.ValidationError({"channels": "Duplicate channel declarations."})
@@ -161,14 +160,28 @@ def replace_selection(provider, country, user, data):
     existing_plan = EntitlementPlan.objects.filter(
         provider_slug=provider.slug, billing_country=country, plan_id=profile.plan_id,
     ).first() if profile and profile.plan_id else None
+    # A retired product is rendered as unsupported while its stored selection
+    # remains intact. Accept that rendered state only for this saved product.
+    keep_retired_plan = bool(
+        profile and state["plan_id"] and state["plan_id"] == profile.plan_id
+        and profile.plan_state == "selected"
+        and state["plan_state"] == "unsupported"
+        and effective_plan_state(profile, existing_plan, as_of) == "unsupported"
+    )
+    if keep_retired_plan:
+        state["plan_state"] = profile.plan_state
     if profile and data["revision"] in {revision, revision - 1} and (
         state == {key: getattr(profile, key) for key in state}
         and children == {child.package_id: child.holding for child in profile.channels.all()}
     ):
         return selection_data(profile, existing_plan, as_of), False
+    if data["revision"] != revision:
+        return selection_data(profile, existing_plan, as_of), True
 
-    plan = None
-    if state["plan_id"]:
+    plan = existing_plan if keep_retired_plan else None
+    if state["plan_id"] and not keep_retired_plan:
+        if state["plan_state"] == "unsupported":
+            raise serializers.ValidationError({"plan_id": "Only the saved retired plan can be kept."})
         plan = active_at(EntitlementPlan.objects.filter(
             provider_slug=provider.slug, billing_country=country, plan_id=state["plan_id"],
         ), as_of).first()
@@ -180,8 +193,6 @@ def replace_selection(provider, country, user, data):
         ), as_of).values_list("package_id", flat=True))
         if children.keys() - allowed:
             raise serializers.ValidationError({"channels": "Channel is unavailable for this host and market."})
-    if data["revision"] != revision:
-        return selection_data(profile, existing_plan, as_of), True
 
     if profile is None:
         profile = ViewerMarketSelection.objects.create(

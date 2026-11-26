@@ -58,7 +58,7 @@ from .serializers import (
     WatchlistReportRowSerializer,
 )
 from tracker.scrapers import ContentMatcher, ScrapedItem
-from tracker.services.filtering import apply_composable_filters, parse_actor_filters
+from tracker.services.filtering import apply_composable_filters, parse_actor_filters, requested_languages
 from tracker.services.unified_catalogue import (
     identity_key,
     resolve_catalogue_scope,
@@ -434,18 +434,8 @@ def unified_catalog(request):
 
     # Language filters use the same canonical ISO codes as offer ingestion.
     # Unknown or absent language data cannot satisfy an active filter.
-    def requested_languages(param_name: str) -> set[str] | None:
-        raw = (request.GET.get(param_name) or "").strip()
-        if not raw:
-            return None
-        return {
-            code
-            for part in raw.split(",")
-            if (code := normalize_language_code(part.strip()))
-        }
-
-    audio_filter = requested_languages("audio_languages")
-    subtitle_filter = requested_languages("subtitle_languages")
+    audio_filter = requested_languages(request.GET, "audio_languages")
+    subtitle_filter = requested_languages(request.GET, "subtitle_languages")
     if audio_filter is not None or subtitle_filter is not None:
         filtered_items = []
         for item in unified_items:
@@ -2777,30 +2767,13 @@ def _popular_movie_dict(movie: TMDbMovie) -> dict:
     }
 
 
-def _current_country(request) -> str:
-    """Resolve the active country: explicit query param, then saved preference."""
-    return (
-        request.query_params.get("current_country")
-        or resolve_preferences(user_id=viewer_id(request)).get("current_country")
-        or ""
-    )
-
-
-def _active_country(request) -> str:
-    """Active country for the list surfaces (homepage, catalog, watchlist).
-
-    Mirrors :func:`_current_country` (the detail pages) but also honours the
-    legacy ``country`` parameter. All four surfaces must evaluate the same
-    country, or the same title reads 🟢 "Watchable here" on its detail page and
-    🟡 "Watchable with VPN" in the watchlist — the movie 615457 report. They
-    used to default to a hard-coded "US" while the detail page used the user's
-    saved country (NL), so a local offer looked foreign.
-    """
+def _active_country(request, *, default="US") -> str:
+    """Resolve the viewing country for title detail and list surfaces."""
     return (
         request.GET.get("current_country")
         or request.GET.get("country")
         or resolve_preferences(user_id=viewer_id(request)).get("current_country")
-        or "US"
+        or default
     )
 
 
@@ -2855,8 +2828,8 @@ def _season_summaries(item: Movie) -> list[dict]:
 
 
 def _build_prime_offers(
-    request, movie: Movie, season: int | None = None, *, offers=None,
-    access=None, classify_pref=None,
+    request, movie: Movie, season: int | None = None, *, current_country: str, reach,
+    offers=None, access=None, classify_pref=None,
 ) -> list[dict]:
     """Ranked official + BVOD offers for one tracked movie or series.
 
@@ -2868,7 +2841,7 @@ def _build_prime_offers(
     from tracker.services.presentation import present_offer
     from tracker.services.ranking import rank_offers
     from tracker.services.scraped_offers import BVOD_CATEGORIES, get_scraped_offers
-    from tracker.services.access import build_reach, build_user_access, classify_offer
+    from tracker.services.access import build_user_access, classify_offer
     from tracker.services.preferences import build_preference
 
     from .services.offer_pipeline import OfficialOffersPipeline
@@ -2879,10 +2852,9 @@ def _build_prime_offers(
         default_provider_slug=getattr(settings, "DEFAULT_PREFERENCE_PROVIDER", "prime"),
         provider_category_set={ProviderCategory.OFFICIAL, ProviderCategory.BVOD, ProviderCategory.AVOD, ProviderCategory.TVOD, ProviderCategory.FAST},
     )
-    current_country = request.query_params.get("country") or _current_country(request)
     offers_out = pipeline.run(
         movie, current_country=current_country, season=season,
-        offers=offers, access=access, classify_pref=classify_pref,
+        offers=offers, access=access, classify_pref=classify_pref, reach=reach,
     ).offers_out
 
     if season is not None:
@@ -2898,7 +2870,6 @@ def _build_prime_offers(
         preference = build_preference(user)
         classify_pref = build_preference(user)
         access = build_user_access(user, offers=bvod_offers)
-        reach = build_reach(classify_pref, current_country)
         ranked = rank_offers(bvod_offers, preference, current_country=current_country)
         for offer in ranked:
             presented = present_offer(offer, provider_map)
@@ -2928,7 +2899,9 @@ def _prime_detail_response(request, item: Movie, key: str) -> Response:
     # and no catalogue crawl can happen). Reusing ``request_title_refresh``
     # keeps the dedup, cooldown and metered-source policy identical here.
     user = viewer_id(request)
-    country = _active_country(request).strip().upper()
+    # An unset market retains neutral ranking and the global source summary.
+    selected_country = _active_country(request, default="").strip().upper()
+    country = selected_country or "US"
     request_title_refresh(
         item,
         priority=RefreshPriority.RECENTLY_VIEWED,
@@ -2955,25 +2928,24 @@ def _prime_detail_response(request, item: Movie, key: str) -> Response:
     from tracker.services.watchability import describe_last_known, qualify_watchability_dict
 
     access_pref = build_preference(user)
-    access_country = country
     evidence = get_title_offer_evidence(item, season=season)
     current_offers, last_known_offers = evidence.current, evidence.last_known
     providers = {provider.slug: provider for provider in Provider.objects.all()}
     reports = [offer for offer in evidence.source_reported if offer.country == country]
     access = build_user_access(user, offers=current_offers + last_known_offers + reports)
-    reach = build_reach(access_pref, access_country)
+    reach = build_reach(access_pref, country)
     access_verdict = access_resolve_title(
         item,
         current_offers or reports,
         access_pref,
-        current_country=access_country, access=access, provider_map=providers,
+        current_country=country, access=access, provider_map=providers,
         refresh_state=(
             None if last_known_offers
             else refresh_states_for({item.pk}, country=country).get(item.pk)
         ),
     )
     last_known = describe_last_known(
-        item, last_known_offers, access_pref, current_country=access_country,
+        item, last_known_offers, access_pref, current_country=country,
         access=access, provider_map=providers,
     )
 
@@ -2993,9 +2965,9 @@ def _prime_detail_response(request, item: Movie, key: str) -> Response:
         "is_in_watchlist": is_in_watchlist,
         "watch_events": MovieWatchEventSerializer(watch_events, many=True).data,
         "offers": _build_prime_offers(
-            request, item, season=season,
+            request, item, season=season, current_country=selected_country,
             offers=[offer for offer in current_offers if offer.offer_type not in {"rent", "buy"}],
-            access=access, classify_pref=access_pref,
+            access=access, classify_pref=access_pref, reach=reach,
         ),
         "source_reported_offers": source_reported,
         # The single access verdict for this title, computed by the same
@@ -3021,7 +2993,7 @@ def _prime_detail_response(request, item: Movie, key: str) -> Response:
         # inventing a second classifier. Absence of this field is read by the
         # frontend as unknown, never as unavailable.
         "availability": title_source_report(
-            [item.pk], country=_current_country(request) or request.query_params.get("country") or None,
+            [item.pk], country=selected_country or None,
         ).get(item.pk),
         # True while this title still waits in the refresh queue — the
         # frontend polls on it ("Checking availability…") until the worker

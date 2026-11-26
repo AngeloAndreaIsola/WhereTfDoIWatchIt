@@ -26,6 +26,14 @@ from tracker.services.watchability import (
 logger = logging.getLogger(__name__)
 
 
+def requested_languages(params, name: str) -> set[str] | None:
+    """Keep an absent filter distinct from a filter with no recognized codes."""
+    value = (params.get(name) or "").strip()
+    if not value:
+        return None
+    return {code for part in value.split(",") if (code := normalize_language_code(part.strip()))}
+
+
 def parse_actor_filters(params) -> tuple[list[int], list[str]]:
     """Read repeated or comma-separated actor ids/names from query params."""
     raw_actors = params.getlist("actor_id") if hasattr(params, "getlist") else params.get("actor_id")
@@ -82,6 +90,11 @@ def apply_composable_filters(
     Not available and only a never-fetched one to ⚪ Unknown. Omitted (or a
     missing id) keeps today's behavior: no offers = Unknown.
     """
+    audio_filter = requested_languages(params, "audio_languages")
+    subtitle_filter = requested_languages(params, "subtitle_languages")
+    if any(codes is not None and not codes for codes in (audio_filter, subtitle_filter)):
+        return [], 0
+
     # 1. Text Search (Title/Overview)
     q = (params.get("q") or params.get("query") or "").strip()
     if q:
@@ -315,12 +328,6 @@ def apply_composable_filters(
     needs_access = watchable_only or status_filter in {
         "watchable", "watchable_any", "watchable_here", "watchable_vpn",
     }
-
-    def languages(name):
-        value = params.get(name) or ""
-        return {code for part in value.split(",") if (code := normalize_language_code(part.strip()))}
-
-    audio_filter, subtitle_filter = languages("audio_languages"), languages("subtitle_languages")
 
     def matches(row):
         if needs_access and not row.is_accessible:
