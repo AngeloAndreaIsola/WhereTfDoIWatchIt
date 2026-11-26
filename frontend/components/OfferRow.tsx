@@ -6,6 +6,8 @@ import { normalizeLanguageCode } from "@/lib/languages";
 import { isUnverifiedOffer, UNVERIFIED_BADGE } from "@/lib/availability";
 import {
   explainReason,
+  isAccessibleEntitlementOffer,
+  isLegacyPlanOffer,
   isPositiveVerdict,
   presentVerdict,
 } from "@/lib/entitlement";
@@ -87,12 +89,20 @@ export default function OfferRow({
   const entitlement = offer.entitlement ?? null;
   const verdict = entitlement?.verdict ?? null;
   const verdictPresentation = presentVerdict(entitlement);
-  const positive = entitlement ? isPositiveVerdict(entitlement) : Boolean(offer.is_entitled);
-  const unconfirmed = Boolean(entitlement) && verdict === "UNKNOWN";
-  const watchUrl = offer.url || (!reported && tmdbId ? `/watch/${tmdbId}` : null);
+  const legacyPlan = isLegacyPlanOffer(offer);
+  const positive = !unverified &&
+    (entitlement ? isPositiveVerdict(entitlement) : !legacyPlan && offer.is_entitled === true);
+  const unconfirmed = legacyPlan || verdict === "UNKNOWN";
+  const bestMatch = isBest && isAccessibleEntitlementOffer(offer);
+  const transaction = verdict === "RENT_OR_BUY";
+  const watchUrl = offer.url || (!reported && !transaction && tmdbId ? `/watch/${tmdbId}` : null);
   const linkLabel = unverified
     ? offer.url ? "Check provider" : "Verify availability"
+    : transaction
+    ? verdictPresentation.label
     : unconfirmed
+    ? offer.url ? "Check provider" : "Why can't I watch?"
+    : entitlement && !isAccessibleEntitlementOffer(offer)
     ? offer.url ? "Check provider" : "Why can't I watch?"
     : "Watch";
 
@@ -118,9 +128,9 @@ export default function OfferRow({
   // the movie-194 fix: the offer list used to drop unowned services entirely,
   // which made "available elsewhere" look like "nothing found".
   const notEntitled =
-    !reported &&
+    !unverified && !unconfirmed &&
     (entitlement
-      ? !positive && verdict !== "UNKNOWN"
+      ? !positive
       : offer.is_entitled === false);
   const notAccessible = !reported && offer.is_accessible === false;
   // Why the row is muted. An unowned service is the common case; an offer the
@@ -129,6 +139,7 @@ export default function OfferRow({
   // simply wrong. Prefer the resolver's own rejection reason.
   const mutedReason = (() => {
     if (!notAccessible) return "";
+    if (unverified && !entitlement) return "Availability needs a recheck";
     if (entitlement) {
       if (verdict === "UNKNOWN") return explainReason(entitlement.reason);
       if (verdict === "BLOCKED") return explainReason(entitlement.reason);
@@ -165,18 +176,16 @@ export default function OfferRow({
     <div
       data-testid="offer-row"
       data-entitled={
-        reported
+        unverified || unconfirmed
           ? "unknown"
-          : entitlement
-          ? positive ? "true" : unconfirmed ? "unknown" : "false"
-          : notEntitled ? "false" : "true"
+          : positive ? "true" : notEntitled ? "false" : "unknown"
       }
       data-entitlement-verdict={verdict ?? "missing"}
       className={`
         rounded-xl border p-4 text-sm transition-all
         ${notAccessible
           ? "border-dashed border-gray-300 bg-gray-50/70 opacity-80 dark:border-gray-600 dark:bg-gray-800/40"
-          : isBest
+          : bestMatch
           ? "border-green-400 bg-green-50/80 shadow-xs dark:border-green-600 dark:bg-green-900/20"
           : "border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800/50"}
       `}
@@ -221,11 +230,11 @@ export default function OfferRow({
           >
             {offer.offer_type}
           </span>
-          {entitlement && (
+          {(entitlement || legacyPlan) && (
             <span
               data-testid="entitlement-verdict"
-              data-verdict={entitlement.verdict}
-              data-reason={entitlement.reason}
+              data-verdict={entitlement?.verdict ?? "missing"}
+              data-reason={entitlement?.reason}
               className={`rounded-md px-2 py-0.5 text-xs font-semibold ${
                 verdictPresentation.tone === "positive"
                   ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300"
@@ -300,7 +309,7 @@ export default function OfferRow({
               {offer.required_base_display ? ` · needs ${offer.required_base_display}` : ""}
             </span>
           )}
-          {offer.access_label && !entitlement && !notEntitled && !offer.is_addon && (
+          {offer.access_label && !entitlement && !unverified && !legacyPlan && !notEntitled && !offer.is_addon && (
             <span
               className={`rounded-md px-2 py-0.5 text-xs font-medium ${
                 notAccessible
@@ -311,7 +320,7 @@ export default function OfferRow({
               {offer.access_label}
             </span>
           )}
-          {isBest && !notAccessible && positive && (
+          {bestMatch && (
             <span className="rounded-full bg-green-600 px-2.5 py-0.5 text-xs font-bold text-white shadow-xs">
               Best Match
             </span>
@@ -358,7 +367,7 @@ export default function OfferRow({
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 py-1.5 text-xs font-semibold text-white shadow-xs hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600 transition-all"
           >
-            {!unverified && <span aria-hidden="true">▶</span>}
+            {linkLabel === "Watch" && <span aria-hidden="true">▶</span>}
             <span>{linkLabel}</span>
           </a>
         )}

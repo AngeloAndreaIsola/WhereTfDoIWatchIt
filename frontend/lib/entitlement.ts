@@ -2,7 +2,9 @@ import type {
   EntitlementReason,
   EntitlementVerdict,
   OfferEntitlement,
+  PrimeOffer,
 } from "./api";
+import { isUnverifiedOffer } from "./availability";
 
 export interface VerdictPresentation {
   label: string;
@@ -76,5 +78,20 @@ export function isPositiveVerdict(
   return Boolean(
     entitlement &&
       (entitlement.verdict === "INCLUDED" || entitlement.verdict === "FREE_WITH_ADS")
+  );
+}
+
+export function isLegacyPlanOffer(offer: Pick<PrimeOffer, "entitlement" | "offer_type" | "is_addon" | "access_type">): boolean {
+  return !offer.entitlement && (
+    offer.offer_type === "subscription" || offer.offer_type === "addon" ||
+    offer.access_type === "subscription" || offer.access_type === "addon" || offer.is_addon === true
+  );
+}
+
+export function isAccessibleEntitlementOffer(
+  offer: Pick<PrimeOffer, "entitlement" | "offer_type" | "is_addon" | "access_type" | "availability_evidence" | "is_accessible">
+): boolean {
+  return offer.is_accessible === true && !isUnverifiedOffer(offer) && (
+    offer.entitlement ? isPositiveVerdict(offer.entitlement) : !isLegacyPlanOffer(offer)
   );
 }

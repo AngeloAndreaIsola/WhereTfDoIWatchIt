@@ -144,9 +144,18 @@ describe("OfferRow entitlement verdicts (#103)", () => {
   });
 
   it("treats an older payload without an entitlement object as unconfirmed", () => {
-    render(<OfferRow offer={{ ...baseOffer, is_entitled: null }} />);
-    expect(screen.queryByTestId("entitlement-verdict")).toBeNull();
+    render(<OfferRow offer={{
+      ...baseOffer,
+      offer_type: "subscription",
+      is_entitled: true,
+      is_accessible: true,
+      access_label: "Included with your subscription",
+    }} isBest tmdbId={238} />);
+    expect(verdictRow()).toHaveTextContent("Plan access unconfirmed");
+    expect(screen.queryByText("Included with your subscription")).toBeNull();
+    expect(screen.queryByText("Best Match")).toBeNull();
     expect(screen.getByTestId("offer-row")).toHaveAttribute("data-entitlement-verdict", "missing");
+    expect(screen.getByTestId("offer-row")).toHaveAttribute("data-entitled", "unknown");
   });
 
   it("shows the declared-selection caveat on a positive verdict", () => {
