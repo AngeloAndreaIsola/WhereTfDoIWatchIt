@@ -1,0 +1,17 @@
+<rss xmlns:anime="https://www.animeworld.ac/"><channel>
+<lastBuildDate>Tue, 17 Nov 2026 10:00:00 GMT</lastBuildDate>
+<item>
+  <guid isPermaLink="false">7214</guid>
+  <title>Original Series</title>
+  <anime:name>Original Series</anime:name>
+  <anime:link>https://www.animeworld.ac/play/original-series</anime:link>
+  <anime:type>anime</anime:type>
+</item>
+<item>
+  <guid isPermaLink="false">7215</guid>
+  <title>Original Movie</title>
+  <anime:name>Original Movie</anime:name>
+  <anime:link>https://www.animeworld.ac/play/original-movie</anime:link>
+  <anime:type>movie</anime:type>
+</item>
+</channel></rss>

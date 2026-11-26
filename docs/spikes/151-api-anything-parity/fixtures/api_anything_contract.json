@@ -1,0 +1,33 @@
+{
+  "source": "issue-149 and issue-151 (offline description only; upstream goodnight000/api-anything NOT fetched, NOT pinned)",
+  "upstream_sha": null,
+  "upstream_sha_note": "UNVERIFIED: the spike is offline-only; no network request was made to fetch or pin an upstream commit.",
+  "executed": false,
+  "dimensions": [
+    {"id": "native_id", "name": "Source-native ID", "required": "Stable provider-native identifier preserved through pagination, replay and detail enrichment."},
+    {"id": "provider_alias", "name": "Provider slug + domain aliases", "required": "One provider family per slug; host aliases are reviewed and provider-scoped, never a new provider per hostname."},
+    {"id": "metadata_only", "name": "Metadata-only record", "required": "Discovery never fabricates an Offer, playback URL, language track or quality claim."},
+    {"id": "pagination", "name": "Pagination completeness", "required": "Bounded page walk with a verified terminal condition; an empty page is not automatically terminal."},
+    {"id": "checkpoint", "name": "Checkpoint / resume", "required": "Per-provider, per-partition cursor committed only after the page is persisted; resume does not restart page one."},
+    {"id": "interrupt", "name": "Interruption handling", "required": "Operator interrupt / budget exhaustion / crash leaves a PARTIAL state and a committed checkpoint."},
+    {"id": "replay", "name": "Replay / idempotency", "required": "Exact replay reports unchanged without rewriting rows or advancing updated_at."},
+    {"id": "dedupe", "name": "Deduplication", "required": "Native ID wins over URL; tracking-only URL variants collapse; same title on different URLs stays separate."},
+    {"id": "typed_identity", "name": "Typed canonical reconciliation", "required": "Explicit Movie/TVSeries evidence; identity is (tmdb_id, content_type); anime/episode count never guesses type."},
+    {"id": "uncertainty", "name": "Identity uncertainty", "required": "Unclassified rows persist as PENDING and never project to canonical mappings or offers."},
+    {"id": "budget", "name": "Request budget / rate", "required": "Attempt-level accounting including robots, redirects and retries; min interval; operator and provider caps (lower wins)."},
+    {"id": "errors", "name": "Error classification / fail-closed", "required": "403/429/404/JS-challenge/robots/DNS/redirect each map to a distinct state; policy errors are not swallowed."},
+    {"id": "permission", "name": "Permission + robots grant", "required": "No dispatch without a reviewed grant; robots crawl-delay honoured; no credential/cookie/auth forwarding."},
+    {"id": "drift", "name": "Config drift / self-healing scope", "required": "Learned recipes cannot widen approved hosts, paths, rates, auth or write scope."},
+    {"id": "runtime_cost", "name": "Runtime / dependency cost", "required": "Startup, memory, packaging and maintenance compared with Python/Django collectors."},
+    {"id": "determinism", "name": "Test determinism", "required": "Fixture-only, no live source traffic, fake clock/transport, disposable DB."},
+    {"id": "credentials", "name": "Credential / token handling", "required": "No storage or sharing of cookies/tokens; local-only mode; no secret in fixtures or prompts."}
+  ],
+  "go_no_go_criteria": [
+    "A pinned, integrity-reviewed upstream commit exists.",
+    "An offline fixture POC reproduces all six provider contracts on every dimension above.",
+    "A reviewed permission grant exists for any source it would touch (#124); none does today.",
+    "The adapter cannot widen host/path/rate/auth/write scope during self-repair.",
+    "Runtime/packaging cost is justified against the current Python collectors.",
+    "No production code is refactored before the parity evidence is reviewed."
+  ]
+}
