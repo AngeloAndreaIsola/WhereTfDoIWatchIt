@@ -5,8 +5,18 @@ from tracker.services.offers import Offer
 from tracker.services.watchability import (
     RefreshState,
     WatchabilityStatus,
-    evaluate_watchability,
+    evaluate_watchability as _evaluate_watchability,
 )
+
+from tracker.services.access import build_explicit_access, build_user_access
+from tracker.tests.reviewed_entitlement import reviewed_access
+
+
+def evaluate_watchability(movie, offers, preference, *, current_country=None, user_subscriptions=None, **kwargs):
+    access = (build_user_access(preference.user_id) if user_subscriptions is None
+              else build_explicit_access(user_subscriptions))
+    access = reviewed_access(offers, access, current_country=current_country or preference.current_country)
+    return _evaluate_watchability(movie, offers, preference, current_country=current_country, access=access, **kwargs)
 
 
 class WatchabilityEvaluationTests(TestCase):
@@ -101,12 +111,13 @@ class WatchabilityEvaluationTests(TestCase):
         self.assertIsNone(res.best_offer)
         self.assertTrue(any("not in your configured VPN regions" in exp for exp in res.explanation))
 
-    def test_rent_buy_excluded(self):
+    def test_confirmed_rent_is_payable_without_entitlement(self):
         offers = [Offer(
             country="US",
             service="prime",
             offer_type="rent",
             quality="hd",
+            audio_languages=["EN"],
             url="https://amazon.com/rent",
         )]
         res = evaluate_watchability(
@@ -115,12 +126,10 @@ class WatchabilityEvaluationTests(TestCase):
             self.pref,
             current_country="US",
         )
-        # Rent/buy do not qualify for the user, but the offer still resolves
-        # canonical availability, so the badge stays non-negative.
-        self.assertEqual(res.status, WatchabilityStatus.AVAILABLE_ELSEWHERE)
-        self.assertEqual(res.status_symbol, "🟠")
-        self.assertEqual(len(res.excluded_offers), 1)
-        self.assertIn("Only available to rent", res.excluded_offers[0].rejection_reasons[0])
+        self.assertEqual(res.status, WatchabilityStatus.PURCHASE_ONLY)
+        self.assertEqual(res.status_symbol, "🟣")
+        self.assertFalse(res.purchase_offers[0].is_entitled)
+        self.assertTrue(res.purchase_offers[0].requires_payment)
 
     def test_free_with_ads_counts_as_a_free_offer(self):
         """``free_with_ads`` (AVOD) is a free stream, not a rent/buy.
@@ -164,6 +173,7 @@ class WatchabilityEvaluationTests(TestCase):
             service="rakuten_tv",
             offer_type="rent",
             quality="hd",
+            audio_languages=["EN"],
             url="https://rakuten.tv/nl/platoon",
         )]
         res = evaluate_watchability(
@@ -174,9 +184,9 @@ class WatchabilityEvaluationTests(TestCase):
             user_subscriptions=set(),
         )
         self.assertNotEqual(res.status, WatchabilityStatus.NOT_WATCHABLE)
-        self.assertEqual(res.status, WatchabilityStatus.AVAILABLE_ELSEWHERE)
-        self.assertEqual(res.status_symbol, "🟠")
-        self.assertEqual(res.status_label, "Available — not with your subscriptions")
+        self.assertEqual(res.status, WatchabilityStatus.PURCHASE_ONLY)
+        self.assertEqual(res.status_symbol, "🟣")
+        self.assertEqual(res.status_label, "Available — rental or purchase")
 
     def test_explicit_worldwide_scraped_source_bypasses_vpn_but_respects_language_match(self):
         offers = [Offer(
@@ -276,11 +286,11 @@ class WatchabilityEvaluationTests(TestCase):
             current_country="US",
             user_subscriptions={"scraped_site"},
         )
-        self.assertEqual(res.status, WatchabilityStatus.AVAILABLE_ELSEWHERE)
-        self.assertEqual(res.status_symbol, "🟠")
-        self.assertEqual(res.status_label, "Available — language data unknown")
+        self.assertEqual(res.status, WatchabilityStatus.UNKNOWN)
+        self.assertEqual(res.status_symbol, "⚪")
+        self.assertEqual(res.status_label, "Unknown")
         self.assertEqual(len(res.excluded_offers), 1)
-        self.assertFalse(res.excluded_offers[0].is_language_match)
+        self.assertIsNone(res.excluded_offers[0].is_language_match)
         self.assertIn("Language information unknown", res.excluded_offers[0].rejection_reasons)
 
 

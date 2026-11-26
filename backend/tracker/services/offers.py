@@ -8,6 +8,7 @@ existing call sites that mutate or index offers keep working.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Iterable, Optional
 
 
@@ -24,6 +25,27 @@ def effective_territorial_scope(country: str, asserted_scope: str = "") -> str:
     if (asserted_scope or "").lower().strip() == TerritorialScope.WORLDWIDE:
         return TerritorialScope.WORLDWIDE
     return TerritorialScope.COUNTRY if (country or "").upper().strip() else TerritorialScope.UNKNOWN
+
+
+@dataclass(frozen=True)
+class OfferLineage:
+    content_type: str
+    title_id: int
+    identity: str = ""
+    source: str = ""
+    package_id: str = ""
+    package_label: str = ""
+    variant_id: str = ""
+    observed_at: datetime | None = None
+    conflicted: bool = False
+
+    def public_scope(self):
+        return {
+            "content_type": self.content_type,
+            "tmdb_id": self.title_id,
+            "source_package_id": self.package_id or None,
+            "source_package_label": self.package_label or None,
+        }
 
 
 @dataclass
@@ -62,6 +84,7 @@ class Offer:
     available_until: Optional[str] = None
     season_number: Optional[int] = None
     episode_number: Optional[int] = None
+    lineage: OfferLineage | None = None
 
     def get(self, key: str, default: Any = None) -> Any:
         """Dict-like access for backward compatibility."""
@@ -131,6 +154,9 @@ class Offer:
             "season_number": self.season_number,
             "episode_number": self.episode_number,
         }
+
+        if self.lineage:
+            data.update(self.lineage.public_scope())
 
         if self.reporting_source:
             data.update(

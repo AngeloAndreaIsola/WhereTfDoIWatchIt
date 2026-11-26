@@ -23,7 +23,7 @@ from availability.domain.reconciliation import ReconciledOffer
 from availability.services.offer_variant_projection import public_offer_variant
 from availability.services.query import AvailabilityQueryService
 
-from .offers import Offer
+from .offers import Offer, OfferLineage
 
 
 class OfferEvidence(NamedTuple):
@@ -51,15 +51,15 @@ class TitleOfferEvidence(NamedTuple):
 
 
 def get_title_offer_evidence(
-    movie, *, season: Optional[int] = None, country: Optional[str] = None
+    movie, *, season: Optional[int] = None, country: Optional[str] = None, now=None,
 ) -> TitleOfferEvidence:
     """Read one title's reconciled offers, split into current and last-known."""
     service = AvailabilityQueryService()
     if movie.content_type == "series" and season is not None:
-        result = service.get_reconciled_for_series(movie.tmdb_id, season, country)
+        result = service.get_reconciled_for_series(movie.tmdb_id, season, country, now=now)
     else:
         result = service.get_reconciled_for_content(
-            movie.tmdb_id, movie.content_type or "movie", country
+            movie.tmdb_id, movie.content_type or "movie", country, now=now,
         )
     return _split(result.offers)
 
@@ -78,7 +78,7 @@ def get_local_offers(movie, *, season: Optional[int] = None, country: Optional[s
     return get_offer_evidence(movie, season=season, country=country).current
 
 
-def get_offer_evidence_bulk(movies) -> dict[int, OfferEvidence]:
+def get_title_offer_evidence_bulk(movies, *, now=None) -> dict[int, TitleOfferEvidence]:
     """Read reconciled offers for many list/report titles in bounded queries.
 
     This deliberately supports only title-level rows; season detail pages keep
@@ -86,14 +86,21 @@ def get_offer_evidence_bulk(movies) -> dict[int, OfferEvidence]:
     """
     movie_list = list(movies)
     pairs = [(movie.tmdb_id, movie.content_type or "movie") for movie in movie_list]
-    reconciled = AvailabilityQueryService().get_reconciled_for_contents(pairs)
+    reconciled = AvailabilityQueryService().get_reconciled_for_contents(pairs, now=now)
     return {
         movie.id: _split(
             reconciled.get((movie.tmdb_id, movie.content_type or "movie"), [])
-        ).confirmed_and_history
+        )
         for movie in movie_list
     }
 
+
+
+def get_offer_evidence_bulk(movies) -> dict[int, OfferEvidence]:
+    return {
+        movie_id: evidence.confirmed_and_history
+        for movie_id, evidence in get_title_offer_evidence_bulk(movies).items()
+    }
 
 def get_local_offers_bulk(movies) -> dict[int, list[Offer]]:
     """Current (verified) offers only, per title; see :func:`get_offer_evidence_bulk`."""
@@ -155,6 +162,57 @@ def _tracker_offer(offer: ReconciledOffer) -> Offer:
         available_until=_window_timestamp(offer, "available_until"),
         season_number=offer.season_number,
         episode_number=offer.episode_number,
+        lineage=_offer_lineage(offer, report),
+    )
+
+
+def _safe_package_value(value):
+    if value is None or isinstance(value, bool):
+        return ""
+    value = str(value)
+    return value if len(value) <= 150 and all(c.isascii() and (c.isalnum() or c in "_.-") for c in value) else ""
+
+
+def _offer_lineage(offer, report):
+    """Bind to the observation behind the rendered rendition and its own variant."""
+    base = {"content_type": offer.content_type, "title_id": offer.tmdb_id}
+    candidates = [obs for obs in offer.observations if getattr(obs, "offer_identity", "") and obs.evidence == offer.evidence]
+    if report and getattr(report, "offer_identity", ""):
+        candidates = [report]
+    chosen_price = offer.price if offer.price and offer.price.selected_variant else None
+    if chosen_price:
+        candidates = [obs for obs in candidates if obs.price == chosen_price]
+    else:
+        candidates = [obs for obs in candidates if obs.provider_url == offer.provider_url]
+    if len(candidates) != 1:
+        return OfferLineage(**base)
+    observation = candidates[0]
+    observed_at = observation.observed_at or observation.last_seen
+    price = observation.price
+    if price is None or price.observed_at is None or price.observed_at < observed_at:
+        return OfferLineage(**base, identity=observation.offer_identity, source=observation.source,
+                            observed_at=observed_at)
+    variants = price.open_variants if offer.evidence == AvailabilityEvidence.VERIFIED else price.variants
+    selected = chosen_price.selected_variant if chosen_price else None
+    if selected is None:
+        variants = [variant for variant in variants if variant.get("url", "") == observation.provider_url]
+        selected = variants[0] if len(variants) == 1 else {}
+    variant_id = str(selected.get("source_offer_id") or "")
+    if sum(str(variant.get("source_offer_id") or "") == variant_id for variant in variants) > 1:
+        variant_id = ""
+    # Group-level mixed commercial actions are independent. A disagreement
+    # over availability/window of the same stable observation is material.
+    conflicted = any(
+        conflict.kind in {"availability", "mapping", "window"}
+        and observation.offer_id in conflict.offer_ids
+        for conflict in offer.conflicts
+    )
+    return OfferLineage(
+        **base, identity=observation.offer_identity, source=observation.source,
+        package_id=_safe_package_value(selected.get("package_id")),
+        package_label=_safe_package_value(selected.get("package")),
+        variant_id=variant_id,
+        observed_at=observed_at, conflicted=conflicted,
     )
 
 

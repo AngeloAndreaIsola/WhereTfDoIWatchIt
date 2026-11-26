@@ -87,6 +87,7 @@ _VERDICT_TO_STATUS = {
     AccessVerdict.UNAVAILABLE: WatchabilityStatus.NOT_WATCHABLE,
     AccessVerdict.UNKNOWN: WatchabilityStatus.UNKNOWN,
     AccessVerdict.CHECKING: WatchabilityStatus.CHECKING,
+    AccessVerdict.NEEDS_RECHECK: WatchabilityStatus.NEEDS_RECHECK,
 }
 
 
@@ -121,6 +122,10 @@ class EvaluatedOffer:
     available_until: Optional[str] = None
     season_number: Optional[int] = None
     episode_number: Optional[int] = None
+    entitlement: dict | None = None
+    lineage_scope: dict = field(default_factory=dict)
+    price: dict | None = None
+    prices: list[dict] = field(default_factory=list)
 
     @classmethod
     def from_classified(cls, c: ClassifiedOffer) -> "EvaluatedOffer":
@@ -153,6 +158,10 @@ class EvaluatedOffer:
             available_until=c.available_until,
             season_number=c.season_number,
             episode_number=c.episode_number,
+            entitlement=c.entitlement.to_dict() if c.entitlement else None,
+            lineage_scope=c.lineage_scope,
+            price=c.price,
+            prices=c.prices,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -177,6 +186,11 @@ class EvaluatedOffer:
             "access_label": self.access_label,
             "locality": self.locality,
             "is_accessible": self.is_accessible,
+            "is_entitled": self.is_entitled,
+            "entitlement": self.entitlement,
+            **self.lineage_scope,
+            "price": self.price,
+            "prices": self.prices,
             "requires_payment": self.requires_payment,
             "available_from": self.available_from,
             "available_until": self.available_until,
@@ -201,9 +215,14 @@ class WatchabilityResult:
     access_flags: dict[str, Any] = field(default_factory=dict)
     last_known: Optional["LastKnownAvailability"] = None
 
+    source_reported_offers: list[dict] = field(default_factory=list)
+    last_known_offers: list[dict] = field(default_factory=list)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "status": self.status,
+            "source_reported_offers": self.source_reported_offers,
+            "last_known_offers": self.last_known_offers,
             "status_label": self.status_label,
             "status_symbol": self.status_symbol,
             "best_offer": self.best_offer.to_dict() if self.best_offer else None,
@@ -392,10 +411,10 @@ def qualify_watchability(result: WatchabilityResult, last_known: Optional[LastKn
     return result
 
 
-def qualify_watchability_dict(payload: dict[str, Any], last_known: Optional[LastKnownAvailability]) -> dict[str, Any]:
+def qualify_watchability_dict(payload: dict[str, Any], last_known: Optional[LastKnownAvailability], *, current=False) -> dict[str, Any]:
     """Same as :func:`qualify_watchability` for the detail page's verdict dict."""
     payload.update(_last_known_fields(last_known))
-    if last_known is not None and payload.get("status") in _QUALIFIABLE:
+    if last_known is not None and not current and payload.get("status") in _QUALIFIABLE:
         payload["status"] = payload["verdict"] = WatchabilityStatus.NEEDS_RECHECK
         payload["status_label"], payload["status_symbol"] = _needs_recheck_label(last_known)
         payload["explanation"] = _needs_recheck_explanation(last_known)

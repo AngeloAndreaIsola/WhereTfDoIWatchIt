@@ -51,7 +51,6 @@ from .serializers import (
     MovieWatchEventSerializer,
     PreferenceSerializer,
     ProviderSerializer,
-    RankedOfferSerializer,
     ScrapedContentMappingSerializer,
     SubscriptionSerializer,
     UserMovieDataSerializer,
@@ -67,9 +66,7 @@ from tracker.services.unified_catalogue import (
     watched_identity_keys,
 )
 from tracker.services.watchability import (
-    QUALIFYING_OFFER_TYPES,
     WatchabilityStatus,
-    evaluate_watchability,
 )
 from tracker.services.access import SubscriptionAccessMode
 from availability.services.legacy_ingest import ingest_scraped_mapping
@@ -102,6 +99,8 @@ from .services.bulk_refresh import (
     stale_catalogue_sources,
     title_level_source_slugs,
 )
+from .services.entitlement_selections import viewer_id
+from .services.preferences import build_preference
 from .services.availability_reads import get_local_offers, get_title_offer_evidence
 from .services.availability_metrics import (
     WINDOW_DAYS,
@@ -238,18 +237,16 @@ def genres_list(request):
 @api_view(["GET"])
 def homepage_feed(request):
     """GET /api/homepage/ — returns only watchable titles (🟢 Watchable here & 🟡 Watchable with VPN) with pagination."""
+    user = viewer_id(request)
     curr_country = _active_country(request)
-    pref = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
+    pref = build_preference(user)
 
     movies = Movie.objects.visible().order_by("-id")
-    # The resolver builds the access map from ``Subscription`` rows, exactly as
-    # the detail page does. Passing the legacy flat slug set here would route
-    # list surfaces through ``build_explicit_access``, which ignores
-    # ``access_mode`` and AVOD/FAST auto-entitlement — the detail↔list
-    # disagreement this redesign exists to remove.
+    params = request.GET.copy()
+    params["watchable"] = "1"
     evaluated, _ = apply_composable_filters(
         movies,
-        request.GET,
+        params,
         pref,
         current_country=curr_country,
     )
@@ -275,8 +272,9 @@ def homepage_feed(request):
 @api_view(["GET"])
 def unified_catalog(request):
     """GET /api/catalog/unified/ — Unified catalog endpoint merging official and unofficial sources."""
+    user = viewer_id(request)
     curr_country = _active_country(request)
-    pref = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
+    pref = build_preference(user)
 
     scope = resolve_catalogue_scope(request.GET)
     allowed_provider_slugs = scope.allowed_provider_slugs
@@ -298,7 +296,7 @@ def unified_catalog(request):
     if include_official and watched_filter in ("watched", "unwatched", "all"):
         watched_movie_ids = set(
             UserMovieData.objects.filter(
-                user_id=1, is_watched=True
+                user_id=user, is_watched=True
             ).values_list("movie_id", flat=True)
         )
 
@@ -313,6 +311,7 @@ def unified_catalog(request):
             allowed_provider_slugs=allowed_provider_slugs,
         )
 
+        known_providers = {provider.slug: provider for provider in Provider.objects.all()}
         for item in evaluated:
             m = item["movie"]
             watch_res = item["watchability"]
@@ -332,9 +331,10 @@ def unified_catalog(request):
             # Determine provider details from best offer or watchability
             provider_info = None
             p_obj = None
-            if best_offer and best_offer.get("service"):
-                svc_slug = best_offer["service"]
-                p_obj = Provider.objects.filter(slug__iexact=svc_slug).first()
+            discovery_offer = item["discovery_offer"]
+            if discovery_offer and discovery_offer.service:
+                svc_slug = discovery_offer.service
+                p_obj = known_providers.get(svc_slug)
                 provider_info = {
                     "slug": svc_slug,
                     "name": p_obj.name if p_obj else svc_slug.capitalize(),
@@ -360,7 +360,15 @@ def unified_catalog(request):
             })
 
     # 2. Fetch Unofficial Catalog Items (canonical, via the scraper bridge)
-    if include_scraper:
+    access_status = (request.GET.get("availability_status") or request.GET.get("status") or "").strip().lower()
+    requested_access = request.GET.get("access") or request.GET.get("access_type") or ""
+    access_filtered = (
+        "included" in {part.strip().lower() for part in requested_access.split(",")}
+        or access_status in {"watchable", "watchable_any", "watchable_here", "watchable_vpn", "included", "purchase_only"}
+        or any(request.GET.get(key) in ("true", "1") for key in
+               ("watchable", "watchable_only", "included", "included_in_my_plan"))
+    )
+    if include_scraper and not access_filtered:
         scraped_items = unofficial_catalogue_items(
             request.GET,
             allowed_provider_slugs=allowed_provider_slugs,
@@ -439,74 +447,10 @@ def unified_catalog(request):
     audio_filter = requested_languages("audio_languages")
     subtitle_filter = requested_languages("subtitle_languages")
     if audio_filter is not None or subtitle_filter is not None:
-        raw_access = request.GET.get("access") or request.GET.get("access_type") or ""
-        access_filter = {
-            value.strip().lower()
-            for value in raw_access.split(",")
-            if value.strip()
-        }
-        if "all" in access_filter:
-            access_filter.clear()
-        status_filter = (
-            request.GET.get("availability_status") or request.GET.get("status") or ""
-        ).strip().lower()
-        watchable_only = request.GET.get("watchable") in ("true", "1") or request.GET.get("watchable_only") in ("true", "1")
         filtered_items = []
         for item in unified_items:
-            matching_offer = False
             if item.get("source") == "official":
-                watchability = item.get("watchability") or {}
-                # The resolver partitions offers by current entitlement and
-                # reachability. Excluded offers cannot make a language match;
-                # purchase offers remain eligible only when the resolver has
-                # already confirmed entitlement and territory reach.
-                offers = list(watchability.get("watchable_offers") or [])
-                offers.extend(watchability.get("purchase_offers") or [])
-                if allowed_provider_slugs is not None:
-                    offers = [
-                        offer for offer in offers
-                        if (offer.get("service") or "").lower() in allowed_provider_slugs
-                    ]
-                if access_filter:
-                    offers = [
-                        offer for offer in offers
-                        if (offer.get("access_type") or "").lower() in access_filter
-                    ]
-                if watchable_only or status_filter in ("watchable", "watchable_any"):
-                    offers = [offer for offer in offers if offer.get("is_accessible")]
-                elif status_filter == "watchable_here":
-                    offers = [
-                        offer for offer in offers
-                        if offer.get("is_accessible") and offer.get("is_current_country")
-                    ]
-                elif status_filter == "watchable_vpn":
-                    offers = [
-                        offer for offer in offers
-                        if offer.get("is_accessible") and offer.get("is_candidate_country")
-                    ]
-                elif status_filter == "purchase_only":
-                    offers = [offer for offer in offers if offer.get("requires_payment")]
-
-                for offer in offers:
-                    available_audio = {
-                        code
-                        for value in offer.get("audio_languages") or []
-                        if (code := normalize_language_code(str(value)))
-                    }
-                    available_subtitles = {
-                        code
-                        for value in offer.get("subtitle_languages") or []
-                        if (code := normalize_language_code(str(value)))
-                    }
-                    if (
-                        (audio_filter is None or audio_filter.intersection(available_audio))
-                        and (
-                            subtitle_filter is None
-                            or subtitle_filter.intersection(available_subtitles)
-                        )
-                    ):
-                        matching_offer = True
-                        break
+                matching_offer = True
             else:
                 # Each unofficial result is one canonical ProviderContent
                 # entry with its own provider identity. Keep both language
@@ -612,15 +556,32 @@ def movie_availability(request, tmdb_id: int):
     except (Movie.DoesNotExist, Movie.MultipleObjectsReturned):
         return Response({"error": "movie not tracked yet"}, status=404)
 
-    preference = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
+    user = viewer_id(request)
+    preference = build_preference(user)
 
     country = _active_country(request).strip().upper()
     evidence = get_title_offer_evidence(movie)
     offers, last_known = evidence.current, evidence.last_known
-    ranked = rank_offers(offers, preference)
+    from .services.access import build_reach, build_user_access
+    from .services.offer_pipeline import OfficialOffersPipeline
 
-    user_data = UserMovieData.objects.filter(user_id=1, movie=movie).first()
-    watch_events = MovieWatchEvent.objects.filter(user_id=1, movie=movie).order_by("-watched_date", "-created_at")
+    provider_map = {provider.slug: provider for provider in Provider.objects.all()}
+    access = build_user_access(user, offers=offers + last_known + evidence.source_reported)
+    reach = build_reach(preference, country)
+    pipeline = OfficialOffersPipeline(user_id=user)
+
+    def present(rows):
+        ranked = pipeline.rank_and_present(
+            rows, preference, provider_map, current_country=country,
+            access=access, reach=reach, classify_preference=preference, display_service=False,
+        )
+        for row in ranked:
+            row.setdefault("available_from", None)
+            row.setdefault("available_until", None)
+        return ranked
+
+    user_data = UserMovieData.objects.filter(user_id=user, movie=movie).first()
+    watch_events = MovieWatchEvent.objects.filter(user_id=user, movie=movie).order_by("-watched_date", "-created_at")
 
     return Response(
         {
@@ -632,14 +593,13 @@ def movie_availability(request, tmdb_id: int):
                 "reason": "local",
                 "offers": len(offers),
             },
-            "offers": RankedOfferSerializer([offer.to_dict() for offer in ranked], many=True).data,
+            "offers": present(offers),
             "source_reported_offers": [
-                offer.to_dict() for offer in evidence.source_reported if offer.country == country
+                {**row, **raw.to_dict()}
+                for raw in evidence.source_reported if raw.country == country
+                for row in present([raw])
             ],
-            # Stale/unverified positives: history ("last seen"), never current.
-            "last_known_offers": RankedOfferSerializer(
-                [offer.to_dict() for offer in rank_offers(last_known, preference)], many=True
-            ).data,
+            "last_known_offers": present(last_known),
         }
     )
 
@@ -675,6 +635,20 @@ def refresh_availability(request, tmdb_id: int):
     )
 
 
+@api_view(["PUT"])
+def subscription_market_selection(request, provider_slug: str, billing_country: str):
+    from .services.entitlement_selections import SelectionInput, normalize_market, replace_selection, viewer_id
+
+    country = normalize_market(billing_country)
+    provider = get_object_or_404(Provider, slug=provider_slug)
+    payload = SelectionInput(data=request.data)
+    payload.is_valid(raise_exception=True)
+    selection, conflict = replace_selection(provider, country, viewer_id(request), payload.validated_data)
+    if conflict:
+        return Response({"code": "revision_conflict", "selection": selection}, status=409)
+    return Response(selection)
+
+
 @api_view(["GET"])
 def providers_list(request):
     """List canonical providers catalog with subscription state for user_id=1.
@@ -684,6 +658,20 @@ def providers_list(request):
     paint N cards from one response — see ``tracker.services.provider_status``
     for the batched computation and the refresh-target rules.
     """
+    from tracker.models import EntitlementChannel, EntitlementPlan, ViewerMarketSelection
+    from .services.entitlement_selections import normalize_market, selection_catalogue
+
+    user = viewer_id(request)
+    country = normalize_market(request.GET["billing_country"]) if "billing_country" in request.GET else None
+    visible = Q(is_enabled=True) | Q(external_mappings__integration_name="justwatch")
+    if country:
+        visible |= (
+            Q(slug__in=EntitlementPlan.objects.filter(billing_country=country).values("provider_slug"))
+            | Q(slug__in=EntitlementChannel.objects.filter(country=country).values("parent_provider"))
+            | Q(slug__in=ViewerMarketSelection.objects.filter(
+                user_id=user, billing_country=country,
+            ).values("provider_slug"))
+        )
     category = request.GET.get("category")
     is_major = request.GET.get("is_major")
 
@@ -694,9 +682,7 @@ def providers_list(request):
         # ones is what makes the service-access manager *catalogue-driven*: a
         # newly found service is visible and selectable, while still defaulting
         # to inactive until the user declares access to it.
-        Provider.objects.filter(
-            Q(is_enabled=True) | Q(external_mappings__integration_name="justwatch")
-        )
+        Provider.objects.filter(visible)
         .distinct()
         .prefetch_related("external_mappings")
         # Batched scraped-item count: the serializer prefers this annotation
@@ -711,23 +697,26 @@ def providers_list(request):
 
     providers = list(qs)
 
-    user_sub_provider_ids = set(
-        Subscription.objects.filter(user_id=1, provider__isnull=False).values_list("provider_id", flat=True)
-    )
     user_access_modes = dict(
-        Subscription.objects.filter(user_id=1, provider__isnull=False).values_list("provider_id", "access_mode")
+        Subscription.objects.filter(user_id=user, provider__isnull=False).values_list("provider_id", "access_mode")
     )
-
     serializer = ProviderSerializer(
         providers,
         many=True,
         context={
-            "user_subscribed_ids": user_sub_provider_ids,
+            "user_subscribed_ids": set(user_access_modes),
             "user_access_modes": user_access_modes,
             "provider_status": provider_card_status(providers),
         },
     )
-    return Response(serializer.data)
+    if country is None:
+        return Response(serializer.data)
+    catalogue = selection_catalogue(
+        providers, country, user,
+        {pk for pk, mode in user_access_modes.items() if mode == "included"},
+        timezone.now(),
+    )
+    return Response([dict(row, **options) for row, options in zip(serializer.data, catalogue)])
 
 
 @api_view(["POST"])
@@ -807,6 +796,7 @@ def provider_packages(request):
 
 
 @api_view(["POST"])
+@transaction.atomic
 def provider_toggle(request, slug: str):
     """Own/unown a provider, or set the user's *access mode* for it.
 
@@ -840,18 +830,27 @@ def provider_toggle(request, slug: str):
             provider.is_enabled = True
             provider.save(update_fields=["is_enabled"])
 
-    sub = Subscription.objects.filter(user_id=1, provider=provider).first()
+    from .services.entitlement_selections import revoke_selections, viewer_id
+
+    provider = Provider.objects.select_for_update().get(pk=provider.pk)
+    user = viewer_id(request)
+    sub = Subscription.objects.filter(user_id=user, provider=provider).first()
 
     if "access_mode" not in data:
-        if sub:
-            sub.delete()
+        from tracker.models import ViewerMarketSelection
+
+        held = ViewerMarketSelection.objects.filter(user_id=user, provider_slug=provider.slug, holding="yes")
+        if sub or held.exists():
+            if sub:
+                sub.delete()
+            revoke_selections(provider.slug, user)
             return Response({
                 "provider": provider.slug,
                 "is_subscribed": False,
                 "access_mode": SubscriptionAccessMode.NONE,
                 "message": f"Unsubscribed from {provider.name}",
             })
-        Subscription.objects.create(user_id=1, provider=provider, name=provider.name)
+        Subscription.objects.create(user_id=user, provider=provider, name=provider.name)
         _activate()
         return Response({
             "provider": provider.slug,
@@ -871,6 +870,7 @@ def provider_toggle(request, slug: str):
     if requested == SubscriptionAccessMode.NONE:
         if sub:
             sub.delete()
+        revoke_selections(provider.slug, user)
         return Response({
             "provider": provider.slug,
             "is_subscribed": False,
@@ -884,7 +884,7 @@ def provider_toggle(request, slug: str):
         created = False
     else:
         sub = Subscription.objects.create(
-            user_id=1, provider=provider, name=provider.name, access_mode=requested
+            user_id=user, provider=provider, name=provider.name, access_mode=requested
         )
         created = True
 
@@ -989,8 +989,11 @@ def provider_refresh(request, slug: str):
 @api_view(["GET", "POST"])
 def subscriptions_list_create(request):
     """List or create user subscriptions (single-user, user_id=1)."""
+    from .services.entitlement_selections import viewer_id
+
+    user = viewer_id(request)
     if request.method == "GET":
-        subs = Subscription.objects.filter(user_id=1).order_by("id")
+        subs = Subscription.objects.filter(user_id=user).order_by("id")
         return Response(SubscriptionSerializer(subs, many=True).data)
 
     serializer = SubscriptionSerializer(data=request.data)
@@ -1001,7 +1004,7 @@ def subscriptions_list_create(request):
 
     if resolved_p:
         sub, created = Subscription.objects.get_or_create(
-            user_id=1,
+            user_id=user,
             provider=resolved_p,
             defaults={"name": resolved_p.name, "access_mode": access_mode},
         )
@@ -1011,7 +1014,7 @@ def subscriptions_list_create(request):
     else:
         name_clean = (validated.get("name") or "").strip()
         sub, created = Subscription.objects.get_or_create(
-            user_id=1,
+            user_id=user,
             name=name_clean,
             defaults={"access_mode": access_mode},
         )
@@ -1237,8 +1240,9 @@ def provider_delete(request, slug: str):
 @api_view(["GET"])
 def catalog_list(request):
     """GET /api/catalog/ — List all tracked catalog items with composable filters, watchability & pagination."""
+    user = viewer_id(request)
     curr_country = _active_country(request)
-    pref = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
+    pref = build_preference(user)
 
     movies = Movie.objects.visible().order_by("-id")
     evaluated, _ = apply_composable_filters(
@@ -1333,9 +1337,15 @@ def scraper_confirm_match(request):
 
 
 @api_view(["DELETE"])
+@transaction.atomic
 def subscription_detail(request, pk: int):
-    """Delete a subscription by primary key (single-user, user_id=1)."""
-    sub = get_object_or_404(Subscription, pk=pk, user_id=1)
+    from .services.entitlement_selections import revoke_selections, viewer_id
+
+    user = viewer_id(request)
+    sub = get_object_or_404(Subscription, pk=pk, user_id=user)
+    if sub.provider_id:
+        provider = Provider.objects.select_for_update().get(pk=sub.provider_id)
+        revoke_selections(provider.slug, user)
     sub.delete()
     return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -1520,13 +1530,14 @@ def watchlist_resolve(request):
 
 @api_view(["GET"])
 def watchlist_report(request):
-    """Return aggregated report for watchlist items (user_id=1) with full watchability evaluation, composable filters & pagination."""
+    """Return an aggregated report for the viewer’s watchlist."""
+    user = viewer_id(request)
     curr_country = _active_country(request)
-    preference = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
+    preference = build_preference(user)
 
     items = (
         WatchlistItem.objects.select_related("movie")
-        .filter(user_id=1, movie__is_quarantined=False)
+        .filter(user_id=user, movie__is_quarantined=False)
         .order_by("-added_at")
     )
     watchlist_movies = [item.movie for item in items]
@@ -1554,7 +1565,7 @@ def watchlist_report(request):
     user_data_by_movie = {
         row.movie_id: row
         for row in UserMovieData.objects.filter(
-            user_id=1,
+            user_id=user,
             movie_id__in=[item["movie"].id for item in evaluated_filtered],
         )
     }
@@ -1574,7 +1585,7 @@ def watchlist_report(request):
         ranked = rank_offers(raw_offers, preference, current_country=curr_country)
 
         countries = sorted(list({r.country.upper() for r in ranked if r.country}))
-        best = ranked[0] if ranked else None
+        best = watch_res.best_offer
         best_country = best.country.upper() if best else None
         best_service = best.service if best else None
 
@@ -1652,8 +1663,9 @@ def watched_report(request):
     mark/unmark endpoints write), so there is no second watched-list model.
     Ordered most-recently-watched first, undated rows last.
     """
+    user = viewer_id(request)
     curr_country = _active_country(request)
-    preference = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
+    preference = build_preference(user)
     def positive_int(name, default, maximum=None):
         raw = request.GET.get(name, str(default))
         try:
@@ -1665,12 +1677,12 @@ def watched_report(request):
     page = positive_int("page", 1)
     page_size = positive_int("page_size", 24, 100)
     events = (
-        MovieWatchEvent.objects.filter(user_id=1, movie_id=OuterRef("movie_id"))
+        MovieWatchEvent.objects.filter(user_id=user, movie_id=OuterRef("movie_id"))
         .order_by().values("movie_id")
         .annotate(watch_count=Count("pk"), last_watched_at=Max("watched_date"))
     )
     watched_qs = UserMovieData.objects.filter(
-        user_id=1, is_watched=True, movie__is_quarantined=False
+        user_id=user, is_watched=True, movie__is_quarantined=False
     ).select_related("movie")
     if (request.GET.get("watched") or request.GET.get("watched_status") or "").strip().lower() == "unwatched":
         watched_qs = watched_qs.none()
@@ -1721,6 +1733,7 @@ def watched_report(request):
     availability_dependent = any(request.GET.get(key) for key in (
         "country", "availability_status", "status", "watchable", "watchable_only",
         "providers", "provider", "service", "quality", "access", "access_type",
+        "included", "included_in_my_plan", "audio_languages", "subtitle_languages",
     ))
     # Remaining metadata filters (actor names/genre) and availability filters
     # need Python evaluation. Bound this exceptional path explicitly; never
@@ -1830,7 +1843,7 @@ def watched_report(request):
         ranked = rank_offers(raw_offers, preference, current_country=curr_country)
 
         countries = sorted(list({r.country.upper() for r in ranked if r.country}))
-        best = ranked[0] if ranked else None
+        best = watch_res.best_offer
         best_country = best.country.upper() if best else None
         best_service = best.service if best else None
 
@@ -2768,7 +2781,7 @@ def _current_country(request) -> str:
     """Resolve the active country: explicit query param, then saved preference."""
     return (
         request.query_params.get("current_country")
-        or resolve_preferences(user_id=1).get("current_country")
+        or resolve_preferences(user_id=viewer_id(request)).get("current_country")
         or ""
     )
 
@@ -2786,7 +2799,7 @@ def _active_country(request) -> str:
     return (
         request.GET.get("current_country")
         or request.GET.get("country")
-        or resolve_preferences(user_id=1).get("current_country")
+        or resolve_preferences(user_id=viewer_id(request)).get("current_country")
         or "US"
     )
 
@@ -2841,7 +2854,10 @@ def _season_summaries(item: Movie) -> list[dict]:
     return out
 
 
-def _build_prime_offers(request, movie: Movie, season: int | None = None) -> list[dict]:
+def _build_prime_offers(
+    request, movie: Movie, season: int | None = None, *, offers=None,
+    access=None, classify_pref=None,
+) -> list[dict]:
     """Ranked official + BVOD offers for one tracked movie or series.
 
     ``season`` (series only) restricts the official result set to rows that
@@ -2857,14 +2873,16 @@ def _build_prime_offers(request, movie: Movie, season: int | None = None) -> lis
 
     from .services.offer_pipeline import OfficialOffersPipeline
 
+    user = viewer_id(request)
     pipeline = OfficialOffersPipeline(
-        user_id=1,
+        user_id=user,
         default_provider_slug=getattr(settings, "DEFAULT_PREFERENCE_PROVIDER", "prime"),
         provider_category_set={ProviderCategory.OFFICIAL, ProviderCategory.BVOD, ProviderCategory.AVOD, ProviderCategory.TVOD, ProviderCategory.FAST},
     )
-    current_country = _current_country(request)
+    current_country = request.query_params.get("country") or _current_country(request)
     offers_out = pipeline.run(
-        movie, current_country=current_country, season=season
+        movie, current_country=current_country, season=season,
+        offers=offers, access=access, classify_pref=classify_pref,
     ).offers_out
 
     if season is not None:
@@ -2877,9 +2895,9 @@ def _build_prime_offers(request, movie: Movie, season: int | None = None) -> lis
         movie, provider_categories=BVOD_CATEGORIES
     )
     if bvod_offers:
-        preference = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
-        classify_pref = build_preference(1)
-        access = build_user_access(1)
+        preference = build_preference(user)
+        classify_pref = build_preference(user)
+        access = build_user_access(user, offers=bvod_offers)
         reach = build_reach(classify_pref, current_country)
         ranked = rank_offers(bvod_offers, preference, current_country=current_country)
         for offer in ranked:
@@ -2892,16 +2910,7 @@ def _build_prime_offers(request, movie: Movie, season: int | None = None) -> lis
                 offer, access=access, preference=classify_pref,
                 reach=reach, provider_map=provider_map,
             )
-            offer_dict["access_type"] = classified.access_type
-            offer_dict["access_label"] = classified.access_label
-            offer_dict["locality"] = classified.locality
-            offer_dict["is_accessible"] = classified.is_accessible
-            offer_dict["is_entitled"] = classified.is_entitled
-            offer_dict["requires_payment"] = classified.requires_payment
-            offer_dict["is_addon"] = classified.is_addon
-            offer_dict["required_base"] = classified.required_base
-            offer_dict["required_base_display"] = classified.required_base_display
-            offer_dict["rejection_reasons"] = classified.rejection_reasons
+            offer_dict.update(classified.entitlement_fields())
             offers_out.append(offer_dict)
 
     return offers_out
@@ -2918,6 +2927,7 @@ def _prime_detail_response(request, item: Movie, key: str) -> Response:
     # (capability-driven — catalogue-only collectors are structurally excluded
     # and no catalogue crawl can happen). Reusing ``request_title_refresh``
     # keeps the dedup, cooldown and metered-source policy identical here.
+    user = viewer_id(request)
     country = _active_country(request).strip().upper()
     request_title_refresh(
         item,
@@ -2925,9 +2935,9 @@ def _prime_detail_response(request, item: Movie, key: str) -> Response:
         country=country,
     )
 
-    user_data = UserMovieData.objects.filter(user_id=1, movie=item).first()
-    is_in_watchlist = WatchlistItem.objects.filter(user_id=1, movie=item).exists()
-    watch_events = MovieWatchEvent.objects.filter(user_id=1, movie=item).order_by("-watched_date", "-created_at")
+    user_data = UserMovieData.objects.filter(user_id=user, movie=item).first()
+    is_in_watchlist = WatchlistItem.objects.filter(user_id=user, movie=item).exists()
+    watch_events = MovieWatchEvent.objects.filter(user_id=user, movie=item).order_by("-watched_date", "-created_at")
     season = _requested_season(request, item)
     pending = RefreshRequest.objects.filter(
         movie=item, country=country, status=RefreshRequestStatus.PENDING
@@ -2937,48 +2947,56 @@ def _prime_detail_response(request, item: Movie, key: str) -> Response:
         .order_by("-requested_at", "-pk")
         .first()
     )
-    from tracker.services.access import resolve_title as access_resolve_title
+    from tracker.services.access import (
+        build_reach, build_user_access, classify_offer, resolve_title as access_resolve_title,
+    )
     from tracker.services.preferences import build_preference
 
     from tracker.services.watchability import describe_last_known, qualify_watchability_dict
 
-    access_pref = build_preference(1)
-    access_country = (
-        request.query_params.get("current_country") or request.query_params.get("country")
-        or access_pref.current_country
-    )
+    access_pref = build_preference(user)
+    access_country = country
     evidence = get_title_offer_evidence(item, season=season)
     current_offers, last_known_offers = evidence.current, evidence.last_known
+    providers = {provider.slug: provider for provider in Provider.objects.all()}
+    reports = [offer for offer in evidence.source_reported if offer.country == country]
+    access = build_user_access(user, offers=current_offers + last_known_offers + reports)
+    reach = build_reach(access_pref, access_country)
     access_verdict = access_resolve_title(
         item,
-        current_offers,
+        current_offers or reports,
         access_pref,
-        current_country=access_country,
+        current_country=access_country, access=access, provider_map=providers,
         refresh_state=(
             None if last_known_offers
             else refresh_states_for({item.pk}, country=country).get(item.pk)
         ),
     )
     last_known = describe_last_known(
-        item, last_known_offers, access_pref, current_country=access_country
+        item, last_known_offers, access_pref, current_country=access_country,
+        access=access, provider_map=providers,
     )
 
     from tracker.services.presentation import present_offer
 
-    providers = {provider.slug: provider for provider in Provider.objects.all()} if evidence.source_reported else {}
     source_reported = []
-    for offer in evidence.source_reported:
-        if offer.country != country:
-            continue
+    for offer in reports:
         presented = present_offer(offer, providers)
-        source_reported.append({**offer.to_dict(), "service": presented.service_display})
+        classified = classify_offer(
+            offer, access=access, preference=access_pref, reach=reach, provider_map=providers,
+        )
+        source_reported.append({**classified.entitlement_fields(), **offer.to_dict(), "service": presented.service_display})
 
     payload = {
         key: MovieDetailSerializer(item).data,
         "user_data": UserMovieDataSerializer(user_data).data if user_data else None,
         "is_in_watchlist": is_in_watchlist,
         "watch_events": MovieWatchEventSerializer(watch_events, many=True).data,
-        "offers": _build_prime_offers(request, item, season=season),
+        "offers": _build_prime_offers(
+            request, item, season=season,
+            offers=[offer for offer in current_offers if offer.offer_type not in {"rent", "buy"}],
+            access=access, classify_pref=access_pref,
+        ),
         "source_reported_offers": source_reported,
         # The single access verdict for this title, computed by the same
         # resolver the watchlist badge uses (tracker.services.access). The
@@ -2986,22 +3004,25 @@ def _prime_detail_response(request, item: Movie, key: str) -> Response:
         # whether a title is watchable, reachable via VPN, purchase-only or
         # genuinely unavailable.
         "watchability": qualify_watchability_dict(
-            access_verdict.to_watchability_dict(), last_known
+            access_verdict.to_watchability_dict(), last_known, current=bool(current_offers or reports)
         ),
         # Stale ("last seen") or uncorroborated positive offers, classified by
         # the same resolver. History only: never part of ``offers``/counts.
         "last_known_offers": last_known.offers if last_known else [],
-        # Rent/buy offers are surfaced separately (never in ``offers``, which
-        # stays subscription/free by design) so "available only for an
-        # additional payment" is distinguishable from "included".
-        "purchase_offers": [c.to_dict() for c in access_verdict.purchase_offers],
+        # Keep the discovered transactional alternatives in their existing section.
+        "purchase_offers": [
+            row.to_dict() for row in access_verdict.offers
+            if current_offers and row.requires_payment
+        ],
         # The canonical availability verdict for this title, exactly as the
         # availability report computes it. Present so an empty ``offers`` list
         # is never ambiguous: the detail page can tell "checked and genuinely
         # unavailable" apart from "the evidence never resolved" without
         # inventing a second classifier. Absence of this field is read by the
         # frontend as unknown, never as unavailable.
-        "availability": title_source_report([item.pk], country=str(access_country) if access_country else None).get(item.pk),
+        "availability": title_source_report(
+            [item.pk], country=_current_country(request) or request.query_params.get("country") or None,
+        ).get(item.pk),
         # True while this title still waits in the refresh queue — the
         # frontend polls on it ("Checking availability…") until the worker
         # drains the request and canonical offers land.
@@ -3118,40 +3139,12 @@ def watch_redirect(request, tmdb_id: int):
             status=404,
         )
 
-    preference = Preference.objects.filter(user_id=1).first() or Preference(user_id=1)
+    from .services.access import resolve_title
+    from .services.preferences import build_preference
 
-    user_subs = list(
-        Subscription.objects.filter(user_id=1).values_list("provider__slug", "name")
-    )
-    subscribed_slugs = set()
-    for slug, name in user_subs:
-        if slug:
-            subscribed_slugs.add(slug.lower())
-        if name:
-            subscribed_slugs.add(name.lower())
-
-    offers = get_local_offers(movie)
-    qualifying = [
-        o for o in offers
-        if (o.offer_type or "").lower() in QUALIFYING_OFFER_TYPES
-    ]
-
-    if subscribed_slugs:
-        matched = [
-            o for o in qualifying
-            if (o.service or "").lower() in subscribed_slugs
-        ]
-        if matched:
-            qualifying = matched
-
-    current_country = _current_country(request)
-    ranked = rank_offers(qualifying, preference, current_country=current_country)
-
-    top_offer = None
-    for offer in ranked:
-        if offer.url and offer.url.strip():
-            top_offer = offer
-            break
+    preference = build_preference(viewer_id(request))
+    result = resolve_title(movie, get_local_offers(movie), preference, current_country=_active_country(request))
+    top_offer = next((offer for offer in result.accessible_offers if offer.url.strip()), None)
 
     movie_payload = {
         "tmdb_id": movie.tmdb_id,
@@ -3525,7 +3518,7 @@ def add_to_watchlist(request):
 @api_view(["GET"])
 def watched_list(request):
     """GET /api/watched/ — Paginated list of titles the user has watched."""
-    user_id = 1
+    user_id = viewer_id(request)
 
     def positive_int(name, default):
         raw = request.GET.get(name, str(default))
@@ -3595,8 +3588,17 @@ def watched_list(request):
     else:
         qs = qs.order_by(F("last_watched_at").desc(nulls_last=True), *secondary_order)
 
+    watched_rows = list(qs[start:start + page_size])
+    movies = [row.movie for row in watched_rows]
+    preference = build_preference(user_id)
+    country = request.GET.get("current_country") or request.GET.get("country") or preference.current_country or "US"
+    evaluations, _ = apply_composable_filters(
+        movies, {}, preference, current_country=country,
+        refresh_states=refresh_states_for({movie.pk for movie in movies}),
+    )
+    watchability = {entry["movie"].pk: entry["watchability"].to_dict() for entry in evaluations}
     results = []
-    for r in qs[start:start + page_size]:
+    for r in watched_rows:
         m = r.movie
         results.append({
             "movie": {
@@ -3613,6 +3615,7 @@ def watched_list(request):
                 "watched_date": r.watched_date.isoformat() if r.watched_date else None,
             },
             "watch_count": r.watch_count,
+            "watchability": watchability.get(m.pk),
             "last_watched_at": r.last_watched_at.isoformat() if r.last_watched_at else None,
             "is_in_watchlist": r.is_in_watchlist,
         })

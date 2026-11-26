@@ -1,35 +1,4 @@
-"""Single source of truth for "how can this user access this title?".
-
-The watchlist badge and the title-detail offer list must never disagree about
-whether a title is watchable. They used to run two different classifiers
-(``watchability.evaluate_watchability`` for the watchlist,
-``offer_pipeline.OfficialOffersPipeline._qualify_offers`` for the detail page)
-with different rules — one applied country + language + strict subscription
-matching, the other applied none of them — so a title could read 🟠 "Available
-elsewhere" in the watchlist while its detail page listed the same offers as
-included. This module is the one resolver both paths call.
-
-It distinguishes, per offer, the access model the SPEC requires:
-
-* **included subscription** — a service the user selected with
-  ``access_mode="included"``;
-* **add-on channel** — a separate subscription bolted onto a base service
-  (``access_mode="addon"``);
-* **free** vs **free with ads** — genuinely free streams;
-* **rent** / **buy** — require an additional payment (and an account the user
-  selected with ``access_mode="rent_buy"``);
-* **a selected service in another country (VPN)** — reachable only through the
-  user's configured VPN regions.
-
-and the title verdict: available here / available via VPN / purchase-only /
-available elsewhere / unavailable / unknown / checking.
-
-VPN reach is driven by the user's own setting (``Preference.vpn_enabled`` and
-``Preference.candidate_countries`` as the regions) and their actual country
-(``current_country``). It is never inferred from IP or locale, and a
-cross-country offer is reported as *potentially* reachable (🟡), never as a
-certainty.
-"""
+"""Shared offer and title access projections for API reads."""
 from __future__ import annotations
 
 import logging
@@ -37,6 +6,8 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
 from tracker.models import Provider, ProviderCategory, Subscription
+from tracker.services.entitlement import Entitlement, project_title
+from tracker.services.entitlement_reads import EntitlementContext
 from tracker.services.offers import (
     Offer,
     TerritorialScope,
@@ -78,17 +49,6 @@ PAYMENT_ACCESS_TYPES = frozenset({AccessType.RENT, AccessType.BUY})
 #: Access types that can make a title watchable without extra payment.
 INCLUDED_ACCESS_TYPES = SUBSCRIPTION_ACCESS_TYPES | FREE_ACCESS_TYPES
 
-ACCESS_TYPE_LABELS: dict[str, str] = {
-    AccessType.SUBSCRIPTION: "Included with your subscription",
-    AccessType.ADDON: "Add-on channel",
-    AccessType.FREE: "Free",
-    AccessType.FREE_WITH_ADS: "Free with ads",
-    AccessType.RENT: "Rent",
-    AccessType.BUY: "Buy",
-    AccessType.UNKNOWN: "Unknown access",
-}
-
-
 class SubscriptionAccessMode:
     """How the user holds a service — stored on ``Subscription.access_mode``."""
 
@@ -125,6 +85,7 @@ class AccessVerdict:
     UNAVAILABLE = "unavailable"
     UNKNOWN = "unknown"
     CHECKING = "checking"
+    NEEDS_RECHECK = "needs_recheck"
 
 
 VERDICT_LABELS: dict[str, tuple[str, str]] = {
@@ -135,6 +96,7 @@ VERDICT_LABELS: dict[str, tuple[str, str]] = {
     AccessVerdict.UNAVAILABLE: ("Not available", "⚫"),
     AccessVerdict.UNKNOWN: ("Unknown", "⚪"),
     AccessVerdict.CHECKING: ("Checking availability…", "🔵"),
+    AccessVerdict.NEEDS_RECHECK: ("Needs recheck", "🕓"),
 }
 
 
@@ -283,6 +245,7 @@ class UserAccess:
     #: True when synthesised from an explicit slug set (tests / callers that
     #: pass ``user_subscriptions`` directly) rather than DB rows.
     synthetic: bool = False
+    entitlement: EntitlementContext = field(default_factory=EntitlementContext)
 
     def _match(self, slug: str, bucket: set[str]) -> bool:
         s = normalize_service_slug(slug)
@@ -331,7 +294,7 @@ def build_explicit_access(slugs: Iterable[str]) -> UserAccess:
     )
 
 
-def build_user_access(user_id: int = 1) -> UserAccess:
+def build_user_access(user_id: int = 1, *, offers=(), as_of=None) -> UserAccess:
     """Build the user's access map from ``Subscription`` rows.
 
     ``access_mode`` decides the bucket; ``none`` means "explicitly not owned"
@@ -347,6 +310,7 @@ def build_user_access(user_id: int = 1) -> UserAccess:
         SubscriptionAccessMode.RENT_BUY: access.rent_buy,
     }
     rows = Subscription.objects.filter(user_id=user_id).select_related("provider")
+    legacy_holdings = set()
     for sub in rows:
         raw_mode = getattr(sub, "access_mode", None)
         mode = str(raw_mode).lower().strip() if raw_mode is not None else SubscriptionAccessMode.INCLUDED
@@ -362,6 +326,8 @@ def build_user_access(user_id: int = 1) -> UserAccess:
             canon_slug = normalize_service_slug(slug)
             if canon_slug:
                 target.add(canon_slug)
+                if mode == SubscriptionAccessMode.INCLUDED:
+                    legacy_holdings.add(canon_slug)
         else:
             # Name-only rows preserve their declared access_mode.
             if name:
@@ -398,6 +364,7 @@ def build_user_access(user_id: int = 1) -> UserAccess:
             access.free.add(s)
         else:
             access.included.add(s)
+    access.entitlement = EntitlementContext(as_of=as_of, legacy_holdings=legacy_holdings).load(user_id, list(offers))
     return access
 
 
@@ -484,6 +451,8 @@ class ClassifiedOffer:
     rejection_reasons: list[str] = field(default_factory=list)
     ranking_score: tuple = field(default_factory=tuple)
     availability_evidence: str = "verified"
+    entitlement: Entitlement | None = None
+    lineage_scope: dict = field(default_factory=dict)
     #: Display price (structured amount + currency) or None. Price never
     #: affects ``is_entitled``/``is_accessible`` — it only tells the reader what
     #: a rent/buy offer would cost, which is orthogonal to access.
@@ -506,6 +475,23 @@ class ClassifiedOffer:
     def is_candidate_country(self) -> bool:
         return self.locality == Locality.VPN
 
+    def entitlement_fields(self) -> dict[str, Any]:
+        return {
+            "access_type": self.access_type,
+            "access_label": self.access_label,
+            "locality": self.locality,
+            "is_accessible": self.is_accessible,
+            "is_entitled": self.is_entitled,
+            "requires_payment": self.requires_payment,
+            "playback_verified": False,
+            "is_addon": self.is_addon,
+            "required_base": self.required_base,
+            "required_base_display": self.required_base_display,
+            "rejection_reasons": self.rejection_reasons,
+            "entitlement": self.entitlement.to_dict() if self.entitlement else None,
+            **self.lineage_scope,
+        }
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "country": self.country,
@@ -513,8 +499,6 @@ class ClassifiedOffer:
             "service_display": self.service_display,
             "source_indicator": self.source_indicator,
             "offer_type": self.offer_type,
-            "access_type": self.access_type,
-            "access_label": self.access_label,
             "quality": self.quality,
             "url": self.url,
             "audio_languages": self.audio_languages,
@@ -522,16 +506,9 @@ class ClassifiedOffer:
             "is_scraped_source": self.is_scraped_source,
             "source_category": self.source_category,
             "territorial_scope": self.territorial_scope,
-            "is_entitled": self.is_entitled,
             "is_language_match": self.is_language_match,
-            "locality": self.locality,
-            "is_accessible": self.is_accessible,
-            "requires_payment": self.requires_payment,
-            "is_addon": self.is_addon,
-            "required_base": self.required_base,
-            "required_base_display": self.required_base_display,
-            "rejection_reasons": self.rejection_reasons,
             "availability_evidence": self.availability_evidence,
+            **self.entitlement_fields(),
             "price": self.price,
             "prices": self.prices,
             "available_from": self.available_from,
@@ -574,6 +551,7 @@ def _coerce_offer(raw: Any) -> Offer:
         available_until=getattr(raw, "available_until", None),
         season_number=getattr(raw, "season_number", None),
         episode_number=getattr(raw, "episode_number", None),
+        lineage=getattr(raw, "lineage", None),
     )
 
 
@@ -609,66 +587,52 @@ def classify_offer(
     scored = score_offer(raw, preference)
     is_lang_match = scored.is_match
 
-    locality = reach.locality(country, territorial_scope)
+    # Worldwide distribution does not extend paid plan terms to another market.
+    reach_scope = TerritorialScope.COUNTRY if access_type in SUBSCRIPTION_ACCESS_TYPES else territorial_scope
+    locality = reach.locality(country, reach_scope)
     requires_payment = access_type in PAYMENT_ACCESS_TYPES
 
-    # An offer whose provider has a base platform is delivered as an add-on
-    # channel. It is only entitled when the user holds *both* the channel and
-    # that base platform: selecting the channel never grants the base, and
-    # holding the base never grants every channel. The requirement is surfaced
-    # on the offer itself (``required_base``) so the UI can say what is missing.
-    clean_service = (service or "").lower().strip()
-    provider = provider_map.get(clean_service) or provider_map.get(normalize_service_slug(clean_service))
-    is_addon = False
-    base_slug = ""
-    base_display = ""
-    if provider is not None:
-        channel_base = getattr(provider, "addon_parent_slug", "") or ""
-        if channel_base:
-            base_provider = provider_map.get(channel_base) or provider_map.get(normalize_service_slug(channel_base))
-            is_addon = True
-            base_slug = channel_base
-            base_display = (
-                getattr(base_provider, "name", "") or channel_base
-                if base_provider is not None
-                else channel_base
-            )
-            if access_type == AccessType.SUBSCRIPTION:
-                access_type = AccessType.ADDON
-
-    if is_addon:
-        base_entitled = access.entitles(base_slug, AccessType.SUBSCRIPTION)
-        channel_entitled = access.entitles(service, AccessType.ADDON)
-        entitled = base_entitled and channel_entitled
-    else:
-        base_entitled = True
-        channel_entitled = True
-        entitled = access.entitles(service, access_type)
-
-    is_accessible = bool(
-        entitled
-        and is_lang_match
-        and reach.reachable(locality)
-        and access_type in INCLUDED_ACCESS_TYPES
+    entitlement = access.entitlement.evaluate(
+        raw, normalize_service_slug(service), country, access_type, reach.current_country,
     )
-
+    entitled = entitlement.positive
+    is_accessible = bool(entitled and is_lang_match and reach.reachable(locality))
+    is_addon = bool(entitlement.fact.host) or access_type == AccessType.ADDON
+    if is_addon:
+        access_type = AccessType.ADDON
+    base_slug = entitlement.fact.host
+    base_display = getattr(provider_map.get(base_slug), "name", "") or base_slug
+    labels = {
+        "PLAN_COVERS_TITLE": "Included with your selected plan",
+        "CHANNEL_AND_BASE_COVER_TITLE": "Included with your channel",
+        "CHANNEL_NOT_HELD": "Requires add-on channel",
+        "PUBLIC_FREE": "Free",
+        "PUBLIC_AD_FUNDED": "Free with ads",
+        "RENTAL": "Rent",
+        "PURCHASE": "Buy",
+    }
+    access_label = labels.get(entitlement.reason)
+    if not access_label:
+        access_label = "Plan access unconfirmed" if access_type in SUBSCRIPTION_ACCESS_TYPES else "Access unconfirmed"
+        if entitlement.verdict == "BLOCKED":
+            access_label = "Access blocked"
     reasons: list[str] = []
-    if is_addon and not base_entitled:
-        reasons.append(f"Requires {base_display or base_slug} (add-on channel)")
+    reason_text = {
+        "BASE_NOT_HELD": "The required base subscription is marked as not held",
+        "CHANNEL_NOT_HELD": "The required add-on channel is marked as not held",
+        "PLAN_EXCLUDED": "The selected plan excludes this offer",
+        "REGION_EXCLUDED": "The selected product excludes this market",
+        "PLAN_UNSPECIFIED": "Confirm your plan",
+        "PLAN_UNSUPPORTED": "The declared plan has no supported product mapping",
+        "HOLDING_UNCONFIRMED": "The required holding is unconfirmed",
+        "NO_APPLICABLE_RULE": "Title coverage under the selected plan is unconfirmed",
+        "PORTABILITY_UNVERIFIED": "Plan coverage in this market is unconfirmed",
+        "SOURCE_REPORTED": "A source reported this offer",
+        "STALE_EVIDENCE": "This offer was last seen in an earlier check",
+        "EVIDENCE_CONFLICT": "Applicable offer evidence conflicts",
+    }
     if not entitled:
-        if requires_payment:
-            reasons.append(
-                f"Only available to {offer_type} (not included in subscription)"
-            )
-        elif is_addon and not channel_entitled:
-            reasons.append(
-                f"No active subscription for {presented.service_display or service} "
-                "(add-on channel)"
-            )
-        elif not is_addon:
-            reasons.append(
-                f"No active subscription for {presented.service_display or service}"
-            )
+        reasons.append(reason_text.get(entitlement.reason, access_label))
     if is_lang_match is None:
         reasons.append("Language information unknown")
     elif is_lang_match is False:
@@ -696,7 +660,7 @@ def classify_offer(
         source_indicator=presented.source_indicator,
         offer_type=offer_type,
         access_type=access_type,
-        access_label=ACCESS_TYPE_LABELS.get(access_type, ACCESS_TYPE_LABELS[AccessType.UNKNOWN]),
+        access_label=access_label,
         quality=raw.quality or "",
         url=raw.url or "",
         audio_languages=audio,
@@ -718,7 +682,9 @@ def classify_offer(
         required_base_display=base_display,
         rejection_reasons=reasons,
         ranking_score=scored.score_tuple,
-        availability_evidence=getattr(raw, "availability_evidence", "verified"),
+        availability_evidence=raw.availability_evidence,
+        entitlement=entitlement,
+        lineage_scope=raw.lineage.public_scope() if raw.lineage else {},
         price=raw.price,
         prices=list(raw.prices or []),
         available_from=raw.available_from,
@@ -758,6 +724,7 @@ class AccessResult:
             "refresh_state": self.refresh_state,
             "access_flags": self.access_flags,
             "best_offer": self.best_offer.to_dict() if self.best_offer else None,
+            "purchase_offers": [offer.to_dict() for offer in self.purchase_offers],
         }
 
 
@@ -825,7 +792,7 @@ def resolve_title(
     elif user_subscriptions is not None:
         access = build_explicit_access(user_subscriptions)
     else:
-        access = build_user_access(getattr(preference, "user_id", 1) or 1)
+        access = build_user_access(getattr(preference, "user_id", 1) or 1, offers=offer_list)
 
     reach = build_reach(preference, current_country)
     if provider_map is None:
@@ -845,14 +812,7 @@ def resolve_title(
     vpn = [c for c in classified if c.is_accessible and c.locality == Locality.VPN]
     purchase = [
         c for c in classified
-        if c.requires_payment and c.is_entitled and reach.reachable(c.locality)
-    ]
-    unknown_territory = [
-        c for c in classified
-        if c.locality == Locality.UNKNOWN
-        and c.is_entitled
-        and c.is_language_match is not False
-        and c.access_type in (INCLUDED_ACCESS_TYPES | PAYMENT_ACCESS_TYPES)
+        if c.entitlement.verdict == "RENT_OR_BUY" and c.is_language_match and reach.reachable(c.locality)
     ]
 
     raw_ranking_pref = getattr(preference, "ranking_preferences", None)
@@ -883,35 +843,18 @@ def resolve_title(
             provider_priority=provider_priority,
         )
 
-    accessible = sorted(local + vpn, key=_offer_sort_key)
+    accessible = sorted(local, key=_offer_sort_key) + sorted(vpn, key=_offer_sort_key)
     excluded = [c for c in classified if c not in accessible]
-
-    explanation: list[str] = []
-    if local:
-        verdict = AccessVerdict.AVAILABLE_HERE
-    elif vpn:
-        verdict = AccessVerdict.AVAILABLE_VPN
-    elif purchase:
-        verdict = AccessVerdict.PURCHASE_ONLY
-        explanation = [
-            "Only available for an additional payment (rent or buy) — no "
-            "subscription or free option is accessible with your services."
-        ]
-    elif unknown_territory:
-        verdict = AccessVerdict.UNKNOWN
-        explanation = [
-            "An offer was found, but its country is unknown; local or VPN access "
-            "has not been verified."
-        ]
-    else:
-        verdict = AccessVerdict.AVAILABLE_ELSEWHERE
-        seen: set[str] = set()
-        for c in excluded:
-            for r in c.rejection_reasons:
-                if r not in seen:
-                    seen.add(r)
-                    explanation.append(r)
-
+    projected = project_title([(c.entitlement, c.locality, c.is_language_match) for c in classified])
+    verdict = {
+        "watchable_here": AccessVerdict.AVAILABLE_HERE,
+        "watchable_vpn": AccessVerdict.AVAILABLE_VPN,
+    }.get(projected, projected)
+    explanation = list(dict.fromkeys(
+        reason for c in excluded for reason in c.rejection_reasons
+    )) if not accessible else []
+    if verdict == AccessVerdict.PURCHASE_ONLY:
+        explanation = ["Available for rental or purchase."]
     if verdict == AccessVerdict.AVAILABLE_ELSEWHERE:
         label, symbol = _elsewhere_label(excluded)
     else:

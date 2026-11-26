@@ -283,7 +283,8 @@ class UnofficialOffersContractTests(TestCase):
                 "price", "prices",
                 "availability_evidence", "last_seen_at",
                 "territorial_scope", "locality", "is_accessible",
-                "is_entitled", "rejection_reasons",
+                "is_entitled", "rejection_reasons", "entitlement", "access_type", "access_label",
+                "requires_payment", "playback_verified", "is_addon", "required_base", "required_base_display",
             },
         )
         self.assertIsNone(offer["price"])
@@ -335,7 +336,8 @@ class UnofficialOffersContractTests(TestCase):
             "?include_bvod=true&current_country=NL"
         )["offers"]
         self.assertEqual(vpn_offer["locality"], "vpn")
-        self.assertTrue(vpn_offer["is_accessible"])
+        self.assertFalse(vpn_offer["is_accessible"])
+        self.assertEqual(vpn_offer["entitlement"]["verdict"], "UNKNOWN")
 
     def test_missing_scraped_country_is_unknown_in_v2_offer_response(self):
         Preference.objects.update_or_create(

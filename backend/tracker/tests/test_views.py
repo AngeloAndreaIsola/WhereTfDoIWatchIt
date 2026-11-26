@@ -354,7 +354,7 @@ class WatchlistReportEndpointTests(TestCase):
         self.assertIsNone(row["best_service"])
 
     def test_available_elsewhere_never_reads_unavailable(self):
-        """Regression (Platoon, NL): offers present ⇒ 🟠, never ⚫.
+        """Regression (Platoon, NL): verified rental ⇒ 🟣, never ⚫.
 
         The response simultaneously reported ``available_countries`` including
         NL (from ``rank_offers``) and ``watchability.status: "not_watchable"``
@@ -365,14 +365,14 @@ class WatchlistReportEndpointTests(TestCase):
         movie = Movie.objects.create(tmdb_id=792, title="Platoon", year=1986)
         WatchlistItem.objects.create(user_id=1, movie=movie, source="manual")
         # The only local offer is a rent one, and no subscription is held.
-        local_offer(movie, country="NL", service="rakuten_tv", offer_type="rent",
+        local_offer(movie, country="NL", service="rakuten_tv", offer_type="rent", review_public=True,
                     quality="hd", audio_languages=["EN"], subtitle_languages=["EN"])
 
         resp = self.client.get("/api/watchlist/report/?current_country=NL")
         self.assertEqual(resp.status_code, 200)
         row = next(r for r in resp.json()["report"] if r["movie"]["tmdb_id"] == 792)
-        self.assertEqual(row["watchability"]["status"], "available_elsewhere")
-        self.assertEqual(row["watchability"]["status_symbol"], "🟠")
+        self.assertEqual(row["watchability"]["status"], "purchase_only")
+        self.assertEqual(row["watchability"]["status_symbol"], "🟣")
         self.assertNotEqual(row["watchability"]["status"], "not_watchable")
 
     def test_mixed_list(self):
@@ -383,7 +383,7 @@ class WatchlistReportEndpointTests(TestCase):
         WatchlistItem.objects.create(user_id=1, movie=m1, source="manual")
         WatchlistItem.objects.create(user_id=1, movie=m2, source="manual")
 
-        local_offer(m1, country="US", service="netflix", quality="4k",
+        local_offer(m1, country="US", service="netflix", reviewed_for=1, quality="4k",
                     audio_languages=["EN"], subtitle_languages=["EN"])
         local_offer(m1, country="GB", service="prime", quality="hd",
                     audio_languages=["EN"], subtitle_languages=["EN"])
@@ -523,7 +523,7 @@ class WatchEndpointTests(TestCase):
         local_offer(
             self.movie,
             country="US",
-            service="netflix",
+            service="netflix", reviewed_for=1,
             offer_type="subscription",
             quality="hd",
             url="https://www.netflix.com/title/123",
@@ -557,7 +557,7 @@ class WatchEndpointTests(TestCase):
         local_offer(
             self.movie,
             country="US",
-            service="disney",
+            service="disney", reviewed_for=1,
             offer_type="subscription",
             quality="hd",
             url="https://www.disneyplus.com/movies/456",
@@ -593,7 +593,7 @@ class WatchEndpointTests(TestCase):
         local_offer(
             series,
             country="US",
-            service="prime",
+            service="prime", reviewed_for=1,
             offer_type="subscription",
             quality="hd",
             url="https://www.primevideo.com/detail/1396",
@@ -977,11 +977,11 @@ class MovieDetailEndpointTests(TestCase):
             if row["movie"]["tmdb_id"] == movie.tmdb_id
         )
         self.assertTrue(all(offer["locality"] == "vpn" for offer in detail_vpn_offers))
-        self.assertTrue(all(offer["is_accessible"] for offer in detail_vpn_offers))
-        self.assertEqual(detail_vpn["watchability"]["status"], "available_vpn")
-        self.assertEqual(report_vpn_row["watchability"]["status"], "watchable_vpn")
+        self.assertTrue(all(not offer["is_accessible"] for offer in detail_vpn_offers))
+        self.assertEqual(detail_vpn["watchability"]["status"], "unknown")
+        self.assertEqual(report_vpn_row["watchability"]["status"], "unknown")
         self.assertEqual(v2_vpn_offer["locality"], "vpn")
-        self.assertTrue(v2_vpn_offer["is_accessible"])
+        self.assertFalse(v2_vpn_offer["is_accessible"])
 
     @patch("tracker.services.enrichment.TMDbClient")
     def test_returns_full_local_detail(self, remote):
