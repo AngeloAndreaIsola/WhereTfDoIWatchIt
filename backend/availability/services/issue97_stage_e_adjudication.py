@@ -258,6 +258,11 @@ def _same_source(left, left_digest, right, right_digest):
                 or (left_digest and left_digest == right_digest))
 
 
+def _review_for_index(pair, index_name):
+    review = pair.conflict_review
+    return review if review and review.index_name == index_name else None
+
+
 def adjudicate(pair, index, first_party, *, index_name="justwatch", app_read=None):
     """For app comparisons preserve the contributing index capture and add its local read."""
     idx = _verdict(pair, index, native=False, index_name=index_name)
@@ -269,9 +274,7 @@ def adjudicate(pair, index, first_party, *, index_name="justwatch", app_read=Non
     else:
         state = time_state(pair.slot, index.window, first_party.window)
     cell = _CELLS.get((idx, fp))
-    review = pair.conflict_review
-    if review and review.index_name != index_name:
-        review = None
+    review = _review_for_index(pair, index_name)
     if _same_source(index.binding, index.payload_digest, first_party.binding, first_party.payload_digest):
         state = "same_source_echo"
     elif "unsupported" in (idx, fp):
@@ -420,22 +423,29 @@ def _title_display_row(pair, row):
 def _source_report_present(pair, index, status, body, service_label):
     scope = pair.scope
     title = body.get(scope.media_type) if isinstance(body, dict) else None
-    if not isinstance(title, dict) or title.get("tmdb_id") != scope.tmdb_id:
+    if (not isinstance(title, dict) or type(title.get("tmdb_id")) is not int
+            or title["tmdb_id"] != scope.tmdb_id or not _known(service_label)):
         return None
-    if status == 404 and body.get("message") == f"{scope.media_type.title()} not tracked.":
-        return False
+    if status == 404:
+        if (body.get("message") == f"{scope.media_type.title()} not tracked."
+                and title.get("content_type", scope.media_type) == scope.media_type
+                and body.get("offers", []) == [] and body.get("source_reported_offers", []) == []):
+            return False
+        return None
     if (status != 200 or title.get("content_type") != scope.media_type
-            or title.get("title") != scope.canonical_title or title.get("year") != scope.year):
+            or title.get("title") != scope.canonical_title or title.get("year") != scope.year
+            or body.get("selected_season") is not None):
         return None
 
     rows = body.get("source_reported_offers")
-    if not service_label or not isinstance(rows, list):
+    if not isinstance(rows, list):
         return None
     matches = []
     for row in rows:
-        if not isinstance(row, dict) or not all(row.get(k) for k in ("country", "service", "offer_type")):
+        if (not isinstance(row, dict) or row.get("country") != scope.market
+                or not all(_known(row.get(k)) for k in ("service", "offer_type"))):
             return None
-        if (row["country"], row["service"], row["offer_type"]) == (scope.market, service_label, scope.offer_class):
+        if (row["service"], row["offer_type"]) == (service_label, scope.offer_class):
             matches.append(row)
     if not matches:
         return False
@@ -463,10 +473,16 @@ def source_report_retrieval(pair, native, index, *, requested_scope, read, statu
     """
     source = _verdict(pair, index, native=False)
     present = None
-    if source in {"yes", "no"}:
+    # A fresh abstention can support a completed read of an absent offer.
+    # A displayed row still needs a sealed positive source assertion.
+    if index.freshness == "fresh" and source in {"yes", "no", "unknown"}:
         present = _source_report_present(pair, index, status, body, service_label)
     if present and source != "yes":
         present = None
+    if source == "no":
+        review = _review_for_index(pair, "justwatch")
+        if not review or review.availability != "FN":
+            present = None
     verified = display_retrieval(pair, native, surface="source_reported_offers", read=read,
                                  typed_scope=requested_scope, status=status, present=present,
                                  contributions=(index.window,))

@@ -375,3 +375,126 @@ class AccountingTests(TestCase):
             self.assertEqual(display_rate([r]).value, "UNDEFINED")
         with self.assertRaises(ValueError):
             display_rate([shown, shown])
+
+
+class SourceReportRetrievalTests(TestCase):
+    def setUp(self):
+        self.pair, self.index, self.native = fixture()
+        self.row = dict(country="NL", service="Netflix", offer_type="subscription", reporting_source="justwatch",
+                        availability_evidence="source_reported", observed_at=STAMP.isoformat(),
+                        season_number=None, episode_number=None)
+
+    def score(self, pair, index, native, *, rows=(), status=200, body=None, **changes):
+        scope = pair.scope
+        requested_scope = (scope.media_type, scope.tmdb_id, scope.market)
+        if body is None:
+            body = {scope.media_type: dict(tmdb_id=scope.tmdb_id, content_type=scope.media_type,
+                                           title=scope.canonical_title, year=scope.year),
+                    "source_reported_offers": list(rows)}
+            if status == 404:
+                body["message"] = f"{scope.media_type.title()} not tracked."
+        options = dict(requested_scope=requested_scope, read=index.window, service_label="Netflix")
+        return source_report_retrieval(pair, native, index, status=status, body=body, **{**options, **changes})
+
+    def test_display_regression_matrix(self):
+        pair, idx, fp = self.pair, self.index, self.native
+        unknown = replace(idx, signal="")
+        negative = replace(idx, signal="explicit_class_negative", second_review=True)
+        reviewed = replace(pair, conflict_review=ConflictReview("justwatch", "FN"))
+        echo = replace(fp, payload_digest=idx.payload_digest)
+        echo_pair = replace(pair, native_receipt=replace(pair.native_receipt, payload_digest=idx.payload_digest))
+        cases = (
+            ("positive displayed", pair, idx, fp, {"rows": [self.row]}, "TP", "displayed", "displayed"),
+            ("positive absent", pair, idx, fp, {}, "TP", "miss", "miss"),
+            ("abstention with empty 200", pair, unknown, fp, {}, "abstention", "miss", "unscored"),
+            ("abstention with typed 404", pair, unknown, fp, {"status": 404}, "abstention", "miss", "unscored"),
+            ("abstention with unsealed display", pair, unknown, fp, {"rows": [self.row]},
+             "abstention", "unresolved", "unscored"),
+            ("abstention with generic 404", pair, unknown, fp, {"status": 404, "body": {"detail": "Not found."}},
+             "abstention", "unresolved", "unscored"),
+            ("provider 404", pair, unknown, replace(fp, status=404), {}, "unsupported", "unscored", "unscored"),
+            ("index 404", pair, replace(unknown, status=404), fp, {},
+             "unsupported", "unresolved", "unscored"),
+            ("no independent positive", pair, unknown, replace(fp, signal=""), {},
+             "unresolved", "unscored", "unscored"),
+            ("shared payload", echo_pair, unknown, echo, {}, "same_source_echo", "same_source_echo", "unscored"),
+            ("unknown index freshness", pair, replace(unknown, freshness="unknown"), fp, {},
+             "abstention", "unresolved", "unscored"),
+            ("stale native", pair, unknown, replace(fp, freshness="last_known"), {},
+             "stale", "unscored", "unscored"),
+            ("first review only", reviewed, replace(negative, second_review=False), fp, {},
+             "needs_recheck", "unresolved", "unscored"),
+            ("unreviewed conflict", pair, negative, fp, {}, "needs_recheck", "unresolved", "unscored"),
+            ("reviewed conflict", reviewed, negative, fp, {}, "FN", "miss", "unscored"),
+        )
+        for label, pair, idx, fp, options, outcome, state, projection in cases:
+            with self.subTest(label=label):
+                self.assertEqual(adjudicate(pair, idx, fp).outcome, outcome)
+                result = self.score(pair, idx, fp, **options)
+                self.assertEqual((result.state, result.projection), (state, projection))
+                rate = display_rate([result])
+                self.assertEqual((rate.numerator, rate.denominator),
+                                 (int(state == "displayed"), int(state in {"displayed", "miss"})))
+                if not rate.denominator:
+                    self.assertEqual(rate.value, "UNDEFINED")
+
+    def test_abstention_does_not_admit_unresolved_read_or_wrong_scope(self):
+        pair, idx, fp = self.pair, replace(self.index, signal=""), self.native
+        title = dict(content_type="movie", tmdb_id=27205, title="Inception", year=2010)
+        for changes in (
+            {"requested_scope": ("series", 27205, "NL")},
+            {"requested_scope": ("movie", 27205, "BE")},
+            {"requested_scope": ("movie", 1, "NL")},
+            {"rows": [{**self.row, "country": "BE"}]},
+            {"rows": [{**self.row, "offer_type": 1}]},
+            {"rows": [{**self.row, "season_number": 1, "episode_number": 2}]},
+            {"body": {"movie": {**title, "title": "Wrong title"}, "source_reported_offers": []}},
+            {"body": {"movie": title, "source_reported_offers": [], "selected_season": 1}},
+            {"body": {"movie": title, "source_reported_offers": None}},
+            {"body": {"movie": title}},
+            {"status": 404, "body": {"movie": title, "message": "Movie not tracked.", "offers": [self.row]}},
+            {"status": 403},
+            {"status": 500},
+            {"service_label": ""},
+            {"read": None},
+            {"read": replace(idx.window, uncertainty=timedelta(seconds=6))},
+            {"read": replace(idx.window, original=SLOT - MINUTE)},
+        ):
+            with self.subTest(changes=changes):
+                result = self.score(pair, idx, fp, **changes)
+                self.assertEqual(display_rate([result]).value, "UNDEFINED")
+        for wrong_scope in (replace(pair.scope, provider="prime"), replace(pair.scope, offer_class="rent")):
+            with self.subTest(wrong_scope=wrong_scope):
+                for left, right in ((replace(idx, scope=wrong_scope), fp), (idx, replace(fp, scope=wrong_scope))):
+                    result = self.score(pair, left, right)
+                    self.assertEqual(display_rate([result]).denominator, 0)
+
+    def test_abstaining_misses_reduce_retrieval_without_changing_index_accuracy(self):
+        pair, idx, fp = self.pair, self.index, self.native
+        first = adjudicate(pair, idx, fp)
+        shown = self.score(pair, idx, fp, rows=[self.row])
+        for statuses in ((200,), (404,), (200, 404)):
+            with self.subTest(statuses=statuses):
+                decisions, displays = [first], [shown]
+                for i, status in enumerate(statuses, start=1):
+                    scope = replace(pair.scope, tmdb_id=pair.scope.tmdb_id + i)
+                    candidate = replace(pair, candidate_id=f"miss-{i}", scope=scope)
+                    unknown = replace(idx, scope=scope, signal="")
+                    native = replace(fp, scope=scope)
+                    decisions.append(adjudicate(candidate, unknown, native))
+                    displays.append(self.score(candidate, unknown, native, status=status))
+                rate = display_rate(displays)
+                self.assertEqual((rate.numerator, rate.denominator, rate.value),
+                                 (1, 1 + len(statuses), 1 / (1 + len(statuses))))
+
+                manifest = [(d.candidate_id, d.scope) for d in decisions]
+                index_counts = summarize(decisions, expected_manifest=manifest)
+                self.assertEqual(index_counts["outcomes"], {"TP": 1, "abstention": len(statuses)})
+                for key in ("agreement", "conditional_precision", "conditional_recall"):
+                    self.assertEqual((index_counts[key].numerator, index_counts[key].denominator), (1, 1))
+                self.assertEqual(index_counts["full_panel_recall"], "UNDEFINED")
+                incomplete = summarize(decisions[:1], expected_manifest=manifest)
+                self.assertEqual(incomplete["panel_completeness"], "incomplete")
+                self.assertEqual(len(incomplete["missing"]), len(statuses))
+                self.assertEqual(incomplete["full_panel_precision"], "UNDEFINED")
+                self.assertEqual(incomplete["full_panel_recall"], "UNDEFINED")

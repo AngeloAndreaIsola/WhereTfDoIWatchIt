@@ -1,5 +1,6 @@
 """Stage E typed HTTP reads of synthetic observations persisted in isolated PostgreSQL."""
 import json
+from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta
 from hashlib import sha256
@@ -30,14 +31,14 @@ class TypedApplicationReplay(TestCase):
         Preference.objects.create(current_country="NL", candidate_countries=["NL"])
         movie = Movie.objects.create(tmdb_id=27205, content_type="movie", title="Inception", year=2010)
         Movie.objects.create(tmdb_id=27205, content_type="series", title="Fixture series", year=2010)
-        scope = {"tmdb_id": movie.tmdb_id, "media_type": movie.content_type, "title": movie.title,
-                 "year": movie.year, "country": country.code, "scope_id": "movie-27205-nl"}
+        self.scope = {"tmdb_id": movie.tmdb_id, "media_type": movie.content_type, "title": movie.title,
+                      "year": movie.year, "country": country.code, "scope_id": "movie-27205-nl"}
         path = Path(__file__).with_name("fixtures") / "issue97_synthetic_justwatch.json"
-        search = json.loads(path.read_bytes())[scope["scope_id"]]["search"]
-        encoded = json.dumps(search, sort_keys=True, separators=(",", ":")).encode()
+        self.search = json.loads(path.read_bytes())[self.scope["scope_id"]]["search"]
+        encoded = json.dumps(self.search, sort_keys=True, separators=(",", ":")).encode()
         self.source_digest = sha256(encoded).hexdigest()
         # The normal adapter parses the response through its mocked HTTP transport.
-        report = replay_scope(scope, search)
+        report = replay_scope(self.scope, self.search)
         self.assertEqual(report["mock_attempts"], ["GetSearchTitles"])
         self.assertEqual(report["status"], "observed_fixture_offers")
         jw, _ = Source.objects.get_or_create(slug=report["source"], defaults={"name": "JustWatch"})
@@ -83,10 +84,53 @@ class TypedApplicationReplay(TestCase):
                                              "34803b1738c95fb61a8ffcbbbc158051d500ce2b8a45f84b171655d5b7a2b856"))
         return pair, replace(index, binding=pair.index, payload_digest=self.source_digest), native
 
+    def reviewed_abstention(self):
+        pair, index, native = self.reviewed_report()
+        search = deepcopy(self.search)
+        search["data"]["popularTitles"]["edges"][0]["node"]["offers"] = []
+        report = replay_scope(self.scope, search)
+        self.assertEqual((report["status"], report["title_offers"]), ("unknown", []))
+        digest = sha256(json.dumps(search, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        pair = replace(pair, index_receipt=replace(pair.index_receipt, payload_digest=digest))
+        return pair, replace(index, payload_digest=digest, signal=""), native
+
     def score_report(self, pair, index, native, response):
         return source_report_retrieval(pair, native, index, requested_scope=("movie", 27205, "NL"),
                                        read=index.window, status=response.status_code, body=response.json(),
                                        service_label=self.netflix.name)
+
+    def test_independent_positive_with_index_abstention_and_empty_200_is_a_miss(self):
+        pair, index, native = self.reviewed_report()
+        self.original.delete()
+        response = self.read("movie")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["source_reported_offers"], [])
+        self.assertEqual(self.score_report(pair, index, native, response).state, "miss")
+
+        pair, index, native = self.reviewed_abstention()
+        decision = adjudicate(pair, index, native)
+        self.assertEqual((decision.eligibility, decision.index, decision.advertised, decision.outcome),
+                         ("eligible", "unknown", "yes", "abstention"))
+        result = self.score_report(pair, index, native, response)
+        rate = display_rate([result])
+        self.assertEqual((result.state, result.projection, rate.numerator, rate.denominator, rate.value),
+                         ("miss", "unscored", 0, 1, 0.0))
+
+    def test_typed_app_404_counts_as_miss_and_provider_404_does_not(self):
+        pair, index, native = self.reviewed_abstention()
+        Movie.objects.get(tmdb_id=27205, content_type="movie").delete()
+        response = self.read("movie")
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["message"], "Movie not tracked.")
+        self.assertEqual(self.read("series").status_code, 200)
+        result = self.score_report(pair, index, native, response)
+        rate = display_rate([result])
+        self.assertEqual((result.state, result.projection, rate.numerator, rate.denominator, rate.value),
+                         ("miss", "unscored", 0, 1, 0.0))
+        for no_provider_proof in (replace(native, status=404), replace(native, signal="")):
+            result = self.score_report(pair, index, no_provider_proof, response)
+            self.assertEqual(result.state, "unscored")
+            self.assertEqual(display_rate([result]).value, "UNDEFINED")
 
     def test_same_document_different_payloads_only_support_projection(self):
         pair, index, native = self.reviewed_report()
