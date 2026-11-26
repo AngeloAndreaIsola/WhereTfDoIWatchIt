@@ -1,0 +1,670 @@
+{
+  "version": 1,
+  "artifact": "issue103-adversarial-cases",
+  "scope": {
+    "repository": "AngeloAndreaIsola/WhereTfDoIWatchIt",
+    "issue": 103,
+    "baseMaster": "f9a4431ed4db85c29abd29a28ba4b90b82c32e9d",
+    "architectureHead": "2cfa9204a8d5c8c9ebd85ef4205b68eee81fb5f6",
+    "backendHead": "6667ebcae41bfcad18928f190ddf23ef17f9b3e7",
+    "branch": "qa/103-adversarial-tests",
+    "owner": "Agent B - adversarial test design",
+    "ownedPaths": [
+      "docs/tests/issue103-adversarial-matrix.md",
+      "docs/tests/issue103-adversarial-cases.json"
+    ],
+    "transport": "mocked only; no live provider, first-party, TMDb or playback calls",
+    "noApplicationCodeChanges": true
+  },
+  "conventions": {
+    "asOf": "2030-01-15T12:00:00Z",
+    "titleId": 900001,
+    "observedAt": "2030-01-14T12:00:00Z",
+    "ruleWindow": "[observedAt, ruleUntil) with startsAt=observedAt",
+    "factWindow": "[startsAt, endsAt); null bounds mean unbounded",
+    "mergeRule": "merge each case.viewer over viewerDefaults and each offer over offerDefaults independently, retaining explicit nulls; all rows share titleId",
+    "scopeEncoding": "scope=season:N uses content_type=series and season=N; scope=series uses content_type=series and season=null; scope=movie uses content_type=movie",
+    "planStateMapping": "viewerPlan null -> unspecified; 'unmapped' -> unsupported; any other string -> selected",
+    "channelMapping": "selection.channels = {'orbit_via_aster': viewer.channel}; no other key is populated",
+    "localityMapping": "market == viewer.current -> local; market in viewer.vpn -> vpn; market null -> unknown; otherwise -> out_of_reach",
+    "languageMapping": "viewer.languageMatch true -> true; false -> false (NOT null); null -> null",
+    "titleProjection": "project_title() over (entitlement, locality, language) triples, evaluated after the per-row gate; row order must not change keyed results or the title state"
+  },
+  "viewerDefaults": {
+    "provider": "aster",
+    "holding": "yes",
+    "plan": "base",
+    "channel": "unspecified",
+    "billing": "NL",
+    "current": "NL",
+    "vpn": [],
+    "languageMatch": true,
+    "noSelection": false
+  },
+  "offerDefaults": {
+    "scope": "movie",
+    "market": "NL",
+    "provider": "aster",
+    "kind": "subscription",
+    "evidence": "verified",
+    "rule": "allow:base",
+    "ruleScope": "same",
+    "ruleUntil": "2030-02-01T00:00:00Z",
+    "portability": "unspecified",
+    "sourceSupported": true,
+    "publicConditionsMet": true,
+    "conflicted": false,
+    "observedAt": "2030-01-14T12:00:00Z",
+    "startsAt": null,
+    "endsAt": null,
+    "ruleObservedAt": "2030-01-14T12:00:00Z",
+    "ruleFreshUntil": "2030-01-17T12:00:00Z",
+    "ruleStartsAt": "2030-01-14T12:00:00Z"
+  },
+  "extendedFields": {
+    "sourceSupported": "sets OfferFact.source_supported; false models a source/package mapping not enabled for review -> SOURCE_UNSUPPORTED",
+    "publicConditionsMet": "sets OfferFact.public_conditions_met for free/free_with_ads only -> PUBLIC_CONDITIONS_UNCONFIRMED when false",
+    "conflicted": "sets OfferFact.conflicted -> EVIDENCE_CONFLICT",
+    "observedAt": "overrides OfferFact.observed_at; a value after asOf -> EVIDENCE_UNVERIFIED",
+    "startsAt/endsAt": "override OfferFact window bounds; asOf outside [startsAt,endsAt) -> STALE_EVIDENCE",
+    "ruleObservedAt/ruleFreshUntil/ruleStartsAt": "override CoverageRule freshness/validity; asOf outside the rule window -> NO_APPLICABLE_RULE",
+    "portability='conflicting'": "emits two otherwise identical rules with portability allowed and denied -> EVIDENCE_CONFLICT",
+    "noSelection": "passes selection=None into the evaluator -> HOLDING_UNCONFIRMED; models a missing/legacy-only profile on a paid offer"
+  },
+  "evaluatorCases": [
+    {
+      "id": "E01-base-included-control",
+      "group": "base-vs-premium",
+      "viewer": {},
+      "offers": [{}],
+      "expect": {"rows": [["INCLUDED", "PLAN_COVERS_TITLE"]], "title": "watchable_here"}
+    },
+    {
+      "id": "E02-premium-no-inheritance",
+      "group": "base-vs-premium",
+      "viewer": {"plan": "premium"},
+      "offers": [{}],
+      "expect": {"rows": [["UNKNOWN", "NO_APPLICABLE_RULE"]], "title": "unknown"},
+      "assertions": ["premium must not inherit a base allow rule", "is_entitled false", "is_accessible false"]
+    },
+    {
+      "id": "E03-premium-explicit-allow",
+      "group": "base-vs-premium",
+      "viewer": {"plan": "premium"},
+      "offers": [{"rule": "allow:premium"}],
+      "expect": {"rows": [["INCLUDED", "PLAN_COVERS_TITLE"]], "title": "watchable_here"}
+    },
+    {
+      "id": "E04-paid-ads-is-subscription-not-public-ads",
+      "group": "ad-supported-exclusions",
+      "viewer": {"plan": "ads"},
+      "offers": [{"rule": "allow:ads"}],
+      "expect": {"rows": [["INCLUDED", "PLAN_COVERS_TITLE"]], "title": "watchable_here"},
+      "assertions": ["verdict is INCLUDED, not FREE_WITH_ADS", "source_label/reason reflect a paid plan, not public ad funding"]
+    },
+    {
+      "id": "E05-paid-ads-explicit-exclusion",
+      "group": "ad-supported-exclusions",
+      "viewer": {"plan": "ads"},
+      "offers": [{"rule": "deny:ads"}],
+      "expect": {"rows": [["BLOCKED", "PLAN_EXCLUDED"]], "title": "available_elsewhere"},
+      "assertions": ["is_entitled false", "the offer stays visible with an exclusion explanation"]
+    },
+    {
+      "id": "E06-paid-ads-name-cannot-grant-other-plan",
+      "group": "ad-supported-exclusions",
+      "viewer": {"plan": "base"},
+      "offers": [{"rule": "allow:ads"}],
+      "expect": {"rows": [["UNKNOWN", "NO_APPLICABLE_RULE"]], "title": "unknown"},
+      "assertions": ["the label 'with ads' must not be used as a join key or to widen coverage"]
+    },
+    {
+      "id": "E07-hosted-channel-base-only",
+      "group": "hosted-channel-base-plus-addon",
+      "viewer": {"channel": "no"},
+      "offers": [{"provider": "orbit_via_aster", "kind": "addon"}],
+      "expect": {"rows": [["REQUIRES_ADDON", "CHANNEL_NOT_HELD"]], "title": "available_elsewhere"},
+      "assertions": ["reason names the child channel and host", "is_entitled false"]
+    },
+    {
+      "id": "E08-hosted-channel-base-and-addon",
+      "group": "hosted-channel-base-plus-addon",
+      "viewer": {"channel": "yes"},
+      "offers": [{"provider": "orbit_via_aster", "kind": "addon"}],
+      "expect": {"rows": [["INCLUDED", "CHANNEL_AND_BASE_COVER_TITLE"]], "title": "watchable_here"},
+      "assertions": ["required_base=aster and required_channel=orbit_via_aster are projected", "caveat string present"]
+    },
+    {
+      "id": "E09-standalone-brand-cannot-substitute-host",
+      "group": "hosted-channel-base-plus-addon",
+      "viewer": {"provider": "aster_plus", "holding": "yes", "plan": "base", "channel": "yes"},
+      "offers": [{"provider": "orbit_via_aster", "kind": "addon"}],
+      "expect": {"rows": [["UNKNOWN", "HOLDING_UNCONFIRMED"]], "title": "unknown"},
+      "assertions": ["aster_plus holding must not grant orbit_via_aster", "no fuzzy/brand-name fallback"]
+    },
+    {
+      "id": "E10-hosted-channel-base-not-held",
+      "group": "hosted-channel-base-plus-addon",
+      "viewer": {"holding": "no", "plan": null, "channel": "yes"},
+      "offers": [{"provider": "orbit_via_aster", "kind": "addon"}],
+      "expect": {"rows": [["BLOCKED", "BASE_NOT_HELD"]], "title": "available_elsewhere"},
+      "assertions": ["explicit child holding is retained so the missing base stays explainable"]
+    },
+    {
+      "id": "E11-hosted-channel-unanswered",
+      "group": "hosted-channel-base-plus-addon",
+      "viewer": {"channel": "unspecified"},
+      "offers": [{"provider": "orbit_via_aster", "kind": "addon"}],
+      "expect": {"rows": [["UNKNOWN", "HOLDING_UNCONFIRMED"]], "title": "unknown"}
+    },
+    {
+      "id": "E12-hosted-channel-unresolved-package",
+      "group": "hosted-channel-base-plus-addon",
+      "viewer": {"channel": "yes"},
+      "offers": [{"provider": "orbit_unknown", "kind": "addon"}],
+      "expect": {"rows": [["UNKNOWN", "PACKAGE_UNRESOLVED"]], "title": "unknown"}
+    },
+    {
+      "id": "E13-same-provider-two-countries-no-portability",
+      "group": "same-provider-different-countries",
+      "viewer": {},
+      "offers": [{}, {"market": "DE"}],
+      "expect": {"rows": [["INCLUDED", "PLAN_COVERS_TITLE"], ["UNKNOWN", "PORTABILITY_UNVERIFIED"]], "title": "watchable_here"},
+      "assertions": ["local INCLUDED survives a late/foreign unresolved row", "foreign row is not watchable_here"]
+    },
+    {
+      "id": "E14-country-disagreement-without-vpn",
+      "group": "same-provider-different-countries",
+      "viewer": {},
+      "offers": [{"rule": "deny:base"}, {"market": "DE", "rule": "allow:base", "portability": "allowed"}],
+      "expect": {"rows": [["BLOCKED", "PLAN_EXCLUDED"], ["INCLUDED", "PLAN_COVERS_TITLE"]], "title": "available_elsewhere"},
+      "assertions": ["mixed country rows stay separate; DE positive is out_of_reach when VPN is off"]
+    },
+    {
+      "id": "E15-country-disagreement-with-vpn",
+      "group": "same-provider-different-countries",
+      "viewer": {"vpn": ["DE"]},
+      "offers": [{"rule": "deny:base"}, {"market": "DE", "rule": "allow:base", "portability": "allowed"}],
+      "expect": {"rows": [["BLOCKED", "PLAN_EXCLUDED"], ["INCLUDED", "PLAN_COVERS_TITLE"]], "title": "watchable_vpn"},
+      "assertions": ["VPN reach is potential only; is_accessible true with vpn locality but never locally"]
+    },
+    {
+      "id": "E16-portability-denied-region",
+      "group": "same-provider-different-countries",
+      "viewer": {"billing": "DE"},
+      "offers": [{"portability": "denied"}],
+      "expect": {"rows": [["BLOCKED", "REGION_EXCLUDED"]], "title": "available_elsewhere"}
+    },
+    {
+      "id": "E17-portability-conflict",
+      "group": "same-provider-different-countries",
+      "viewer": {"billing": "DE"},
+      "offers": [{"portability": "conflicting"}],
+      "expect": {"rows": [["UNKNOWN", "EVIDENCE_CONFLICT"]], "title": "unknown"}
+    },
+    {
+      "id": "E18-unsupported-plan",
+      "group": "unsupported-and-expired-plans",
+      "viewer": {"plan": "unmapped"},
+      "offers": [{}],
+      "expect": {"rows": [["UNKNOWN", "PLAN_UNSUPPORTED"]], "title": "unknown"},
+      "assertions": ["unsupported is distinct from unspecified", "show plan-recovery UI, never a watchable badge"]
+    },
+    {
+      "id": "E19-missing-plan-legacy-holding",
+      "group": "missing-selection",
+      "viewer": {"plan": null},
+      "offers": [{}],
+      "expect": {"rows": [["UNKNOWN", "PLAN_UNSPECIFIED"]], "title": "unknown"}
+    },
+    {
+      "id": "E20-missing-selection-object",
+      "group": "missing-selection",
+      "viewer": {"noSelection": true},
+      "offers": [{}],
+      "expect": {"rows": [["UNKNOWN", "HOLDING_UNCONFIRMED"]], "title": "unknown"}
+    },
+    {
+      "id": "E21-unspecified-holding",
+      "group": "missing-selection",
+      "viewer": {"holding": "unspecified", "plan": null},
+      "offers": [{}],
+      "expect": {"rows": [["UNKNOWN", "HOLDING_UNCONFIRMED"]], "title": "unknown"}
+    },
+    {
+      "id": "E22-explicitly-unowned",
+      "group": "missing-selection",
+      "viewer": {"holding": "no", "plan": null},
+      "offers": [{}],
+      "expect": {"rows": [["BLOCKED", "BASE_NOT_HELD"]], "title": "available_elsewhere"}
+    },
+    {
+      "id": "E23-expired-rule-exclusive-boundary",
+      "group": "unsupported-and-expired-plans",
+      "viewer": {},
+      "offers": [{"ruleUntil": "2030-01-15T12:00:00Z"}],
+      "expect": {"rows": [["UNKNOWN", "NO_APPLICABLE_RULE"]], "title": "unknown"},
+      "assertions": "[from,until) is half open: asOf == until contributes no allow"
+    },
+    {
+      "id": "E24-rule-not-yet-effective",
+      "group": "unsupported-and-expired-plans",
+      "viewer": {},
+      "offers": [{"ruleStartsAt": "2030-01-16T00:00:00Z"}],
+      "expect": {"rows": [["UNKNOWN", "NO_APPLICABLE_RULE"]], "title": "unknown"}
+    },
+    {
+      "id": "E25-mixed-subscription-and-rent",
+      "group": "rent-buy-vs-subscription",
+      "viewer": {},
+      "offers": [{}, {"kind": "rent", "rule": "none"}],
+      "expect": {"rows": [["INCLUDED", "PLAN_COVERS_TITLE"], ["RENT_OR_BUY", "RENTAL"]], "title": "watchable_here"},
+      "assertions": ["rent requires_payment=true and is_entitled=false", "subscription and rent are separate rows; no cross-borrowing"]
+    },
+    {
+      "id": "E26-unknown-plan-plus-purchase",
+      "group": "rent-buy-vs-subscription",
+      "viewer": {"plan": null},
+      "offers": [{}, {"kind": "buy", "rule": "none"}],
+      "expect": {"rows": [["UNKNOWN", "PLAN_UNSPECIFIED"], ["RENT_OR_BUY", "PURCHASE"]], "title": "unknown"},
+      "assertions": ["purchase row stays in purchase_offers with requires_payment=true", "purchase must not make the title watchable"]
+    },
+    {
+      "id": "E27-free-with-ads-public",
+      "group": "free-with-ads",
+      "viewer": {"holding": "no", "plan": null},
+      "offers": [{"kind": "free_with_ads", "rule": "none"}],
+      "expect": {"rows": [["FREE_WITH_ADS", "PUBLIC_AD_FUNDED"]], "title": "watchable_here"},
+      "assertions": ["is_entitled=true, requires_payment=false", "verdict is not INCLUDED with a paid-plan reason"]
+    },
+    {
+      "id": "E28-free-with-ads-unconfirmed-condition",
+      "group": "free-with-ads",
+      "viewer": {"holding": "no", "plan": null},
+      "offers": [{"kind": "free_with_ads", "rule": "none", "publicConditionsMet": false}],
+      "expect": {"rows": [["UNKNOWN", "PUBLIC_CONDITIONS_UNCONFIRMED"]], "title": "unknown"},
+      "assertions": ["an unconfirmed signup/other condition blocks a free-with-ads badge"]
+    },
+    {
+      "id": "E29-explicit-free-no-ads",
+      "group": "free-with-ads",
+      "viewer": {"holding": "no", "plan": null},
+      "offers": [{"kind": "free", "rule": "none"}],
+      "expect": {"rows": [["INCLUDED", "PUBLIC_FREE"]], "title": "watchable_here"},
+      "assertions": ["free stays free; advertising capability alone must not relabel it free_with_ads"]
+    },
+    {
+      "id": "E30-source-reported-only",
+      "group": "stale-and-source-reported-evidence",
+      "viewer": {},
+      "offers": [{"evidence": "source_reported"}],
+      "expect": {"rows": [["UNKNOWN", "SOURCE_REPORTED"]], "title": "unknown"},
+      "assertions": ["is_entitled is null on the source-reported row", "playback_verified=false", "not in current offers"]
+    },
+    {
+      "id": "E31-stale-only",
+      "group": "stale-and-source-reported-evidence",
+      "viewer": {},
+      "offers": [{"evidence": "stale"}],
+      "expect": {"rows": [["UNKNOWN", "STALE_EVIDENCE"]], "title": "needs_recheck"},
+      "assertions": ["stale row is historical only; is_entitled=false on last_known_offers"]
+    },
+    {
+      "id": "E32-verified-plus-late-stale",
+      "group": "stale-and-source-reported-evidence",
+      "viewer": {},
+      "offers": [{}, {"evidence": "stale"}],
+      "expect": {"rows": [["INCLUDED", "PLAN_COVERS_TITLE"], ["UNKNOWN", "STALE_EVIDENCE"]], "title": "watchable_here"},
+      "assertions": ["stale evidence cannot downgrade or upgrade a current verified verdict"]
+    },
+    {
+      "id": "E33-material-conflict-same-scope",
+      "group": "multiple-conflicting-offers",
+      "viewer": {},
+      "offers": [{"rule": "conflict:base"}],
+      "expect": {"rows": [["UNKNOWN", "EVIDENCE_CONFLICT"]], "title": "unknown"},
+      "assertions": ["allow and deny for the same scope yield EVIDENCE_CONFLICT, never INCLUDED"]
+    },
+    {
+      "id": "E34-different-scope-rule-cannot-qualify",
+      "group": "multiple-conflicting-offers",
+      "viewer": {},
+      "offers": [{"ruleScope": "season:2", "scope": "season:1"}],
+      "expect": {"rows": [["UNKNOWN", "NO_APPLICABLE_RULE"]], "title": "unknown"},
+      "assertions": ["a season 2 rule cannot qualify a season 1 offer"]
+    },
+    {
+      "id": "E35-series-rule-cannot-qualify-movie",
+      "group": "multiple-conflicting-offers",
+      "viewer": {},
+      "offers": [{"ruleScope": "series"}],
+      "expect": {"rows": [["UNKNOWN", "NO_APPLICABLE_RULE"]], "title": "unknown"}
+    },
+    {
+      "id": "E36-invalid-offer-class",
+      "group": "invalid-api-responses",
+      "viewer": {},
+      "offers": [{"kind": "unknown", "rule": "none"}],
+      "expect": {"rows": [["UNKNOWN", "OFFER_CLASS_UNKNOWN"]], "title": "unknown"},
+      "assertions": ["unmapped monetization stays UNKNOWN with the original package id preserved", "no exception"]
+    },
+    {
+      "id": "E37-future-observation",
+      "group": "invalid-api-responses",
+      "viewer": {},
+      "offers": [{"observedAt": "2030-01-16T00:00:00Z"}],
+      "expect": {"rows": [["UNKNOWN", "EVIDENCE_UNVERIFIED"]], "title": "unknown"}
+    },
+    {
+      "id": "E38-unsupported-source-mapping",
+      "group": "invalid-api-responses",
+      "viewer": {},
+      "offers": [{"sourceSupported": false}],
+      "expect": {"rows": [["UNKNOWN", "SOURCE_UNSUPPORTED"]], "title": "unknown"},
+      "assertions": ["a mapping not enabled for review must not produce a positive"]
+    },
+    {
+      "id": "E39-missing-territory",
+      "group": "invalid-api-responses",
+      "viewer": {},
+      "offers": [{"market": null}],
+      "expect": {"rows": [["UNKNOWN", "TERRITORY_UNKNOWN"]], "title": "unknown"}
+    },
+    {
+      "id": "E40-unknown-entitlement-no-false-positive",
+      "group": "unknown-no-false-positive-badge",
+      "viewer": {"plan": null},
+      "offers": [{}],
+      "expect": {"rows": [["UNKNOWN", "PLAN_UNSPECIFIED"]], "title": "unknown"},
+      "assertions": [
+        "is_entitled=false",
+        "is_accessible=false",
+        "is_user_subscribed=false",
+        "watchability heading and 'Included in my plan' filter count = 0",
+        "included=1 report filter returns no row",
+        "'Confirm your plan' is the only recovery affordance"
+      ]
+    },
+    {
+      "id": "E41-language-mismatch-no-false-badge",
+      "group": "unknown-no-false-positive-badge",
+      "viewer": {"languageMatch": false},
+      "offers": [{}],
+      "expect": {"rows": [["INCLUDED", "PLAN_COVERS_TITLE"]], "title": "available_elsewhere"},
+      "assertions": ["is_entitled=true but is_accessible=false", "watchable_here count = 0", "no 'Included in my plan' badge on the watchable heading"]
+    },
+    {
+      "id": "E42-worldwide-distribution-no-paid-portability",
+      "group": "unknown-no-false-positive-badge",
+      "viewer": {"current": "DE", "billing": "NL"},
+      "offers": [{"territorialScope": "worldwide"}],
+      "expect": {"rows": [["INCLUDED", "PLAN_COVERS_TITLE"]], "title": "available_elsewhere"},
+      "assertions": ["worldwide title distribution does not extend paid plan territory", "locality=out_of_reach", "is_accessible=false"]
+    }
+  ],
+  "httpCases": [
+    {
+      "id": "H01-catalogue-market-scoping",
+      "group": "base-vs-premium",
+      "seed": {
+        "provider": {"slug": "synthetic-aster", "name": "Aster"},
+        "countries": ["NL", "DE"],
+        "plans": [
+          {"plan_id": "base", "billing_country": "NL", "plan_class": "base", "caveat": ""},
+          {"plan_id": "premium", "billing_country": "NL", "plan_class": "premium", "caveat": ""},
+          {"plan_id": "paid-ads", "billing_country": "DE", "plan_class": "paid_ads", "caveat": "Ad-supported"}
+        ],
+        "channels": [
+          {"package_id": "orbit", "parent_provider": "synthetic-aster", "country": "NL", "caveat": ""},
+          {"package_id": "comet", "parent_provider": "synthetic-aster", "country": "NL", "caveat": ""},
+          {"package_id": "foreign", "parent_provider": "synthetic-aster", "country": "DE", "caveat": ""}
+        ],
+        "legacySubscription": {"provider": "synthetic-aster", "name": "Aster"}
+      },
+      "request": {"method": "GET", "path": "/api/providers/?billing_country=NL"},
+      "expect": {
+        "status": 200,
+        "providerRow": {
+          "slug": "synthetic-aster",
+          "plan_options": [
+            {"plan_id": "base", "display_name": "base", "class": "base", "billing_country": "NL", "caveat": ""},
+            {"plan_id": "premium", "display_name": "premium", "class": "premium", "billing_country": "NL", "caveat": ""}
+          ],
+          "channel_options": [
+            {"package_id": "comet", "parent_provider": "synthetic-aster", "country": "NL", "caveat": ""},
+            {"package_id": "orbit", "parent_provider": "synthetic-aster", "country": "NL", "caveat": ""}
+          ],
+          "unlisted_plan_option": {"plan_id": null, "plan_state": "unsupported", "display_name": "I don't know / my plan isn't listed"},
+          "selection": {"holding": "yes", "plan_state": "unspecified", "plan_id": null, "plan_display_name": null, "channels": [], "revision": 0}
+        },
+        "assertions": [
+          "DE plan 'paid-ads' and DE channel 'foreign' are absent from the NL catalogue",
+          "legacy subscription seeds only a coarse holding yes with plan_state unspecified",
+          "unlisted option has null plan_id and is distinct from an unknown arbitrary plan id",
+          "GET /api/providers/?billing_country=XYZ returns 400"
+        ]
+      }
+    },
+    {
+      "id": "H02-first-write-and-refresh-persistence",
+      "group": "browser-refresh-persisted-selection-recovery",
+      "seed": {"provider": "synthetic-aster", "billing_country": "NL"},
+      "steps": [
+        {
+          "request": {
+            "method": "PUT",
+            "path": "/api/subscriptions/synthetic-aster/markets/NL/",
+            "body": {"holding": "yes", "plan_state": "selected", "plan_id": "base", "channels": [{"package_id": "orbit", "holding": "yes"}, {"package_id": "comet", "holding": "no"}], "revision": 0}
+          },
+          "expect": {
+            "status": 200,
+            "body": {"holding": "yes", "plan_state": "selected", "plan_id": "base", "plan_display_name": "base", "channels": [{"package_id": "comet", "holding": "no"}, {"package_id": "orbit", "holding": "yes"}], "revision": 1}
+          }
+        },
+        {
+          "request": {"method": "GET", "path": "/api/providers/?billing_country=NL"},
+          "expect": {
+            "status": 200,
+            "assertions": [
+              "selection.revision === 1 after a simulated browser refresh",
+              "selection.plan_id === 'base' and plan_display_name === 'base'",
+              "both channel declarations are returned sorted by package_id"
+            ]
+          }
+        },
+        {
+          "request": {
+            "method": "PUT",
+            "path": "/api/subscriptions/synthetic-aster/markets/NL/",
+            "body": {"holding": "yes", "plan_state": "selected", "plan_id": "premium", "channels": [], "revision": 0}
+          },
+          "expect": {
+            "status": 409,
+            "body": {"code": "revision_conflict", "selection": {"holding": "yes", "plan_state": "selected", "plan_id": "base", "plan_display_name": "base", "channels": [{"package_id": "comet", "holding": "no"}, {"package_id": "orbit", "holding": "yes"}], "revision": 1}},
+            "assertions": ["client must reload the saved selection and keep its draft visible"]
+          }
+        },
+        {
+          "request": {
+            "method": "PUT",
+            "path": "/api/subscriptions/synthetic-aster/markets/NL/",
+            "body": {"holding": "yes", "plan_state": "selected", "plan_id": "base", "channels": [{"package_id": "comet", "holding": "no"}, {"package_id": "orbit", "holding": "yes"}], "revision": 0}
+          },
+          "expect": {"status": 200, "assertions": ["identical replay returns the saved revision 1 without incrementing"]}
+        },
+        {
+          "request": {
+            "method": "PUT",
+            "path": "/api/subscriptions/synthetic-aster/markets/NL/",
+            "body": {"holding": "yes", "plan_state": "selected", "plan_id": "base", "channels": [], "revision": 0}
+          },
+          "expect": {"status": 409, "assertions": ["a two-step-old replay is outside the accepted {revision, revision-1} window"]}
+        }
+      ]
+    },
+    {
+      "id": "H03-retired-plan-persists-as-unsupported",
+      "group": "unsupported-and-expired-plans",
+      "seed": {"plan": "base", "selectionPlanId": "base"},
+      "steps": [
+        {"action": "set EntitlementPlan(base, NL).ends_at = asOf"},
+        {
+          "request": {"method": "GET", "path": "/api/providers/?billing_country=NL"},
+          "expect": {
+            "status": 200,
+            "selection": {"plan_state": "unsupported", "plan_id": "base", "plan_display_name": "base"},
+            "catalogue": {"plan_options": [{"plan_id": "premium"}]},
+            "assertions": ["the retired plan is not silently replaced by premium", "the saved plan id and last label survive"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "H04-hosted-channel-retired-in-billing-market",
+      "group": "hosted-channel-base-plus-addon",
+      "seed": {"channelDeclaration": "orbit yes", "channelEndsAt": "asOf"},
+      "steps": [
+        {"action": "expire EntitlementChannel(orbit, NL) at asOf while the viewer still declares holding=yes"},
+        {"action": "run get_title_offer_evidence -> build_user_access -> resolve_title for the addon offer"},
+        {"expect": {"verdict": "UNKNOWN", "reason": "HOLDING_UNCONFIRMED", "assertions": ["channel declarations are not trusted when the channel is no longer active in the billing market", "no INCLUDED on a retired channel"]}}
+      ]
+    },
+    {
+      "id": "H05-invalid-selection-writes",
+      "group": "invalid-api-responses",
+      "requestBase": {"method": "PUT", "path": "/api/subscriptions/synthetic-aster/markets/NL/"},
+      "invalidBodies": [
+        {"body": {"holding": "no"}, "why": "missing plan_state/plan_id/channels/revision"},
+        {"body": {"holding": "yes", "plan_state": "selected", "plan_id": null, "channels": [], "revision": 0}, "why": "selected plan with null plan_id"},
+        {"body": {"holding": "no", "plan_state": "selected", "plan_id": "base", "channels": [], "revision": 0}, "why": "selected plan without held base"},
+        {"body": {"holding": "yes", "plan_state": "unsupported", "plan_id": "base", "channels": [], "revision": 0}, "why": "non-null plan id with unsupported state"},
+        {"body": {"holding": "yes", "plan_state": "selected", "plan_id": "paid-ads", "channels": [], "revision": 0}, "why": "plan belongs to DE, not NL"},
+        {"body": {"holding": "yes", "plan_state": "selected", "plan_id": "Base", "channels": [], "revision": 0}, "why": "case-variant of a plan id"},
+        {"body": {"holding": "yes", "plan_state": "selected", "plan_id": "base ", "channels": [], "revision": 0}, "why": "untrimmed plan id"},
+        {"body": {"holding": "yes", "plan_state": "selected", "plan_id": "base", "channels": [], "revision": "0"}, "why": "string revision"},
+        {"body": {"holding": "yes", "plan_state": "selected", "plan_id": "base", "channels": [], "revision": true}, "why": "boolean revision"},
+        {"body": {"holding": "yes", "plan_state": "selected", "plan_id": "base", "channels": [{"package_id": "foreign", "holding": "yes"}], "revision": 0}, "why": "channel from another market"},
+        {"body": {"holding": "yes", "plan_state": "selected", "plan_id": "base", "channels": [{"package_id": "orbit", "holding": "yes"}, {"package_id": "orbit", "holding": "no"}], "revision": 0}, "why": "duplicate child declaration"}
+      ],
+      "expect": {"status": 400, "assertions": ["no ViewerMarketSelection row is created on any invalid write"]}
+    },
+    {
+      "id": "H06-concurrent-edits",
+      "group": "concurrent-edits-and-409",
+      "seed": {"provider": "synthetic-aster", "billing_country": "NL", "initialRevision": 0},
+      "steps": [
+        {"action": "two concurrent PUTs at revision 0 with distinct plans base and premium", "expect": {"statuses": [200, 409], "finalRevision": 1}},
+        {"action": "two concurrent PUTs at revision 1 with an identical new state", "expect": {"statuses": [200, 200], "finalRevision": 2, "assertions": ["the identical replay increments the revision once"]}}
+      ]
+    },
+    {
+      "id": "H07-viewer-and-market-isolation",
+      "group": "browser-refresh-persisted-selection-recovery",
+      "seed": {"viewers": ["legacy-viewer", "other-viewer"]},
+      "steps": [
+        {"action": "authenticated viewer PUTs an unsupported unlisted plan for NL", "expect": {"status": 200, "plan_state": "unsupported", "plan_id": null}},
+        {"action": "anonymous client PUTs base for NL", "expect": {"status": 200}},
+        {"expect": {"ViewerMarketSelection.count": 2, "assertions": ["user_id is resolved on the server, never accepted from the request body", "each viewer/market profile is independent"]}}
+      ]
+    },
+    {
+      "id": "H08-detail-mixed-offer-projection",
+      "group": "rent-buy-vs-subscription",
+      "seed": {"movie": 910003, "offers": ["subscription NL covered", "rent NL", "buy DE"]},
+      "request": {"method": "GET", "path": "/api/prime/movie/910003/?current_country=NL"},
+      "expect": {
+        "status": 200,
+        "offers": [{"offer_type": "subscription", "entitlement.verdict": "INCLUDED", "entitlement.reason": "PLAN_COVERS_TITLE", "is_entitled": true}],
+        "purchase_offers": [
+          {"offer_type": "rent", "entitlement.verdict": "RENT_OR_BUY", "requires_payment": true, "is_entitled": false}
+        ],
+        "source_package_id": "preserved from the current observation",
+        "watchability": {"verdict": "available_here", "purchase_offers": ["rent"]},
+        "assertions": ["the DE buy row is not silently merged into the local purchase list", "no provenance_reference or raw document appears in the response"]
+      }
+    },
+    {
+      "id": "H09-source-reported-projection",
+      "group": "stale-and-source-reported-evidence",
+      "seed": {"movie": 910003, "currentRow": "rewritten to source_reported"},
+      "request": {"method": "GET", "path": "/api/prime/movie/910003/?current_country=NL"},
+      "expect": {
+        "status": 200,
+        "offers": [],
+        "purchase_offers": [],
+        "watchability": {"verdict": "unknown"},
+        "source_reported_offers": [{"entitlement.verdict": "UNKNOWN", "entitlement.reason": "SOURCE_REPORTED", "is_entitled": null, "playback_verified": false}],
+        "assertions": ["a matching reviewed product cannot certify a source report", "legacy flags stay null on source-reported rows"]
+      }
+    },
+    {
+      "id": "H10-stale-projection",
+      "group": "stale-and-source-reported-evidence",
+      "seed": {"movie": 910003, "offerLastSeen": "asOf - 5 days"},
+      "request": {"method": "GET", "path": "/api/prime/movie/910003/?current_country=NL"},
+      "expect": {
+        "status": 200,
+        "offers": [],
+        "watchability": {"verdict": "needs_recheck"},
+        "last_known_offers": [{"is_entitled": false, "entitlement.reason": "STALE_EVIDENCE"}]
+      }
+    },
+    {
+      "id": "H11-composed-filters-single-row-predicate",
+      "group": "unknown-no-false-positive-badge",
+      "seed": {"movie": 910003, "offers": ["included NL", "rent NL", "buy DE"]},
+      "requestBase": "/api/watchlist/report/",
+      "cases": [
+        {"query": "current_country=NL", "expect": "one report row, best_offer.reason PLAN_COVERS_TITLE"},
+        {"query": "current_country=NL&included=1", "expect": "one report row"},
+        {"query": "watchable=1&access=rent", "expect": "no row"},
+        {"query": "watchable=1&country=DE", "expect": "no row"},
+        {"query": "included=1&access=buy", "expect": "no row"},
+        {"query": "country=NL&access=buy", "expect": "no row"}
+      ],
+      "assertions": ["filters require one row satisfying all predicates; a local rental cannot borrow inclusion from a foreign subscription"]
+    },
+    {
+      "id": "H12-missing-entitlement-object-compat",
+      "group": "invalid-api-responses",
+      "seed": {"payload": "older payload with no v1 entitlement object"},
+      "expect": {
+        "assertions": [
+          "plan-dependent row renders 'Plan access unconfirmed'",
+          "no 'Included' string and no watchable badge from a legacy boolean",
+          "raw offer classes and prices remain visible"
+        ]
+      }
+    }
+  ],
+  "findings": [
+    {
+      "id": "F01",
+      "severity": "informational",
+      "title": "Identical replay accepted for the saved revision and one revision behind",
+      "detail": "replace_selection() treats data.revision in {revision, revision-1} as a replay when the state matches. A two-step-old identical replay returns 409. This is intentional idempotency, but clients must not interpret a 200 replay as a new revision.",
+      "case": "H02"
+    },
+    {
+      "id": "F02",
+      "severity": "informational",
+      "title": "Channel declarations are dropped when the reviewed channel is no longer active in the billing market",
+      "detail": "entitlement_reads.EntitlementContext.evaluate rebuilds the Selection without its channel map when (host, billing_country, channel_id) is absent from the active reviewed channel set. A declared child therefore yields HOLDING_UNCONFIRMED rather than INCLUDED after catalogue retirement, which is the desired no-false-positive outcome but must be asserted explicitly.",
+      "case": "H04"
+    },
+    {
+      "id": "F03",
+      "severity": "informational",
+      "title": "Language mismatch is a false value, not null, in the shared fixture harness",
+      "detail": "test_issue103_fixtures.run_case passes viewer.languageMatch directly as the language triple member. project_title checks `language is None` for missing language info; a false value takes the verified-anywhere branch and yields available_elsewhere. Harnesses must preserve that distinction or E41 will be mis-scored.",
+      "case": "E41"
+    },
+    {
+      "id": "F04",
+      "severity": "needs-evidence",
+      "title": "No real positive product mapping is enabled",
+      "detail": "The backend verification audit states no reviewed source mappings or real-world rights assertions are shipped. Every real paid positive remains UNKNOWN until independently reviewed first-party title/plan/market evidence is supplied. No live call was made to test this.",
+      "case": "E38"
+    }
+  ]
+}
