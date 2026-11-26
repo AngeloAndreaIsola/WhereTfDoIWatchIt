@@ -4,26 +4,30 @@ HTTP read paths use this adapter while the response/ranking layer continues to
 consume its established ``tracker.services.offers.Offer`` representation.
 It deliberately performs no cache lookup, refresh, or network activity.
 
-Rows are read through the reconciliation layer, so what a viewer sees is one
-effective offer per (content, provider, country, offer type) rather than every
-raw observation a source happened to write. Raw rows stay untouched; this
-module only projects the reconciled view onto the tracker representation.
+Rows are read through the reconciliation layer. Current streaming alternatives
+with recorded renditions retain the scope of their own source observation so
+each can be evaluated independently for entitlement and language.
 
 Verified offers qualify for watchability. Recent title reports and older
 positive observations are returned separately with their original timestamps.
 """
 from __future__ import annotations
 
+from collections import Counter
+from dataclasses import replace
 from datetime import UTC
 from typing import Literal, NamedTuple, Optional
 from urllib.parse import urlsplit
 
-from availability.domain.enums import AvailabilityEvidence
+from availability.domain.enums import AvailabilityEvidence, OfferType
 from availability.domain.reconciliation import ReconciledOffer
+from availability.services.normalize import (
+    normalize_justwatch_quality, normalize_languages, normalize_price, parse_availability_timestamp,
+)
 from availability.services.offer_variant_projection import public_offer_variant
 from availability.services.query import AvailabilityQueryService
 
-from .offers import Offer
+from .offers import Offer, OfferLineage
 
 
 class OfferEvidence(NamedTuple):
@@ -51,15 +55,15 @@ class TitleOfferEvidence(NamedTuple):
 
 
 def get_title_offer_evidence(
-    movie, *, season: Optional[int] = None, country: Optional[str] = None
+    movie, *, season: Optional[int] = None, country: Optional[str] = None, now=None,
 ) -> TitleOfferEvidence:
     """Read one title's reconciled offers, split into current and last-known."""
     service = AvailabilityQueryService()
     if movie.content_type == "series" and season is not None:
-        result = service.get_reconciled_for_series(movie.tmdb_id, season, country)
+        result = service.get_reconciled_for_series(movie.tmdb_id, season, country, now=now)
     else:
         result = service.get_reconciled_for_content(
-            movie.tmdb_id, movie.content_type or "movie", country
+            movie.tmdb_id, movie.content_type or "movie", country, now=now,
         )
     return _split(result.offers)
 
@@ -78,7 +82,7 @@ def get_local_offers(movie, *, season: Optional[int] = None, country: Optional[s
     return get_offer_evidence(movie, season=season, country=country).current
 
 
-def get_offer_evidence_bulk(movies) -> dict[int, OfferEvidence]:
+def get_title_offer_evidence_bulk(movies, *, now=None) -> dict[int, TitleOfferEvidence]:
     """Read reconciled offers for many list/report titles in bounded queries.
 
     This deliberately supports only title-level rows; season detail pages keep
@@ -86,14 +90,21 @@ def get_offer_evidence_bulk(movies) -> dict[int, OfferEvidence]:
     """
     movie_list = list(movies)
     pairs = [(movie.tmdb_id, movie.content_type or "movie") for movie in movie_list]
-    reconciled = AvailabilityQueryService().get_reconciled_for_contents(pairs)
+    reconciled = AvailabilityQueryService().get_reconciled_for_contents(pairs, now=now)
     return {
         movie.id: _split(
             reconciled.get((movie.tmdb_id, movie.content_type or "movie"), [])
-        ).confirmed_and_history
+        )
         for movie in movie_list
     }
 
+
+
+def get_offer_evidence_bulk(movies) -> dict[int, OfferEvidence]:
+    return {
+        movie_id: evidence.confirmed_and_history
+        for movie_id, evidence in get_title_offer_evidence_bulk(movies).items()
+    }
 
 def get_local_offers_bulk(movies) -> dict[int, list[Offer]]:
     """Current (verified) offers only, per title; see :func:`get_offer_evidence_bulk`."""
@@ -113,12 +124,98 @@ def _split(offers) -> TitleOfferEvidence:
         if not offer.currently_available:
             continue
         if offer.evidence == AvailabilityEvidence.VERIFIED:
-            current.append(_tracker_offer(offer))
+            current.extend(_current_offers(offer))
         elif offer.evidence == AvailabilityEvidence.SOURCE_REPORTED:
             source_reported.append(_tracker_offer(offer))
         else:
             last_known.append(_tracker_offer(offer))
     return TitleOfferEvidence(current, last_known, source_reported)
+
+
+def _current_offers(offer: ReconciledOffer) -> list[Offer]:
+    if offer.offer_type not in {OfferType.SUBSCRIPTION, OfferType.ADDON, OfferType.FREE, OfferType.FREE_WITH_ADS}:
+        return [_tracker_offer(offer)]
+
+    verified = [obs for obs in offer.observations if obs.evidence == AvailabilityEvidence.VERIFIED]
+    scoped = [(obs, _current_variant_snapshot(obs)) for obs in verified]
+    if not any(snapshot for _, snapshot in scoped):
+        return [_tracker_offer(offer)]
+
+    rows = []
+    for observation, snapshot in scoped:
+        if snapshot is None:
+            rows.append(_stream_offer(offer, observation))
+            continue
+        counts = Counter(str(variant.get("source_offer_id") or "") for variant in snapshot.variants)
+        for variant in snapshot.open_variants:
+            variant_id = str(variant.get("source_offer_id") or "")
+            rows.append(_stream_offer(
+                offer, observation, variant,
+                variant_id=variant_id if counts[variant_id] == 1 else "",
+                inherit_languages=len(snapshot.variants) == 1,
+            ))
+    return rows
+
+
+def _current_variant_snapshot(observation):
+    snapshot = observation.price
+    if (snapshot and snapshot.open_variants and snapshot.observed_at is not None
+            and snapshot.observed_at >= (observation.observed_at or observation.last_seen)):
+        return snapshot
+    return None
+
+
+def _stream_offer(offer, observation, variant=None, *, variant_id="", inherit_languages=True):
+    """Project a current streaming action with fields from one observation."""
+    snapshot = observation.price
+    audio = _as_list(observation.audio_languages)
+    subtitles = _as_list(observation.subtitle_languages)
+    url, quality = observation.provider_url, observation.quality
+    start, end = observation.available_from, observation.available_until
+    price = snapshot if snapshot and snapshot.is_current and snapshot.is_valid and not snapshot.variants else None
+    if variant is not None:
+        audio = _variant_languages(variant, "audio_languages", audio if inherit_languages else None)
+        subtitles = _variant_languages(variant, "subtitle_languages", subtitles if inherit_languages else None)
+        url = _variant_display_url(variant.get("url"))
+        quality = normalize_justwatch_quality(variant.get("presentation_type"))
+        start = parse_availability_timestamp(variant.get("available_from"))
+        expiry = variant.get("available_to")
+        end = parse_availability_timestamp(expiry if expiry is not None else variant.get("available_until"))
+        normalized = normalize_price(variant.get("amount"), variant.get("currency"))
+        error = variant.get("validation_error") or normalized.error
+        snapshot = replace(
+            snapshot, amount=normalized.amount, currency=normalized.currency,
+            source_offer_id=_safe_package_value(variant_id), variants=(variant,), open_variants=(variant,),
+            selected_variant=variant, is_current=snapshot.is_current and not error,
+            validation_error=error,
+        )
+        price = snapshot if snapshot.is_current else None
+    elif snapshot and any(variant.get("url") == url for variant in snapshot.variants):
+        url = _variant_display_url(url)
+    return Offer(
+        country=offer.country, service=offer.provider, offer_type=offer.offer_type,
+        quality=quality, url=url, audio_languages=audio, subtitle_languages=subtitles,
+        price=_price_dict(price, offer) if price else None,
+        prices=[_price_dict(snapshot, offer)] if snapshot else [],
+        availability_evidence=str(offer.evidence), last_seen_at=observation.last_seen.isoformat(),
+        available_from=start.astimezone(UTC).isoformat() if start else None,
+        available_until=end.astimezone(UTC).isoformat() if end and observation.source != "justwatch" else None,
+        season_number=offer.season_number, episode_number=offer.episode_number,
+        lineage=OfferLineage(
+            content_type=offer.content_type, title_id=offer.tmdb_id,
+            identity=observation.offer_identity, source=observation.source,
+            observed_at=observation.observed_at or observation.last_seen,
+            package_id=_safe_package_value((variant or {}).get("package_id")),
+            package_label=_safe_package_value((variant or {}).get("package")), variant_id=variant_id,
+        ),
+    )
+
+
+def _variant_languages(variant, key, fallback):
+    if key not in variant:
+        return fallback
+    values = variant[key]
+    return normalize_languages(values) if isinstance(values, list) else None
 
 
 def _tracker_offer(offer: ReconciledOffer) -> Offer:
@@ -155,6 +252,57 @@ def _tracker_offer(offer: ReconciledOffer) -> Offer:
         available_until=_window_timestamp(offer, "available_until"),
         season_number=offer.season_number,
         episode_number=offer.episode_number,
+        lineage=_offer_lineage(offer, report),
+    )
+
+
+def _safe_package_value(value):
+    if value is None or isinstance(value, bool):
+        return ""
+    value = str(value)
+    return value if len(value) <= 150 and all(c.isascii() and (c.isalnum() or c in "_.-") for c in value) else ""
+
+
+def _offer_lineage(offer, report):
+    """Bind to the observation behind the rendered rendition and its own variant."""
+    base = {"content_type": offer.content_type, "title_id": offer.tmdb_id}
+    candidates = [obs for obs in offer.observations if getattr(obs, "offer_identity", "") and obs.evidence == offer.evidence]
+    if report and getattr(report, "offer_identity", ""):
+        candidates = [report]
+    chosen_price = offer.price if offer.price and offer.price.selected_variant else None
+    if chosen_price:
+        candidates = [obs for obs in candidates if obs.price == chosen_price]
+    else:
+        candidates = [obs for obs in candidates if obs.provider_url == offer.provider_url]
+    if len(candidates) != 1:
+        return OfferLineage(**base)
+    observation = candidates[0]
+    observed_at = observation.observed_at or observation.last_seen
+    price = observation.price
+    if price is None or price.observed_at is None or price.observed_at < observed_at:
+        return OfferLineage(**base, identity=observation.offer_identity, source=observation.source,
+                            observed_at=observed_at)
+    variants = price.open_variants if offer.evidence == AvailabilityEvidence.VERIFIED else price.variants
+    selected = chosen_price.selected_variant if chosen_price else None
+    if selected is None:
+        variants = [variant for variant in variants if variant.get("url", "") == observation.provider_url]
+        selected = variants[0] if len(variants) == 1 else {}
+    variant_id = str(selected.get("source_offer_id") or "")
+    if sum(str(variant.get("source_offer_id") or "") == variant_id for variant in variants) > 1:
+        variant_id = ""
+    # Group-level mixed commercial actions are independent. A disagreement
+    # over availability/window of the same stable observation is material.
+    conflicted = any(
+        conflict.kind in {"availability", "mapping", "window"}
+        and observation.offer_id in conflict.offer_ids
+        for conflict in offer.conflicts
+    )
+    return OfferLineage(
+        **base, identity=observation.offer_identity, source=observation.source,
+        package_id=_safe_package_value(selected.get("package_id")),
+        package_label=_safe_package_value(selected.get("package")),
+        variant_id=variant_id,
+        observed_at=observed_at, conflicted=conflicted,
     )
 
 

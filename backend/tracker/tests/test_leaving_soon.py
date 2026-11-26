@@ -19,6 +19,7 @@ from availability.persistence.repositories import OfferRepository
 from availability.sources.pbs import PbsSource
 from tracker.models import Movie, Preference, Provider, Subscription, WatchlistItem
 from tracker.services.access import UserAccess
+from tracker.tests.reviewed_entitlement import record_reviewed_offer, reviewed_access
 from availability.services.departures import confirmed_expiry
 from tracker.views_leaving_soon import build_leaving_soon
 
@@ -205,12 +206,13 @@ class LeavingSoonTests(TestCase):
         def add_series(tmdb_id):
             series = Movie.objects.create(tmdb_id=tmdb_id, content_type="series", title="Show")
             WatchlistItem.objects.create(user_id=17, movie=series, source="manual")
-            Offer.objects.create(
+            row = Offer.objects.create(
                 provider=provider, source=source, country=country,
                 tmdb_id=tmdb_id, content_type="episode", season_number=1, episode_number=3,
                 provider_content_id=str(tmdb_id), offer_type="free", audio_languages=["EN"],
                 last_seen=NOW, available_until=NOW + timedelta(days=7),
             )
+            record_reviewed_offer(row, now=NOW)
 
         def read():
             with CaptureQueriesContext(connection) as queries, \
@@ -244,7 +246,13 @@ class LeavingSoonScopeTests(SimpleTestCase):
         self.enterContext(patch("tracker.views_leaving_soon.build_preference",
                                 return_value=self.preference))
         self.access = UserAccess(included={"netflix"})
-        self.enterContext(patch("tracker.views_leaving_soon.build_user_access", return_value=self.access))
+        def read_access(_user, *, offers, as_of):
+            return reviewed_access(
+                list(offers), self.access, current_country=self.preference.current_country,
+                hosts={"channel": "prime"}, as_of=as_of,
+            )
+
+        self.enterContext(patch("tracker.views_leaving_soon.build_user_access", side_effect=read_access))
         self.providers = []
         self.enterContext(patch.object(Provider.objects, "all", return_value=self.providers))
         self.query = self.enterContext(patch(
@@ -347,14 +355,18 @@ class LeavingSoonDatabaseTests(TestCase):
                     season=None, episode=None, offer_type="free_with_ads", country=None,
                     age=timedelta(0), native_id=None):
         source = source or self.direct
-        return Offer.objects.create(
+        row = Offer.objects.create(
             tmdb_id=title.tmdb_id, content_type=kind or title.content_type,
             provider=provider or self.avod, source=source, country=country or self.us,
             season_number=season, episode_number=episode, offer_type=offer_type,
             provider_content_id=native_id or f"{source.slug}-{title.content_type}-{title.tmdb_id}",
             audio_languages=["en"], last_seen=NOW - age,
+            provider_url=f"https://example.test/{source.slug}/{title.tmdb_id}",
             available_until=None if days is None else NOW + timedelta(days=days),
         )
+        if source == self.direct or row.provider != self.avod:
+            record_reviewed_offer(row)
+        return row
 
     def get(self, query="country=US", *, status=200, client=None):
         # Leave SQL, reconciliation, scoring and response rendering real.
@@ -421,13 +433,14 @@ class LeavingSoonDatabaseTests(TestCase):
         }])
         self.assertEqual([row.content_type for row in rows], ["series", "season", "episode"])
         for row in rows:
-            Offer.objects.create(
+            observation = Offer.objects.create(
                 tmdb_id=series.tmdb_id, content_type=row.content_type, provider=provider,
                 source=pbs, country=self.us, season_number=row.season_number,
                 episode_number=row.episode_number, provider_content_id=row.provider_content_id,
                 offer_type=row.offer_type, audio_languages=row.audio_languages, last_seen=NOW,
                 available_until=row.available_until,
             )
+            record_reviewed_offer(observation, now=NOW)
         data, _ = self.get()
         self.assertEqual(data["coverage"]["offers_with_confirmed_expiry_data"], 1)
         self.assertEqual([(r["sources"], r["season_number"], r["episode_number"], r["departure_kind"])
@@ -460,6 +473,7 @@ class LeavingSoonDatabaseTests(TestCase):
                                       now=NOW, **identity)
         self.assertFalse(created)
         self.assertEqual(previous.pk, latest.pk)
+        record_reviewed_offer(latest, now=NOW)
         return repo, latest
 
     def test_reconstructible_end_date_conflict_and_resolution(self):
@@ -557,7 +571,7 @@ class LeavingSoonDatabaseTests(TestCase):
         self.assertEqual([item["movie"]["tmdb_id"] for item in data["items"]], [832])
         self.assertEqual(data["coverage"]["watchlist_titles"], 1)
 
-    def test_persisted_entitlement_modes_and_qualifying_alternatives(self):
+    def test_persisted_market_selection_and_qualifying_alternatives(self):
         movie = self.title(840)
         base = Provider.objects.create(slug="qa-base", name="Base")
         channel = Provider.objects.create(slug="qa-channel", name="Channel", config={"addon_parent": base.slug})
@@ -567,7 +581,9 @@ class LeavingSoonDatabaseTests(TestCase):
             Subscription.objects.create(provider=provider, user_id=37, access_mode=mode)
         for provider, kind in [(channel, "subscription"), (store, "rent"), (store, "buy"),
                                (unknown, "subscription"), (self.avod, "unknown")]:
-            self.observation(movie, provider=provider, offer_type=kind, days=14)
+            observed = self.observation(movie, provider=provider, offer_type=kind, days=14)
+            if provider == channel:
+                channel_offer = observed
         self.observation(movie, days=7)
 
         def summary():
@@ -576,6 +592,8 @@ class LeavingSoonDatabaseTests(TestCase):
 
         self.assertEqual(summary(), [("qa-avod", "free_with_ads", "last_option")])
         Subscription.objects.create(provider=base, user_id=37, access_mode="included")
+        self.assertEqual(summary(), [("qa-avod", "free_with_ads", "last_option")])
+        record_reviewed_offer(channel_offer, viewer=37, parent=base.slug, now=NOW)
         self.assertEqual(summary(), [("qa-avod", "free_with_ads", "leaving_provider"),
                                      ("qa-channel", "addon", "last_option")])
 
@@ -596,12 +614,13 @@ class LeavingSoonDatabaseTests(TestCase):
                     for provider, source, kind, episode, days in [
                         (self.avod, bbc, "season", None, 8), (self.other, self.direct, "episode", 2, 7),
                     ]:
-                        repo.upsert(
+                        observed, _ = repo.upsert(
                             provider=provider, country=self.us, source=source, content_type=kind,
                             tmdb_id=series.tmdb_id, season_number=season, episode_number=episode,
                             offer_type="free_with_ads", provider_content_id=str(series.tmdb_id),
                             audio_languages=["en"], now=NOW, available_until=NOW + timedelta(days=days),
                         )
+                        record_reviewed_offer(observed, now=NOW)
             previous = size
             data, count = self.get()
             self.assertEqual(len(data["items"]), size)

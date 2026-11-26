@@ -14,6 +14,16 @@ from tracker.services.offers import Offer
 from tracker.services.ranking import compute_source_rank, rank_offers
 from tracker.services.preferences import get_default_ranking_preferences
 
+from tracker.services.access import resolve_title as _resolve_title
+from tracker.tests.reviewed_entitlement import reviewed_access
+
+
+def resolve_title(movie, offers, pref, *, access, current_country, provider_map):
+    return _resolve_title(
+        movie, offers, pref, access=reviewed_access(offers, access, current_country=current_country),
+        current_country=current_country, provider_map=provider_map,
+    )
+
 
 def _pref(
     audio=("EN",),
@@ -292,16 +302,16 @@ class RankingWT013Tests(SimpleTestCase):
         self.assertEqual(ranked[1].service, "Netflix")
 
         # 2. Test access.py resolve_title ordering / agreement:
-        from tracker.services.access import resolve_title, build_explicit_access
+        from tracker.services.access import build_explicit_access
         access = build_explicit_access(["netflix", "scrapedone"])
         res = resolve_title(None, [o_official, o_unofficial], pref, access=access, current_country="US", provider_map={})
         # best_offer should agree with rank_offers:
         self.assertIsNotNone(res.best_offer)
         self.assertEqual(res.best_offer.service, "ScrapedOne")
 
-    def test_local_official_vs_vpn_unofficial_obeys_source_priority(self):
-        """source_priority can put a reachable VPN offer first when prefer_local is disabled."""
-        from tracker.services.access import AccessVerdict, build_explicit_access, resolve_title
+    def test_local_coverage_precedes_vpn_in_title_projection(self):
+        """The raw ranking may favor a VPN row while local coverage wins for a title."""
+        from tracker.services.access import AccessVerdict, build_explicit_access
 
         local = _offer("US", "OfficialLocal", audio=("EN",))
         vpn_unofficial = _offer(
@@ -327,13 +337,13 @@ class RankingWT013Tests(SimpleTestCase):
             ), current_country="US", provider_map={},
         )
         self.assertEqual(ranked[0].service, "UnofficialVPN")
-        self.assertEqual(result.best_offer.service, ranked[0].service)
+        self.assertEqual(result.best_offer.service, "OfficialLocal")
         # Offer order does not change the factual verdict: one eligible local offer exists.
         self.assertEqual(result.verdict, AccessVerdict.AVAILABLE_HERE)
         self.assertEqual(result.vpn_offers[0].locality, "vpn")
 
     def test_local_source_priority_keeps_local_offer_first_but_verdict_tracks_reachability(self):
-        from tracker.services.access import AccessVerdict, build_explicit_access, resolve_title
+        from tracker.services.access import AccessVerdict, build_explicit_access
 
         local = _offer("US", "OfficialLocal", audio=("EN",))
         vpn_unofficial = _offer(
@@ -362,7 +372,7 @@ class RankingWT013Tests(SimpleTestCase):
         self.assertEqual(result.verdict, AccessVerdict.AVAILABLE_HERE)
 
     def test_vpn_only_offer_keeps_vpn_verdict_when_ranked_first(self):
-        from tracker.services.access import AccessVerdict, build_explicit_access, resolve_title
+        from tracker.services.access import AccessVerdict, build_explicit_access
 
         vpn_offer = _offer("IT", "UnofficialVPN", audio=("EN",), source_category="unofficial")
         pref = _pref(

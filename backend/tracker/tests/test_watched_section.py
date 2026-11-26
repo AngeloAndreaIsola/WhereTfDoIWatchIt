@@ -133,7 +133,7 @@ class WatchedReportContentTests(TestCase):
         local_offer(
             movie,
             country="US",
-            service="netflix",
+            service="netflix", reviewed_for=1,
             quality="hd",
             audio_languages=["EN"],
             subtitle_languages=["EN"],

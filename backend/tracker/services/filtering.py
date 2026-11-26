@@ -8,10 +8,13 @@ from django.db.models import Q, QuerySet
 from tracker.models import Movie, Preference, UserMovieData
 from tracker.services.availability_reads import (
     OfferEvidence,
-    get_offer_evidence,
-    get_offer_evidence_bulk,
+    get_title_offer_evidence as get_offer_evidence,
+    get_title_offer_evidence_bulk as get_offer_evidence_bulk,
 )
-from tracker.services.access import build_explicit_access, build_user_access
+from tracker.services.access import (
+    SUBSCRIPTION_ACCESS_TYPES, build_reach, build_user_access, classify_offer,
+)
+from tracker.languages import normalize_language_code
 from tracker.models import Provider
 from tracker.services.watchability import (
     WatchabilityStatus,
@@ -21,6 +24,14 @@ from tracker.services.watchability import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def requested_languages(params, name: str) -> set[str] | None:
+    """Keep an absent filter distinct from a filter with no recognized codes."""
+    value = (params.get(name) or "").strip()
+    if not value:
+        return None
+    return {code for part in value.split(",") if (code := normalize_language_code(part.strip()))}
 
 
 def parse_actor_filters(params) -> tuple[list[int], list[str]]:
@@ -79,6 +90,11 @@ def apply_composable_filters(
     Not available and only a never-fetched one to ⚪ Unknown. Omitted (or a
     missing id) keeps today's behavior: no offers = Unknown.
     """
+    audio_filter = requested_languages(params, "audio_languages")
+    subtitle_filter = requested_languages(params, "subtitle_languages")
+    if any(codes is not None and not codes for codes in (audio_filter, subtitle_filter)):
+        return [], 0
+
     # 1. Text Search (Title/Overview)
     q = (params.get("q") or params.get("query") or "").strip()
     if q:
@@ -294,19 +310,58 @@ def apply_composable_filters(
             except Exception:  # noqa: BLE001 - one corrupt title must not hide peers
                 logger.exception("Offer read failed for movie %s", movie.tmdb_id)
                 evidence_by_movie[movie.id] = OfferEvidence([], [])
-    access = (
-        build_explicit_access(user_subscriptions)
-        if user_subscriptions is not None
-        else build_user_access(getattr(preference, "user_id", 1) or 1)
-    )
+    all_offers = [
+        offer for batch in evidence_by_movie.values() if batch
+        for partition in batch for offer in partition
+    ]
+    access = build_user_access(getattr(preference, "user_id", 1) or 1, offers=all_offers)
     provider_map = {provider.slug: provider for provider in Provider.objects.all()}
+    reach = build_reach(preference, current_country)
+    included_only = (
+        bool(access_filter_set and "included" in access_filter_set)
+        or params.get("included") in ("true", "1")
+        or params.get("included_in_my_plan") in ("true", "1")
+        or status_filter == "included"
+    )
+    if access_filter_set:
+        access_filter_set.discard("included")
+    needs_access = watchable_only or status_filter in {
+        "watchable", "watchable_any", "watchable_here", "watchable_vpn",
+    }
+
+    def matches(row):
+        if needs_access and not row.is_accessible:
+            return False
+        if status_filter == "watchable_here" and not row.is_current_country:
+            return False
+        if status_filter == "watchable_vpn" and not row.is_candidate_country:
+            return False
+        if included_only and (
+            not row.is_entitled or row.access_type not in SUBSCRIPTION_ACCESS_TYPES
+            or not row.is_accessible
+        ):
+            return False
+        return (
+            (not provider_slug_set or row.service.lower() in provider_slug_set)
+            and (not country_filter or row.country == country_filter)
+            and (not access_filter_set or row.access_type in access_filter_set)
+            and (not quality_filter_set or row.quality.lower() in quality_filter_set)
+            and (not audio_filter or bool(audio_filter.intersection(row.audio_languages)))
+            and (not subtitle_filter or bool(subtitle_filter.intersection(row.subtitle_languages)))
+        )
 
     evaluated_items = []
     for m in movie_list:
-        offers, last_known_offers = evidence_by_movie.get(m.id) or OfferEvidence([], [])
+        evidence = evidence_by_movie.get(m.id) or OfferEvidence([], [])
+        offers, last_known_offers = evidence.current, evidence.last_known
+        reported = getattr(evidence, "source_reported", [])
+        classified_reports = [
+            classify_offer(offer, access=access, preference=preference, reach=reach, provider_map=provider_map)
+            for offer in reported
+        ]
         watch_res = evaluate_watchability(
             m,
-            offers,
+            offers or reported,
             preference,
             current_country=current_country,
             user_subscriptions=user_subscriptions,
@@ -316,80 +371,45 @@ def apply_composable_filters(
         )
         # Stale/unverified positives qualify a "nothing current" verdict as
         # 🕓 needs recheck; they never make a title watchable.
-        qualify_watchability(
-            watch_res,
-            describe_last_known(
-                m,
-                last_known_offers,
-                preference,
-                current_country=current_country,
-                user_subscriptions=user_subscriptions,
-                access=access,
-                provider_map=provider_map,
-            ),
+        last_known = describe_last_known(
+            m, last_known_offers, preference, current_country=current_country,
+            access=access, provider_map=provider_map,
         )
-        # Provider/country/quality filters describe *where* a title has been
-        # seen, so last-known offers keep it discoverable; whether it is
-        # watchable now is decided by the status filters below.
-        evidence_offers = list(offers) + list(last_known_offers)
+        if not reported and not offers:
+            qualify_watchability(watch_res, last_known)
+        else:
+            watch_res.last_known = last_known
+        if not offers and reported:
+            watch_res.excluded_offers = []
+            watch_res.access_flags = {}
+        watch_res.source_reported_offers = [
+            {**classified.entitlement_fields(), **raw.to_dict()}
+            for raw, classified in zip(reported, classified_reports)
+        ]
+        if last_known:
+            watch_res.last_known_offers = last_known.offers
 
-        # Apply Provider Filter
-        if provider_slug_set:
-            all_services = {
-                (getattr(o, "service", None) or (o.get("service") if isinstance(o, dict) else "") or "").lower()
-                for o in evidence_offers
-            }
-            if not any(ps == s for ps in provider_slug_set for s in all_services):
-                continue
-
-        # Apply Country Filter
-        if country_filter:
-            all_countries = {
-                (getattr(o, "country", None) or (o.get("country") if isinstance(o, dict) else "") or "").upper()
-                for o in evidence_offers
-            }
-            if country_filter not in all_countries:
+        if status_filter in {"not_watchable", "needs_recheck", "purchase_only", "unknown"}:
+            if watch_res.status != status_filter:
                 continue
 
-        # Apply Watchable Only filter (🟢 or 🟡)
-        if watchable_only and watch_res.status not in (
-            WatchabilityStatus.WATCHABLE_HERE,
-            WatchabilityStatus.WATCHABLE_VPN,
-        ):
-            continue
-
-        # Apply Availability Status filter
-        if status_filter:
-            if status_filter in ("watchable", "watchable_any") and watch_res.status not in (
-                WatchabilityStatus.WATCHABLE_HERE,
-                WatchabilityStatus.WATCHABLE_VPN,
-            ):
+        discovery_offer = next(iter(watch_res.watchable_offers or watch_res.excluded_offers), None)
+        if any((provider_slug_set, country_filter, access_filter_set, quality_filter_set,
+                audio_filter, subtitle_filter, needs_access, included_only, status_filter == "purchase_only")):
+            rows = watch_res.watchable_offers + watch_res.excluded_offers
+            if status_filter == "purchase_only":
+                rows = watch_res.purchase_offers
+            elif not needs_access and not included_only:
+                rows += classified_reports
+                rows += [
+                    classify_offer(raw, access=access, preference=preference, reach=reach, provider_map=provider_map)
+                    for raw in last_known_offers
+                ]
+            eligible = [row for row in rows if matches(row)]
+            if not eligible:
                 continue
-            elif status_filter == "watchable_here" and watch_res.status != WatchabilityStatus.WATCHABLE_HERE:
-                continue
-            elif status_filter == "watchable_vpn" and watch_res.status != WatchabilityStatus.WATCHABLE_VPN:
-                continue
-            elif status_filter == "not_watchable" and watch_res.status != WatchabilityStatus.NOT_WATCHABLE:
-                continue
-            elif status_filter == "needs_recheck" and watch_res.status != WatchabilityStatus.NEEDS_RECHECK:
-                continue
-
-        # Apply Access-Type Filter (subscription/addon/free/free_with_ads/rent/buy)
-        if access_filter_set:
-            present_types = {
-                str(t).lower() for t in (watch_res.access_flags or {}).get("present_access_types", [])
-            }
-            if not (present_types & access_filter_set):
-                continue
-
-        # Apply Quality Filter
-        if quality_filter_set:
-            movie_qualities = {
-                (getattr(o, "quality", None) or (o.get("quality") if isinstance(o, dict) else "") or "").lower()
-                for o in evidence_offers
-            }
-            if not any(q in quality_filter_set for q in movie_qualities):
-                continue
+            discovery_offer = eligible[0]
+            watch_res.best_offer = next((row for row in watch_res.watchable_offers if matches(row)), None)
 
         evaluated_items.append({
             "movie": m,
@@ -398,7 +418,9 @@ def apply_composable_filters(
             # same title a second time just to build summary fields.
             "offers": offers,
             "last_known_offers": last_known_offers,
+            "source_reported_offers": reported,
             "watchability": watch_res,
+            "discovery_offer": discovery_offer,
         })
 
     # Sort results

@@ -7,7 +7,8 @@ from tracker.models import Provider, ProviderCategory
 
 def local_offer(movie, *, country="US", service="netflix", offer_type="subscription",
                 quality="", url="", audio_languages=None, subtitle_languages=None,
-                season_number=None, episode_number=None, provider_content_id=""):
+                season_number=None, episode_number=None, provider_content_id="",
+                reviewed_for=None, review_public=False):
     provider, _ = Provider.objects.get_or_create(
         slug=service.lower(),
         defaults={"name": service.replace("_", " ").title(), "category": ProviderCategory.OFFICIAL},
@@ -25,7 +26,7 @@ def local_offer(movie, *, country="US", service="netflix", offer_type="subscript
     if movie.content_type == "series":
         kwargs["season_number"] = 1 if season_number is None else season_number
         kwargs["episode_number"] = 1 if episode_number is None else episode_number
-    return Offer.objects.create(
+    row = Offer.objects.create(
         provider=provider,
         country=availability_country,
         source=source,
@@ -39,6 +40,12 @@ def local_offer(movie, *, country="US", service="netflix", offer_type="subscript
         provider_content_id=provider_content_id,
         **kwargs,
     )
+
+    if reviewed_for is not None or review_public:
+        from tracker.tests.reviewed_entitlement import record_reviewed_offer
+
+        record_reviewed_offer(row, viewer=reviewed_for)
+    return row
 
 
 def reviewed_test_sources(now=None, *, slugs=None):

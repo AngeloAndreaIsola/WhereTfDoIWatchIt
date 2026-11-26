@@ -541,10 +541,9 @@ class JustWatchRegressionCoverageTests(TestCase):
             [domain_offer],
             pref,
         )
-        # Since Netflix is not owned by user, the offer verdict must be AVAILABLE_ELSEWHERE (not AVAILABLE_HERE)
-        self.assertEqual(resolved.verdict, AccessVerdict.AVAILABLE_ELSEWHERE)
-        self.assertNotEqual(resolved.verdict, AccessVerdict.AVAILABLE_HERE)
-        self.assertIn("No active subscription", " ".join(resolved.explanation))
+        self.assertEqual(resolved.verdict, AccessVerdict.UNKNOWN)
+        self.assertFalse(resolved.offers[0].is_entitled)
+        self.assertIn("Plan access unconfirmed", resolved.explanation)
 
     # -------------------------------------------------------------------------
     # 2. A completely unmapped provider is logged/skipped safely; package sync

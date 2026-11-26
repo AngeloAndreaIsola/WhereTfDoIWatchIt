@@ -236,11 +236,13 @@ class SeasonCacheTests(TestCase):
         self.assertEqual(prime.seasons_available, [])
 
 
+from tracker.services.availability_reads import TitleOfferEvidence
+
 class SeasonDetailEndpointTests(TestCase):
     """``/api/prime/series/<id>/?season=N`` payload shape and season plumbing."""
 
     def setUp(self):
-        reads_patcher = patch("tracker.services.offer_pipeline.get_local_offers")
+        reads_patcher = patch("tracker.views.get_title_offer_evidence")
         enrich_patcher = patch("tracker.services.enrichment.enrich_movie_from_tmdb")
         self.addCleanup(reads_patcher.stop)
         self.addCleanup(enrich_patcher.stop)
@@ -266,7 +268,7 @@ class SeasonDetailEndpointTests(TestCase):
             audio_languages=["EN"],
             subtitle_languages=["EN"],
         )
-        self.read_offers.return_value = [self.offer]
+        self.read_offers.return_value = TitleOfferEvidence([self.offer], [], [])
 
     def test_no_season_param_reads_show_level_offers(self):
         response = self.client.get("/api/prime/series/1396/")
@@ -296,7 +298,7 @@ class SeasonDetailEndpointTests(TestCase):
             self.assertEqual(one_call.args, (self.series,))
 
     def test_unknown_season_returns_empty_offers_but_echoes_selection(self):
-        self.read_offers.return_value = []
+        self.read_offers.return_value = TitleOfferEvidence([], [], [])
         response = self.client.get("/api/prime/series/1396/?season=99")
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -393,7 +395,7 @@ class SeriesSubscriptionFilterTests(TestCase):
     """
 
     def setUp(self):
-        reads_patcher = patch("tracker.services.offer_pipeline.get_local_offers")
+        reads_patcher = patch("tracker.views.get_title_offer_evidence")
         enrich_patcher = patch("tracker.services.enrichment.enrich_movie_from_tmdb")
         self.addCleanup(reads_patcher.stop)
         self.addCleanup(enrich_patcher.stop)
@@ -421,7 +423,7 @@ class SeriesSubscriptionFilterTests(TestCase):
         ]
 
     def test_unsubscribed_rows_are_surfaced_muted_and_payload_stays_full(self):
-        self.read_offers.return_value = self.unsubscribed
+        self.read_offers.return_value = TitleOfferEvidence(self.unsubscribed, [], [])
 
         response = self.client.get("/api/prime/series/90001/")
 
@@ -442,11 +444,11 @@ class SeriesSubscriptionFilterTests(TestCase):
         self.assertEqual(data["series"]["title"], "Some Series")
         self.assertEqual([row["season"] for row in data["seasons"]], [1, 2, 3])
 
-    def test_a_subscribed_prime_row_is_returned_and_accessible(self):
-        self.read_offers.return_value = self.unsubscribed + [
+    def test_a_legacy_subscribed_prime_row_is_returned_unconfirmed(self):
+        self.read_offers.return_value = TitleOfferEvidence(self.unsubscribed + [
             Offer(country="AT", service="prime", offer_type="subscription",
                   quality="hd", audio_languages=["EN"], subtitle_languages=["EN"]),
-        ]
+        ], [], [])
 
         response = self.client.get("/api/prime/series/90001/?current_country=AT")
 
@@ -455,8 +457,9 @@ class SeriesSubscriptionFilterTests(TestCase):
         services = {offer["service"] for offer in data["offers"]}
         self.assertEqual(services, {"Netflix", "Disney+", "Prime Video"})
         prime = next(o for o in data["offers"] if o["service"] == "Prime Video")
-        self.assertTrue(prime["is_entitled"])
-        self.assertTrue(prime["is_accessible"])
+        self.assertFalse(prime["is_entitled"])
+        self.assertFalse(prime["is_accessible"])
+        self.assertEqual(prime["entitlement"]["reason"], "PACKAGE_UNRESOLVED")
         # Its unowned peers stay listed but must never be claimed accessible.
         peers = [o for o in data["offers"] if o["service"] != "Prime Video"]
         self.assertTrue(peers)
