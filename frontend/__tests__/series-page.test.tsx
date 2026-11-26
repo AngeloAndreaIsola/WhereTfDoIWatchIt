@@ -74,6 +74,15 @@ const seriesBody = {
       locality: "local",
       is_entitled: true,
       is_accessible: true,
+      entitlement: {
+        verdict: "INCLUDED",
+        reason: "PLAN_COVERS_TITLE",
+        provider: "prime",
+        offer_type: "subscription",
+        offer_country: "US",
+        evidence_state: "verified",
+        caveats: [],
+      },
     },
   ],
 };
@@ -179,6 +188,108 @@ describe("TV series detail flow", () => {
     await fetchPrimeSeriesOffers(1396, "JP");
 
     expect(fetchMock).toHaveBeenCalledWith("/api/prime/series/1396/?current_country=JP");
+  });
+  it("renders TV purchase actions independently when offers are empty (U1)", async () => {
+    mockFetch([
+      { body: preferencesBody },
+      {
+        body: {
+          ...seriesBody,
+          offers: [],
+          availability: "available_elsewhere",
+          purchase_offers: [
+            {
+              country: "NL",
+              service: "Synthetic Store",
+              offer_type: "rent",
+              quality: "hd",
+              url: "https://store.example/rent/1396",
+              audio_languages: ["EN"],
+              subtitle_languages: ["EN"],
+              requires_payment: true,
+              is_accessible: true,
+              entitlement: {
+                verdict: "RENT_OR_BUY",
+                reason: "RENTAL",
+                provider: "synthetic-store",
+                offer_type: "rent",
+                offer_country: "NL",
+                evidence_state: "verified",
+                caveats: [],
+              },
+            },
+          ],
+        },
+      },
+      { body: { offers: [] } },
+    ]);
+
+    render(React.createElement(SeriesDetailPage, { params: { tmdb_id: "1396" } }));
+
+    // Series metadata loads
+    expect(await screen.findByRole("heading", { name: /Breaking Bad/ })).toBeInTheDocument();
+
+    // Purchase action and provider are present even though offers=[]
+    expect(screen.getByRole("heading", { name: "Rent or Buy" })).toBeInTheDocument();
+    expect(screen.getByText("Synthetic Store")).toBeInTheDocument();
+    expect(screen.getAllByText("Rent").length).toBeGreaterThan(0);
+    expect(screen.getByRole("link", { name: "Rent" })).toHaveAttribute("href", "https://store.example/rent/1396");
+
+    // Empty-offers state still shows AvailabilityState
+    expect(screen.getByText("Availability not known yet.")).toBeInTheDocument();
+
+    // No Best Match badge for transaction-only row
+    expect(screen.queryByText("Best Match")).toBeNull();
+  });
+
+  it("renders season transaction-only case when season has offers=[] and purchase_offers (U1)", async () => {
+    const seasonOfferBody = {
+      ...seriesBody,
+      seasons: [
+        { season: 1, name: "Season 1", episode_count: 7 },
+        { season: 2, name: "Season 2", episode_count: 13 },
+      ],
+      offers: [],
+      availability: { state: "unknown" },
+      purchase_offers: [
+        {
+          country: "NL",
+          service: "Synthetic Store",
+          offer_type: "buy",
+          quality: "hd",
+          url: "https://store.example/buy/1396/s1",
+          audio_languages: ["EN"],
+          subtitle_languages: ["EN"],
+          requires_payment: true,
+          is_accessible: true,
+          entitlement: {
+            verdict: "RENT_OR_BUY",
+            reason: "PURCHASE",
+            provider: "synthetic-store",
+            offer_type: "buy",
+            offer_country: "NL",
+            evidence_state: "verified",
+            caveats: [],
+          },
+        },
+      ],
+    };
+
+    mockFetch([
+      { body: preferencesBody },
+      { body: seasonOfferBody },
+      { body: { offers: [] } },
+      { body: seasonOfferBody },
+    ]);
+
+    render(React.createElement(SeriesDetailPage, { params: { tmdb_id: "1396" } }));
+
+    expect(await screen.findByRole("heading", { name: /Breaking Bad/ })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Rent or Buy" })).toBeInTheDocument();
+    expect(screen.getByText("Synthetic Store")).toBeInTheDocument();
+    expect(screen.getAllByText("Buy").length).toBeGreaterThan(0);
+    expect(screen.getByRole("link", { name: "Buy" })).toHaveAttribute("href", "https://store.example/buy/1396/s1");
+    expect(screen.queryByText("Best Match")).toBeNull();
   });
 });
 

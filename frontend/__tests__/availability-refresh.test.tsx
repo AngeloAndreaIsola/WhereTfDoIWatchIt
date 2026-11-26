@@ -50,6 +50,15 @@ const offer = (service: string) => ({
   locality: "local",
   is_entitled: true,
   is_accessible: true,
+  entitlement: {
+    verdict: "INCLUDED",
+    reason: "PLAN_COVERS_TITLE",
+    provider: "netflix",
+    offer_type: "subscription",
+    offer_country: "US",
+    evidence_state: "verified",
+    caveats: [],
+  },
 });
 
 /** Never fetched: no offers, worker still holds the queued request. */
@@ -163,6 +172,27 @@ describe("Reload reconstruction (P9)", () => {
     expect(screen.queryByText("Checking availability…")).not.toBeInTheDocument();
   });
 
+  it.each(["movie", "series"] as const)("does not crown an older %s offer with boolean-only access", async (kind) => {
+    const legacy = { ...offer("Netflix"), entitlement: undefined, access_label: "Included with your subscription" };
+    const body = kind === "movie" ? resolvedMovieBody : pendingSeriesBody;
+    vi.stubGlobal("fetch", vi.fn((url: string) => {
+      if (url.includes("/api/preferences/")) return Promise.resolve(response({ body: preferencesBody }));
+      if (url.includes("/api/v2/unofficial/")) return Promise.resolve(response({ body: unofficialBody }));
+      if (url.includes(`/api/prime/${kind}/`)) {
+        return Promise.resolve(response({ body: { ...body, offers: [legacy], refresh_pending: false } }));
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }));
+
+    render(kind === "movie"
+      ? React.createElement(MovieDetailPage, { params: { tmdb_id: "550" } })
+      : React.createElement(SeriesDetailPage, { params: { tmdb_id: "1396" } }));
+
+    expect(await screen.findByText("Plan access unconfirmed")).toBeInTheDocument();
+    expect(screen.queryByText("Best Match")).not.toBeInTheDocument();
+    expect(screen.queryByText("Included with your subscription")).not.toBeInTheDocument();
+  });
+
   it.each(["movie", "series"] as const)("shows aged %s source reports without claiming access or playback", async (kind) => {
     const reported = {
       ...offer("Netflix"),
@@ -219,7 +249,7 @@ describe("Reload reconstruction (P9)", () => {
       </CurrentLocationProvider>,
     );
     await waitFor(() => expect(primeCalls(fetchMock, "movie").some(([url]) => url.includes("NL"))).toBe(true));
-    fireEvent.click(screen.getByRole("button", { name: "Refresh availability" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Refresh availability" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(refreshUrl, expect.objectContaining({ method: "POST" })));
     await waitFor(() => expect(screen.getByRole("button", { name: "Refresh availability" })).toBeEnabled());
   });
