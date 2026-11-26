@@ -154,9 +154,9 @@ class RecoveredCatalogFilterTests(TestCase):
         movie = Movie.objects.create(tmdb_id=846, title="Unowned Language Offer")
         self._subscribe("disney")
         local_offer(movie, service="netflix", audio_languages=["EN"], subtitle_languages=["JA"])
-        local_offer(movie, service="disney", audio_languages=["IT"], subtitle_languages=["IT"])
+        local_offer(movie, service="disney", reviewed_for=1, audio_languages=["IT"], subtitle_languages=["IT"])
 
-        rows = self._results("?audio_languages=EN&subtitle_languages=JA")
+        rows = self._results("?watchable=1&audio_languages=EN&subtitle_languages=JA")
 
         self.assertNotIn(movie.tmdb_id, {row["tmdb_id"] for row in rows})
 
@@ -181,16 +181,16 @@ class RecoveredCatalogFilterTests(TestCase):
             defaults={"current_country": "US", "candidate_countries": ["GB"]},
         )
         local_offer(movie, country="US", audio_languages=["IT"], subtitle_languages=["IT"])
-        local_offer(movie, country="GB", audio_languages=["EN"], subtitle_languages=["JA"])
+        local_offer(movie, country="GB", reviewed_for=1, audio_languages=["EN"], subtitle_languages=["JA"])
 
         self.assertNotIn(
             movie.tmdb_id,
-            {row["tmdb_id"] for row in self._results("?audio_languages=EN&subtitle_languages=JA")},
+            {row["tmdb_id"] for row in self._results("?watchable=1&audio_languages=EN&subtitle_languages=JA")},
         )
         Preference.objects.filter(user_id=1).update(vpn_enabled=True)
         self.assertIn(
             movie.tmdb_id,
-            {row["tmdb_id"] for row in self._results("?audio_languages=EN&subtitle_languages=JA")},
+            {row["tmdb_id"] for row in self._results("?watchable=1&audio_languages=EN&subtitle_languages=JA")},
         )
 
     def test_language_filter_respects_active_access_type_and_rental_entitlement(self):

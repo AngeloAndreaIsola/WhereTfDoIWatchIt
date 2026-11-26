@@ -16,4 +16,6 @@ trap cleanup EXIT HUP INT TERM
 docker compose -p "$project" -f docker-compose.yml -f docker-compose.test.yml \
   --profile test up -d db-test
 docker compose -p "$project" -f docker-compose.yml -f docker-compose.test.yml \
-  --profile test run --build --rm --no-deps backend-test manage.py test --noinput "$@"
+  --profile test run --build --rm --no-deps \
+  --volume "$repo_root/docs/contracts:/app/docs/contracts:ro" \
+  backend-test manage.py test --noinput "$@"

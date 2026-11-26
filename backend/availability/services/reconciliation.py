@@ -376,6 +376,7 @@ class AvailabilityReconciliationService:
             window_unknown=bool(own_price and own_price.variant_window_unknown),
             observed_at=_aware_opt(row.observed_at),
             title_checked_at=title_checked_at,
+            offer_identity=row.identity,
         )
 
     def _reconcile_group(self, group, subgroups):

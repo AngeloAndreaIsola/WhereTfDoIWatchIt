@@ -38,7 +38,7 @@ class SurfaceCountryAgreementTests(TestCase):
         self.movie = Movie.objects.create(tmdb_id=615457, title="Nobody", year=2021)
         # A local (NL) subscription offer the user is entitled to.
         local_offer(self.movie, country="NL", service="prime", offer_type="subscription",
-                    quality="hd", audio_languages=["EN"], subtitle_languages=["EN"])
+                    quality="hd", reviewed_for=1, audio_languages=["EN"], subtitle_languages=["EN"])
         WatchlistItem.objects.create(user_id=1, movie=self.movie)
 
     def test_detail_and_watchlist_agree_on_saved_country(self):

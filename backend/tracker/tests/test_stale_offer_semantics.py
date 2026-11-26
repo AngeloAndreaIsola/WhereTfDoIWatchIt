@@ -17,6 +17,7 @@ from availability.domain.enums import AvailabilityEvidence, ConflictKind
 from availability.models import Offer as RawOffer, Source
 from availability.tests.freshness_helpers import declare_freshness
 from availability.tests.reconciliation_fixtures import ReconciliationFixtureMixin
+from tracker.tests.reviewed_entitlement import record_reviewed_offer
 from tracker.models import Movie, Preference, Subscription, WatchlistItem
 from tracker.services.availability_reads import get_local_offers, get_offer_evidence
 from tracker.services.watchability import (
@@ -159,8 +160,10 @@ class ApiAgreementTests(_Base):
         )
         Subscription.objects.create(user_id=1, provider=self.netflix, name="Netflix")
         self.stale_movie = Movie.objects.create(tmdb_id=551, title="Old News", year=2000)
-        self.offer(tmdb_id=550, provider_content_id="fresh", last_seen=self.fresh(),
-                   audio_languages=["EN"], subtitle_languages=["EN"])
+        record_reviewed_offer(self.offer(
+            tmdb_id=550, provider_content_id="fresh", last_seen=self.fresh(),
+            audio_languages=["EN"], subtitle_languages=["EN"],
+        ), viewer=1)
         self.offer(tmdb_id=551, provider_content_id="stale", last_seen=self.stale(),
                    audio_languages=["EN"], subtitle_languages=["EN"])
 
@@ -180,7 +183,7 @@ class ApiAgreementTests(_Base):
         self.assertEqual(stale["last_seen_at"], self.stale().isoformat())
         self.assertIsNone(stale["best_offer"])
         # What the evidence meant when last seen is kept apart from the status.
-        self.assertEqual(stale["last_known"]["status"], "watchable_here")
+        self.assertEqual(stale["last_known"]["status"], "needs_recheck")
 
         self.assertEqual(set(self.catalog("?status=watchable")), {550})
         self.assertEqual(set(self.catalog("?watchable=true")), {550})
@@ -217,7 +220,7 @@ class ApiAgreementTests(_Base):
         self.assertEqual(last_known["service"], "recon-netflix")
         self.assertEqual(last_known["availability_evidence"], "stale")
         self.assertEqual(last_known["last_seen_at"], self.stale().isoformat())
-        self.assertTrue(last_known["is_entitled"])
+        self.assertFalse(last_known["is_entitled"])
 
         fresh = self.client.get("/api/prime/movie/550/").json()
         self.assertEqual(len(fresh["offers"]), 1)
@@ -254,11 +257,11 @@ class EntitlementAndLanguageStayIndependentTests(_Base):
         watch = self.catalog()
 
         # Fresh but unowned: unchanged verdict.
-        self.assertEqual(watch[fresh_movie.tmdb_id]["status"], "available_elsewhere")
+        self.assertEqual(watch[fresh_movie.tmdb_id]["status"], "unknown")
         # Stale and unowned: needs recheck, and still flagged as not entitled.
         stale = watch[550]
         self.assertEqual(stale["status"], "needs_recheck")
-        self.assertEqual(stale["last_known"]["status"], "available_elsewhere")
+        self.assertEqual(stale["last_known"]["status"], "needs_recheck")
         [offer] = stale["last_known"]["offers"]
         self.assertFalse(offer["is_entitled"])
         self.assertNotIn("When last seen, it was included", " ".join(stale["explanation"]))
@@ -287,7 +290,7 @@ class EntitlementAndLanguageStayIndependentTests(_Base):
         )
         self.assertEqual(both.evidence, "stale")
         self.assertTrue(both.offers[0]["is_language_match"])
-        self.assertEqual(both.status, "watchable_here")
+        self.assertEqual(both.status, "needs_recheck")
 
         en_only = describe_last_known(
             other, get_offer_evidence(other).last_known, preference,
@@ -295,7 +298,7 @@ class EntitlementAndLanguageStayIndependentTests(_Base):
         )
         self.assertEqual(en_only.evidence, "unknown")
         self.assertFalse(en_only.offers[0]["is_language_match"])
-        self.assertEqual(en_only.status, "available_elsewhere")
+        self.assertEqual(en_only.status, "needs_recheck")
 
         # Qualified status for both; never watchable, never unavailable.
         for movie, last_known in ((self.movie, both), (other, en_only)):

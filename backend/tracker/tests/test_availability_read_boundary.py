@@ -5,6 +5,7 @@ from django.test import TestCase
 from availability.domain.enums import ContentType, OfferType, SourceType
 from availability.models import Country, Offer as AvailabilityOffer, Source
 from availability.tests.freshness_helpers import declare_freshness
+from tracker.tests.reviewed_entitlement import record_reviewed_offer
 from tracker.models import Movie, Provider, ProviderCategory
 
 
@@ -122,7 +123,7 @@ class AvailabilityReadBoundaryTests(TestCase):
 
     def test_watch_redirect_uses_existing_local_offer_without_refresh(self):
         movie = Movie.objects.create(tmdb_id=104, title="Movie", year=2024)
-        self.local_offer(movie)
+        record_reviewed_offer(self.local_offer(movie), viewer=1)
 
         response = self.request_without_refresh("/api/watch/104/")
         self.assertEqual(response.status_code, 200)

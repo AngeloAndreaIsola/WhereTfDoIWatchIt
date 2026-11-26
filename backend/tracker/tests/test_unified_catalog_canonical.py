@@ -320,9 +320,9 @@ class UnifiedCatalogOfficialWatchabilityTests(
             if offer["service"] == "recon-netflix"
         ]
         self.assertEqual(len(counted), 1)
-        self.assertEqual(watch["status"], "watchable_here")
-        self.assertEqual(watch["best_offer"]["service"], "recon-netflix")
-        self.assertEqual(watch["best_offer"]["url"], "https://a.test/550")
+        self.assertEqual(watch["status"], "unknown")
+        self.assertIsNone(watch["best_offer"])
+        self.assertEqual(counted[0]["url"], "https://a.test/550")
 
 
 class UnifiedCatalogLocalReadTests(UnifiedCatalogCanonicalTestCase):

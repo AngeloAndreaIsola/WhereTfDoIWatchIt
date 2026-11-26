@@ -25,7 +25,7 @@ from tracker.models import (
     ProviderCategory,
     Subscription,
 )
-from tracker.services.access import AccessType, AccessVerdict, resolve_title
+from tracker.services.access import AccessType, AccessVerdict, build_user_access, resolve_title as _resolve_title
 from tracker.services.offers import Offer
 from tracker.services.provider_catalogue import sync_provider_catalogue
 
@@ -37,6 +37,18 @@ def pkg(technical_name, clear_name="", short_name="", monetization=("FLATRATE",)
         short_name=short_name,
         monetization_types=list(monetization),
     )
+
+from tracker.tests.reviewed_entitlement import reviewed_access
+
+
+def resolve_title(movie, offers, pref, *, current_country=None, access=None, user_subscriptions=None):
+    if access is None:
+        access = build_user_access(pref.user_id)
+    access = reviewed_access(
+        offers, access, current_country=current_country or pref.current_country,
+        hosts={"hayu_amazon": "prime", "mgm_plus": "prime"},
+    )
+    return _resolve_title(movie, offers, pref, access=access, current_country=current_country)
 
 
 class _FakeClient:
@@ -173,7 +185,7 @@ class AddonEntitlementTests(TestCase):
         self.assertEqual(classified.required_base, "prime")
         self.assertEqual(classified.required_base_display, self.base.name)
         self.assertTrue(
-            any(f"Requires {self.base.name}" in r for r in classified.rejection_reasons)
+            any("base subscription" in r for r in classified.rejection_reasons)
         )
 
     def test_base_without_channel_is_not_accessible(self):

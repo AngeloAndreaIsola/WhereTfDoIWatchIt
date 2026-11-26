@@ -462,7 +462,7 @@ class PrimeMovieEndpointTests(TestCase):
         # Netflix (unowned) has the better JA audio rank; Prime (owned) is EN.
         local_offer(movie, country="US", service="netflix",
                     quality="hd", audio_languages=["JA"], subtitle_languages=["JA"])
-        local_offer(movie, country="US", service="prime",
+        local_offer(movie, country="US", service="prime", reviewed_for=1,
                     quality="hd", audio_languages=["EN"], subtitle_languages=["EN"])
 
         from django.test import Client

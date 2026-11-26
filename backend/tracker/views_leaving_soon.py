@@ -72,7 +72,11 @@ def build_leaving_soon(*, user_id: int, country: str, days: int = 30, now=None) 
     presence = recorded_presence(reconciled, country)
 
     preference = build_preference(user_id)
-    access = build_user_access(user_id)
+    offers_by_id = {
+        id(offer): _tracker_offer(offer) for offers in reconciled.values() for offer in offers
+        if offer.country.upper() == country and offer.evidence == AvailabilityEvidence.VERIFIED
+    }
+    access = build_user_access(user_id, offers=offers_by_id.values(), as_of=now)
     reach = build_reach(preference, current_country=preference.current_country or country)
     providers = {provider.slug: provider for provider in Provider.objects.all()}
 
@@ -90,7 +94,7 @@ def build_leaving_soon(*, user_id: int, country: str, days: int = 30, now=None) 
             ):
                 continue
             classified = classify_offer(
-                _tracker_offer(offer), access=access, preference=preference,
+                offers_by_id[id(offer)], access=access, preference=preference,
                 reach=reach, provider_map=providers,
             )
             if classified.is_accessible and classified.is_qualifying_offer_type:

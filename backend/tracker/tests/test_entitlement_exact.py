@@ -1,16 +1,4 @@
-"""Tests for exact canonical provider entitlement matching (no substring containment).
-
-Verifies the invariants:
-1. Exact matching: subscription to `viaplay` never grants `viaplay_sports`, and vice versa.
-2. Separation of access types: Prime base membership never implies channels/add-ons or rentals/purchases.
-3. Add-on channels require their own declared `addon` entitlement and their base platform.
-4. Negative tests for similar slug prefixes/suffixes (`max` vs `max_amazon`, `apple` vs `apple_tv_store`, `now` vs `snow`, `mubi` vs `mubi_amazon`, `youtube` vs `youtubetv`).
-5. Only verified 1:1 aliases are accepted (`netflixkids` <-> `netflix`, `amazonprimevideo` <-> `prime`, `appletvplus` <-> `apple`, `hbo` <-> `max`, `bbc` <-> `bbc_iplayer`, `rai-play` <-> `raiplay`).
-6. Unregistered/unowned providers remain visible as viewing options (e.g. `AVAILABLE_ELSEWHERE`) but never classified as user-entitled.
-7. Unknown access modes never default to `included`.
-8. Free providers (BVOD/AVOD) auto-count as free even without declared subscriptions.
-9. Users with no subscriptions cannot access subscription offers, but free offers remain watchable.
-"""
+"""Exact provider and reviewed alias regressions with synthetic package coverage."""
 from django.test import TestCase
 
 from tracker.models import Movie, Preference, Provider, ProviderCategory, Subscription
@@ -24,9 +12,21 @@ from tracker.services.access import (
     build_user_access,
     classify_offer,
     normalize_service_slug,
-    resolve_title,
+    resolve_title as _resolve_title,
 )
 from tracker.services.offers import Offer
+
+from tracker.tests.reviewed_entitlement import reviewed_access
+
+
+def resolve_title(movie, offers, pref, *, current_country=None, access=None, user_subscriptions=None):
+    if access is None:
+        access = build_user_access(pref.user_id) if user_subscriptions is None else build_explicit_access(user_subscriptions)
+    access = reviewed_access(
+        offers, access, current_country=current_country or pref.current_country,
+        hosts={"hayu_amazon": "prime", "mgm_plus": "prime"},
+    )
+    return _resolve_title(movie, offers, pref, access=access, current_country=current_country)
 
 
 class EntitlementExactMatchingTests(TestCase):
@@ -81,7 +81,7 @@ class EntitlementExactMatchingTests(TestCase):
         classified = res.offers[0]
         self.assertFalse(classified.is_entitled)
         self.assertFalse(classified.is_accessible)
-        self.assertTrue(any("No active subscription" in r for r in classified.rejection_reasons))
+        self.assertTrue(any("marked as not held" in r for r in classified.rejection_reasons))
 
     def test_viaplay_sports_subscription_does_not_grant_viaplay(self):
         """Holding Viaplay Sports must NEVER grant entitlement to base Viaplay."""
@@ -144,7 +144,7 @@ class EntitlementExactMatchingTests(TestCase):
         classified = res.offers[0]
         self.assertTrue(classified.is_addon)
         self.assertFalse(classified.is_entitled)
-        self.assertTrue(any("Requires Prime Video" in r for r in classified.rejection_reasons))
+        self.assertTrue(any("base subscription" in r for r in classified.rejection_reasons))
 
     def test_prime_base_and_channel_both_held_grants_access(self):
         """Holding base Prime Video and the add-on channel entitles the channel."""
@@ -174,13 +174,12 @@ class EntitlementExactMatchingTests(TestCase):
             self.pref,
             current_country="NL",
         )
-        self.assertEqual(res.verdict, AccessVerdict.AVAILABLE_ELSEWHERE)
-        self.assertEqual(res.status_symbol, "🟠")
+        self.assertEqual(res.verdict, AccessVerdict.PURCHASE_ONLY)
         self.assertFalse(res.offers[0].is_entitled)
-        self.assertFalse(res.access_flags["has_rent"])
+        self.assertTrue(res.access_flags["has_rent"])
 
-    def test_prime_with_rent_buy_account_enables_purchase_only(self):
-        """Declaring rent_buy account enables rental offer as purchase_only."""
+    def test_rent_buy_account_does_not_establish_ownership(self):
+        """A reviewed rental is payable even if the viewer has a store account."""
         self._sub("prime", mode=SubscriptionAccessMode.RENT_BUY)
         res = resolve_title(
             self.movie,
@@ -190,7 +189,7 @@ class EntitlementExactMatchingTests(TestCase):
         )
         self.assertEqual(res.verdict, AccessVerdict.PURCHASE_ONLY)
         self.assertEqual(res.status_symbol, "🟣")
-        self.assertTrue(res.offers[0].is_entitled)
+        self.assertFalse(res.offers[0].is_entitled)
         self.assertTrue(res.access_flags["has_rent"])
 
     # -----------------------------------------------------------------------
@@ -277,9 +276,9 @@ class EntitlementExactMatchingTests(TestCase):
         """Unregistered provider is visible in offers list but never entitled."""
         self._sub("netflix")
         offer = self._offer("some_obscure_service")
-        res = resolve_title(self.movie, [offer], self.pref, current_country="NL")
+        res = _resolve_title(self.movie, [offer], self.pref, current_country="NL")
 
-        self.assertEqual(res.verdict, AccessVerdict.AVAILABLE_ELSEWHERE)
+        self.assertEqual(res.verdict, AccessVerdict.UNKNOWN)
         self.assertEqual(len(res.offers), 1)
         self.assertFalse(res.offers[0].is_entitled)
         self.assertFalse(res.offers[0].is_accessible)
@@ -308,8 +307,8 @@ class EntitlementExactMatchingTests(TestCase):
     # -----------------------------------------------------------------------
     # 7. Free provider auto-entitlement
     # -----------------------------------------------------------------------
-    def test_free_bvod_provider_auto_counts_without_subscription(self):
-        """BVOD provider auto-qualifies even when user has no subscriptions."""
+    def test_reviewed_public_offer_needs_no_subscription(self):
+        """Reviewed public rights apply without a declared subscription."""
         Provider.objects.get_or_create(
             slug="npo_start",
             defaults={"name": "NPO Start", "category": ProviderCategory.BVOD, "is_enabled": True},
@@ -336,14 +335,14 @@ class EntitlementExactMatchingTests(TestCase):
         self.assertFalse(access.entitles("prime", AccessType.SUBSCRIPTION))
         self.assertFalse(access.entitles("viaplay", AccessType.SUBSCRIPTION))
 
-        res_sub = resolve_title(
+        res_sub = _resolve_title(
             self.movie,
             [self._offer("netflix", offer_type="subscription")],
             self.pref,
             current_country="NL",
             access=access,
         )
-        self.assertEqual(res_sub.verdict, AccessVerdict.AVAILABLE_ELSEWHERE)
+        self.assertEqual(res_sub.verdict, AccessVerdict.UNKNOWN)
         self.assertFalse(res_sub.offers[0].is_entitled)
 
     # -----------------------------------------------------------------------

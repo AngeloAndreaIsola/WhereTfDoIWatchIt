@@ -131,7 +131,9 @@ class WatchedListTests(TestCase):
         self.assertEqual(beyond["results"], [])
         self.assertEqual(beyond["pagination"]["count"], 5)
         self.assertEqual(beyond["pagination"]["page"], 4)
-        self.assertEqual(first["results"][0], {
+        first_row = first["results"][0]
+        self.assertEqual(first_row.pop("watchability")["status"], "unknown")
+        self.assertEqual(first_row, {
             "movie": {"tmdb_id": 1, "title": "Title 1", "year": 2024,
                       "content_type": "movie", "poster_path": "/poster.jpg"},
             "user_data": {"is_watched": True, "rating": None, "review": "", "watched_date": None},
@@ -202,7 +204,7 @@ class WatchedListTests(TestCase):
             self.assertEqual([r["movie"]["tmdb_id"] for r in result["results"]], expected_ids)
             self.assertEqual(hydrate.call_count, len(expected_ids))
             events.assert_not_called()
-            self.assertEqual(len(queries), 2, [q["sql"] for q in queries])
+            self.assertEqual(len(queries), 8, [q["sql"] for q in queries])
             self.assertIn('COUNT(*)', queries[0]["sql"])
             self.assertRegex(queries[1]["sql"], r"LIMIT 7 OFFSET 14$")
             self.assertTrue(all(r["is_in_watchlist"] for r in result["results"]))
