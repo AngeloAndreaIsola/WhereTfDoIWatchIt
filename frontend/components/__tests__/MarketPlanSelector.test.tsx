@@ -162,4 +162,104 @@ describe("MarketPlanSelector", () => {
     expect(screen.getByRole("button", { name: "Save plan selection" })).toBeDisabled();
     expect(screen.queryByText(/included with your/i)).toBeNull();
   });
+
+  it("preserves conflict draft through subsequent catalogue polling (U2)", async () => {
+    const newer: MarketSelection = {
+      holding: "yes",
+      plan_state: "selected",
+      plan_id: "premium",
+      channels: [],
+      revision: 4,
+    };
+    const onSave = vi
+      .fn<(slug: string, input: MarketSelectionInput) => Promise<void>>()
+      .mockRejectedValueOnce(new MarketSelectionConflictError(newer));
+
+    const { rerender } = render(<MarketPlanSelector provider={provider} onSave={onSave} />);
+    fireEvent.change(screen.getByLabelText("Plan for Aster in NL"), { target: { value: "ads" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save plan selection" }));
+
+    expect(await screen.findByText(/not saved: this selection changed elsewhere/i)).toBeInTheDocument();
+    expect(screen.getByLabelText("Plan for Aster in NL")).toHaveValue("ads");
+    expect(screen.getByTestId("saved-revision")).toHaveTextContent("4");
+    expect(screen.getByTestId("saved-selection-summary")).toHaveTextContent("premium");
+
+    // Simulate background catalogue poll returning revision 4 with premium
+    rerender(
+      <MarketPlanSelector
+        provider={{
+          ...provider,
+          selection: newer,
+        }}
+        onSave={onSave}
+      />
+    );
+
+    // Unsaved edit (ads) and conflict summary MUST be preserved, not overwritten by polling
+    expect(screen.getByLabelText("Plan for Aster in NL")).toHaveValue("ads");
+    expect(screen.getByText(/not saved: this selection changed elsewhere/i)).toBeInTheDocument();
+    expect(screen.getByTestId("saved-revision")).toHaveTextContent("4");
+    expect(screen.getByTestId("saved-selection-summary")).toHaveTextContent("premium");
+
+    // Discarding changes reverts to the server's saved state
+    fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
+    expect(screen.getByLabelText("Plan for Aster in NL")).toHaveValue("premium");
+    expect(screen.queryByText(/not saved: this selection changed elsewhere/i)).toBeNull();
+    expect(screen.queryByTestId("saved-selection-summary")).toBeNull();
+  });
+
+  it("preserves retired plan ID on unrelated channel edit instead of sending null (U3)", async () => {
+    const onSave = vi.fn<(slug: string, input: MarketSelectionInput) => Promise<void>>(async () => {});
+    render(
+      <MarketPlanSelector
+        provider={{
+          ...provider,
+          plan_options: [provider.plan_options![2]],
+          selection: {
+            holding: "yes",
+            plan_state: "unsupported",
+            plan_id: "base",
+            plan_display_name: "Base",
+            channels: [],
+            revision: 5,
+          },
+        }}
+        onSave={onSave}
+      />
+    );
+
+    expect(screen.getByLabelText("Plan for Aster in NL")).toHaveValue("retired:base");
+
+    // Change only a channel
+    fireEvent.change(screen.getByLabelText("Channel Orbit via Aster"), { target: { value: "yes" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save plan selection" }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0][1]).toEqual({
+      holding: "yes",
+      plan_state: "unsupported",
+      plan_id: "base",
+      channels: [{ package_id: "orbit", holding: "yes" }],
+      revision: 5,
+    });
+  });
+
+  it("renders reviewed market-specific channel caveat scoped to its channel (U5)", () => {
+    render(
+      <MarketPlanSelector
+        provider={{
+          ...provider,
+          channel_options: [
+            { package_id: "orbit", parent_provider: "aster", country: "NL", display_name: "Orbit", caveat: "Reviewed NL channel caveat" },
+            { package_id: "comet", parent_provider: "aster", country: "NL", display_name: "Comet", caveat: "" },
+          ],
+        }}
+        onSave={vi.fn(async () => {})}
+      />
+    );
+
+    expect(screen.getByText("Reviewed NL channel caveat")).toBeInTheDocument();
+    expect(screen.getByTestId("channel-caveat-orbit")).toHaveTextContent("Reviewed NL channel caveat");
+    expect(screen.queryByTestId("channel-caveat-comet")).toBeNull();
+  });
 });

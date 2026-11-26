@@ -2,7 +2,7 @@ import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import SubscriptionsPage from "@/app/subscriptions/page";
-import type { ProviderItem } from "@/lib/api";
+import type { MarketSelection, ProviderItem } from "@/lib/api";
 import { catalogPageCache, leavingSoonCache, watchlistPageCache } from "@/lib/navigationCache";
 
 vi.mock("next/link", () => ({
@@ -179,5 +179,110 @@ describe("Subscriptions page market selection", () => {
     await act(async () => finishPreviousMarket(catalogue("NL")));
     expect(screen.getByLabelText("Plan for Aster in DE")).toBeInTheDocument();
     expect(screen.queryByLabelText("Plan for Aster in NL")).toBeNull();
+  });
+
+  it("preserves retired plan ID when saving channel modification over HTTP (U3 regression)", async () => {
+    const retiredSelection: MarketSelection = {
+      holding: "yes",
+      plan_state: "unsupported",
+      plan_id: "legacy_plus",
+      plan_display_name: "Legacy Plus",
+      channels: [],
+      revision: 2,
+    };
+    const initialProvider: ProviderItem = {
+      ...catalogue("NL")[0],
+      selection: retiredSelection,
+    };
+    let putBody: unknown = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: unknown, init?: { method?: string; body?: string }) => {
+        if (init?.method === "PUT") {
+          putBody = JSON.parse(init?.body || "{}");
+          return { ok: true, status: 200, json: async () => ({ ...retiredSelection, revision: 3 }) };
+        }
+        return { ok: true, status: 200, json: async () => [initialProvider] };
+      })
+    );
+
+    render(<SubscriptionsPage />);
+    expect(await screen.findByTestId("retired-plan-notice")).toBeInTheDocument();
+    expect(screen.getByTestId("retired-plan-notice")).toHaveTextContent("Legacy Plus");
+
+    fireEvent.change(screen.getByLabelText("Channel Orbit via Aster"), { target: { value: "yes" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save plan selection" }));
+
+    await waitFor(() => {
+      expect(putBody).not.toBeNull();
+    });
+    expect(putBody).toEqual({
+      holding: "yes",
+      plan_state: "unsupported",
+      plan_id: "legacy_plus",
+      channels: [{ package_id: "orbit", holding: "yes" }],
+      revision: 2,
+    });
+  });
+
+  it("preserves unsaved conflict draft across background catalogue re-fetches over HTTP (U2 regression)", async () => {
+    const newerSelection: MarketSelection = {
+      holding: "yes",
+      plan_state: "selected",
+      plan_id: "ads",
+      channels: [],
+      revision: 5,
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: unknown, init?: { method?: string }) => {
+        if (init?.method === "PUT") {
+          return {
+            ok: false,
+            status: 409,
+            json: async () => ({
+              code: "revision_conflict",
+              selection: newerSelection,
+            }),
+          };
+        }
+        return { ok: true, status: 200, json: async () => catalogue("NL") };
+      })
+    );
+
+    render(<SubscriptionsPage />);
+    expect(await screen.findByLabelText("Plan for Aster in NL")).toHaveValue("base");
+
+    // Draft a change to ads
+    fireEvent.change(screen.getByLabelText("Plan for Aster in NL"), { target: { value: "ads" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save plan selection" }));
+
+    expect(await screen.findByText(/not saved: this selection changed elsewhere/i)).toBeInTheDocument();
+    expect((screen.getByLabelText("Plan for Aster in NL") as HTMLSelectElement).value).toBe("ads");
+  });
+
+  it("renders market-specific add-on caveats over HTTP (U5 regression)", async () => {
+    const providerWithCaveat: ProviderItem = {
+      ...catalogue("NL")[0],
+      channel_options: [
+        {
+          package_id: "orbit",
+          parent_provider: "aster",
+          country: "NL",
+          display_name: "Orbit",
+          caveat: "Requires separate billing agreement with host operator.",
+        },
+      ],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, status: 200, json: async () => [providerWithCaveat] }))
+    );
+
+    render(<SubscriptionsPage />);
+    expect(await screen.findByText("Requires separate billing agreement with host operator.")).toBeInTheDocument();
+    expect(screen.getByTestId("channel-caveat-orbit")).toHaveTextContent(
+      "Requires separate billing agreement with host operator."
+    );
   });
 });

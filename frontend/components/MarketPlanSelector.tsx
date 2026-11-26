@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   ChannelDeclaration,
   MarketHolding,
@@ -56,7 +56,7 @@ function draftFromSelection(selection: MarketSelection | undefined): Draft {
 function planInput(choice: string): { plan_state: MarketPlanState; plan_id: string | null } {
   if (choice === UNSPECIFIED_CHOICE) return { plan_state: "unspecified", plan_id: null };
   if (choice === UNLISTED_CHOICE) return { plan_state: "unsupported", plan_id: null };
-  if (choice.startsWith("retired:")) return { plan_state: "unsupported", plan_id: null };
+  if (choice.startsWith("retired:")) return { plan_state: "unsupported", plan_id: choice.slice("retired:".length) };
   return { plan_state: "selected", plan_id: choice };
 }
 
@@ -78,6 +78,8 @@ export default function MarketPlanSelector({
 }: MarketPlanSelectorProps) {
   const selection = provider.selection;
   const selectionIdentity = useMemo(() => selectionKey(selection), [selection]);
+  const providerKey = `${provider.slug}:${provider.billing_country}`;
+  const prevProviderKey = useRef(providerKey);
   const planOptions = provider.plan_options ?? [];
   const channelOptions = provider.channel_options ?? [];
   const unlisted = provider.unlisted_plan_option;
@@ -90,6 +92,20 @@ export default function MarketPlanSelector({
   const [conflicted, setConflicted] = useState(false);
 
   useEffect(() => {
+    const marketChanged = prevProviderKey.current !== providerKey;
+    prevProviderKey.current = providerKey;
+
+    if (!marketChanged && conflicted) {
+      // Subscriptions polling or catalogue reload for the same provider/market
+      // while in conflict: update the saved comparison from the server and advance
+      // the base revision, but preserve unsaved draft edits and keep the conflict summary visible.
+      setSavedState(selection);
+      if (selection?.revision !== undefined) {
+        setDraft((prev) => ({ ...prev, revision: selection.revision }));
+      }
+      return;
+    }
+
     setDraft(draftFromSelection(selection));
     setSavedState(selection);
     setMessage("");
@@ -98,7 +114,7 @@ export default function MarketPlanSelector({
     // A new catalogue read (market change or successful save) is the only
     // reason to re-seed the editable draft.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectionIdentity]);
+  }, [selectionIdentity, providerKey]);
 
   const selectedPlan = planOptions.find((p) => p.plan_id === draft.planChoice);
   const plan = planInput(draft.planChoice);
@@ -237,35 +253,44 @@ export default function MarketPlanSelector({
             Channel add-ons
           </legend>
           {channelOptions.map((channel) => (
-            <label
-              key={channel.package_id}
-              className="mt-1 flex items-center justify-between gap-2 text-[11px] text-gray-700 dark:text-gray-300"
-            >
-              <span>
-                {channel.display_name}
-                <span className="text-gray-500 dark:text-gray-400">
-                  {" "}(via {hostLabel(channel.parent_provider)} · {channel.country})
-                </span>
-              </span>
-              <select
-                value={draft.channels[channel.package_id] ?? "unspecified"}
-                onChange={(e) =>
-                  setDraft((prev) => ({
-                    ...prev,
-                    channels: {
-                      ...prev.channels,
-                      [channel.package_id]: e.target.value as ChannelAnswer,
-                    },
-                  }))
-                }
-                aria-label={`Channel ${channel.display_name} via ${hostLabel(channel.parent_provider)}`}
-                className="rounded border border-gray-300 bg-white px-2 py-1 text-[11px] dark:border-gray-600 dark:bg-gray-900"
+            <div key={channel.package_id} className="mt-1">
+              <label
+                className="flex items-center justify-between gap-2 text-[11px] text-gray-700 dark:text-gray-300"
               >
-                <option value="unspecified">Not answered</option>
-                <option value="yes">I have it</option>
-                <option value="no">I don&apos;t have it</option>
-              </select>
-            </label>
+                <span>
+                  {channel.display_name}
+                  <span className="text-gray-500 dark:text-gray-400">
+                    {" "}(via {hostLabel(channel.parent_provider)} · {channel.country})
+                  </span>
+                </span>
+                <select
+                  value={draft.channels[channel.package_id] ?? "unspecified"}
+                  onChange={(e) =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      channels: {
+                        ...prev.channels,
+                        [channel.package_id]: e.target.value as ChannelAnswer,
+                      },
+                    }))
+                  }
+                  aria-label={`Channel ${channel.display_name} via ${hostLabel(channel.parent_provider)}`}
+                  className="rounded border border-gray-300 bg-white px-2 py-1 text-[11px] dark:border-gray-600 dark:bg-gray-900"
+                >
+                  <option value="unspecified">Not answered</option>
+                  <option value="yes">I have it</option>
+                  <option value="no">I don&apos;t have it</option>
+                </select>
+              </label>
+              {channel.caveat && (
+                <p
+                  data-testid={`channel-caveat-${channel.package_id}`}
+                  className="mt-0.5 text-[10px] text-gray-500 dark:text-gray-400"
+                >
+                  {channel.caveat}
+                </p>
+              )}
+            </div>
           ))}
           <p className="mt-1 text-[10px] text-gray-500 dark:text-gray-400">
             A channel held on its own does not grant a channel hosted by another
@@ -274,14 +299,30 @@ export default function MarketPlanSelector({
         </fieldset>
       )}
 
-      <button
-        type="button"
-        onClick={handleSave}
-        disabled={saving || needsHolder}
-        className="rounded bg-blue-600 px-3 py-1 text-[11px] font-semibold text-white hover:bg-blue-500 disabled:opacity-50"
-      >
-        {saving ? "Saving…" : "Save plan selection"}
-      </button>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={saving || needsHolder}
+          className="rounded bg-blue-600 px-3 py-1 text-[11px] font-semibold text-white hover:bg-blue-500 disabled:opacity-50"
+        >
+          {saving ? "Saving…" : "Save plan selection"}
+        </button>
+        {conflicted && (
+          <button
+            type="button"
+            onClick={() => {
+              setConflicted(false);
+              setDraft(draftFromSelection(savedState ?? selection));
+              setMessage("");
+              setError("");
+            }}
+            className="text-[10px] text-gray-500 underline hover:text-gray-700 dark:text-gray-400"
+          >
+            Discard changes
+          </button>
+        )}
+      </div>
 
           {conflicted && savedState && (
             <p

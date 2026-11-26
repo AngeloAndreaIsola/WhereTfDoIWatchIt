@@ -709,32 +709,6 @@ export default function SeriesDetailPage({ params }: SeriesDetailPageProps) {
                         ))}
                       </div>
                     )}
-
-                    {/* Rent / buy: canonical availability that needs an extra
-                        payment, kept apart from the included offers above. */}
-                    {data.purchase_offers && data.purchase_offers.length > 0 && (
-                      <div className="space-y-3 pt-2">
-                        <div>
-                          <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                            Rent or Buy
-                          </h3>
-                          <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
-                            Available for an extra payment — not included in your subscriptions.
-                          </p>
-                        </div>
-                        {data.purchase_offers.map((offer: PrimeOffer, i: number) => (
-                          <OfferRow
-                            key={`${offer.country}-${offer.service}-${offer.quality}-purchase-${i}`}
-                            offer={offer}
-                            tmdbId={tmdbId}
-                            isBest={false}
-                            preferredAudio={preferences.audio_languages}
-                            preferredSubtitles={preferences.subtitle_languages}
-                            currentCountry={currentCountry}
-                          />
-                        ))}
-                      </div>
-                    )}
                   </div>
                 );
               })()
@@ -747,6 +721,35 @@ export default function SeriesDetailPage({ params }: SeriesDetailPageProps) {
               currentCountry={currentCountry}
             />
           </section>
+
+          {/* Rent / buy: canonical availability that needs an extra payment,
+              kept apart from the included offers above. Rendered independently
+              of offers so transaction-only series and seasons remain actionable. */}
+          {data.purchase_offers && data.purchase_offers.length > 0 && (
+            <section>
+              <div className="space-y-3">
+                <div>
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                    Rent or Buy
+                  </h3>
+                  <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    Available for an extra payment — not included in your subscriptions.
+                  </p>
+                </div>
+                {data.purchase_offers.map((offer: PrimeOffer, i: number) => (
+                  <OfferRow
+                    key={`${offer.country}-${offer.service}-${offer.quality}-purchase-${i}`}
+                    offer={offer}
+                    tmdbId={tmdbId}
+                    isBest={false}
+                    preferredAudio={preferences.audio_languages}
+                    preferredSubtitles={preferences.subtitle_languages}
+                    currentCountry={currentCountry}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
 
           {/* Scraper Sources Section — scraper rows carry no season signal, so the
               show-level list is hidden as soon as a season is selected (the API

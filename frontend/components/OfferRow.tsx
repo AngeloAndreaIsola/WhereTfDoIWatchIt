@@ -1,6 +1,6 @@
 "use client";
 
-import type { PrimeOffer } from "@/lib/api";
+import type { EntitlementReason, EntitlementVerdict, PrimeOffer } from "@/lib/api";
 import LanguageBadge from "@/components/LanguageBadge";
 import { normalizeLanguageCode } from "@/lib/languages";
 import { isUnverifiedOffer, UNVERIFIED_BADGE } from "@/lib/availability";
@@ -92,7 +92,21 @@ export default function OfferRow({
   const legacyPlan = isLegacyPlanOffer(offer);
   const positive = !unverified &&
     (entitlement ? isPositiveVerdict(entitlement) : !legacyPlan && offer.is_entitled === true);
-  const unconfirmed = legacyPlan || verdict === "UNKNOWN";
+  const isContradictoryUnverified = unverified && isPositiveVerdict(entitlement);
+  const effectiveVerdict: EntitlementVerdict | "UNKNOWN" | null = isContradictoryUnverified
+    ? "UNKNOWN"
+    : verdict;
+  const effectiveReason: EntitlementReason | undefined = isContradictoryUnverified
+    ? offer.availability_evidence === "stale"
+      ? "STALE_EVIDENCE"
+      : offer.availability_evidence === "source_reported"
+      ? "SOURCE_REPORTED"
+      : "EVIDENCE_UNVERIFIED"
+    : entitlement?.reason;
+  const effectivePresentation = isContradictoryUnverified
+    ? { label: "Plan access unconfirmed", tone: "unknown" as const }
+    : verdictPresentation;
+  const unconfirmed = legacyPlan || effectiveVerdict === "UNKNOWN";
   const bestMatch = isBest && isAccessibleEntitlementOffer(offer);
   const transaction = verdict === "RENT_OR_BUY";
   const watchUrl = offer.url || (!reported && !transaction && tmdbId ? `/watch/${tmdbId}` : null);
@@ -180,7 +194,7 @@ export default function OfferRow({
           ? "unknown"
           : positive ? "true" : notEntitled ? "false" : "unknown"
       }
-      data-entitlement-verdict={verdict ?? "missing"}
+      data-entitlement-verdict={effectiveVerdict ?? "missing"}
       className={`
         rounded-xl border p-4 text-sm transition-all
         ${notAccessible
@@ -233,23 +247,23 @@ export default function OfferRow({
           {(entitlement || legacyPlan) && (
             <span
               data-testid="entitlement-verdict"
-              data-verdict={entitlement?.verdict ?? "missing"}
-              data-reason={entitlement?.reason}
+              data-verdict={effectiveVerdict ?? "missing"}
+              data-reason={effectiveReason}
               className={`rounded-md px-2 py-0.5 text-xs font-semibold ${
-                verdictPresentation.tone === "positive"
+                effectivePresentation.tone === "positive"
                   ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300"
-                  : verdictPresentation.tone === "ads"
+                  : effectivePresentation.tone === "ads"
                   ? "bg-sky-100 text-sky-800 dark:bg-sky-900/30 dark:text-sky-300"
-                  : verdictPresentation.tone === "transaction"
+                  : effectivePresentation.tone === "transaction"
                   ? "bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300"
-                  : verdictPresentation.tone === "addon"
+                  : effectivePresentation.tone === "addon"
                   ? "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
-                  : verdictPresentation.tone === "blocked"
+                  : effectivePresentation.tone === "blocked"
                   ? "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300"
                   : "bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-200"
               }`}
             >
-              {verdictPresentation.label}
+              {effectivePresentation.label}
             </span>
           )}
           {unverified && (
@@ -377,30 +391,30 @@ export default function OfferRow({
         <div className="mt-3 space-y-1 border-t border-gray-100 pt-2.5 text-[11px] dark:border-gray-700/60">
           {!positive && (
             <p data-testid="entitlement-reason" className="text-gray-600 dark:text-gray-300">
-              {explainReason(entitlement.reason)}
+              {explainReason(effectiveReason)}
             </p>
           )}
-          {entitlement.billing_country && entitlement.offer_country &&
+          {!isContradictoryUnverified && entitlement.billing_country && entitlement.offer_country &&
             entitlement.billing_country.toUpperCase() !== entitlement.offer_country.toUpperCase() && (
               <p data-testid="region-caveat" className="text-amber-700 dark:text-amber-400">
                 Billing {entitlement.billing_country} · offer {entitlement.offer_country} —
                 plan coverage in another market needs reviewed portability.
               </p>
             )}
-          {(entitlement.reason === "PORTABILITY_UNVERIFIED" ||
+          {!isContradictoryUnverified && (entitlement.reason === "PORTABILITY_UNVERIFIED" ||
             entitlement.reason === "REGION_EXCLUDED" ||
             entitlement.reason === "TERRITORY_UNKNOWN") && (
             <p data-testid="region-caveat" className="text-amber-700 dark:text-amber-400">
               Region caveat: this market is not confirmed by your selected plan.
             </p>
           )}
-          {entitlement.plan_id && (
+          {!isContradictoryUnverified && entitlement.plan_id && (
             <p className="text-gray-500 dark:text-gray-400">
               Selected plan: {entitlement.plan_id}
               {entitlement.required_channel && ` · channel: ${entitlement.required_channel}`}
             </p>
           )}
-          {entitlement.caveats.map((caveat) => (
+          {positive && (entitlement.caveats ?? []).map((caveat) => (
             <p
               key={caveat}
               data-testid="entitlement-caveat"
@@ -420,8 +434,8 @@ export default function OfferRow({
       <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-gray-600 dark:text-gray-400 border-t border-gray-100 pt-2.5 dark:border-gray-700/60">
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="font-semibold text-gray-700 dark:text-gray-300">Audio 🎧:</span>
-          {offer.audio_languages.length > 0 ? (
-            offer.audio_languages.map((code) => (
+          {(offer.audio_languages ?? []).length > 0 ? (
+            (offer.audio_languages ?? []).map((code) => (
               <LanguageBadge
                 key={`audio-${code}`}
                 code={code}
@@ -436,8 +450,8 @@ export default function OfferRow({
 
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="font-semibold text-gray-700 dark:text-gray-300">Subs 💬:</span>
-          {offer.subtitle_languages.length > 0 ? (
-            offer.subtitle_languages.map((code) => (
+          {(offer.subtitle_languages ?? []).length > 0 ? (
+            (offer.subtitle_languages ?? []).map((code) => (
               <LanguageBadge
                 key={`sub-${code}`}
                 code={code}

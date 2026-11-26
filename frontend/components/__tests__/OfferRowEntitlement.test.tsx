@@ -241,4 +241,85 @@ describe("OfferRow entitlement verdicts (#103)", () => {
     expect(screen.getByRole("link", { name: "Verify availability" })).toBeInTheDocument();
     expect(screen.getByTestId("entitlement-reason")).toHaveTextContent(/needs a recheck/i);
   });
+
+  it("gates positive verdict badge when availability_evidence is stale (U4)", () => {
+    render(
+      <OfferRow
+        offer={{
+          ...baseOffer,
+          availability_evidence: "stale",
+          is_accessible: true,
+          is_entitled: true,
+          entitlement: entitlement({
+            verdict: "INCLUDED",
+            reason: "PLAN_COVERS_TITLE",
+            evidence_state: "stale",
+          }),
+        }}
+        isBest={true}
+        tmdbId={238}
+      />
+    );
+    expect(screen.queryByText("Included with your selected plan")).toBeNull();
+    expect(screen.queryByText("Best Match")).toBeNull();
+    expect(screen.getByTestId("unverified-badge")).toHaveTextContent("Unverified");
+    expect(screen.getByTestId("unverified-badge")).toHaveAttribute("data-verification-state", "stale");
+    expect(verdictRow()).toHaveTextContent("Plan access unconfirmed");
+    expect(verdictRow()).toHaveAttribute("data-verdict", "UNKNOWN");
+    expect(verdictRow()).toHaveAttribute("data-reason", "STALE_EVIDENCE");
+    expect(screen.getByTestId("entitlement-reason")).toHaveTextContent(/needs a recheck/i);
+    expect(screen.queryByText(/selected plan:/i)).toBeNull();
+  });
+
+  it("gates positive verdict badge when availability_evidence is source_reported with contradictory verdict (U4)", () => {
+    render(
+      <OfferRow
+        offer={{
+          ...baseOffer,
+          availability_evidence: "source_reported",
+          reporting_source: "justwatch",
+          is_accessible: true,
+          is_entitled: true,
+          entitlement: entitlement({
+            verdict: "INCLUDED",
+            reason: "PLAN_COVERS_TITLE",
+            evidence_state: "source_reported",
+          }),
+        }}
+        isBest={true}
+        tmdbId={238}
+      />
+    );
+    expect(screen.queryByText("Included with your selected plan")).toBeNull();
+    expect(screen.queryByText("Best Match")).toBeNull();
+    expect(screen.getByTestId("unverified-badge")).toHaveTextContent("Source-reported");
+    expect(verdictRow()).toHaveTextContent("Plan access unconfirmed");
+    expect(verdictRow()).toHaveAttribute("data-verdict", "UNKNOWN");
+    expect(verdictRow()).toHaveAttribute("data-reason", "SOURCE_REPORTED");
+    expect(screen.getByTestId("entitlement-reason")).toHaveTextContent(/a source reported this offer/i);
+  });
+
+  it("renders Included badge when availability_evidence is verified (U4)", () => {
+    render(
+      <OfferRow
+        offer={{
+          ...baseOffer,
+          availability_evidence: "verified",
+          is_accessible: true,
+          is_entitled: true,
+          entitlement: entitlement({
+            verdict: "INCLUDED",
+            reason: "PLAN_COVERS_TITLE",
+            evidence_state: "verified",
+          }),
+        }}
+        isBest={true}
+        tmdbId={238}
+      />
+    );
+    expect(verdictRow()).toHaveTextContent("Included with your selected plan");
+    expect(verdictRow()).toHaveAttribute("data-verdict", "INCLUDED");
+    expect(screen.getByText("Best Match")).toBeInTheDocument();
+    expect(screen.queryByTestId("unverified-badge")).toBeNull();
+  });
 });
