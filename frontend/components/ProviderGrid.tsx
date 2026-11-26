@@ -3,59 +3,14 @@
 import React, { useState } from "react";
 import ProviderIcon from "./ProviderIcon";
 import { formatRelativeTime } from "@/lib/time";
-import type { ProviderAccessMode } from "@/lib/api";
+import type {
+  ProviderAccessMode,
+  ProviderItem,
+  MarketSelectionInput,
+} from "@/lib/api";
+import MarketPlanSelector from "./MarketPlanSelector";
 
-export interface ProviderItem {
-  id: number;
-  slug: string;
-  name: string;
-  category: string;
-  is_major: boolean;
-  is_enabled: boolean;
-  icon_name: string;
-  domain?: string;
-  last_scraped_at?: string | null;
-  scraped_content_count?: number;
-  is_subscribed: boolean;
-  /** How the user holds this service (null when not owned). */
-  access_mode?: ProviderAccessMode | null;
-  has_scraper?: boolean;
-  /** Which collector refreshes this card: a catalogue source, its scraper, or `null` when none is registered (the refresh control stays hidden). */
-  refresh_kind?: "catalogue" | "scraper" | null;
-  /** Slug of the availability source behind `refresh_kind: "catalogue"`. */
-  source_slug?: string | null;
-  /** When that collector last ran; `null`/missing renders "Never run". */
-  last_run?: string | null;
-  /** Error recorded by the last finished run of that collector. */
-  last_run_error?: string | null;
-  /** Items the collector owns: catalogue/scraped rows, or active offers for plain providers. */
-  available_items?: number;
-  /** Queue/worker state read server-side — the card must not guess it. */
-  refreshing?: boolean;
-  catalogue_sync_status?: string;
-  catalogue_sync_report?: { pages_scanned?: number; pages_remaining?: number | null; items_unique?: number; last_error?: string };
-  /** Pending discovery observations, separate from canonical availability. */
-  catalogue_discovery?: {
-    inventory_count?: number;
-    pending_classification_count?: number;
-    last_successful_sync?: string | null;
-    historical_checkpoint?: Record<string, number>;
-    incremental_checkpoint?: Record<string, number>;
-    coverage_status?: string;
-    error?: string;
-    new_discoveries_last_run?: number;
-    duplicate_identities_last_run?: number;
-    failed_pages_last_run?: Array<{ partition?: string; page?: number; status?: number; evidence?: string }>;
-  };
-  /** Site host used to fetch this card's favicon. Absent for catalogue providers, which use the brand badges. */
-  favicon_domain?: string;
-  /** True when this service is an add-on channel sold through a base platform. */
-  is_addon?: boolean;
-  /** Base platform slug this add-on requires (only for `is_addon` rows). */
-  parent?: string | null;
-  /** Display name of the base platform this add-on requires. */
-  parent_name?: string | null;
-}
+export type { ProviderItem } from "@/lib/api";
 
 interface ProviderGridProps {
   providers: ProviderItem[];
@@ -66,6 +21,12 @@ interface ProviderGridProps {
    * instead of relying on the binary subscribe/unsubscribe toggle.
    */
   onSetAccessMode?: (slug: string, mode: ProviderAccessMode) => Promise<void>;
+  /** Billing market whose reviewed plan options each card should edit. */
+  billingCountry?: string;
+  /** Enables the market plan/channel editor on each card. */
+  onSaveMarketSelection?: (slug: string, input: MarketSelectionInput) => Promise<void>;
+  /** slug → display name, so a hosted channel can name its base platform. */
+  hostNames?: Record<string, string>;
   /** Per-source refresh. Rendered only when the card resolves to a registered collector. Resolves with an optional failure message (ignored here, surfaced by `refreshErrors`). */
   onRefresh?: (slug: string) => Promise<unknown>;
   /** Delete control, offered by the imported-sources section only. */
@@ -103,6 +64,9 @@ export default function ProviderGrid({
   providers,
   onToggle,
   onSetAccessMode,
+  billingCountry,
+  onSaveMarketSelection,
+  hostNames,
   onRefresh,
   onRemove,
   useFavicons = false,
@@ -339,15 +303,23 @@ export default function ProviderGrid({
                       : "border-gray-200 bg-white text-gray-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
                   }`}
                 >
-                  {ACCESS_MODE_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              )}
+                   {ACCESS_MODE_OPTIONS.map((option) => (
+                     <option key={option.value} value={option.value}>
+                       {option.label}
+                     </option>
+                   ))}
+                 </select>
+               )}
 
-              {/* Refresh: a sibling of the card, never a child of it, so the
+               {billingCountry && onSaveMarketSelection && (
+                 <MarketPlanSelector
+                   provider={provider}
+                   hostNames={hostNames}
+                   onSave={onSaveMarketSelection}
+                 />
+               )}
+
+               {/* Refresh: a sibling of the card, never a child of it, so the
                   press runs one source without toggling the subscription. */}
               {canRefresh && (
                 <button

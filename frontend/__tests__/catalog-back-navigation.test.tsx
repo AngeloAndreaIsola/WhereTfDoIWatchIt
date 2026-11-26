@@ -117,7 +117,7 @@ describe("Catalog back navigation cache", () => {
   });
 
   it("aborts an in-flight fetch on unmount so invalidation prevents stale repopulation", async () => {
-    const deferred = { promise: null as Promise<unknown>, resolve: (_v: unknown) => {} };
+    const deferred = { promise: null as unknown as Promise<unknown>, resolve: (_v: unknown) => {} };
     deferred.promise = new Promise((resolve) => {
       deferred.resolve = resolve;
     });
