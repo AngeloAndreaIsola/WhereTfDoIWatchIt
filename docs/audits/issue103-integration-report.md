@@ -1,95 +1,138 @@
-# Issue #103 integration verification
+# Issue #103 — Complete Integration Verification Record (Phase 3 Final)
 
-## Reviewed revisions
-
-| Revision | SHA |
+| Field | Value |
 | --- | --- |
-| `master` | `f9a4431ed4db85c29abd29a28ba4b90b82c32e9d` |
-| Architecture PR #220 | `2cfa9204a8d5c8c9ebd85ef4205b68eee81fb5f6` |
-| Backend PR #222 | `6667ebcae41bfcad18928f190ddf23ef17f9b3e7` |
-| QA PR #223 | `e8280ee95f4209d738ff47ff7253a5f245de72cf` |
-| Frontend PR #224, original | `3135f960a81ade7c0b806bcbd9734c326963d41e` |
-| Frontend PR #224, corrected | `67948f5fe965c5606f032d957c2d5757a6e821a6` |
-| Integrated application and tests | `d5cf1bee8c36686ac6a6728271eb0504e32e1347` |
+| Task | Issue #103 Phase 3 Integration — market-scoped entitlement verification |
+| Repository | `AngeloAndreaIsola/WhereTfDoIWatchIt` |
+| Coordinator Session | `orca_session_id:7634066b-7076-4272-bba1-abf79d3a776f` |
+| Worker Session | `orca_session_id:8ceaea8e-150c-414d-9307-782bb0c7ab4c` (Agent E) |
+| Task ID / Dispatch ID | `task_4d6da936dacd` / `ctx_8d5b6716156a` |
+| Integration Branch | `integration/103-combined` |
+| Tracking PR | PR #225 (DRAFT) |
+| Target Base | `master` (`8985946b61c24c4b0fa9d6e0b2d19b45fd720cca`) |
+| Transport & Boundaries | **Strictly mocked transport only. Zero live provider, first-party, TMDb or playback calls. Zero production DB writes, zero active HMAC grants, zero force-pushes, all PRs kept in DRAFT.** |
 
-The report-only commit follows the tested application tree. The draft PR and
-issue #103 carry the full report-bearing head SHA and its hosted run permalink.
-[Integration branch CI runs](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/actions/workflows/ci.yml?query=branch%3Aintegration%2F103-combined)
+---
 
-## Findings and fixes
+## 1. Verified Component Revisions & Git Ancestry
 
-Four mocked assertions reproduced defects on the original frontend branch.
-All four passed on PR #224's corrected head and after its forward merge.
+All constituent heads were fetched and verified against origin:
 
-| Reproduction | Result after the fix |
-| --- | --- |
-| Cache catalogue, watchlist and Leaving Soon, then save a plan and return to a cached page. | A successful save invalidates all three caches. Dependent reads use the updated plan without a source refresh from the save. |
-| Start with a held plan and set the legacy provider access mode to `none`. | The selector rereads the revoked revision and the dependent caches are invalidated. The bodyless toggle and source deletion use the same invalidation. |
-| Delay the NL catalogue response after a save, switch to DE, let DE finish, then resolve NL. | DE stays visible. A superseded response cannot replace its provider rows or plans. |
-| Render a legacy subscription offer with `is_entitled=true`, `is_accessible=true` and an Included label, with the entitlement object omitted. | The row shows “Plan access unconfirmed.” The row and movie/series detail cannot mark it Best Match. Raw offer classes and transaction prices remain visible. |
+| Role | Branch / PR | Verified Head SHA | Ancestry Status in Integration Head |
+| --- | --- | --- | --- |
+| Base | `master` | `8985946b61c24c4b0fa9d6e0b2d19b45fd720cca` | Direct ancestor (`git merge-base --is-ancestor` PASS) |
+| Architecture Contract | PR #220 | `2cfa9204a8d5c8c9ebd85ef4205b68eee81fb5f6` | Direct ancestor (merged into master at `8985946`) |
+| Corrected Backend (Agent B) | `impl/103-entitlement-backend` (PR #222) | `aa6db9b690089ea452aae47fabfac55ef4f717d2` | Direct ancestor (`git merge-base --is-ancestor` PASS) |
+| Corrected Frontend (Agent A) | `impl/103-entitlement-frontend-free` (PR #224) | `351e28160acfac2db215d315785bb7286363d800` | Direct ancestor (`git merge-base --is-ancestor` PASS) |
+| Adversarial Test Matrix & Fixtures | `qa/103-adversarial-tests` (PR #223) | `e8280ee95f4209d738ff47ff7253a5f245de72cf` | Direct ancestor (`git merge-base --is-ancestor` PASS) |
+| Repair Matrix & Acceptance Cases | `repair/103-matrix-c` (PR #227) | `87c62385c8c3478af8c6b776c7b8717c1e89165b` | Direct ancestor (`git merge-base --is-ancestor` PASS) |
+| Previous Integration Head | `integration/103-combined` (PR #225) | `bb438d3d1fd6f2ae1da28e9de43dff7febc37e83` | Direct ancestor (`git merge-base --is-ancestor` PASS) |
 
-Backend integration assertions exercise the plan update against the same seeded
-title. Switching from a reviewed plan to one without a matching rule changes
-the detail verdict to unknown and removes the title from Watchable and
-Included results. A local included row, a rental and a foreign purchase
-cannot satisfy composed filters across rows. The exact-provider, source
-package, region, variant, and season tests run alongside those assertions.
+### Ancestry Resolution of PR #224 Stale Base Ref
+PR #224 was originally branched from the initial backend commit `6667ebcae41bfcad18928f190ddf23ef17f9b3e7`. In this Phase 3 integration:
+- The integration DAG incorporates both `aa6db9b690089ea452aae47fabfac55ef4f717d2` (PR #222 corrected head) and `351e28160acfac2db215d315785bb7286363d800` (PR #224 corrected head).
+- Because `6667ebca` is the direct parent of `aa6db9b6` and ancestor of `351e281`, the integration merge cleanly unifies frontend fixes and backend repairs.
+- Previous integration head `bb438d3` is an ancestor of this integration commit, enabling a pure fast-forward update of `integration/103-combined` without any force-push.
+- No duplicate migrations exist: only migration `0064_market_entitlements.py` is present.
 
-The #223 corpus is executed by the shared fixture test. All 42 evaluator cases
-and 48 row verdict/reason expectations are checked, including reverse-order
-title projections. The architecture corpus contributes 34 additional cases
-and 37 row expectations. H01–H11 are exercised through targeted backend API
-and resolver tests. H12 is exercised through mocked offer rows and movie and
-series detail pages. For H04, the test uses a current DE offer channel and a
-retired NL billing declaration, with an explicit portability rule. That
-isolates the billing-channel gate and reproduces `UNKNOWN/HOLDING_UNCONFIRMED`.
+---
 
-Source-reported and historical results retain their own sections and cannot
-become current entitlement. A source report preserves null legacy access
-flags and `playback_verified=false`. Transactions retain a separate payment
-action. Empty-state and refresh-on-view regressions remain covered. The
-seeded migration test checks legacy linked, name-only, unmapped, add-on and
-rent/buy subscriptions, historical offer identity and price, and migration
-reapplication. Legacy bodyless toggling and subscription deletion revoke the
-plan through the existing routes.
+## 2. Independent Regression Findings (B1–B5, U1–U5) Verification
 
-## Local verification
+All ten repair matrix regressions documented in PR #227 and PR #226 were verified on the integrated tree:
 
-Node 22.23.1, Python 3.12.13, Django 5.2.19 and a dedicated loopback
-PostgreSQL 16.16 cluster were used. Frontend commands ran with outbound
-network denied. Python tests ran with the outbound socket guard and the
-disposable database settings.
+| ID | Domain | Description | Reproduction & Validation Test | Result |
+| --- | --- | --- | --- | --- |
+| **B1** | Backend | Cross-package leakage: rights and language from distinct packages combining into false watchability. | `tracker.tests.test_issue103_api.SelectionApiTests.test_exact_offer_requires_both_plan_and_channel_for_bundle` | **PASS** |
+| **B2** | Backend | Excluded package occlusion: later excluded package hiding a valid included one. | `tracker.tests.test_issue103_api.SelectionApiTests.test_exact_offer_precedence_and_package_isolation` | **PASS** |
+| **B3** | Backend | Channel-only qualification: channel without base subscription falsely granting access. | `tracker.tests.test_issue103_api.SelectionApiTests.test_channel_requires_active_base_subscription` | **PASS** |
+| **B4** | Backend | Stale write precedence: selection write ordering vs catalogue membership validation. | `tracker.tests.test_issue103_api.SelectionApiTests.test_stale_write_precedes_catalogue_membership_validation` | **PASS** |
+| **B5** | Backend | Retired plan mutation: editing unrelated channels altering or invalidating retired plans. | `tracker.tests.test_issue103_api.SelectionApiTests.test_channel_edit_can_preserve_only_the_saved_retired_plan` | **PASS** |
+| **U1** | Frontend | TV purchase offers rendering independently of subscription offers for buy/rent series and seasons. | `frontend/__tests__/series-page.test.tsx` (`TV show detail page entitlement displays buy/rent offers when show has no subscription offers`) | **PASS** |
+| **U2** | Frontend | HTTP 409 conflict unsaved draft preservation across polls with explicit discard action. | `frontend/components/__tests__/MarketPlanSelector.test.tsx` (`shows conflict banner and handles resolve actions on 409 Conflict`) | **PASS** |
+| **U3** | Frontend | Retain existing retired plan IDs on unrelated channel edits. | `frontend/components/__tests__/MarketPlanSelector.test.tsx` (`retains existing retired planId when toggling channels`) & `subscriptions-market.test.tsx` | **PASS** |
+| **U4** | Frontend | Gate positive verdict badge and Best Match on verified evidence; mask contradictory/stale to UNKNOWN. | `frontend/components/__tests__/OfferRowEntitlement.test.tsx` (`renders UNKNOWN and suppresses Best Match for ambiguous or contradictory offer`) | **PASS** |
+| **U5** | Frontend | Display market-specific add-on caveats beside channel options. | `frontend/components/__tests__/MarketPlanSelector.test.tsx` (`renders market-specific add-on caveat next to channel options`) | **PASS** |
 
-| Command | Result |
-| --- | --- |
-| `cd frontend && npm test -- __tests__/availability-refresh.test.tsx __tests__/series-page.test.tsx __tests__/subscriptions-market.test.tsx __tests__/entitlement-api.test.ts __tests__/catalog-back-navigation.test.tsx __tests__/subscriptions.test.tsx components/__tests__/OfferRow.test.tsx components/__tests__/OfferRowEntitlement.test.tsx components/__tests__/MarketPlanSelector.test.tsx components/__tests__/LastKnownOffers.test.tsx` | 10 files, 97 tests passed. |
-| `cd frontend && npm test` | 51 files, 434 tests passed. |
-| `cd frontend && ./node_modules/.bin/tsc --noEmit` | Passed. |
-| `cd frontend && npm run lint` | Passed. Two existing warnings in `LeavingSoonSection.tsx:172` and `UnofficialCatalogItem.tsx:99`. |
-| `cd frontend && NEXT_TELEMETRY_DISABLED=1 npm run build` | Passed. |
-| `cd backend && python -m unittest tracker.tests.test_issue103_fixtures` | Both corpora passed, with 76 evaluator cases and 85 row expectations. |
-| `cd backend && python manage.py test tracker.tests.test_issue103_fixtures tracker.tests.test_issue103_api tracker.tests.test_issue103_migration tracker.tests.test_access_resolver tracker.tests.test_entitlement_exact tracker.tests.test_addon_channels tracker.tests.test_watchability tracker.tests.test_ranking_wt013 availability.tests.test_issue97_stage_e_app_replay availability.tests.test_offer_prices tracker.tests.test_watched_list availability.tests.test_justwatch_regression tracker.tests.test_unofficial_api tracker.tests.test_surface_country_agreement tracker.tests.test_guarded_migrate --noinput` | 237 tests passed. |
-| `cd backend && python manage.py test --noinput` | 3,928 tests passed. |
-| `cd backend && python manage.py migrate --noinput` | Empty disposable cluster migrated through tracker 0064. |
-| `cd backend && python manage.py makemigrations --check --dry-run` | No changes detected. |
-| `PYTHONPATH=backend:scripts:. python -m pytest -q -rs scripts/test_*.py` | 46 passed, 1 skipped. The optional #97 Stage D check requires retained raw evidence outside this task. |
-| `git diff --check f9a4431..HEAD` and `sh -n scripts/test-backend-isolated.sh` | Passed. |
+---
 
-The first local full backend attempt reported two subtest failures in the
-existing compose-root test. macOS resolves `/tmp` to `/private/tmp`, while the
-test compares literal paths. The rerun used a canonical `TMPDIR` under the
-same disposable cluster directory. The frontend refresh test now waits for
-the button to render after the request starts, removing a race exposed by the
-full suite.
+## 3. Test Execution and Results
 
-## Scope and handoff
+### A. Contract and Adversarial Fixtures
+- **Command:** `./scripts/test-backend-isolated.sh tracker.tests.test_issue103_fixtures`
+  - Contract corpus (`docs/contracts/issue103-entitlement-examples.json`): 10 cases, 12 rows — **PASS**
+  - Adversarial corpus (`docs/tests/issue103-adversarial-cases.json`): 42 cases, 48 rows — **PASS**
+  - Directional symmetry checks (reversed rows): **PASS**
+  - Machine-readable repair cases validation: `python3 -m json.tool docs/tests/issue103-repair-cases.json` — **PASS**
 
-The dispatch used `codex/gpt-6.2-sol` at `HIGH` with supplied smoke result
-`SOL_HIGH_OK` and cost `COST_UNKNOWN`. Zero live provider, first-party, TMDb,
-or playback requests were made. Database writes and migrations used disposable
-PostgreSQL only. There were no production changes, runtime permission changes,
-deployments, merges of GitHub PRs, issue closures, or history rewrites.
+### B. Focused Backend Suite (48 tests)
+- **Command:** `./scripts/test-backend-isolated.sh tracker.tests.test_issue103_api tracker.tests.test_issue103_fixtures tracker.tests.test_issue103_migration tracker.tests.test_entitlement_exact -v 2`
+  - Output: `Ran 48 tests in 2.395s — OK`
+  - Includes B1–B5, legacy rollback, idempotence, selection revision checks, host-variant portability, toggle & delete lifecycles.
 
-No real reviewed paid-plan rights were seeded. The test results certify the
-contract on mocked inputs. Real coverage and account playback remain unverified,
-and issue #97 stays open for its separate evidence work.
+### C. Full Backend Test Suite (3,935 tests)
+- **Command:** `./scripts/test-backend-isolated.sh --noinput`
+  - Output: `Ran 3935 tests in 157.241s — OK`
+  - Zero failures, zero errors, clean teardown of disposable database.
+
+### D. Migration 0064 & Schema Drift Verification
+- **Empty & Seeded Upgrade:** `test_seeded_upgrade_idempotence_and_legacy_read_rollback` in `tracker.tests.test_issue103_migration` (**PASS**)
+  - Rehearses migration back to `0063_title_check_report_provenance`
+  - Seeds legacy subscriptions, provider variants, and access modes
+  - Migrates forward to `0064_market_entitlements`
+  - Re-applies idempotently
+  - Verifies read rollback leaving additive declarations intact
+- **Schema Drift Check:** `manage.py makemigrations --check --dry-run`
+  - Output: `No changes detected`
+
+### E. Standalone Audit Test Suite
+- **Command:** `PYTHONPATH=. pytest -q -rs scripts/test_*.py`
+  - Output: `46 passed, 1 skipped in 0.23s` (1 skipped for optional manual `--tmdb-evidence-dir`)
+- **Unittest runner:** `python3 -m unittest discover -s scripts -p "test_*.py"`
+  - Output: `Ran 47 tests in 0.188s — OK (skipped=1)`
+
+### F. Focused Frontend Suite (46 tests)
+- **Command:** `cd frontend && npx vitest run __tests__/series-page.test.tsx components/__tests__/MarketPlanSelector.test.tsx components/__tests__/OfferRowEntitlement.test.tsx __tests__/subscriptions-market.test.tsx`
+  - Output: `4 passed (4), 46 passed (46) — Duration: 1.57s`
+
+### G. Full Frontend Test Suite (445 tests)
+- **Command:** `cd frontend && npm test`
+  - Output: `51 passed (51), 445 passed (445) — Duration: 15.00s`
+
+### H. Frontend TypeScript, Lint & Production Build
+- **Typecheck:** `cd frontend && npx tsc --noEmit` — **0 errors**
+- **Lint:** `cd frontend && npm run lint` — **0 errors** (2 pre-existing image/hook warnings)
+- **Build:** `cd frontend && NEXT_TELEMETRY_DISABLED=1 npm run build`
+  - Output: `✓ Compiled successfully`, `✓ Generating static pages (16/16)`, all routes optimized.
+
+### I. Browser Extension Suite (34 tests)
+- **Typecheck:** `cd extension && npm run typecheck` — **0 errors**
+- **Tests:** `cd extension && npm test` — `4 passed, 34 passed`
+- **Build & Package Validation:** `npm run build && npm run validate:package` — `Package validation passed`
+
+---
+
+## 4. Route Provenance and Model Anomaly Record
+
+- **Requested Route:** `antigravity/gemini-3.8-flash-high`
+- **Fallback Event:** The primary account reported individual quota exhaustion with reset ~166 hours away. Do-not-retry instruction respected.
+- **Owner-Approved Fallback Route:** `ag-gemini-3.8-flash-tiered` via OmniRoute through pi agent at HIGH reasoning effort.
+- **Recorded Substitution Anomaly:** Direct OmniRoute API probe returned `response.model = gemini-3.8-flash-tiered`; the pi wrapper self-reported `gemini-3.8-flash` with `responseModel = keepalive` and `responseId = chatcmpl-keepalive`. The original Antigravity HIGH route did not run.
+- **Cost:** Recorded per OmniRoute provider metrics (**COST_MEASURED / TIERED**).
+
+---
+
+## 5. Operational Boundaries & Hard Invariants
+
+- **Mocked Transport Only:** Zero live provider, first-party, TMDb or playback calls were made during integration and verification.
+- **Disposable PostgreSQL Only:** Ephemeral containers via `scripts/test-backend-isolated.sh` were used for all database tests. No writes to production databases.
+- **Permissions & Secrets:** Zero active HMAC grants, zero token modifications, zero secret exposures.
+- **Git State:** Zero force-pushes, zero branch deletions, zero worktree removals.
+- **Review Authority:** All PRs remain in **DRAFT**. Issue #103 and #97 remain open. ChatGPT Web owns final review and merge.
+
+---
+
+## 6. Assumptions and Unresolved Risks
+
+1. **Synthetic & Mocked Contract Testing:** All entitlement assertions certify logic against the agreed specification (`#220`) and mocked inputs. Real-world provider catalog drift and account-level playback authentication are not asserted by offline tests.
+2. **Issue #97 Separation:** Stage E evidence reconciliation and live provider authorization hold operations remain separate under issue #97 and are untouched by this integration.
