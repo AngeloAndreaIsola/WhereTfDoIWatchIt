@@ -13,6 +13,7 @@ import LastKnownOffers from "@/components/LastKnownOffers";
 import CastList from "@/components/CastList";
 import type { PrimeOffer, PrimeSeriesResponse } from "@/lib/api";
 import { invalidateCatalogCache, invalidateWatchlistCache } from "@/lib/navigationCache";
+import { isAccessibleEntitlementOffer } from "@/lib/entitlement";
 import { fetchPrimeSeriesOffers, addToWatchlist, markMovieWatched, unmarkMovieWatched, removeWatchlistItem, requestAvailabilityRefresh } from "@/lib/api";
 
 interface UnofficialOffer {
@@ -666,7 +667,7 @@ export default function SeriesDetailPage({ params }: SeriesDetailPageProps) {
                 // Lead with an offer the user can actually play; when none of
                 // the found offers is included, say so rather than crowning an
                 // unplayable one "Best Match".
-                const bestOffer = data.offers.find((o: PrimeOffer) => o.is_accessible);
+                const bestOffer = data.offers.find(isAccessibleEntitlementOffer);
                 const rest = data.offers.filter((o: PrimeOffer) => o !== bestOffer);
                 return (
                   <div className="space-y-3">
@@ -686,8 +687,7 @@ export default function SeriesDetailPage({ params }: SeriesDetailPageProps) {
                       </div>
                     ) : (
                       <p className="rounded-xl border border-dashed border-amber-300 bg-amber-50/60 p-3 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
-                        None of the offers found is included with your
-                        subscriptions — they are listed for reference.
+                        No offers match your current access and viewing settings.
                       </p>
                     )}
 

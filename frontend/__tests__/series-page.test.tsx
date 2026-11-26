@@ -74,6 +74,15 @@ const seriesBody = {
       locality: "local",
       is_entitled: true,
       is_accessible: true,
+      entitlement: {
+        verdict: "INCLUDED",
+        reason: "PLAN_COVERS_TITLE",
+        provider: "prime",
+        offer_type: "subscription",
+        offer_country: "US",
+        evidence_state: "verified",
+        caveats: [],
+      },
     },
   ],
 };

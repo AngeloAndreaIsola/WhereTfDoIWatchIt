@@ -52,7 +52,7 @@ describe("LastKnownOffers", () => {
     );
   });
 
-  it("keeps entitlement separate: an unowned stale offer stays muted", () => {
+  it("keeps a stale legacy offer muted without interpreting its subscription flags", () => {
     render(
       <LastKnownOffers
         offers={[
@@ -66,8 +66,9 @@ describe("LastKnownOffers", () => {
       />
     );
     expect(screen.getByTestId("offer-not-subscribed")).toHaveTextContent(
-      "Not in your subscriptions"
+      "Availability needs a recheck"
     );
+    expect(screen.getByTestId("offer-row")).toHaveAttribute("data-entitled", "unknown");
   });
 });
 

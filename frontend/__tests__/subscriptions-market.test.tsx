@@ -1,8 +1,9 @@
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import SubscriptionsPage from "@/app/subscriptions/page";
 import type { ProviderItem } from "@/lib/api";
+import { catalogPageCache, leavingSoonCache, watchlistPageCache } from "@/lib/navigationCache";
 
 vi.mock("next/link", () => ({
   default: ({
@@ -45,6 +46,22 @@ function catalogue(country: string): ProviderItem[] {
   ];
 }
 
+const pageCaches = [catalogPageCache, watchlistPageCache, leavingSoonCache];
+
+function cacheDependentPages() {
+  for (const cache of pageCaches) {
+    cache.set({
+      key: "before",
+      items: [],
+      page: 1,
+      paginationInfo: { totalPages: 1, hasNext: false, hasPrevious: false },
+      filters: {},
+      scrollY: 0,
+      cachedAt: Date.now(),
+    });
+  }
+}
+
 describe("Subscriptions page market selection", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -80,6 +97,7 @@ describe("Subscriptions page market selection", () => {
   });
 
   it("writes a plan selection without refreshing any availability source", async () => {
+    cacheDependentPages();
     const calls: Array<{ url: string; method: string }> = [];
     vi.stubGlobal(
       "fetch",
@@ -102,7 +120,64 @@ describe("Subscriptions page market selection", () => {
         url: "/api/subscriptions/aster/markets/NL/",
         method: "PUT",
       });
+      for (const cache of pageCaches) expect(cache.get("before")).toBeUndefined();
     });
     expect(calls.some((c) => c.url.includes("/refresh/"))).toBe(false);
+  });
+
+  it("updates the displayed market selection after legacy revocation", async () => {
+    let providers = catalogue("NL");
+    cacheDependentPages();
+    vi.stubGlobal("fetch", vi.fn(async (_url: unknown, init?: { method?: string }) => {
+      if (init?.method === "POST") {
+        const result = { is_subscribed: false, access_mode: "none" };
+        providers = [{
+          ...providers[0],
+          ...result,
+          access_mode: "none",
+          selection: {
+            holding: "no", plan_state: "unspecified", plan_id: null, channels: [], revision: 2,
+          },
+        }];
+        return { ok: true, json: async () => result };
+      }
+      return { ok: true, json: async () => providers };
+    }));
+
+    render(<SubscriptionsPage />);
+    expect(await screen.findByLabelText("Plan for Aster in NL")).toHaveValue("base");
+    fireEvent.change(screen.getByLabelText("Access mode for Aster"), { target: { value: "none" } });
+
+    await waitFor(() => expect(screen.getByLabelText("Plan for Aster in NL")).not.toHaveValue("base"));
+    for (const cache of pageCaches) expect(cache.get("before")).toBeUndefined();
+  });
+
+  it("keeps the current market when the previous market response arrives last", async () => {
+    let catalogueReads = 0;
+    let finishPreviousMarket: (providers: ProviderItem[]) => void = () => {};
+    const previousMarket = new Promise<ProviderItem[]>((resolve) => {
+      finishPreviousMarket = resolve;
+    });
+    vi.stubGlobal("fetch", vi.fn(async (url: unknown, init?: { method?: string }) => {
+      if (init?.method === "PUT") return { ok: true, json: async () => catalogue("NL")[0].selection };
+      catalogueReads += 1;
+      const country = String(url).includes("billing_country=DE") ? "DE" : "NL";
+      return {
+        ok: true,
+        json: () => country === "NL" && catalogueReads > 1
+          ? previousMarket
+          : Promise.resolve(catalogue(country)),
+      };
+    }));
+
+    render(<SubscriptionsPage />);
+    expect(await screen.findByLabelText("Plan for Aster in NL")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Save plan selection" }));
+    await waitFor(() => expect(catalogueReads).toBe(2));
+    fireEvent.change(screen.getByLabelText("Billing country"), { target: { value: "DE" } });
+    expect(await screen.findByLabelText("Plan for Aster in DE")).toBeInTheDocument();
+    await act(async () => finishPreviousMarket(catalogue("NL")));
+    expect(screen.getByLabelText("Plan for Aster in DE")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Plan for Aster in NL")).toBeNull();
   });
 });

@@ -13,6 +13,7 @@ import {
   ProviderAccessMode,
   MarketSelectionInput,
 } from "@/lib/api";
+import { invalidateCatalogCache, invalidateWatchlistCache } from "@/lib/navigationCache";
 
 /** Fast cadence for re-reading the list right after a press. */
 const POLL_INTERVAL_MS = 2500;
@@ -36,11 +37,18 @@ function initialBillingCountry(): string {
   return "NL";
 }
 
+function invalidateEntitlementViews() {
+  invalidateCatalogCache();
+  invalidateWatchlistCache();
+}
+
 export default function SubscriptionsPage() {
   const [providers, setProviders] = useState<ProviderItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState("");
   const [billingCountry, setBillingCountry] = useState<string>(initialBillingCountry);
+  const billingCountryRef = useRef(billingCountry);
+  const catalogueRequest = useRef(0);
 
   const [importUrl, setImportUrl] = useState("");
   const [importing, setImporting] = useState(false);
@@ -63,27 +71,17 @@ export default function SubscriptionsPage() {
 
   const pollsRef = useRef(0);
 
-  const fetchProviders = useCallback(async () => {
-    setLoading(true);
-    setFetchError("");
-    try {
-      setProviders(await fetchProviderMarketCatalogue(billingCountry));
-    } catch (err: unknown) {
-      setFetchError(err instanceof Error ? err.message : "Failed to load providers");
-    } finally {
-      setLoading(false);
+  const readProviders = useCallback(async (showLoading: boolean) => {
+    const request = ++catalogueRequest.current;
+    if (showLoading) {
+      setLoading(true);
+      setFetchError("");
     }
-  }, [billingCountry]);
-
-  /**
-   * Re-read the list without the loading state (never scroll/reset the page
-   * mid-refresh) and retire any press whose source is no longer refreshing.
-   * A failed poll keeps the current data: the next tick retries.
-   */
-  const silentFetchProviders = useCallback(async () => {
     try {
-      const data: ProviderItem[] = await fetchProviderMarketCatalogue(billingCountry);
+      const data = await fetchProviderMarketCatalogue(billingCountryRef.current);
+      if (request !== catalogueRequest.current) return;
       setProviders(data);
+      setFetchError("");
       setRefreshPending((prev) => {
         if (prev.size === 0) return prev;
         const stillRunning = new Set<string>();
@@ -93,10 +91,17 @@ export default function SubscriptionsPage() {
         });
         return stillRunning;
       });
-    } catch {
-      // Transient network failure while polling: keep the last known state.
+    } catch (err: unknown) {
+      if (showLoading && request === catalogueRequest.current) {
+        setFetchError(err instanceof Error ? err.message : "Failed to load providers");
+      }
+    } finally {
+      if (request === catalogueRequest.current) setLoading(false);
     }
-  }, [billingCountry]);
+  }, []);
+
+  const fetchProviders = useCallback(() => readProviders(true), [readProviders]);
+  const silentFetchProviders = useCallback(() => readProviders(false), [readProviders]);
 
   const anyRefreshing = providers.some((p) => p.refreshing);
   const shouldPoll = anyRefreshing || refreshPending.size > 0;
@@ -121,43 +126,34 @@ export default function SubscriptionsPage() {
 
   useEffect(() => {
     fetchProviders();
-  }, [fetchProviders]);
+  }, [billingCountry, fetchProviders]);
 
   const handleToggleProvider = async (slug: string) => {
     try {
       const res = await fetch(`/api/providers/${slug}/toggle/`, { method: "POST" });
       if (res.ok) {
-        // Update just this provider's subscription flag in place so the page
-        // doesn't flash back to the loading state (which jumps the scroll to top).
-        setProviders((prev) =>
-          prev.map((p) =>
-            p.slug === slug ? { ...p, is_subscribed: !p.is_subscribed } : p
-          )
-        );
+        invalidateEntitlementViews();
+        await silentFetchProviders();
       }
     } catch (err) {
       console.error(`Failed to toggle provider ${slug}:`, err);
     }
   };
 
-  /**
-   * Declare the user's access to a service (included / add-on / free /
-   * rent·buy / not owned). Updates the card in place so the page never resets.
-   */
   const handleSetAccessMode = async (slug: string, mode: ProviderAccessMode) => {
-    const result = await setProviderAccessMode(slug, mode);
-    setProviders((prev) =>
-      prev.map((p) =>
-        p.slug === slug
-          ? { ...p, is_subscribed: result.is_subscribed, access_mode: result.access_mode }
-          : p
-      )
-    );
+    await setProviderAccessMode(slug, mode);
+    invalidateEntitlementViews();
+    await silentFetchProviders();
   };
 
   /** Switching billing market re-reads the whole catalogue for that market. */
   const handleBillingCountryChange = (country: string) => {
     const normalized = country.toUpperCase();
+    if (normalized === billingCountryRef.current) return;
+    billingCountryRef.current = normalized;
+    catalogueRequest.current += 1;
+    setLoading(true);
+    setProviders([]);
     setBillingCountry(normalized);
     try {
       window.localStorage.setItem(BILLING_COUNTRY_KEY, normalized);
@@ -173,6 +169,7 @@ export default function SubscriptionsPage() {
    */
   const handleSaveMarketSelection = async (slug: string, input: MarketSelectionInput) => {
     await saveMarketSelection(slug, billingCountry, input);
+    invalidateEntitlementViews();
     await silentFetchProviders();
   };
 
@@ -275,6 +272,7 @@ export default function SubscriptionsPage() {
     try {
       const res = await fetch(`/api/providers/${slug}/`, { method: "DELETE" });
       if (res.ok || res.status === 204) {
+        invalidateEntitlementViews();
         await fetchProviders();
       }
     } catch (err) {
