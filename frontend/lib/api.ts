@@ -110,6 +110,13 @@ export interface PrimeOffer {
   last_checked_at?: string | null;
   reporting_source?: string;
   playback_verified?: false;
+  /**
+   * Server-side per-offer entitlement decision. Absent/null on an older
+   * payload: callers must treat that as unconfirmed, never as included.
+   * The front end renders this verbatim and never re-derives coverage from
+   * provider identity, logos, prices or coarse subscription flags.
+   */
+  entitlement?: OfferEntitlement | null;
   /** Reconciled source-declared window, in UTC ISO 8601. Missing or null means unknown. */
   available_from?: string | null;
   /** End of the reported window. A confirmed catalogue departure requires separate evidence. */
@@ -123,6 +130,64 @@ export type SourceReportedOffer = Omit<PrimeOffer, "ranking" | "availability_evi
 };
 
 export type AvailabilityEvidence = "verified" | "source_reported" | "stale" | "unknown";
+
+/**
+ * The six mutually exclusive per-offer verdicts produced by the backend
+ * resolver. Positive coverage is only INCLUDED or FREE_WITH_ADS; the rest must
+ * never be presented as confirmed watchability.
+ */
+export type EntitlementVerdict =
+  | "INCLUDED"
+  | "REQUIRES_ADDON"
+  | "RENT_OR_BUY"
+  | "FREE_WITH_ADS"
+  | "BLOCKED"
+  | "UNKNOWN";
+
+/** Stable reason codes from the shared #103 fixture corpus. */
+export type EntitlementReason =
+  | "PLAN_COVERS_TITLE"
+  | "CHANNEL_AND_BASE_COVER_TITLE"
+  | "CHANNEL_NOT_HELD"
+  | "PUBLIC_FREE"
+  | "PUBLIC_AD_FUNDED"
+  | "RENTAL"
+  | "PURCHASE"
+  | "BASE_NOT_HELD"
+  | "PLAN_EXCLUDED"
+  | "REGION_EXCLUDED"
+  | "PLAN_UNSPECIFIED"
+  | "PLAN_UNSUPPORTED"
+  | "HOLDING_UNCONFIRMED"
+  | "NO_APPLICABLE_RULE"
+  | "PORTABILITY_UNVERIFIED"
+  | "TERRITORY_UNKNOWN"
+  | "SOURCE_REPORTED"
+  | "STALE_EVIDENCE"
+  | "EVIDENCE_CONFLICT"
+  | "OFFER_CLASS_UNKNOWN"
+  | "PACKAGE_UNRESOLVED"
+  | "EVIDENCE_UNVERIFIED"
+  | "SOURCE_UNSUPPORTED"
+  | "PUBLIC_CONDITIONS_UNCONFIRMED"
+  | (string & {});
+
+/** The backend's `Entitlement.to_dict()` projection, rendered verbatim. */
+export interface OfferEntitlement {
+  verdict: EntitlementVerdict;
+  reason: EntitlementReason;
+  provider: string;
+  offer_type: string;
+  offer_country: string | null;
+  evidence_state: AvailabilityEvidence;
+  caveats: string[];
+  billing_country?: string;
+  plan_id?: string;
+  required_base?: string;
+  required_channel?: string;
+  source_label?: string;
+  observed_at?: string;
+}
 
 /** Stale/unverified positive evidence for a title — history, never "watchable now". */
 export interface LastKnownAvailability {
@@ -1227,6 +1292,185 @@ export async function setProviderAccessMode(
     throw new Error(body.error ?? `Failed to update access (${res.status})`);
   }
   return body as ProviderAccessResult;
+}
+
+// ─── Market-scoped subscription selection (#103) ────────────────────────────
+
+export type MarketHolding = "yes" | "no" | "unspecified";
+export type MarketPlanState = "selected" | "unspecified" | "unsupported";
+export type MarketPlanClass = "base" | "paid_ads" | "premium" | "other" | string;
+
+/** A reviewed plan selectable for one provider in one billing market. */
+export interface MarketPlanOption {
+  plan_id: string;
+  display_name: string;
+  class: MarketPlanClass;
+  billing_country: string;
+  caveat: string;
+}
+
+/** A channel package hosted by a base provider in one market. */
+export interface MarketChannelOption {
+  package_id: string;
+  parent_provider: string;
+  country: string;
+  display_name: string;
+  caveat: string;
+}
+
+/** Explicit "I don't know / my plan isn't listed" choice from the catalogue. */
+export interface UnlistedPlanOption {
+  plan_id: null;
+  plan_state: "unsupported";
+  display_name: string;
+}
+
+export interface ChannelDeclaration {
+  package_id: string;
+  /** The backend only accepts an explicit yes/no; omitted children stay unspecified. */
+  holding: "yes" | "no";
+}
+
+/** Saved viewer declaration for one (provider, billing market) pair. */
+export interface MarketSelection {
+  holding: MarketHolding;
+  plan_state: MarketPlanState;
+  plan_id: string | null;
+  plan_display_name?: string | null;
+  channels: ChannelDeclaration[];
+  revision: number;
+}
+
+/** Exact keys required by the optimistic-concurrency selection write. */
+export interface MarketSelectionInput {
+  holding: MarketHolding;
+  plan_state: MarketPlanState;
+  plan_id: string | null;
+  channels: ChannelDeclaration[];
+  revision: number;
+}
+
+export interface MarketSelectionConflict {
+  code: "revision_conflict";
+  selection: MarketSelection;
+}
+
+/** Thrown on HTTP 409; carries the freshly saved selection for reload. */
+export class MarketSelectionConflictError extends Error {
+  readonly selection: MarketSelection;
+  constructor(selection: MarketSelection) {
+    super("This selection changed elsewhere. Review the current saved state before saving again.");
+    this.name = "MarketSelectionConflictError";
+    this.selection = selection;
+  }
+}
+
+/** One provider card enriched with that market's reviewed options and saved state. */
+export interface ProviderItem {
+  id: number;
+  slug: string;
+  name: string;
+  category: string;
+  is_major: boolean;
+  is_enabled: boolean;
+  icon_name: string;
+  domain?: string;
+  last_scraped_at?: string | null;
+  scraped_content_count?: number;
+  is_subscribed: boolean;
+  /** How the user holds this service (null when not owned). */
+  access_mode?: ProviderAccessMode | null;
+  has_scraper?: boolean;
+  refresh_kind?: "catalogue" | "scraper" | null;
+  source_slug?: string | null;
+  last_run?: string | null;
+  last_run_error?: string | null;
+  available_items?: number;
+  refreshing?: boolean;
+  catalogue_sync_status?: string;
+  catalogue_sync_report?: {
+    pages_scanned?: number;
+    pages_remaining?: number | null;
+    items_unique?: number;
+    last_error?: string;
+  };
+  catalogue_discovery?: {
+    inventory_count?: number;
+    pending_classification_count?: number;
+    last_successful_sync?: string | null;
+    historical_checkpoint?: Record<string, number>;
+    incremental_checkpoint?: Record<string, number>;
+    coverage_status?: string;
+    error?: string;
+    new_discoveries_last_run?: number;
+    duplicate_identities_last_run?: number;
+    failed_pages_last_run?: Array<{
+      partition?: string;
+      page?: number;
+      status?: number;
+      evidence?: string;
+    }>;
+  };
+  favicon_domain?: string;
+  is_addon?: boolean;
+  parent?: string | null;
+  parent_name?: string | null;
+  /** Market fields below are only present when `billing_country` is requested. */
+  billing_country?: string;
+  plan_options?: MarketPlanOption[];
+  channel_options?: MarketChannelOption[];
+  unlisted_plan_option?: UnlistedPlanOption;
+  selection?: MarketSelection;
+}
+
+/**
+ * Read the provider catalogue for a billing market. The backend returns the
+ * reviewed plan/channel options plus the viewer's saved market selection on
+ * each provider row; no option is synthesised from a provider name or logo.
+ */
+export async function fetchProviderMarketCatalogue(
+  billingCountry: string
+): Promise<ProviderItem[]> {
+  const res = await fetch(
+    `/api/providers/?billing_country=${encodeURIComponent(billingCountry)}`
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(
+      body.error ?? `Failed to load providers (${res.status})`
+    );
+  }
+  return res.json();
+}
+
+/**
+ * Save one provider's market selection. A 409 is a real conflict, never a
+ * successful overwrite: the error carries the server's current selection so
+ * the caller can reload it while keeping the user's draft visible.
+ */
+export async function saveMarketSelection(
+  providerSlug: string,
+  billingCountry: string,
+  input: MarketSelectionInput
+): Promise<MarketSelection> {
+  const res = await fetch(
+    `/api/subscriptions/${encodeURIComponent(providerSlug)}/markets/${encodeURIComponent(billingCountry)}/`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    }
+  );
+  const body = await res.json().catch(() => ({}));
+  if (res.status === 409 && body.code === "revision_conflict") {
+    throw new MarketSelectionConflictError(body.selection as MarketSelection);
+  }
+  if (!res.ok) {
+    throw new Error(
+      body.error ?? body.detail ?? `Failed to save plan selection (${res.status})`
+    );
+  }
+  return body as MarketSelection;
 }
 
 export interface ProviderCatalogueSyncReport {

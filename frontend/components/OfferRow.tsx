@@ -4,6 +4,11 @@ import type { PrimeOffer } from "@/lib/api";
 import LanguageBadge from "@/components/LanguageBadge";
 import { normalizeLanguageCode } from "@/lib/languages";
 import { isUnverifiedOffer, UNVERIFIED_BADGE } from "@/lib/availability";
+import {
+  explainReason,
+  isPositiveVerdict,
+  presentVerdict,
+} from "@/lib/entitlement";
 
 export { PrimeOffer };
 
@@ -78,9 +83,18 @@ export default function OfferRow({
   );
 
   const reported = offer.availability_evidence === "source_reported";
-  const watchUrl = offer.url || (!reported && tmdbId ? `/watch/${tmdbId}` : null);
   const unverified = isUnverifiedOffer(offer);
-  const linkLabel = unverified ? (offer.url ? "Check provider" : "Verify availability") : "Watch";
+  const entitlement = offer.entitlement ?? null;
+  const verdict = entitlement?.verdict ?? null;
+  const verdictPresentation = presentVerdict(entitlement);
+  const positive = entitlement ? isPositiveVerdict(entitlement) : Boolean(offer.is_entitled);
+  const unconfirmed = Boolean(entitlement) && verdict === "UNKNOWN";
+  const watchUrl = offer.url || (!reported && tmdbId ? `/watch/${tmdbId}` : null);
+  const linkLabel = unverified
+    ? offer.url ? "Check provider" : "Verify availability"
+    : unconfirmed
+    ? offer.url ? "Check provider" : "Why can't I watch?"
+    : "Watch";
 
   // A price is only shown when a source confirmed it for the latest
   // observation: a remembered (stale) value is never presented as fresh, and a
@@ -103,7 +117,11 @@ export default function OfferRow({
   // availability — show it, muted and labelled, rather than hiding it. This is
   // the movie-194 fix: the offer list used to drop unowned services entirely,
   // which made "available elsewhere" look like "nothing found".
-  const notEntitled = !reported && offer.is_entitled === false;
+  const notEntitled =
+    !reported &&
+    (entitlement
+      ? !positive && verdict !== "UNKNOWN"
+      : offer.is_entitled === false);
   const notAccessible = !reported && offer.is_accessible === false;
   // Why the row is muted. An unowned service is the common case; an offer the
   // user *does* own can still be unreachable (wrong country) or unusable
@@ -111,6 +129,16 @@ export default function OfferRow({
   // simply wrong. Prefer the resolver's own rejection reason.
   const mutedReason = (() => {
     if (!notAccessible) return "";
+    if (entitlement) {
+      if (verdict === "UNKNOWN") return explainReason(entitlement.reason);
+      if (verdict === "BLOCKED") return explainReason(entitlement.reason);
+      if (verdict === "REQUIRES_ADDON") {
+        const channel = entitlement.required_channel ?? "this channel";
+        const host = entitlement.required_base ?? offer.required_base_display ?? "";
+        return `Add-on channel ${channel} is not held${host ? ` on ${host}` : ""}`;
+      }
+      if (verdict === "RENT_OR_BUY") return "A separate paid action is required — not included in your plan";
+    }
     if (offer.is_addon && offer.required_base_display) {
       return `Add-on channel — requires ${offer.required_base_display}`;
     }
@@ -136,7 +164,14 @@ export default function OfferRow({
   return (
     <div
       data-testid="offer-row"
-      data-entitled={reported ? "unknown" : notEntitled ? "false" : "true"}
+      data-entitled={
+        reported
+          ? "unknown"
+          : entitlement
+          ? positive ? "true" : unconfirmed ? "unknown" : "false"
+          : notEntitled ? "false" : "true"
+      }
+      data-entitlement-verdict={verdict ?? "missing"}
       className={`
         rounded-xl border p-4 text-sm transition-all
         ${notAccessible
@@ -186,6 +221,28 @@ export default function OfferRow({
           >
             {offer.offer_type}
           </span>
+          {entitlement && (
+            <span
+              data-testid="entitlement-verdict"
+              data-verdict={entitlement.verdict}
+              data-reason={entitlement.reason}
+              className={`rounded-md px-2 py-0.5 text-xs font-semibold ${
+                verdictPresentation.tone === "positive"
+                  ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300"
+                  : verdictPresentation.tone === "ads"
+                  ? "bg-sky-100 text-sky-800 dark:bg-sky-900/30 dark:text-sky-300"
+                  : verdictPresentation.tone === "transaction"
+                  ? "bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300"
+                  : verdictPresentation.tone === "addon"
+                  ? "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+                  : verdictPresentation.tone === "blocked"
+                  ? "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300"
+                  : "bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-200"
+              }`}
+            >
+              {verdictPresentation.label}
+            </span>
+          )}
           {unverified && (
             <span
               data-testid="unverified-badge"
@@ -243,7 +300,7 @@ export default function OfferRow({
               {offer.required_base_display ? ` · needs ${offer.required_base_display}` : ""}
             </span>
           )}
-          {offer.access_label && !notEntitled && !offer.is_addon && (
+          {offer.access_label && !entitlement && !notEntitled && !offer.is_addon && (
             <span
               className={`rounded-md px-2 py-0.5 text-xs font-medium ${
                 notAccessible
@@ -254,7 +311,7 @@ export default function OfferRow({
               {offer.access_label}
             </span>
           )}
-          {isBest && !notAccessible && (
+          {isBest && !notAccessible && positive && (
             <span className="rounded-full bg-green-600 px-2.5 py-0.5 text-xs font-bold text-white shadow-xs">
               Best Match
             </span>
@@ -306,6 +363,50 @@ export default function OfferRow({
           </a>
         )}
       </div>
+
+      {entitlement && (
+        <div className="mt-3 space-y-1 border-t border-gray-100 pt-2.5 text-[11px] dark:border-gray-700/60">
+          {!positive && (
+            <p data-testid="entitlement-reason" className="text-gray-600 dark:text-gray-300">
+              {explainReason(entitlement.reason)}
+            </p>
+          )}
+          {entitlement.billing_country && entitlement.offer_country &&
+            entitlement.billing_country.toUpperCase() !== entitlement.offer_country.toUpperCase() && (
+              <p data-testid="region-caveat" className="text-amber-700 dark:text-amber-400">
+                Billing {entitlement.billing_country} · offer {entitlement.offer_country} —
+                plan coverage in another market needs reviewed portability.
+              </p>
+            )}
+          {(entitlement.reason === "PORTABILITY_UNVERIFIED" ||
+            entitlement.reason === "REGION_EXCLUDED" ||
+            entitlement.reason === "TERRITORY_UNKNOWN") && (
+            <p data-testid="region-caveat" className="text-amber-700 dark:text-amber-400">
+              Region caveat: this market is not confirmed by your selected plan.
+            </p>
+          )}
+          {entitlement.plan_id && (
+            <p className="text-gray-500 dark:text-gray-400">
+              Selected plan: {entitlement.plan_id}
+              {entitlement.required_channel && ` · channel: ${entitlement.required_channel}`}
+            </p>
+          )}
+          {entitlement.caveats.map((caveat) => (
+            <p
+              key={caveat}
+              data-testid="entitlement-caveat"
+              className="text-gray-500 dark:text-gray-400"
+            >
+              {caveat}
+            </p>
+          ))}
+          {entitlement.source_label && (
+            <p className="text-gray-400 dark:text-gray-500">
+              Evidence: {entitlement.source_label}
+            </p>
+          )}
+        </div>
+      )}
 
       <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-gray-600 dark:text-gray-400 border-t border-gray-100 pt-2.5 dark:border-gray-700/60">
         <div className="flex flex-wrap items-center gap-1.5">

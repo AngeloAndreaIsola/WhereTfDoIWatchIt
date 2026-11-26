@@ -3,11 +3,15 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import ProviderGrid, { ProviderItem } from "@/components/ProviderGrid";
+import CountrySelect from "@/components/CountrySelect";
 import {
+  fetchProviderMarketCatalogue,
   refreshProvider,
+  saveMarketSelection,
   setProviderAccessMode,
   syncProviderCatalogue,
   ProviderAccessMode,
+  MarketSelectionInput,
 } from "@/lib/api";
 
 /** Fast cadence for re-reading the list right after a press. */
@@ -19,10 +23,24 @@ const MAX_POLLS = 84;
 /** Polls spent on the fast cadence (~1 minute) before backing off. */
 const FAST_POLLS = 24;
 
+const BILLING_COUNTRY_KEY = "wtdw.billingCountry";
+
+function initialBillingCountry(): string {
+  if (typeof window === "undefined") return "NL";
+  try {
+    const saved = window.localStorage.getItem(BILLING_COUNTRY_KEY);
+    if (saved && /^[a-zA-Z]{2}$/.test(saved)) return saved.toUpperCase();
+  } catch {
+    // Storage is optional; the default market still yields a valid catalogue.
+  }
+  return "NL";
+}
+
 export default function SubscriptionsPage() {
   const [providers, setProviders] = useState<ProviderItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState("");
+  const [billingCountry, setBillingCountry] = useState<string>(initialBillingCountry);
 
   const [importUrl, setImportUrl] = useState("");
   const [importing, setImporting] = useState(false);
@@ -49,18 +67,13 @@ export default function SubscriptionsPage() {
     setLoading(true);
     setFetchError("");
     try {
-      const res = await fetch("/api/providers/");
-      if (!res.ok) {
-        throw new Error(`Failed to load providers (${res.status})`);
-      }
-      const data: ProviderItem[] = await res.json();
-      setProviders(data);
+      setProviders(await fetchProviderMarketCatalogue(billingCountry));
     } catch (err: unknown) {
       setFetchError(err instanceof Error ? err.message : "Failed to load providers");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [billingCountry]);
 
   /**
    * Re-read the list without the loading state (never scroll/reset the page
@@ -69,9 +82,7 @@ export default function SubscriptionsPage() {
    */
   const silentFetchProviders = useCallback(async () => {
     try {
-      const res = await fetch("/api/providers/");
-      if (!res.ok) return;
-      const data: ProviderItem[] = await res.json();
+      const data: ProviderItem[] = await fetchProviderMarketCatalogue(billingCountry);
       setProviders(data);
       setRefreshPending((prev) => {
         if (prev.size === 0) return prev;
@@ -85,7 +96,7 @@ export default function SubscriptionsPage() {
     } catch {
       // Transient network failure while polling: keep the last known state.
     }
-  }, []);
+  }, [billingCountry]);
 
   const anyRefreshing = providers.some((p) => p.refreshing);
   const shouldPoll = anyRefreshing || refreshPending.size > 0;
@@ -142,6 +153,27 @@ export default function SubscriptionsPage() {
           : p
       )
     );
+  };
+
+  /** Switching billing market re-reads the whole catalogue for that market. */
+  const handleBillingCountryChange = (country: string) => {
+    const normalized = country.toUpperCase();
+    setBillingCountry(normalized);
+    try {
+      window.localStorage.setItem(BILLING_COUNTRY_KEY, normalized);
+    } catch {
+      // Persisting the choice is a convenience, not a requirement.
+    }
+  };
+
+  /**
+   * Save a market plan/channel declaration. A conflict is rethrown to the
+   * selector so it can keep the user's draft visible; only a successful write
+   * refreshes the saved state from the server.
+   */
+  const handleSaveMarketSelection = async (slug: string, input: MarketSelectionInput) => {
+    await saveMarketSelection(slug, billingCountry, input);
+    await silentFetchProviders();
   };
 
   /** Pull the current provider catalogue in from JustWatch (idempotent). */
@@ -282,6 +314,7 @@ export default function SubscriptionsPage() {
     }
   };
 
+  const hostNames = Object.fromEntries(providers.map((p) => [p.slug, p.name]));
   const majorProviders = providers.filter((p) => p.is_major);
   const bvodProviders = providers.filter((p) => p.category === "bvod");
   // Public broadcasters are BVOD providers, so every scraper-category provider
@@ -340,6 +373,26 @@ export default function SubscriptionsPage() {
         )}
       </div>
 
+      {!loading && !fetchError && (
+        <div className="mb-6 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
+          <p className="block text-sm font-semibold text-gray-800 dark:text-gray-200">
+            Billing country
+          </p>
+          <p className="mb-2 text-xs text-gray-500 dark:text-gray-400">
+            Plans and channel add-ons are sold per billing market. The current
+            location is kept separate — a plan held elsewhere is not confirmed
+            here without reviewed portability.
+          </p>
+          <div className="max-w-xs">
+            <CountrySelect
+              country={billingCountry}
+              onChange={handleBillingCountryChange}
+              label="Billing country"
+            />
+          </div>
+        </div>
+      )}
+
       {syncResult && (
         <div className="mb-6 rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-2.5 text-xs text-emerald-800 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
           {syncResult}
@@ -385,6 +438,9 @@ export default function SubscriptionsPage() {
               providers={majorProviders}
               onToggle={handleToggleProvider}
               onSetAccessMode={handleSetAccessMode}
+              billingCountry={billingCountry}
+              onSaveMarketSelection={handleSaveMarketSelection}
+              hostNames={hostNames}
               onRefresh={refreshOne}
               refreshPending={refreshPending}
               refreshErrors={refreshErrors}
@@ -433,6 +489,9 @@ export default function SubscriptionsPage() {
                 providers={bvodProviders}
                 onToggle={handleToggleProvider}
                 onSetAccessMode={handleSetAccessMode}
+                billingCountry={billingCountry}
+                onSaveMarketSelection={handleSaveMarketSelection}
+                hostNames={hostNames}
                 onRefresh={refreshOne}
                 refreshPending={refreshPending}
                 refreshErrors={refreshErrors}
@@ -472,6 +531,9 @@ export default function SubscriptionsPage() {
                 providers={otherProviders}
                 onToggle={handleToggleProvider}
                 onSetAccessMode={handleSetAccessMode}
+                billingCountry={billingCountry}
+                onSaveMarketSelection={handleSaveMarketSelection}
+                hostNames={hostNames}
                 onRefresh={refreshOne}
                 refreshPending={refreshPending}
                 refreshErrors={refreshErrors}
@@ -570,6 +632,9 @@ export default function SubscriptionsPage() {
                   providers={scraperProviders}
                   onToggle={handleToggleProvider}
                   onSetAccessMode={handleSetAccessMode}
+                  billingCountry={billingCountry}
+                  onSaveMarketSelection={handleSaveMarketSelection}
+                  hostNames={hostNames}
                   onRefresh={refreshOne}
                   onRemove={handleDeleteProvider}
                   useFavicons
