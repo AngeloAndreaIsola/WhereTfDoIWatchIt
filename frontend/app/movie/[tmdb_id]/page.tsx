@@ -16,6 +16,7 @@ import type { PrimeOffer, PrimeMovieResponse } from "@/lib/api";
 import { fetchPrimeMovieOffers, addToWatchlist, markMovieWatched, unmarkMovieWatched, removeWatchlistItem, requestAvailabilityRefresh } from "@/lib/api";
 import type { LinkTmdbResponse } from "@/lib/api";
 import { invalidateCatalogCache, invalidateWatchlistCache } from "@/lib/navigationCache";
+import { isAccessibleEntitlementOffer } from "@/lib/entitlement";
 
 interface UnofficialOffer {
   country: string;
@@ -597,7 +598,7 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
                 // the found offers is included (movie 194: Netflix/Max/Hulu,
                 // none subscribed) we do not crown one "Best Match" — we say
                 // so and list everything for reference.
-                const bestOffer = data.offers.find((o: PrimeOffer) => o.is_accessible);
+                const bestOffer = data.offers.find(isAccessibleEntitlementOffer);
                 const rest = data.offers.filter((o: PrimeOffer) => o !== bestOffer);
                 return (
                   <div className="space-y-3">
@@ -617,8 +618,7 @@ export default function MovieDetailPage({ params }: MovieDetailPageProps) {
                       </div>
                     ) : (
                       <p className="rounded-xl border border-dashed border-amber-300 bg-amber-50/60 p-3 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
-                        None of the offers found is included with your
-                        subscriptions — they are listed for reference.
+                        No offers match your current access and viewing settings.
                       </p>
                     )}
 

@@ -2,7 +2,7 @@ import React from "react";
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import OfferRow, { formatPrice } from "../OfferRow";
-import type { PrimeOffer } from "@/lib/api";
+import type { OfferEntitlement, PrimeOffer } from "@/lib/api";
 
 const baseOffer = {
   country: "IT",
@@ -19,10 +19,19 @@ const baseOffer = {
   },
 };
 const providerUrl = "https://www.primevideo.com/detail/example";
+const included: OfferEntitlement = {
+  verdict: "INCLUDED",
+  reason: "PLAN_COVERS_TITLE",
+  offer_country: "IT",
+  offer_type: "subscription",
+  provider: "prime",
+  evidence_state: "verified",
+  caveats: [],
+};
 
 describe("OfferRow", () => {
   it("keeps the Watch link for a verified offer", () => {
-    render(<OfferRow offer={{ ...baseOffer, url: providerUrl, availability_evidence: "verified" }} />);
+    render(<OfferRow offer={{ ...baseOffer, url: providerUrl, availability_evidence: "verified", is_accessible: true, entitlement: included }} />);
     expect(screen.queryByTestId("unverified-badge")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Watch" })).toHaveAttribute("href", providerUrl);
   });
@@ -89,14 +98,13 @@ describe("OfferRow", () => {
       locality: "vpn" as const,
       is_entitled: false,
       is_accessible: false,
+      entitlement: { ...included, verdict: "BLOCKED", reason: "BASE_NOT_HELD" } as const,
       access_label: "Included with your subscription",
     };
     render(<OfferRow offer={unowned} currentCountry="NL" isBest={true} />);
 
-    expect(screen.getByTestId("offer-not-subscribed")).toBeInTheDocument();
-    expect(
-      screen.getByText(/not in your subscriptions/i),
-    ).toBeInTheDocument();
+    expect(screen.getByTestId("offer-not-subscribed"))
+      .toHaveTextContent(/base subscription is marked as not held/i);
     // An unplayable offer must never be crowned "Best Match".
     expect(screen.queryByText("Best Match")).not.toBeInTheDocument();
     // The entitlement chip must not contradict the muted message: this offer
@@ -117,6 +125,7 @@ describe("OfferRow", () => {
       locality: "vpn" as const,
       is_entitled: true,
       is_accessible: false,
+      entitlement: included,
       access_label: "Included with your subscription",
       rejection_reasons: ["Does not satisfy language rules"],
     };
@@ -127,11 +136,11 @@ describe("OfferRow", () => {
     ).toBeInTheDocument();
     expect(screen.queryByText("Not reachable from your settings")).not.toBeInTheDocument();
     // They do own the service, so the entitlement chip is accurate here.
-    expect(screen.getByText("Included with your subscription")).toBeInTheDocument();
+    expect(screen.getByText("Included with your selected plan")).toBeInTheDocument();
   });
 
   it("still marks an accessible offer as Best Match", () => {
-    const accessible = { ...baseOffer, locality: "local" as const, is_entitled: true, is_accessible: true };
+    const accessible = { ...baseOffer, locality: "local" as const, is_entitled: true, is_accessible: true, entitlement: included };
     render(<OfferRow offer={accessible} currentCountry="IT" isBest={true} />);
     expect(screen.getByText("Best Match")).toBeInTheDocument();
     expect(screen.queryByTestId("offer-not-subscribed")).not.toBeInTheDocument();
