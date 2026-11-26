@@ -175,6 +175,23 @@ class SelectionApiTests(ProductFixture, TestCase):
         self.assertEqual(self.put().status_code, 200)
         self.assertEqual(ViewerMarketSelection.objects.count(), 2)
 
+    def test_bodyless_toggle_and_legacy_delete_revoke_plan(self):
+        toggle_url = "/api/providers/synthetic-aster/toggle/"
+        self.assertEqual(self.put().status_code, 200)
+        response = self.client.post(toggle_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["is_subscribed"])
+        profile = ViewerMarketSelection.objects.get()
+        self.assertEqual((profile.holding, profile.plan_id, profile.revision), ("no", None, 2))
+
+        self.assertTrue(self.client.post(toggle_url).json()["is_subscribed"])
+        subscription = Subscription.objects.get(provider=self.host)
+        self.assertEqual(self.put(revision=2).status_code, 200)
+        self.assertEqual(self.client.delete(f"/api/subscriptions/{subscription.pk}/").status_code, 204)
+        self.assertFalse(Subscription.objects.filter(pk=subscription.pk).exists())
+        profile.refresh_from_db()
+        self.assertEqual((profile.holding, profile.plan_id, profile.revision), ("no", None, 4))
+
 
 class ConcurrentSelectionTests(ProductFixture, TransactionTestCase):
     def test_concurrent_first_write_distinct_and_identical_replays(self):
@@ -397,6 +414,36 @@ class OfferProjectionTests(ProductFixture, TestCase):
             with self.subTest(params=params):
                 self.assertEqual(self.client.get(f"/api/watchlist/report/?{params}").json()["report"], [])
         self.assertEqual(len(self.client.get("/api/watchlist/report/?current_country=NL&included=1").json()["report"]), 1)
+
+        catalogue = "/api/catalog/?current_country=NL&watchable=1"
+        self.assertEqual(len(self.client.get(catalogue).json()["results"]), 1)
+        refresh.reset_mock()
+        self.assertEqual(self.put(plan_id="premium", revision=1).status_code, 200)
+        refresh.assert_not_called()
+        detail = self.client.get("/api/prime/movie/910003/?current_country=NL").json()
+        self.assertEqual(detail["offers"][0]["entitlement"]["reason"], "NO_APPLICABLE_RULE")
+        self.assertFalse(detail["offers"][0]["is_accessible"])
+        self.assertEqual(detail["watchability"]["verdict"], "unknown")
+        self.assertEqual(self.client.get(catalogue).json()["results"], [])
+        self.assertEqual(self.client.get("/api/watchlist/report/?current_country=NL&included=1").json()["report"], [])
+
+    def test_expired_billing_channel_cannot_qualify_an_active_foreign_channel(self):
+        self.assertEqual(self.put(channels=[{"package_id": "orbit", "holding": "yes"}]).status_code, 200)
+        billing_channel = EntitlementChannel.objects.get(country="NL", package_id="orbit")
+        offer_channel = self.channel("orbit", "DE")
+        hosted = Provider.objects.create(slug="synthetic-orbit-via-aster", name="Hosted orbit")
+        row, package = self.offer(provider=hosted, country=self.de, kind="addon", channel=offer_channel)
+        self.rule(row, package, portability="allowed")
+        evidence = get_title_offer_evidence(self.movie, now=self.now)
+
+        def read():
+            access = build_user_access(1, offers=evidence.current, as_of=self.now)
+            return resolve_title(self.movie, evidence.current, self.preference, access=access).offers[0].entitlement
+
+        self.assertEqual(read().reason, "CHANNEL_AND_BASE_COVER_TITLE")
+        EntitlementChannel.objects.filter(pk=billing_channel.pk).update(ends_at=self.now)
+        result = read()
+        self.assertEqual((result.verdict, result.reason), ("UNKNOWN", "HOLDING_UNCONFIRMED"))
 
     def test_exact_host_variant_portability_and_bulk_queries(self):
         self.assertEqual(self.put(channels=[{"package_id": "orbit", "holding": "yes"}]).status_code, 200)
