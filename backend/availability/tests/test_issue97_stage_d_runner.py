@@ -90,7 +90,7 @@ class StageDRunnerTests(TransactionTestCase):
         self.publish_evidence()
         self.enterContext(patch.object(runner.timezone, "now", side_effect=lambda: self.now))
         self.sleep = self.enterContext(patch.object(runner, "sleep", side_effect=self.advance))
-        self.http = self.enterContext(patch("requests.Session.post", side_effect=self.mock_send))
+        self.http = self.enterContext(patch("requests.Session.post", autospec=True, side_effect=self.mock_send))
 
     def publish_evidence(self):
         os.environ[EVIDENCE_ENV] = json.dumps(self.evidence)
@@ -113,19 +113,44 @@ class StageDRunnerTests(TransactionTestCase):
         token = self.sign_fixture(self.reviewed_scope(batch))
         return runner.execute(batch, token, self.database)
 
-    def mock_send(self, url, *, json, headers, timeout, allow_redirects):
+    def mock_send(self, session, url, *, json, headers, timeout, allow_redirects):
         self.assertEqual(url, self.endpoint)
+        self.assertFalse(session.trust_env)
+        self.assertEqual(session.get_adapter(url).max_retries.total, 0)
         self.assertEqual(json["operationName"], "GetSearchTitles")
+        self.assertEqual(
+            hashlib.sha256(json["query"].encode()).hexdigest(),
+            self.policy["document_sha256"],
+        )
         self.assertEqual(json["variables"]["country"], "NL")
         self.assertEqual(json["variables"]["first"], 20)
+        self.assertIsNone(json["variables"].get("offset"))
         self.assertNotEqual(json["query"], SEASONS_QUERY)
         self.assertFalse(allow_redirects)
         self.assertEqual(timeout, 30)
         title_filter = json["variables"]["searchTitlesFilter"]
         scope = next(scope for scope in self.policy["scopes"] if scope["title"] == title_filter["searchQuery"])
         self.assertEqual(title_filter["objectTypes"], ["MOVIE" if scope["media_type"] == "movie" else "SHOW"])
-        self.assertTrue(JustWatchRequestBudget.objects.get(evidence_reference=self.reference).in_progress)
-        self.assertEqual(AvailabilityExperimentAttempt.objects.count(), self.http.call_count)
+        # An independent connection must see the debit and both events before transport.
+        observer = connection.copy()
+        try:
+            with observer.cursor() as cursor:
+                cursor.execute(
+                    "SELECT b.attempts, b.in_progress, e.kind "
+                    "FROM availability_availabilitystagedattemptevent e "
+                    "JOIN availability_availabilityexperimentattempt a ON a.id = e.attempt_id "
+                    "JOIN availability_availabilitystagedrun r ON r.experiment_id = a.experiment_id "
+                    "JOIN availability_justwatchrequestbudget b ON b.id = r.grant_id "
+                    "WHERE a.ordinal = %s AND a.scope_id = %s AND b.evidence_reference = %s "
+                    "ORDER BY e.kind",
+                    [self.http.call_count, scope["scope_id"], self.reference],
+                )
+                self.assertEqual(cursor.fetchall(), [
+                    (self.http.call_count, True, "handoff"),
+                    (self.http.call_count, True, "reservation"),
+                ])
+        finally:
+            observer.close()
         self.advance(1)
         return self.response(scope)
 
@@ -179,12 +204,20 @@ class StageDRunnerTests(TransactionTestCase):
             ("evidence_sha256", "other"), ("runtime_receipt_sha256", "other"),
             ("prior_checkpoints_sha256", "other"), ("scope_ids", ["movie-220289-nl"]),
             ("maximum_attempts", 13), ("maximum_retries", 1), ("operation", "GetTitleNode"),
+            ("document_sha256", "other"),
         ):
             with self.subTest(key=key), self.assertRaisesRegex(ExperimentBlocked, "authorization does not match"):
                 runner.execute(1, self.sign_fixture({**expected, key: bad}), self.database)
         for token in (self.sign_fixture(expected, key="unreviewed"), "invalid"):
             with self.assertRaisesRegex(ExperimentBlocked, "invalid Stage D authorization"):
                 runner.execute(1, token, self.database)
+        valid_token = self.sign_fixture(expected)
+        raw_payload, tag = valid_token.split(".")
+        corrupted_tag = f"{raw_payload}.{'0' * len(tag)}"
+        corrupted_payload = f"{raw_payload}extra.{tag}"
+        for bad_token in (corrupted_tag, corrupted_payload, "malformed.token.format", ""):
+            with self.subTest(bad_token=bad_token), self.assertRaisesRegex(ExperimentBlocked, "invalid Stage D authorization"):
+                runner.execute(1, bad_token, self.database)
         self.http.assert_not_called()
         self.assertFalse(AvailabilityExperimentAttempt.objects.exists())
 
@@ -193,6 +226,8 @@ class StageDRunnerTests(TransactionTestCase):
         token = self.sign_fixture(expected)
         with self.assertRaisesRegex(ExperimentBlocked, "actual PostgreSQL target"):
             runner.execute(1, token, "wrong")
+        with self.assertRaisesRegex(ExperimentBlocked, "actual PostgreSQL target"):
+            runner.recover_checkpoint("wrong")
         with patch.dict(os.environ, {runner.DISPOSABLE_ENV: "0"}):
             with self.assertRaisesRegex(ExperimentBlocked, "disposable database"):
                 runner.execute(1, token, self.database)
@@ -231,6 +266,13 @@ class StageDRunnerTests(TransactionTestCase):
         self.http.assert_not_called()
 
     def test_twelve_committed_sends_and_no_thirteenth_reservation(self):
+        # Upstream and receipt capacity remain after all 12 Stage D slots are spent.
+        self.receipt["maximum_requests"] = 20
+        self.source.configuration = {PERMISSION_KEY: self.receipt}
+        self.source.save(update_fields=["configuration"])
+        self.evidence["access_permission"]["maximum_requests"] = 20
+        self.evidence["quota"]["remaining"] = 20
+        self.publish_evidence()
         for batch, total in ((1, 2), (2, 7), (3, 12)):
             with self.subTest(batch=batch):
                 result = self.run_batch(batch)
@@ -239,7 +281,7 @@ class StageDRunnerTests(TransactionTestCase):
                 self.assertEqual(result["http_transmitted_confirmed"], total)
                 self.assertEqual(result["http_transmission_unknown"], 0)
         self.assertEqual(self.http.call_count, 12)
-        self.assertEqual(self.sleep.call_count, 11)
+        self.assertEqual([call.args[0] for call in self.sleep.call_args_list], [5] * 11)
         self.assertEqual(AvailabilityExperiment.objects.count(), 1)
         self.assertEqual(AvailabilityStageDRun.objects.count(), 1)
         self.assertEqual(AvailabilityExperimentScope.objects.count(), 12)
@@ -321,6 +363,21 @@ class StageDRunnerTests(TransactionTestCase):
         self.assertEqual(account["http_transmission_unknown"], 1)
         self.http.assert_not_called()
 
+    def test_interrupted_handoff_stays_spent_after_reconnect(self):
+        token = self.sign_fixture(self.reviewed_scope())
+        self.http.side_effect = KeyboardInterrupt
+        with self.assertRaises(KeyboardInterrupt):
+            runner.execute(1, token, self.database)
+        connection.close()
+        report = runner.preflight(1)
+        self.assertEqual(report["accounting"]["http_reservations_spent"], 1)
+        self.assertEqual(report["accounting"]["http_handoff_without_confirmation"], 1)
+        self.assertTrue(JustWatchRequestBudget.objects.get().in_progress)
+        self.assertIn("unknown transmission", report["blockers"][0])
+        with self.assertRaisesRegex(ExperimentBlocked, "unknown transmission"):
+            runner.execute(1, token, self.database)
+        self.assertEqual(self.http.call_count, 1)
+
     def test_confirmed_response_can_be_checkpointed_offline_without_resend(self):
         token = self.sign_fixture(self.reviewed_scope())
         with patch.object(runner, "_checkpoint", side_effect=RuntimeError("interrupted checkpoint")):
@@ -331,8 +388,13 @@ class StageDRunnerTests(TransactionTestCase):
         self.assertIn("offline checkpoint recovery", report["blockers"][0])
         received = self.now
         self.advance(10)
-        checkpoint = runner.recover_checkpoint(self.database)
+        connection.close()
+        output = StringIO()
+        call_command("issue97_stage_d", recover_checkpoint=True,
+                     confirm_database_identity=self.database, stdout=output)
+        checkpoint = json.loads(output.getvalue())
         self.assertEqual(checkpoint["observed_at"], received.isoformat())
+        self.assertEqual(AvailabilityStageDAttemptEvent.objects.get(kind="checkpoint").occurred_at, self.now)
         self.assertEqual(self.http.call_count, 1)
         result = runner.execute(1, token, self.database)
         self.assertEqual(result["http_reservations_spent"], 2)
@@ -354,16 +416,94 @@ class StageDRunnerTests(TransactionTestCase):
         self.assertEqual(self.http.call_count, 1)
 
     def test_wrong_typed_response_stops_before_observation(self):
+        self.assert_unmatched_title_stops(
+            lambda body, node: node.update(objectType="SHOW"), "typed title is missing or ambiguous",
+        )
+
+    def test_wrong_tmdb_id_stops_before_observation(self):
+        self.assert_unmatched_title_stops(
+            lambda body, node: node["content"]["externalIds"].update(tmdbId="999999"),
+            "typed title is missing or ambiguous",
+        )
+
+    def test_wrong_title_stops_before_observation(self):
+        self.assert_unmatched_title_stops(
+            lambda body, node: node["content"].update(title="Different title"), "label/year mismatch",
+        )
+
+    def test_wrong_year_stops_before_observation(self):
+        self.assert_unmatched_title_stops(
+            lambda body, node: node["content"].update(originalReleaseYear=1973), "label/year mismatch",
+        )
+
+    def assert_unmatched_title_stops(self, transform, expected_error):
         token = self.sign_fixture(self.reviewed_scope())
         self.http.side_effect = None
-        self.http.return_value = self.response(transform=lambda body, node: node.update(objectType="SHOW"))
-        with self.assertRaisesRegex(ExperimentBlocked, "typed title"):
+        self.http.return_value = self.response(transform=transform)
+        with self.assertRaisesRegex(ExperimentBlocked, expected_error):
             runner.execute(1, token, self.database)
         response = AvailabilityStageDAttemptEvent.objects.get(kind="response")
         self.assertNotIn("observation", response.evidence)
         self.assertEqual(response.evidence["status"], 200)
         self.assertFalse(AvailabilityExperimentScope.objects.exists())
         self.assertEqual(self.http.call_count, 1)
+
+    def test_stage_d_attempt_and_handoff_history_is_append_only(self):
+        self.run_batch(1)
+        attempts = AvailabilityExperimentAttempt.objects.filter(ordinal=1)
+        handoffs = AvailabilityStageDAttemptEvent.objects.filter(attempt__ordinal=1, kind="handoff")
+        reservations = AvailabilityStageDAttemptEvent.objects.filter(attempt__ordinal=1, kind="reservation")
+        with self.assertRaisesRegex(DatabaseError, "append-only"), transaction.atomic():
+            attempts.update(scope_id="tampered")
+        with self.assertRaisesRegex(DatabaseError, "append-only"), transaction.atomic():
+            with connection.cursor() as cursor:
+                cursor.execute("DELETE FROM availability_availabilityexperimentattempt WHERE ordinal = 1")
+        with self.assertRaisesRegex(DatabaseError, "append-only"), transaction.atomic():
+            handoffs.update(evidence={"tampered": True})
+        with self.assertRaisesRegex(DatabaseError, "append-only"), transaction.atomic():
+            handoffs.delete()
+        with self.assertRaisesRegex(DatabaseError, "append-only"), transaction.atomic():
+            reservations.delete()
+        with self.assertRaisesRegex(DatabaseError, "append-only"), transaction.atomic():
+            with connection.cursor() as cursor:
+                cursor.execute("DELETE FROM availability_availabilitystagedrun")
+        self.assertEqual(attempts.get().scope_id, self.policy["scopes"][0]["scope_id"])
+        self.assertEqual(handoffs.count(), 1)
+        self.assertEqual(self.http.call_count, 2)
+
+    def test_preflight_without_catalogue_rows_and_receipt_reports_thirteen_blockers(self):
+        """Independent preflight on a fresh target finds 13 blockers:
+
+        12 missing typed title identities + 1 missing current NL-search runtime receipt.
+        Synthetic Movie rows populated for offline tests cannot substitute for actual
+        retained target inventory.
+        """
+        Movie.objects.all().delete()
+        self.source.configuration = {}
+        self.source.save(update_fields=["configuration"])
+        output = StringIO()
+        call_command("issue97_stage_d", stdout=output)
+        report = json.loads(output.getvalue())
+        self.assertEqual(report["readiness"], "blocked")
+        self.assertNotIn("authorization_scope", report)
+        self.assertEqual(len(report["blockers"]), 13)
+        self.assertIn("current runtime source receipt must cover NL search only", report["blockers"])
+        for scope in self.policy["scopes"]:
+            self.assertIn(
+                f"{scope['scope_id']} requires the exact typed Movie title and year",
+                report["blockers"],
+            )
+        self.assertEqual(self.http.call_count, 0)
+
+    def test_database_movie_identity_mismatch_blocks_execution(self):
+        token = self.sign_fixture(self.reviewed_scope(1))
+        first_scope = self.policy["scopes"][0]
+        Movie.objects.filter(tmdb_id=first_scope["tmdb_id"], content_type=first_scope["media_type"]).update(year=1999)
+        self.assertIn("requires the exact typed Movie title and year", runner.preflight(1)["blockers"][0])
+        with self.assertRaisesRegex(ExperimentBlocked, "requires the exact typed Movie title and year"):
+            runner.execute(1, token, self.database)
+        self.http.assert_not_called()
+        self.assertFalse(AvailabilityExperimentAttempt.objects.exists())
 
     def test_wrong_market_stops_before_observation(self):
         token = self.sign_fixture(self.reviewed_scope())
@@ -442,6 +582,24 @@ class StageDRunnerTests(TransactionTestCase):
 
     def test_redirect_is_charged_and_stops(self):
         self.assert_charged_stop(302)
+
+    def test_http_200_html_challenge_is_charged_and_stops(self):
+        token = self.sign_fixture(self.reviewed_scope())
+        challenge = self.response(headers={"Content-Type": "text/html"})
+        challenge._content = b"<html><title>Synthetic access challenge</title></html>"
+        self.http.side_effect = None
+        self.http.return_value = challenge
+        with self.assertRaisesRegex(ExperimentBlocked, "access challenge"):
+            runner.execute(1, token, self.database)
+        with self.assertRaisesRegex(ExperimentBlocked, "confirmed response stopped"):
+            runner.execute(1, token, self.database)
+        event = AvailabilityStageDAttemptEvent.objects.get(kind="response")
+        self.assertEqual(event.evidence["status"], 200)
+        self.assertNotIn("observation", event.evidence)
+        self.assertNotIn("Synthetic access challenge", json.dumps(event.evidence))
+        self.assertEqual(JustWatchRequestBudget.objects.get().attempts, 1)
+        self.assertFalse(AvailabilityExperimentScope.objects.exists())
+        self.assertEqual(self.http.call_count, 1)
 
     def test_429_durably_respects_retry_after(self):
         grant, response = self.assert_charged_stop(429)
