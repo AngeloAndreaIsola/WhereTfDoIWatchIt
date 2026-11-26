@@ -1,0 +1,213 @@
+{
+  "version": 1,
+  "asOf": "2030-01-15T12:00:00Z",
+  "titleId": 900001,
+  "viewerDefaults": {"provider":"aster","holding":"yes","plan":"base","channel":"unspecified","billing":"NL","current":"NL","vpn":[],"languageMatch":true},
+  "offerDefaults": {"scope":"movie","market":"NL","provider":"aster","kind":"subscription","evidence":"verified","rule":"allow:base","ruleScope":"same","ruleUntil":"2030-02-01T00:00:00Z","portability":"unspecified"},
+  "cases": [
+    {
+      "id": "base-included",
+      "viewer": {},
+      "offers": [{}],
+      "expect": {"rows":[["INCLUDED","PLAN_COVERS_TITLE"]],"title":"watchable_here"}
+    },
+    {
+      "id": "paid-ads-included",
+      "viewer": {"plan":"ads"},
+      "offers": [{"rule":"allow:ads"}],
+      "expect": {"rows":[["INCLUDED","PLAN_COVERS_TITLE"]],"title":"watchable_here"}
+    },
+    {
+      "id": "ads-excluded",
+      "viewer": {"plan":"ads"},
+      "offers": [{"rule":"deny:ads"}],
+      "expect": {"rows":[["BLOCKED","PLAN_EXCLUDED"]],"title":"available_elsewhere"}
+    },
+    {
+      "id": "premium-explicit",
+      "viewer": {"plan":"premium"},
+      "offers": [{"rule":"allow:premium"}],
+      "expect": {"rows":[["INCLUDED","PLAN_COVERS_TITLE"]],"title":"watchable_here"}
+    },
+    {
+      "id": "premium-no-inheritance",
+      "viewer": {"plan":"premium"},
+      "offers": [{}],
+      "expect": {"rows":[["UNKNOWN","NO_APPLICABLE_RULE"]],"title":"unknown"}
+    },
+    {
+      "id": "legacy-provider-only",
+      "viewer": {"plan":null},
+      "offers": [{}],
+      "expect": {"rows":[["UNKNOWN","PLAN_UNSPECIFIED"]],"title":"unknown"}
+    },
+    {
+      "id": "unsupported-plan",
+      "viewer": {"plan":"unmapped"},
+      "offers": [{}],
+      "expect": {"rows":[["UNKNOWN","PLAN_UNSUPPORTED"]],"title":"unknown"}
+    },
+    {
+      "id": "explicitly-unowned",
+      "viewer": {"holding":"no","plan":null},
+      "offers": [{}],
+      "expect": {"rows":[["BLOCKED","BASE_NOT_HELD"]],"title":"available_elsewhere"}
+    },
+    {
+      "id": "exact-name-collision",
+      "viewer": {},
+      "offers": [{"provider":"aster_plus","rule":"none"}],
+      "expect": {"rows":[["UNKNOWN","HOLDING_UNCONFIRMED"]],"title":"unknown"}
+    },
+    {
+      "id": "listing-only",
+      "viewer": {},
+      "offers": [{"evidence":"source_reported"}],
+      "expect": {"rows":[["UNKNOWN","SOURCE_REPORTED"]],"title":"unknown"}
+    },
+    {
+      "id": "verified-no-tier-rule",
+      "viewer": {},
+      "offers": [{"rule":"none"}],
+      "expect": {"rows":[["UNKNOWN","NO_APPLICABLE_RULE"]],"title":"unknown"}
+    },
+    {
+      "id": "base-only-channel",
+      "viewer": {"channel":"no"},
+      "offers": [{"provider":"orbit_via_aster","kind":"addon"}],
+      "expect": {"rows":[["REQUIRES_ADDON","CHANNEL_NOT_HELD"]],"title":"available_elsewhere"}
+    },
+    {
+      "id": "channel-and-base",
+      "viewer": {"channel":"yes"},
+      "offers": [{"provider":"orbit_via_aster","kind":"addon"}],
+      "expect": {"rows":[["INCLUDED","CHANNEL_AND_BASE_COVER_TITLE"]],"title":"watchable_here"}
+    },
+    {
+      "id": "undeclared-channel",
+      "viewer": {"channel":"unspecified"},
+      "offers": [{"provider":"orbit_via_aster","kind":"addon"}],
+      "expect": {"rows":[["UNKNOWN","HOLDING_UNCONFIRMED"]],"title":"unknown"}
+    },
+    {
+      "id": "channel-without-base",
+      "viewer": {"holding":"no","plan":null,"channel":"yes"},
+      "offers": [{"provider":"orbit_via_aster","kind":"addon"}],
+      "expect": {"rows":[["BLOCKED","BASE_NOT_HELD"]],"title":"available_elsewhere"}
+    },
+    {
+      "id": "unresolved-channel",
+      "viewer": {"channel":"yes"},
+      "offers": [{"provider":"orbit_unknown","kind":"addon"}],
+      "expect": {"rows":[["UNKNOWN","PACKAGE_UNRESOLVED"]],"title":"unknown"}
+    },
+    {
+      "id": "other-billing-market",
+      "viewer": {"billing":"DE"},
+      "offers": [{}],
+      "expect": {"rows":[["UNKNOWN","PORTABILITY_UNVERIFIED"]],"title":"unknown"}
+    },
+    {
+      "id": "explicit-regional-exclusion",
+      "viewer": {"billing":"DE"},
+      "offers": [{"portability":"denied"}],
+      "expect": {"rows":[["BLOCKED","REGION_EXCLUDED"]],"title":"available_elsewhere"}
+    },
+    {
+      "id": "vpn-no-plan-portability",
+      "viewer": {"vpn":["DE"]},
+      "offers": [{"market":"DE"}],
+      "expect": {"rows":[["UNKNOWN","PORTABILITY_UNVERIFIED"]],"title":"unknown"}
+    },
+    {
+      "id": "vpn-supported-potential",
+      "viewer": {"vpn":["DE"]},
+      "offers": [{"market":"DE","portability":"allowed"}],
+      "expect": {"rows":[["INCLUDED","PLAN_COVERS_TITLE"]],"title":"watchable_vpn"}
+    },
+    {
+      "id": "missing-market",
+      "viewer": {},
+      "offers": [{"market":null}],
+      "expect": {"rows":[["UNKNOWN","TERRITORY_UNKNOWN"]],"title":"unknown"}
+    },
+    {
+      "id": "conflicting-rules",
+      "viewer": {},
+      "offers": [{"rule":"conflict:base"}],
+      "expect": {"rows":[["UNKNOWN","EVIDENCE_CONFLICT"]],"title":"unknown"}
+    },
+    {
+      "id": "old-observation",
+      "viewer": {},
+      "offers": [{"evidence":"stale"}],
+      "expect": {"rows":[["UNKNOWN","STALE_EVIDENCE"]],"title":"needs_recheck"}
+    },
+    {
+      "id": "free-with-ads",
+      "viewer": {"holding":"no","plan":null},
+      "offers": [{"kind":"free_with_ads","rule":"none"}],
+      "expect": {"rows":[["FREE_WITH_ADS","PUBLIC_AD_FUNDED"]],"title":"watchable_here"}
+    },
+    {
+      "id": "free-no-ads",
+      "viewer": {"holding":"no","plan":null},
+      "offers": [{"kind":"free","rule":"none"}],
+      "expect": {"rows":[["INCLUDED","PUBLIC_FREE"]],"title":"watchable_here"}
+    },
+    {
+      "id": "purchase",
+      "viewer": {},
+      "offers": [{"kind":"buy","rule":"none"}],
+      "expect": {"rows":[["RENT_OR_BUY","PURCHASE"]],"title":"purchase_only"}
+    },
+    {
+      "id": "untyped-monetization",
+      "viewer": {},
+      "offers": [{"kind":"unknown","rule":"none"}],
+      "expect": {"rows":[["UNKNOWN","OFFER_CLASS_UNKNOWN"]],"title":"unknown"}
+    },
+    {
+      "id": "mixed-sub-rent",
+      "viewer": {},
+      "offers": [{},{"kind":"rent","rule":"none"}],
+      "expect": {"rows":[["INCLUDED","PLAN_COVERS_TITLE"],["RENT_OR_BUY","RENTAL"]],"title":"watchable_here"}
+    },
+    {
+      "id": "mixed-unknown-and-purchase",
+      "viewer": {"plan":null},
+      "offers": [{},{"kind":"buy","rule":"none"}],
+      "expect": {"rows":[["UNKNOWN","PLAN_UNSPECIFIED"],["RENT_OR_BUY","PURCHASE"]],"title":"unknown"}
+    },
+    {
+      "id": "country-disagreement",
+      "viewer": {},
+      "offers": [{"rule":"deny:base"},{"market":"DE","rule":"allow:base","portability":"allowed"}],
+      "expect": {"rows":[["BLOCKED","PLAN_EXCLUDED"],["INCLUDED","PLAN_COVERS_TITLE"]],"title":"available_elsewhere"}
+    },
+    {
+      "id": "sibling-season-rule",
+      "viewer": {},
+      "offers": [{"ruleScope":"season:2","scope":"season:1"}],
+      "expect": {"rows":[["UNKNOWN","NO_APPLICABLE_RULE"]],"title":"unknown"}
+    },
+    {
+      "id": "series-movie-id-collision",
+      "viewer": {},
+      "offers": [{"ruleScope":"series"}],
+      "expect": {"rows":[["UNKNOWN","NO_APPLICABLE_RULE"]],"title":"unknown"}
+    },
+    {
+      "id": "expired-plan-rule",
+      "viewer": {},
+      "offers": [{"ruleUntil":"2030-01-15T12:00:00Z"}],
+      "expect": {"rows":[["UNKNOWN","NO_APPLICABLE_RULE"]],"title":"unknown"}
+    },
+    {
+      "id": "language-filter",
+      "viewer": {"languageMatch":false},
+      "offers": [{}],
+      "expect": {"rows":[["INCLUDED","PLAN_COVERS_TITLE"]],"title":"available_elsewhere"}
+    }
+  ]
+}
