@@ -408,7 +408,7 @@ class SourceReportRetrievalTests(TestCase):
             ("positive absent", pair, idx, fp, {}, "TP", "miss", "miss"),
             ("abstention with empty 200", pair, unknown, fp, {}, "abstention", "miss", "unscored"),
             ("abstention with typed 404", pair, unknown, fp, {"status": 404}, "abstention", "miss", "unscored"),
-            ("abstention with unsealed display", pair, unknown, fp, {"rows": [self.row]},
+            ("abstention with untraceable display", pair, unknown, fp, {"rows": [self.row]},
              "abstention", "unresolved", "unscored"),
             ("abstention with generic 404", pair, unknown, fp, {"status": 404, "body": {"detail": "Not found."}},
              "abstention", "unresolved", "unscored"),

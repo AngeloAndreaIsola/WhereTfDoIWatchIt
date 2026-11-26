@@ -92,6 +92,14 @@ class CaptureReceipt:
 
 
 @dataclass(frozen=True)
+class ReviewedDisplayTrace:
+    """Binding and receipt of the original capture traced to the saved app row."""
+
+    binding: Binding
+    receipt: CaptureReceipt
+
+
+@dataclass(frozen=True)
 class ConflictReview:
     index_name: str
     availability: str | None = None  # Confirmed FP or FN
@@ -111,6 +119,7 @@ class ReviewedPair:
     conflict_review: ConflictReview | None = None
     # Exact child row independently reviewed as covering this series-level scope.
     title_display_mapping: tuple[int, int | None] | None = None
+    display_trace: ReviewedDisplayTrace | None = None
 
 
 @dataclass(frozen=True)
@@ -420,7 +429,7 @@ def _title_display_row(pair, row):
             and (season, episode) == pair.title_display_mapping)
 
 
-def _source_report_present(pair, index, status, body, service_label):
+def _source_report_present(pair, contributor, status, body, service_label):
     scope = pair.scope
     title = body.get(scope.media_type) if isinstance(body, dict) else None
     if (not isinstance(title, dict) or type(title.get("tmdb_id")) is not int
@@ -458,34 +467,46 @@ def _source_report_present(pair, index, status, body, service_label):
         original = datetime.fromisoformat(row["observed_at"])
     except (KeyError, ValueError, TypeError):
         return None
-    if (original.utcoffset() != timedelta(0) or original != index.window.original
-            or row.get("reporting_source") != index.binding.issuer
+    if (original.utcoffset() != timedelta(0) or original != contributor.window.original
+            or row.get("reporting_source") != contributor.binding.issuer
             or row.get("availability_evidence") != "source_reported"):
         return None
     return True
 
 
-def source_report_retrieval(pair, native, index, *, requested_scope, read, status, body, service_label):
-    """Read the typed Prime detail contract against the sealed source observation.
+def source_report_retrieval(pair, native, index, *, requested_scope, read, status, body, service_label,
+                           report_source=None):
+    """Read the typed Prime detail contract against reviewed source evidence.
 
     service_label is the catalogue display name resolved from the reviewed
-    provider slug. The response does not carry the native document ID.
+    provider slug. When the index does not affirm the class, report_source is
+    the separate original observation linked to the saved row in display_trace.
+    The typed HTTP response alone cannot establish that link.
     """
     source = _verdict(pair, index, native=False)
-    present = None
-    # A fresh abstention can support a completed read of an absent offer.
-    # A displayed row still needs a sealed positive source assertion.
-    if index.freshness == "fresh" and source in {"yes", "no", "unknown"}:
-        present = _source_report_present(pair, index, status, body, service_label)
-    if present and source != "yes":
-        present = None
+    comparable = index.freshness == "fresh" and source in {"yes", "no", "unknown"}
     if source == "no":
         review = _review_for_index(pair, "justwatch")
-        if not review or review.availability != "FN":
-            present = None
-    verified = display_retrieval(pair, native, surface="source_reported_offers", read=read,
+        comparable = review is not None and review.availability == "FN"
+
+    contributor, display_pair = index, pair
+    trace = pair.display_trace
+    if (comparable and source != "yes" and trace and report_source
+            and report_source.payload_digest != index.payload_digest
+            and not _same_source(index.binding, index.payload_digest, native.binding, native.payload_digest)):
+        traced_pair = replace(pair, index=trace.binding, index_receipt=trace.receipt)
+        if (_verdict(traced_pair, report_source, native=False) == "yes"
+                and _read_time_state(pair.slot, native.window, read,
+                                     (index.window, report_source.window)) == "eligible"):
+            contributor, display_pair = report_source, traced_pair
+
+    present = _source_report_present(pair, contributor, status, body, service_label) if comparable else None
+    if present and source != "yes" and display_pair is pair:
+        present = None
+    verified = display_retrieval(display_pair if present else pair, native,
+                                 surface="source_reported_offers", read=read,
                                  typed_scope=requested_scope, status=status, present=present,
-                                 contributions=(index.window,))
+                                 contributions=((contributor if present else index).window,))
     projection = "unscored"
     if (source == "yes" and present is not None
             and requested_scope == (pair.scope.media_type, pair.scope.tmdb_id, pair.scope.market)
