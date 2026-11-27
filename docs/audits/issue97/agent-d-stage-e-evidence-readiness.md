@@ -35,9 +35,13 @@ opencode run --format json -m opencode/hy4-flash-free \
 | Probe cost | `0` (`step_finish.cost: 0`) |
 | Session cost | `0` — no paid escalation |
 
-No silent substitution occurred. The preferred `omniroute/ag-gemini-3.5-flash-lite` route was
-not used by this agent (coordinator probe reported repeated 503 `ALL_TARGETS_SKIPPED`). No
-Sol, Astra or paid escalation was used. The probe text part was the only model output recorded.
+No silent substitution occurred. For this review task the mission's preferred reviewer route
+was `opencode/deepseek-v4.1-flash-free`, with fallback `omniroute/ag-gemini-3.8-flash-tiered`.
+Both were unavailable to this agent, so the verified fallback `opencode/hy4-flash-free` was
+used and probed above. `ag-gemini-3.5-flash-lite` was **not** the preferred route for this
+review task; earlier references to it concern different dispatches and are not claims about
+this one. No Sol, Astra or paid escalation was used. The probe text part was the only model
+output recorded.
 
 ---
 
@@ -337,14 +341,17 @@ private path inventory appears in this report.
 
 Draft PR: [#235](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/pull/235).
 - Base (verified): `6af4cd8421ec9c85e4fff724fded60d5cce86c85`.
-- Head at verification: `255e39c2d050b1f7bd735f5df0cf6e2cf81be75a`.
+- **Reviewed head:** `ad58af9aa908ba2929ef64cd0aede09a64b1871c`. This is the head that was
+  independently reviewed and whose CI result is recorded below; PR metadata remains
+  authoritative for the current head, which may advance with later evidence-only commits.
 - `gh api repos/AngeloAndreaIsola/WhereTfDoIWatchIt/pulls/235` → `state: open`,
-  `draft: true`, `base.sha: 6af4cd8…`, `head.sha: 255e39c…`.
+  `draft: true`, `base.sha: 6af4cd8…`, `head.sha: ad58af9…`.
 - `gh pr view 235 --json number,state,isDraft,baseRefName,headRefName,url` → open draft,
   base `master`, head `agent-d/stage-e-evidence-readiness-20261127`.
-- Hosted CI: [run 46062258574](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/actions/runs/46062258574)
-  — **3/3 jobs succeeded** (Backend Tests, Frontend Lint/Build/Test, Browser Extension
-  Build/Typecheck/Tests), verified with `gh api …/actions/runs/46062258574/jobs`.
+- Hosted CI: [run 46062730381](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/actions/runs/46062730381)
+  — **3/3 jobs SUCCESS** at the reviewed head (Backend Tests, Frontend Lint/Build/Test,
+  Browser Extension Build/Typecheck/Tests), verified with
+  `gh api repos/AngeloAndreaIsola/WhereTfDoIWatchIt/actions/runs/46062730381/jobs`.
 - Local results are separate from hosted CI; the workflow does not execute the standalone
   audit scripts, so §12 remains the authoritative local record.
 
