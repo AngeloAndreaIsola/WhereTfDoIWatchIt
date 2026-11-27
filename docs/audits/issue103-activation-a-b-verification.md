@@ -141,7 +141,7 @@ Full inventory with source, reviewer, provenance, and fail-closed disposition is
 
 Exact commands run in this task are in §2 and §3. All isolated test runs used Docker with ephemeral PostgreSQL; no live endpoints were contacted. `git diff --check` passes on the two added markdown files.
 
-Hosted CI on the exact PR head `10cc1308970fde00c2ff9dce62ac3a74be783be8`: [run 46062310367](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/actions/runs/46062310367) — **3/3 jobs SUCCESS** (Frontend Lint/Build/Test, Backend Tests, Browser Extension Build/Typecheck/Tests). Draft PR [#236](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/pull/236). Local validation above is the authoritative record for this report; hosted CI is corroborating.
+Hosted CI on the exact **final** PR head `adf8f5aaa470d259edd906815938d394612eaa14`: [run 46062653699](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/actions/runs/46062653699) — **3/3 jobs SUCCESS** (Frontend Lint/Build/Test, Backend Tests, Browser Extension Build/Typecheck/Tests). An earlier CI run [46062310367](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/actions/runs/46062310367) was 3/3 SUCCESS on the first head `10cc1308970fde00c2ff9dce62ac3a74be783be8`; the final head differs only by a documentation one-line CI-link update. Draft PR [#236](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/pull/236). Local validation above is the authoritative record for this report; hosted CI is corroborating.
 
 ## 6. Status
 
