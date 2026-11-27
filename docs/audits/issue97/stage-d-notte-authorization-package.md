@@ -307,7 +307,7 @@ Hosted CI conclusions for this draft PR are recorded in §14 and are limited to 
 
 ## 14. PR head, CI link/job conclusions and handoff
 
-- Branch: `docs/97-stage-d-notte-authorization-package-agent-b` (isolated, forward-only from exact base `3e439e6`). PR created as a **draft**; exact head recorded after push in the PR/comment handoff.
-- CI: workflow `CI` on the draft PR head; conclusions verified with `gh pr view` / `gh api` after push. CI validates code only; it does not authorize live calls.
+- Branch: `docs/97-stage-d-notte-authorization-package-agent-b` (isolated, forward-only from exact base `3e439e6`). Draft PR [#240](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/pull/240), base `3e439e6a7cab7a72834e710352da7cbf0f0b739f`, head `cf9811c3f33ff212911c330c0cfe48f67b527b36` (verified with `gh pr view` / `gh api`). The head may advance with a CI-record correction commit; PR metadata remains authoritative.
+- CI: workflow `CI`, run [`46071125366`](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/actions/runs/46071125366), overall conclusion **success**. Job conclusions, all **success**: [Backend Tests](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/actions/runs/46071125366/job/140748052612), [Frontend Lint, Build & Test](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/actions/runs/46071125366/job/140748052538), [Browser Extension Build, Typecheck & Tests](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/actions/runs/46071125366/job/140748052236). CI validates code only; it does not authorize live calls.
 - Handoff: one comment on #97 with exact base/head, CI link and conclusions, and an explicit **ChatGPT Web independent review request**. No closure, no cleanup.
 - Next action after owner supplies the three inputs: prepare the exact signed Batch 1 token out of band, re-run preflight on the named retained target, and only then consider a separately approved first send. Until then, stop.
