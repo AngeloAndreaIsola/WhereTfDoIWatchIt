@@ -178,12 +178,46 @@ All commands below were run **in this session** on the local worktree; outputs a
 
 ---
 
-## 9. GitHub verification evidence
+## 9. GitHub verification evidence (verified this session)
 
-Filled in after publication (see final evidence block appended below by the authoring worker).
+Publication and verification were performed with `gh api`. Marker used: `VERIFICATION_MARKER_ISSUE97_AUTH_PACKAGE_20261127_HY4`.
 
-| Item | Verification command | Result |
-| --- | --- | --- |
-| Draft PR exists | `gh api repos/AngeloAndreaIsola/WhereTfDoIWatchIt/pulls/<PR> --jq '{number,state,draft,base:.base.sha,head:.head.sha}'` | pending |
-| Issue comment exists | `gh api repos/AngeloAndreaIsola/WhereTfDoIWatchIt/issues/97/comments --jq '.[].body' \| grep -c '<marker>'` | pending |
-| PR comment exists | `gh api repos/AngeloAndreaIsola/WhereTfDoIWatchIt/issues/<PR>/comments --jq '.[].body' \| grep -c '<marker>'` | pending |
+**Draft PR verification — exact command and result:**
+```sh
+gh api repos/AngeloAndreaIsola/WhereTfDoIWatchIt/pulls/228 \
+  --jq '{number,state,draft,base_sha:.base.sha,head_sha:.head.sha,url:.html_url}'
+# {"base_sha":"488654a22b1837acdd0acbcd810fc495449fc66d","draft":true,
+#  "head_sha":"812502e7529a35765b363ee234ed37b6a9d49273","number":228,
+#  "state":"open","url":"https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/pull/228"}
+```
+
+**Issue #97 comment verification — exact command and result:**
+```sh
+gh api repos/AngeloAndreaIsola/WhereTfDoIWatchIt/issues/97/comments --paginate \
+  --jq '.[].body' | grep -c 'VERIFICATION_MARKER_ISSUE97_AUTH_PACKAGE_20261127_HY4'
+# 1
+```
+Comment URL: `https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/issues/97#issuecomment-7215247968` (id `7215247968`).
+
+**All comment locations verified:**
+```sh
+for n in 97 206 208 209 212 213 214 216 217 221; do
+  c=$(gh api repos/AngeloAndreaIsola/WhereTfDoIWatchIt/issues/$n/comments --paginate \
+      --jq '.[].body' | grep -c 'VERIFICATION_MARKER_ISSUE97_AUTH_PACKAGE_20261127_HY4')
+  echo "issue/PR #$n marker_count=$c"
+done
+# issue/PR #97 marker_count=1
+# issue/PR #206 marker_count=1
+# issue/PR #208 marker_count=1
+# issue/PR #209 marker_count=1
+# issue/PR #212 marker_count=1
+# issue/PR #213 marker_count=1
+# issue/PR #214 marker_count=1
+# issue/PR #216 marker_count=1
+# issue/PR #217 marker_count=1
+# issue/PR #221 marker_count=1
+```
+
+Posted comment IDs: #97 `7215247968`; #206 `7215248328`; #208 `7215248606`; #209 `7215248965`; #212 `7215249236`; #213 `7215249529`; #214 `7215249848`; #216 `7215250156`; #217 `7215250407`; #221 `7215250733`.
+
+**State check:** PR #228 is `open`, `draft: true`; issue #97 and PR #221 remain open. No merge, closure, cleanup or permission change was made. The head SHA above (`812502e…`) is the publication commit; any later evidence-only commit to this report advances the head and is recorded in the PR body.
