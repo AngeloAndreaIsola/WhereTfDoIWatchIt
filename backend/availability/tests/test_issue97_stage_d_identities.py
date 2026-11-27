@@ -2,15 +2,21 @@
 
 import json
 import os
+import shutil
+import tempfile
 from io import StringIO
+from pathlib import Path
 from unittest.mock import patch
 
+from django.conf import settings
 from django.core.management import call_command
 from django.db import connection
 from django.test import SimpleTestCase, TransactionTestCase
 
 from availability.services.issue97_stage_d_identity_provisioning import (
-    COHORT_SHA256, HELD_SCOPE_ID, IDENTITY_MANIFEST_SHA256, provisioning_plan,
+    COHORT_RELATIVE_PATH, COHORT_SHA256, DOCS_ROOT_ENV, HELD_SCOPE_ID,
+    IDENTITY_MANIFEST_RELATIVE_PATH, IDENTITY_MANIFEST_SHA256,
+    pinned_paths, provisioning_plan,
 )
 from availability.services.issue97_stage_d_policy import MANIFEST_SHA256
 from tracker.models import Movie
@@ -44,6 +50,39 @@ class ProvisioningPlanTests(SimpleTestCase):
         )
         self.assertEqual(by_id["series-2316-nl"]["title"], "The Office")
         self.assertEqual(by_id["series-2316-nl"]["identity_status"], "VERIFIED_REVIEWED_ALIAS")
+
+    def test_container_layout_resolves_both_pins_from_injected_docs_root(self):
+        """The runtime image has no repository docs; the mounted root must win.
+
+        Emulates the backend container (cwd inside the backend directory, all
+        module paths rooted at ``/app``) and proves both pinned CSVs are found
+        through ``ISSUE97_STAGE_D_DOCS_ROOT`` rather than a ``/docs/...`` path.
+        """
+        source_root = Path(os.environ.get(DOCS_ROOT_ENV, str(Path(settings.BASE_DIR).resolve().parent)))
+        with tempfile.TemporaryDirectory() as mounted, tempfile.TemporaryDirectory() as backend:
+            mounted_root = Path(mounted)
+            for relative in (COHORT_RELATIVE_PATH, IDENTITY_MANIFEST_RELATIVE_PATH):
+                target = mounted_root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source_root / relative, target)
+            cwd = os.getcwd()
+            try:
+                os.chdir(backend)
+                with patch.dict(os.environ, {DOCS_ROOT_ENV: str(mounted_root)}):
+                    cohort, manifest = pinned_paths()
+                    self.assertEqual(cohort, mounted_root / COHORT_RELATIVE_PATH)
+                    self.assertEqual(manifest, mounted_root / IDENTITY_MANIFEST_RELATIVE_PATH)
+                    self.assertTrue(cohort.is_file())
+                    self.assertTrue(manifest.is_file())
+                    self.assertFalse(str(cohort).startswith("/docs/"))
+                    self.assertFalse(str(manifest).startswith("/docs/"))
+                    plan = provisioning_plan()
+            finally:
+                os.chdir(cwd)
+        self.assertEqual(plan["cohort_sha256"], COHORT_SHA256)
+        self.assertEqual(plan["identity_manifest_sha256"], IDENTITY_MANIFEST_SHA256)
+        self.assertEqual(len(plan["rows"]), 12)
+        self.assertNotIn(HELD_SCOPE_ID, [row["scope_id"] for row in plan["rows"]])
 
     def test_plan_accepts_retained_evidence_dir_and_rejects_wrong_payloads(self):
         import shutil

@@ -11,26 +11,48 @@ admits the held Coherence row.
 import csv
 import hashlib
 import json
+import os
 from pathlib import Path
+
+from django.conf import settings
 
 from availability.audit_identity import load_identity_manifest
 from availability.services.issue97_stage_d_policy import MANIFEST_SHA256, load_policy
 
-ROOT = Path(__file__).resolve().parents[3]
-COHORT = ROOT / "docs/audits/issue97/stage-d-remaining-cohort.csv"
-IDENTITY_MANIFEST = ROOT / "docs/audits/stage2b/identity_manifest_20261122.csv"
+DOCS_ROOT_ENV = "ISSUE97_STAGE_D_DOCS_ROOT"
+COHORT_RELATIVE_PATH = Path("docs/audits/issue97/stage-d-remaining-cohort.csv")
+IDENTITY_MANIFEST_RELATIVE_PATH = Path("docs/audits/stage2b/identity_manifest_20261122.csv")
 COHORT_SHA256 = "f573eff980127bb08943ea2c101d8354c6f18a6fd659e24ca727ae0576354e30"
 IDENTITY_MANIFEST_SHA256 = "ae78a757272aecbb9824d9ef3cea4d8f125bd5e150cc6abafcc96e50e2737925"
 HELD_SCOPE_ID = "movie-220289-nl"
 HELD_REASON = "BLOCKED_YEAR_MISMATCH"
 
 
+def docs_root():
+    """Resolve the repository docs root without depending on the module's depth.
+
+    The runtime image deliberately excludes repository docs, so an explicit
+    mount is injected with ``ISSUE97_STAGE_D_DOCS_ROOT``.  Outside a container
+    the backend ``BASE_DIR`` is the ``backend/`` directory, so its parent is the
+    checkout root that owns ``docs/``.
+    """
+    configured = os.environ.get(DOCS_ROOT_ENV)
+    if configured and configured.strip():
+        return Path(configured).resolve()
+    return Path(settings.BASE_DIR).resolve().parent
+
+
+def pinned_paths():
+    root = docs_root()
+    return root / COHORT_RELATIVE_PATH, root / IDENTITY_MANIFEST_RELATIVE_PATH
+
+
 def _digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _cohort_rows():
-    with COHORT.open(newline="", encoding="utf-8") as handle:
+def _cohort_rows(cohort):
+    with cohort.open(newline="", encoding="utf-8") as handle:
         return list(csv.DictReader(handle))
 
 
@@ -40,13 +62,14 @@ def provisioning_plan(*, tmdb_evidence_dir=None):
     Returns a serializable dict.  Raises ValueError on any pin mismatch, so a
     caller can never provision from altered or assumed data.
     """
-    if _digest(COHORT) != COHORT_SHA256 or _digest(IDENTITY_MANIFEST) != IDENTITY_MANIFEST_SHA256:
+    cohort, identity_manifest = pinned_paths()
+    if _digest(cohort) != COHORT_SHA256 or _digest(identity_manifest) != IDENTITY_MANIFEST_SHA256:
         raise ValueError("Stage D identity pins differ from the reviewed cohort or manifest")
     policy = load_policy()
     identities = load_identity_manifest(
-        IDENTITY_MANIFEST, evidence_dir=tmdb_evidence_dir,
+        identity_manifest, evidence_dir=tmdb_evidence_dir,
     )
-    rows = _cohort_rows()
+    rows = _cohort_rows(cohort)
     by_scope = {row["scope_id"]: row for row in rows}
     if len(by_scope) != len(rows) or len(rows) != 13:
         raise ValueError("Stage D cohort must contain exactly 13 distinct rows")

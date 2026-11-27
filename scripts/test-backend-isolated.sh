@@ -19,4 +19,6 @@ docker compose -p "$project" -f docker-compose.yml -f docker-compose.test.yml \
   --profile test run --build --rm --no-deps \
   --volume "$repo_root/docs/contracts:/app/docs/contracts:ro" \
   --volume "$repo_root/docs/tests:/app/docs/tests:ro" \
+  --volume "$repo_root/docs/audits:/app/docs/audits:ro" \
+  --env ISSUE97_STAGE_D_DOCS_ROOT=/app \
   backend-test manage.py test --noinput "$@"
