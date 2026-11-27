@@ -144,9 +144,9 @@ describe("MarketPlanSelector", () => {
     );
 
     expect(screen.getByTestId("retired-plan-notice")).toHaveTextContent("Base");
-    expect(screen.getByText(/unsupported — no longer offered/)).toBeInTheDocument();
+    expect(screen.getByTestId("retired-plan-notice")).toHaveTextContent(/unsupported in our catalogue/i);
     expect(screen.getByLabelText("Plan for Aster in NL")).toHaveValue("retired:base");
-    expect(screen.getByText(/plan-dependent offers remain unconfirmed/i)).toBeInTheDocument();
+    expect(screen.getByTestId("retired-plan-notice")).toHaveTextContent(/plan-dependent offers are unconfirmed/i);
   });
 
   it("requires a held base for a selected plan and never infers coverage from a logo or name", () => {
@@ -261,5 +261,103 @@ describe("MarketPlanSelector", () => {
     expect(screen.getByText("Reviewed NL channel caveat")).toBeInTheDocument();
     expect(screen.getByTestId("channel-caveat-orbit")).toHaveTextContent("Reviewed NL channel caveat");
     expect(screen.queryByTestId("channel-caveat-comet")).toBeNull();
+  });
+
+  describe("catalogue-scoped unsupported-plan wording (review regression)", () => {
+    const missingCatalogueProvider: ProviderItem = {
+      ...provider,
+      plan_options: [provider.plan_options![2]],
+      selection: {
+        holding: "yes",
+        plan_state: "unsupported",
+        plan_id: "base",
+        plan_display_name: "Base",
+        channels: [],
+        revision: 5,
+      },
+    };
+
+    it("does not claim the provider discontinued the plan when the catalogue entry is missing", () => {
+      render(
+        <MarketPlanSelector provider={missingCatalogueProvider} onSave={vi.fn(async () => {})} />
+      );
+
+      const notice = screen.getByTestId("retired-plan-notice");
+      expect(notice).toHaveTextContent(
+        "We can’t currently confirm coverage for your saved plan “Base” in NL. It remains unsupported in our catalogue, so plan-dependent offers are unconfirmed."
+      );
+      expect(notice).not.toHaveTextContent(/no longer offered/i);
+      expect(notice).not.toHaveTextContent(/discontinued/i);
+      expect(notice).not.toHaveTextContent(/retired/i);
+      expect(screen.queryByText(/no longer offered/i)).toBeNull();
+      expect(screen.queryByText(/no longer available/i)).toBeNull();
+      expect(screen.queryByText(/discontinued/i)).toBeNull();
+    });
+
+    it("preserves the previously saved plan ID", () => {
+      render(
+        <MarketPlanSelector provider={missingCatalogueProvider} onSave={vi.fn(async () => {})} />
+      );
+
+      expect(missingCatalogueProvider.selection!.plan_id).toBe("base");
+      expect(screen.getByLabelText("Plan for Aster in NL")).toHaveValue("retired:base");
+      expect(screen.getByTestId("retired-plan-notice")).toHaveTextContent("Base");
+    });
+
+    it("keeps plan-dependent entitlement unconfirmed", () => {
+      render(
+        <MarketPlanSelector provider={missingCatalogueProvider} onSave={vi.fn(async () => {})} />
+      );
+
+      const notice = screen.getByTestId("retired-plan-notice");
+      expect(notice).toHaveTextContent(/remains unsupported in our catalogue/i);
+      expect(notice).toHaveTextContent(/plan-dependent offers are unconfirmed/i);
+      expect(screen.queryByText(/included with your/i)).toBeNull();
+      expect(screen.queryByText(/best match/i)).toBeNull();
+    });
+
+    it("lets the user retain the saved selection on save", async () => {
+      const onSave = vi.fn<(slug: string, input: MarketSelectionInput) => Promise<void>>(async () => {});
+      render(<MarketPlanSelector provider={missingCatalogueProvider} onSave={onSave} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Save plan selection" }));
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(onSave.mock.calls[0][1]).toEqual({
+        holding: "yes",
+        plan_state: "unsupported",
+        plan_id: "base",
+        channels: [],
+        revision: 5,
+      });
+      expect(screen.getByLabelText("Plan for Aster in NL")).toHaveValue("retired:base");
+    });
+
+    it("leaves 409 conflict handling unchanged", async () => {
+      const newer: MarketSelection = {
+        holding: "yes",
+        plan_state: "selected",
+        plan_id: "premium",
+        channels: [{ package_id: "comet", holding: "yes" }],
+        revision: 9,
+      };
+      const onSave = vi
+        .fn<(slug: string, input: MarketSelectionInput) => Promise<void>>()
+        .mockRejectedValueOnce(new MarketSelectionConflictError(newer))
+        .mockResolvedValueOnce(undefined);
+
+      render(<MarketPlanSelector provider={missingCatalogueProvider} onSave={onSave} />);
+      fireEvent.click(screen.getByRole("button", { name: "Save plan selection" }));
+
+      expect(await screen.findByText(/not saved: this selection changed elsewhere/i)).toBeInTheDocument();
+      expect(screen.getByTestId("saved-revision")).toHaveTextContent("9");
+      expect(screen.getByTestId("saved-selection-summary")).toHaveTextContent("premium");
+      expect(screen.getByTestId("saved-selection-summary")).toHaveTextContent("comet=yes");
+      expect(screen.queryByText(/saved\. no source refresh/i)).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Save plan selection" }));
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2));
+      expect(onSave.mock.calls[1][1].revision).toBe(9);
+      expect(onSave.mock.calls[1][1].plan_id).toBe("base");
+    });
   });
 });
