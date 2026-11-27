@@ -335,10 +335,18 @@ private path inventory appears in this report.
 
 ## 14. Publication and verification record
 
-Filled in after publication: exact PR head, hosted CI link and `gh api`/`gh pr view`
-verification are recorded in the issue #97 handoff and in the PR body. This section is
-completed on the final branch commit so the report does not contain a self-referential head
-claim.
+Draft PR: [#235](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/pull/235).
+- Base (verified): `6af4cd8421ec9c85e4fff724fded60d5cce86c85`.
+- Head at verification: `255e39c2d050b1f7bd735f5df0cf6e2cf81be75a`.
+- `gh api repos/AngeloAndreaIsola/WhereTfDoIWatchIt/pulls/235` → `state: open`,
+  `draft: true`, `base.sha: 6af4cd8…`, `head.sha: 255e39c…`.
+- `gh pr view 235 --json number,state,isDraft,baseRefName,headRefName,url` → open draft,
+  base `master`, head `agent-d/stage-e-evidence-readiness-20261127`.
+- Hosted CI: [run 46062258574](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/actions/runs/46062258574)
+  — **3/3 jobs succeeded** (Backend Tests, Frontend Lint/Build/Test, Browser Extension
+  Build/Typecheck/Tests), verified with `gh api …/actions/runs/46062258574/jobs`.
+- Local results are separate from hosted CI; the workflow does not execute the standalone
+  audit scripts, so §12 remains the authoritative local record.
 
 **Review request:** ChatGPT Web review is explicitly requested for this Stage E
 evidence-readiness report.
