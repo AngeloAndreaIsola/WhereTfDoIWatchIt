@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-27 UTC
 **Issue:** #97 ([P1] Close the real-world availability accuracy verification gap)
-**Status:** DRAFT PR DOSSIER / PENDING OWNER DECISION / NO EXECUTION AUTHORIZED
+**Status:** DRAFT PR DOSSIER — REQUEST_CHANGES corrections applied; pending ChatGPT Web independent re-review and owner decision; NO EXECUTION AUTHORIZED
 **Base Head:** `331dbe2f7731078c93e5e93eb4620c6e7d07e507` (Merge PR #231: #103 stop-writers release readiness plan)
 **Model Identity:** `ag-gemini-3.5-flash-lite` (via wrapper/provider omniroute, requested HIGH as unpinned)
 **Cost:** JSON cost 0
@@ -25,19 +25,16 @@ Merging this dossier into master or retaining it as a draft PR grants zero opera
 ## 1. Exact Runtime-receipt Artifact Requirements (NL Search)
 
 For any future live or recorded search execution against the Netherlands (`nl`) catalog:
-- **Required Capture:** Complete raw request payloads, exact response headers, JSON body, timestamp (ISO-8601 UTC), client version, and egress IP routing fingerprint.
-- **Retention:** Immutable append-only local storage under `docs/audits/issue97/receipts/` with SHA-256 checksum verification.
-- **Hash/Fingerprint Fields:** Every receipt must include:
-  - `payload_sha256`: SHA-256 digest of the canonical JSON payload.
-  - `response_sha256`: SHA-256 digest of the received response body.
-  - `transport_fingerprint`: TLS cipher suite and SNI certificate fingerprint.
-- **Fail-Closed Validation:** Any discrepancy in checksums, missing variables (e.g. omitted country code), or unexpected transport errors must abort the run immediately without generating availability assertions or updating cache states.
+- **Required fields are limited to the pinned runner's validated runtime-receipt schema:** operation `GetSearchTitles`, country `NL`, active window, maximum request count, reviewed access confirmation, rate interval, reviewer/check timestamp, and canonical payload/response SHA-256 digests. Do not invent eligibility or identity fields.
+- **Optional transport metadata:** TLS cipher, SNI certificate fingerprint and egress routing details are optional context only unless a reviewed runner schema explicitly names them as required. They are not mandatory receipt data here.
+- **Custody:** Raw request/response payloads, headers and bodies must stay in private protected off-repository custody with restricted review access and a retention/deletion policy. Git receives only sanitized hashes, counts and provenance metadata; never raw payloads or headers.
+- **Fail-Closed Validation:** Any checksum discrepancy, missing required schema field, omitted country code, or unexpected transport error aborts the run immediately without generating availability assertions or updating cache states.
 
 ---
 
 ## 2. Quota & Balance Evidence Checklist (Offline Satisfiable)
 
-The project operating constraint is the Streaming Availability API (movieofthenight via RapidAPI) **100 requests/day free tier**, which applies exclusively to cached lookups (`last_checked_at`). For external sources (JustWatch, Netflix, Prime Video, Rakuten TV), live quotas are verified offline through owner-provided telemetry:
+Historical note only: a Streaming Availability / RapidAPI free-tier limit was an earlier source constraint; it is **not** a JustWatch quota and does not establish current balance. Current quota and balance for JustWatch and provider sources remain **UNKNOWN** until owner-supplied evidence is reviewed offline:
 - [ ] Owner-supplied account dashboard screenshot or API usage report showing remaining daily/monthly quota.
 - [ ] Explicit confirmation of zero active rate-limiting flags or billing alerts.
 - [ ] Verification that local rate limiters (`tracker.services.rate_limit` and source-specific budget configs) enforce headroom strictly below plan ceilings.
@@ -50,24 +47,37 @@ The project operating constraint is the Streaming Availability API (movieoftheni
 ### Exclusive-Use Attestation
 > "I attest that all offline rehearsals and future authorized executions use dedicated, single-tenant test accounts and disposable PostgreSQL instances (`WTDWI_DISPOSABLE_TEST_DB=1`) with read-only boundaries. No shared production credentials, concurrency leaks, or unauthorized service principals are employed."
 
-### HMAC Authorization Request Template
+### Non-executable HMAC Authorization Request Templates
+
+These are documentation templates only. They do not generate, sign or authorize any token, and no live endpoint is enabled by them.
+
+**Stage D Batch 1 — approved offline scope only (NL search):**
 ```yaml
-authorization_request:
-  target_system: "WhereTfDoIWatchIt Streaming Availability / Source Inception"
-  scope_boundaries:
-    countries: ["nl"]
-    providers: ["netflix", "amazon_prime_video", "rakuten"]
-    max_requests: 3
-    max_retries: 0
-    concurrency: 1
-    allowed_endpoints: ["GetSearchTitles", "GetOffers"]
-  hmac_signature_request:
-    key_id: "PENDING_OWNER_KEY"
-    nonce: "PENDING_NONCE"
-    validity_window_seconds: 300
-  status: "PENDING"
+authorization_request_template:
+  phase: "Stage D Batch 1"
+  operation: "GetSearchTitles"
+  countries: ["nl"]
+  titles: ["The Godfather / tmdb-238", "Breaking Bad / tmdb-1396"]
+  max_first_sends: 2
+  max_retries: 0
+  fallback_season_queries: "denied"
+  additional_operations: "denied"
+  status: "PENDING_NON_EXECUTABLE_TEMPLATE"
 ```
-*Note: No token generation or signing key usage is performed within this dossier.*
+
+**Stage E — separate per-source decisions only:**
+```yaml
+authorization_request_template:
+  phase: "Stage E Batch A"
+  sources: ["netflix", "amazon_prime_video", "rakuten"]
+  pinned_titles:
+    netflix: "Inception / tmdb-27205"
+    amazon_prime_video: "Inception / tmdb-27205"
+    rakuten: "Dune / tmdb-438631"
+  capture_scope: "per-source decision pending; no endpoint or retry allowance is granted by this template"
+  status: "PENDING_OWNER_SOURCE_DECISION_NON_EXECUTABLE"
+```
+*Note: No token generation, signing key usage, endpoint broadening or live execution is performed by this dossier.*
 
 ---
 
@@ -77,9 +87,9 @@ Consistent with the cleaned Stage E matrix, all sources remain **PENDING** owner
 
 | Source | Target Scope | Reviewed Artifacts | Current Status | Owner Decision |
 |---|---|---|---|---|
-| **Netflix** (`E-C1`) | NL single-title Inception (Inception / `tmdb-27205`) | `docs/audits/issue97/stage-e-source-review.md` | PENDING | **[ ] Authorize / [x] Hold** |
-| **Prime Video** (`E-C2`) | NL single-title Inception (The Godfather / `tmdb-238`) | `docs/audits/issue97/stage-e-source-review.md` | PENDING | **[ ] Authorize / [x] Hold** |
-| **Rakuten TV** (`E-C3`) | NL single-title Inception (Dune / `tmdb-438631`) | `docs/audits/issue97/stage-e-source-review.md` | PENDING | **[ ] Authorize / [x] Hold** |
+| **Netflix** (`E-C1`) | NL single-title Inception (`tmdb-27205`) | `docs/audits/issue97/stage-e-source-review.md` | PENDING | **[ ] Authorize / [x] Hold** |
+| **Prime Video** (`E-C2`) | NL single-title Inception (`tmdb-27205`) | `docs/audits/issue97/stage-e-source-review.md` | PENDING | **[ ] Authorize / [x] Hold** |
+| **Rakuten TV** (`E-C3`) | NL single-title Dune (`tmdb-438631`) | `docs/audits/issue97/stage-e-source-review.md` | PENDING | **[ ] Authorize / [x] Hold** |
 
 ---
 
