@@ -150,7 +150,9 @@ opencode run --format json -m opencode/hy4-flash-free \
   'Reply with exactly: MODEL_IDENTITY_OK <your actual model id>'
 ```
 
-All listed commands exited 0; probe reported `cost: 0`. Hosted CI results, the draft PR base/head and the #97 handoff are recorded in the PR and issue comment produced for this deliverable, not inferred here.
+All listed commands exited 0; probe reported `cost: 0`.
+
+**Draft PR and hosted CI (verified with `gh api` / `gh pr view`):** draft PR [#239](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/pull/239), base `3e439e6a7cab7a72834e710352da7cbf0f0b739f`, head `f7525cdf0f703d85d91f406ae8baf426f5ab7e87`, state `open`, `draft: true`. Hosted CI [run 46070883932](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/actions/runs/46070883932) completed with conclusion `success`: Backend Tests `success`, Frontend Lint/Build/Test `success`, Browser Extension Build/Typecheck/Tests `success` (3/3 jobs). The PR is not merged; the ChatGPT Web review request is posted on #97.
 
 ## 10. Forbidden operations statement
 
