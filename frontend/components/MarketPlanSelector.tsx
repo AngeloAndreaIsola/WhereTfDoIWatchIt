@@ -181,10 +181,10 @@ export default function MarketPlanSelector({
           role="status"
           data-testid="retired-plan-notice"
         >
-          Your selected plan &ldquo;{savedState.plan_display_name ?? savedState.plan_id}&rdquo;
-          {" "}is no longer offered in {provider.billing_country}. It stays marked
-          unsupported — plan-dependent offers remain unconfirmed until you pick
-          another plan.
+          We can’t currently confirm coverage for your saved plan
+          {" "}&ldquo;{savedState.plan_display_name ?? savedState.plan_id}&rdquo; in{" "}
+          {provider.billing_country}. It remains unsupported in our catalogue, so
+          plan-dependent offers are unconfirmed.
         </p>
       )}
 
@@ -220,7 +220,7 @@ export default function MarketPlanSelector({
           ))}
           {savedState?.plan_state === "unsupported" && savedState.plan_id && !planOptions.some((p) => p.plan_id === savedState.plan_id) && (
             <option value={retiredChoice(savedState.plan_id)}>
-              {savedState.plan_display_name ?? savedState.plan_id} (unsupported — no longer offered)
+              {savedState.plan_display_name ?? savedState.plan_id} (unsupported in our catalogue)
             </option>
           )}
           {unlisted && <option value={UNLISTED_CHOICE}>{unlisted.display_name}</option>}

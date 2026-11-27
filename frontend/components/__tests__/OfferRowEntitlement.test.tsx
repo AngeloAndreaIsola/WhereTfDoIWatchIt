@@ -322,4 +322,111 @@ describe("OfferRow entitlement verdicts (#103)", () => {
     expect(screen.getByText("Best Match")).toBeInTheDocument();
     expect(screen.queryByTestId("unverified-badge")).toBeNull();
   });
+
+  describe("caveat and non-verified evidence safety guarantees", () => {
+    it("never renders positive verdict, Best Match, or positive copy when evidence is stale", () => {
+      render(
+        <OfferRow
+          offer={{
+            ...baseOffer,
+            availability_evidence: "stale",
+            is_accessible: true,
+            is_entitled: true,
+            entitlement: entitlement({
+              verdict: "INCLUDED",
+              reason: "PLAN_COVERS_TITLE",
+              evidence_state: "stale",
+            }),
+          }}
+          isBest={true}
+          tmdbId={238}
+        />
+      );
+      expect(screen.queryByText("Included with your selected plan")).toBeNull();
+      expect(screen.queryByText("Best Match")).toBeNull();
+      expect(screen.queryByTestId("entitlement-caveat")).toBeNull();
+      expect(screen.getByTestId("unverified-badge")).toHaveTextContent("Unverified");
+      expect(verdictRow()).toHaveTextContent("Plan access unconfirmed");
+      expect(screen.getByTestId("entitlement-reason")).toHaveTextContent(/needs a recheck/i);
+    });
+
+    it("never renders positive verdict, Best Match, or positive copy when evidence is source_reported", () => {
+      render(
+        <OfferRow
+          offer={{
+            ...baseOffer,
+            availability_evidence: "source_reported",
+            reporting_source: "justwatch",
+            is_accessible: true,
+            is_entitled: true,
+            entitlement: entitlement({
+              verdict: "INCLUDED",
+              reason: "PLAN_COVERS_TITLE",
+              evidence_state: "source_reported",
+            }),
+          }}
+          isBest={true}
+          tmdbId={238}
+        />
+      );
+      expect(screen.queryByText("Included with your selected plan")).toBeNull();
+      expect(screen.queryByText("Best Match")).toBeNull();
+      expect(screen.queryByTestId("entitlement-caveat")).toBeNull();
+      expect(screen.getByTestId("unverified-badge")).toHaveTextContent("Source-reported");
+      expect(verdictRow()).toHaveTextContent("Plan access unconfirmed");
+      expect(screen.getByTestId("entitlement-reason")).toHaveTextContent(/a source reported this offer/i);
+    });
+
+    it("never renders positive verdict, Best Match, or positive copy when evidence is unknown/unverified", () => {
+      render(
+        <OfferRow
+          offer={{
+            ...baseOffer,
+            availability_evidence: "unknown",
+            is_accessible: true,
+            is_entitled: true,
+            entitlement: entitlement({
+              verdict: "INCLUDED",
+              reason: "PLAN_COVERS_TITLE",
+              evidence_state: "unknown",
+            }),
+          }}
+          isBest={true}
+          tmdbId={238}
+        />
+      );
+      expect(screen.queryByText("Included with your selected plan")).toBeNull();
+      expect(screen.queryByText("Best Match")).toBeNull();
+      expect(screen.queryByTestId("entitlement-caveat")).toBeNull();
+      expect(screen.getByTestId("unverified-badge")).toHaveTextContent("Unverified");
+      expect(verdictRow()).toHaveTextContent("Plan access unconfirmed");
+      expect(screen.getByTestId("entitlement-reason")).toHaveTextContent(/does not satisfy the current evidence gate/i);
+    });
+
+    it("strictly bounds positive caveat rendering to verified evidence with positive verdict", () => {
+      render(
+        <OfferRow
+          offer={{
+            ...baseOffer,
+            availability_evidence: "verified",
+            is_accessible: true,
+            is_entitled: true,
+            entitlement: entitlement({
+              verdict: "INCLUDED",
+              reason: "PLAN_COVERS_TITLE",
+              evidence_state: "verified",
+              caveats: ["Coverage applies to your declared selection. Account status and playback are unverified."],
+            }),
+          }}
+          isBest={false}
+          tmdbId={238}
+        />
+      );
+      expect(screen.getByTestId("entitlement-caveat")).toHaveTextContent(
+        "Coverage applies to your declared selection. Account status and playback are unverified."
+      );
+      expect(screen.queryByTestId("unverified-badge")).toBeNull();
+      expect(verdictRow()).toHaveTextContent("Included with your selected plan");
+    });
+  });
 });
