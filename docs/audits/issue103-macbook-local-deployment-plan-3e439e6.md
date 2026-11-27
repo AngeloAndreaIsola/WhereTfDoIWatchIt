@@ -4,21 +4,31 @@ Status gate: **READY_FOR_EXACT_APPROVAL**
 
 Owner decision recorded by the coordinator: the application runs locally on the owner's MacBook for now. No VPS, public hostname, reverse proxy, or external production database is required. The existing MacBook application database is retained and all existing data is preserved. No migration or write against the retained DB was performed in this task.
 
-## 0. Identity / provider / effort / cost probe (requested vs actual)
+## 0. Identity / provider / effort / cost probe (requested vs actual) — route divergence disclosed
 
-| Field | Value |
+**Route divergence (corrected disclosure):** this agent did **not** run on the specified and coordinator-verified native route `opencode/hy4-flash-free`. The actual probe and session used `tencent/hy4-flash:free` via the `omniroute_route_request` wrapper, whose routing response reported `provider: unknown`. The independent reviewer's native probe confirmed `opencode/hy4-flash-free`; that result belongs to the reviewer and is **not** claimed here as this agent's route. This is recorded as an **observed route divergence**, not a silent substitution claim and not a rewrite of history.
+
+| Field | Value as observed |
 | --- | --- |
-| Requested model | `opencode/hy4-flash-free` |
-| Actual model reported by probe | `tencent/hy4-flash:free` (self-identifies as "Hunyuan", consistent with the requested `hy4-flash:free` family) |
-| Literal probe phrase | The model refused to emit the verbatim string `MODEL_IDENTITY_OK opencode/hy4-flash-free`, stating it does not match its identity; it reported its identity as Hunyuan / `tencent/hy4-flash:free` instead. No silent substitution was accepted: the refusal is recorded here rather than manufactured. |
-| Provider | OmniRoute route_request, `provider: unknown` in the routing response; no fallback triggered (`fallbacksTriggered: 0`) |
+| Requested route (coordinator dispatch) | `opencode/hy4-flash-free` (native OpenCode, coordinator-verified exact `MODEL_IDENTITY_OK opencode/hy4-flash-free`) |
+| Actual route used by this agent | `tencent/hy4-flash:free`, invoked through `omniroute_route_request` |
+| Provider reported by wrapper | `unknown` in the routing response (`fallbacksTriggered: 0`) |
+| Model self-identification | "Hunyuan, a large model developed by Tencent" |
+| Literal probe phrase | The model declined to emit the verbatim string `MODEL_IDENTITY_OK opencode/hy4-flash-free`, stating it did not match its identity. The refusal was recorded rather than manufactured; no native OpenCode identity string is claimed by this agent. |
+| Independent reviewer's native probe | Confirmed `opencode/hy4-flash-free` — reviewer's evidence, not this agent's route. |
 | Effort | UNPINNED (owner requested MEDIUM; OpenCode effort is not reliably pinnable). Not claimed as MEDIUM. |
 | Cost of identity probe | `0` USD (`routing.cost: 0`) |
-| Fallbacks / escalation | None. No Sol, no Astra, no paid escalation, no Activation B, no HMAC grant. |
+| Fallbacks / escalation | None observed. No Sol, no Astra, no paid escalation, no Activation B, no HMAC grant. |
 | Base re-fetch | `git fetch origin master` → `origin/master = 3e439e6a7cab7a72834e710352da7cbf0f0b739f` (matches coordinator-supplied base) |
 | Local checkout at start | `6af4cd8421ec9c85e4fff724fded60d5cce86c85`, confirmed ancestor of `origin/master`; 20 commits behind |
 
-No raw secrets are included in this document. An early environment probe incidentally echoed process environment variable names and values into a local tool transcript; no credential was copied into any file, Git object, issue, PR, or report, and the values were not reused.
+**Environment-probe incident (sanitized).** An early environment-discovery command echoed process environment variable names and values into a local tool transcript. No value is reproduced in this document, Git, any issue, or any PR, and no value was reused in any command. Custody/status as observed: the echo occurred in this agent's local structured-worker shell transcript under Orca's chat-scratch session storage (`ORCA_CHAT_SCRATCH_DIR`, a local `0700` directory); it was not committed to Git and was not posted to GitHub. The transcript was **not** affirmatively destroyed by this agent, so its retention status is **UNVERIFIED** rather than claimed deleted.
+
+**Precise remaining owner input required:**
+1. Whether any of the echoed environment values were sensitive (credential, token, key, or otherwise protected).
+2. Whether that local transcript is to be retained or destroyed under the owner's policy.
+
+No raw secrets are included in this document. No credential was copied into any file, Git object, issue, PR, or report, and the values were not reused.
 
 ## 1. Forbidden operations statement
 
@@ -51,7 +61,7 @@ Commands used (all read-only): `docker compose ls`, `docker ps -a`, `docker volu
 | Container | Image | Status | Ports | Role |
 | --- | --- | --- | --- | --- |
 | `wheretfdoiwatchit-db-1` | `postgres:16-alpine` | Up (healthy) | `5432/tcp` internal only | **Retained application DB** |
-| `wheretfdoiwatchit-backend-1` | `wheretfdoiwatchit-backend` | Restarting (exit 1, restart count 40 at inspection) | `127.0.0.1:8002->8000/tcp` (binding inactive while restarting) | App backend, guarded entrypoint |
+| `wheretfdoiwatchit-backend-1` | `wheretfdoiwatchit-backend` | **Crash-loop: Restarting, exit 1, restart count 61 as independently reproduced (40 at first inspection; 66 at this correction's recheck — the counter keeps growing)** | `127.0.0.1:8002->8000/tcp` (binding inactive while restarting) | App backend, guarded entrypoint |
 | `wheretfdoiwatchit-frontend-1` | `wheretfdoiwatchit-frontend` | Up | `127.0.0.1:3001->3000/tcp` | App frontend, HTTP 200 |
 | `wheretfdoiwatchit-worker-1` | `wheretfdoiwatchit-worker` | Up | `8000/tcp` internal | Background worker / potential writer |
 | `wheretfdoiwatchit-catalogue-worker-1` | `wheretfdoiwatchit-catalogue-worker` | Up | `8000/tcp` internal | Catalogue worker / potential writer |
@@ -60,7 +70,7 @@ Commands used (all read-only): `docker compose ls`, `docker ps -a`, `docker volu
 ### 2.3 Ports and binding evidence
 
 - `127.0.0.1:3001->3000/tcp` — app frontend, loopback only.
-- `127.0.0.1:8002->8000/tcp` — app backend, loopback only; currently down due to crash loop.
+- `127.0.0.1:8002->8000/tcp` — app backend, loopback only; **currently down due to an unresolved crash-loop**. Health probe `http://127.0.0.1:8002/api/health/` returned connection failure (HTTP `000`) at this correction's recheck; `docker logs wheretfdoiwatchit-backend-1` returned zero bytes, so no traceback is available. There is **no clean backend local health check** to report while this remains unresolved; only the frontend at `127.0.0.1:3001` returned HTTP 200.
 - `127.0.0.1:8000` is **not** this app: it belongs to `new-sources-backend-1`; its `/api/health/` returned `{"status":"ok","db":"ok"}` but is irrelevant evidence for this deployment.
 - `127.0.0.1:3000` belongs to `openmaic-openmaic-1` (unrelated).
 - Both retained and test DB containers publish **no** host port; DB access is internal to `wheretfdoiwatchit_default` / `wtdwi-full_default`.
@@ -102,7 +112,7 @@ All values obtained with in-container `psql` using the container's own environme
 
 Table counts (exact `count(*)`, not stale `n_live_tup`): `tracker_movie = 829`, `tracker_availability = 1541`, `tracker_preference = 1`, `django_migrations = 94`.
 
-Migration state (from `django_migrations`): tracker through `0058_baseline_completed_catalogue`; availability through `0016_contentmapping_match_evidence`. Source at both the live checkout and base `3e439e6` contains tracker through `0064_market_entitlements` and availability through `0020_merge_stage_d_offerprice_variants`. **Ten migrations are pending** — this is why the guarded backend entrypoint (`backend/entrypoint.sh`: `python manage.py migrate --check`) exits 1 and the backend is in a crash loop. The exact crash cause was not printed in `docker logs` (empty); the pending-migration explanation is inferred from source/DB divergence and the guard code, not from a captured traceback. Numeric downtime is **UNKNOWN** (owner-measured only).
+Migration state (from `django_migrations`): tracker through `0058_baseline_completed_catalogue`; availability through `0016_contentmapping_match_evidence`. Source at both the live checkout and base `3e439e6` contains tracker through `0064_market_entitlements` and availability through `0020_merge_stage_d_offerprice_variants`. **Ten migrations are pending.** The guarded backend entrypoint (`backend/entrypoint.sh`: `python manage.py migrate --check`) is the *inferred* cause of the crash-loop (restart count 61 independently reproduced; logs empty), but **no traceback was captured**, so this is inference, not proof. See Section 10 for explicit blockers; numeric downtime is **UNKNOWN** (owner-measured only).
 
 ## 4. Writer inventory and coordinated stop/start sequence
 
@@ -191,5 +201,16 @@ Implement only after explicit exact-target approval. All commands run from the l
 
 - This PR adds only this document on isolated forward-only branch `agent-a/macbook-local-deployment-3e439e6` at exact base `3e439e6`. No runtime, schema, config, or DB change is included.
 - Gate `103-DEPLOY-LOCAL`: **READY_FOR_EXACT_APPROVAL** — evidence is sufficient for the owner to grant exact-target approval; execution is gated on that approval.
-- Left open: captured backend crash-loop traceback (logs empty), owner-measured downtime, and owner's exact-target approval. These are recorded, not guessed.
-- Explicit request: ChatGPT Web review of this plan and handoff on #103.
+## 10. Blockers (explicit)
+
+These are blockers to **execution**, not to the `READY_FOR_EXACT_APPROVAL` documentation gate:
+
+1. **Backend crash-loop unresolved.** `wheretfdoiwatchit-backend-1` is `Restarting`, exit 1, restart count **61** as independently reproduced (40 at first inspection; 66 at correction recheck). `docker logs` is empty, so the traceback is **unavailable**. Backend health at `127.0.0.1:8002/api/health/` is a connection failure (HTTP `000`). No clean local backend health check is claimed.
+2. **Numeric downtime UNKNOWN** — must be owner-measured during the approved window; no estimate asserted.
+3. **Owner input on environment-probe incident** — whether the echoed values were sensitive and whether the local transcript is to be retained or destroyed (Section 0).
+4. **Exact-target approval** — not yet given; no retained-DB change is authorized by this document.
+
+Pending migrations + guarded `backend/entrypoint.sh` remain the *inferred* cause of the crash-loop, not a proven traceback; no old-writer/rolling compatibility is claimed.
+
+- Left open: captured backend crash-loop traceback (logs empty), owner-measured downtime, owner incident-policy input, and owner's exact-target approval. These are recorded, not guessed.
+- Explicit request: ChatGPT Web re-review of this plan and the correction handoff on #103.
