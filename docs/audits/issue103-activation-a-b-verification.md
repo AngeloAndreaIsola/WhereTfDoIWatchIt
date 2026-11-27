@@ -6,6 +6,7 @@
 | Role | Agent B — Activation A and B verification |
 | Base actually used | `6af4cd8421ec9c85e4fff724fded60d5cce86c85` (fresh `git fetch origin master`; `FETCH_HEAD` and `origin/master` both matched the base stated in dispatch) |
 | Branch | `audit/activation-a-b-verification` (isolated, forward-only from base) |
+| Reviewed head | `33a0a2c476c83e2461f64817f36c3004ec75b0aa` (head reviewed in draft PR #236; GitHub PR metadata remains authoritative for the current head) |
 | Requested route | native OpenCode `opencode/hy4-flash-free` |
 | Actual model / identity probe | `MODEL_IDENTITY_OK opencode/hy4-flash-free` (fresh in-session `opencode run --format json -m opencode/hy4-flash-free`) |
 | Provider | OpenCode |
@@ -141,7 +142,7 @@ Full inventory with source, reviewer, provenance, and fail-closed disposition is
 
 Exact commands run in this task are in §2 and §3. All isolated test runs used Docker with ephemeral PostgreSQL; no live endpoints were contacted. `git diff --check` passes on the two added markdown files.
 
-Hosted CI is 3/3 SUCCESS on the exact final PR head (head SHA and run link recorded in draft PR #236 and the issue #103 handoff, which do not change the PR head). Earlier CI run [46062310367](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/actions/runs/46062310367) was 3/3 SUCCESS on the first head `10cc1308970fde00c2ff9dce62ac3a74be783be8`; subsequent heads differ only by documentation one-line CI-link updates. Draft PR [#236](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/pull/236). Local validation above is the authoritative record for this report; hosted CI is corroborating.
+Hosted CI was 3/3 SUCCESS on the exact reviewed head `33a0a2c476c83e2461f64817f36c3004ec75b0aa`: [run 46063472347](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/actions/runs/46063472347) (Frontend Lint/Build/Test, Backend Tests, Browser Extension Build/Typecheck/Tests). Earlier heads were intermediate documentation-only commits; the reviewed head is the one named above, while GitHub PR metadata remains authoritative for the current head. Draft PR [#236](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/pull/236). Local validation above is the authoritative record for this report; hosted CI is corroborating.
 
 ## 6. Status
 
