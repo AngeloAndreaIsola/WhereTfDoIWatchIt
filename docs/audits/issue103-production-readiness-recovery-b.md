@@ -3,7 +3,7 @@
 **Status:** READY_FOR_OWNER_APPROVAL — deployment approval is explicitly **not** granted here.
 **Issue:** #103 (subscription plan tiers, channel add-ons, offer entitlement verdicts).
 **Base SHA:** `a79b9268ceb48e15fd75a6ec196142b172d583b3` (merged master, Merge #228).
-**Head SHA (this draft branch):** to be filled by the final commit on `docs/issue103-release-readiness-a79b926`.
+**Head SHA (this draft branch):** `046d7e5b6053e1af6025648c0218d27959e957b0` (docs-only draft; amendments to this file after this commit are additive evidence).
 **Branch:** `docs/issue103-release-readiness-a79b926` (created from base above).
 **Base CI:** [hosted CI run 46016327617](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/actions/runs/46016327617) — 3/3 jobs success: Browser Extension Build/Typecheck/Tests (16s), Backend Tests (3m13s), Frontend Lint/Build/Test (1m25s). Annotations: Node.js 20 deprecation only (pre-existing, non-blocking).
 
