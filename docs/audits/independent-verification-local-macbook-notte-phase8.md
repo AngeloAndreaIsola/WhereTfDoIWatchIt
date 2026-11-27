@@ -147,3 +147,27 @@ Independently observed facts matching the documents: retained DB `tracker` in `w
 ## 8. Forbidden-operation statement
 
 This review performed: only `gh` read APIs, read-only `shasum`/`python3` digest recomputation, a local model-identity echo probe, read-only `docker ps`/`inspect`/`logs` and in-container `psql SELECT`s against the retained DB (no `UPDATE`/`INSERT`/DDL/`migrate`/config change), read-only `ls`/`file`/`shasum` on the protected backup, and a new documentation-only branch. It performed **no** live provider, TMDb, JustWatch, Netflix, Prime, Rakuten, playback or Notte call; no HMAC grant; no quota/permission/config change; no credential or raw-evidence exposure; no mapping activation; no gate opening; no issue closure or cleanup; and no merge. #97 and #103 remain open; all three PRs remain draft and unmerged.
+
+## 9. Addendum — focused correction verification (task_220a9aed1c03)
+
+Scope: correction-only re-review of PRs #239 and #241. Substantive gate conclusions from §§4–7 are **not reopened**; only correction-verification status is recorded here. Original audit head: `7d073ef10af1320a7bbab5b999f073afce7077bd` (this addendum is committed on the same isolated forward-only branch).
+
+### Corrected heads, CI and handoffs (fresh `gh pr view` / `gh pr checks` / `gh api`)
+
+| PR | Original head | Corrected head | CI run (corrected head) | Jobs | Handoff | New verdict |
+| --- | --- | --- | --- | --- | --- | --- |
+| #239 | `495bcb768811bf7f7906a5e1ca871f076a4cadda` | `79672d3d86036d5db3c09aa78dbb03b36f152b95` | [46073564848](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/actions/runs/46073564848) | 3/3 SUCCESS (Backend Tests; Frontend Lint,Build&Test; Browser Extension Build,Typecheck&Tests) | #97 comment `7228959785` | **READY_FOR_CHATGPT_REVIEW** |
+| #241 | `7130deca89a4769bb6a43302049c396cc630716b` | `cad4d145a5ce54f1fe4a841214451f1c0d8bcca9` | [46073624095](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/actions/runs/46073624095) | 3/3 SUCCESS (same three jobs) | #103 comment `7228972813` | **READY_FOR_CHATGPT_REVIEW** |
+| #240 | `a107c94a3396b51ad5f656eaa62e5c00e4f36304` | unchanged `a107c94a3396b51ad5f656eaa62e5c00e4f36304` | [46072107007](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/actions/runs/46072107007) | 3/3 SUCCESS | prior `7228749636` | unchanged: READY_FOR_CHATGPT_REVIEW |
+
+`gh api .../actions/runs/{46073564848,46073624095}` confirmed `conclusion=success`, `status=completed`, and `head_sha` equal to the corrected PR heads above.
+
+### Correction checks reproduced
+
+#239: the document at the corrected head contains **zero** occurrences of stale `8f42cd4…` / `46071372187` (grep count 0); its §9 now cites reviewed head `495bcb7…` and run `46071757828`, and states "PR metadata remains authoritative for the current head". Gate `97-E-NOTTE` remains `BLOCKED_ON_SPECIFIC_EVIDENCE`. The prior READY_FOR_CHATGPT_REVIEW finding is therefore resolved; no gate opened.
+
+#241: the three prior REQUEST_CHANGES findings are now accurately disclosed in the document, not merely in a handoff: (1) route divergence — requested `opencode/hy4-flash-free`, actual `tencent/hy4-flash:free` via `omniroute_route_request` with `provider: unknown`, cost 0 USD, effort UNPINNED, reviewer's native probe explicitly attributed to the reviewer and not claimed as the agent's route; (2) env-probe incident sanitized — no values in document/Git/GitHub, local chat-scratch transcript custody described, retention **UNVERIFIED**, two explicit owner inputs (whether values were sensitive; retain vs destroy); (3) crash-loop — Restarting/exit 1 with restart count 61 independently reproduced (40 first inspection, 66 correction recheck), empty `docker logs`, traceback unavailable, `127.0.0.1:8002/api/health/` HTTP 000, no clean backend health claim, numeric downtime **UNKNOWN** owner-measured. Gate `103-DEPLOY-LOCAL` remains `READY_FOR_EXACT_APPROVAL`, not execution permission. Verdict upgraded to READY_FOR_CHATGPT_REVIEW on correction verification only.
+
+### Route / cost / effort for this addendum
+
+Route remained the verified fallback `opencode/hy4-flash-free` after the deepseek and OmniRoute 3.8 failures. Reviewer probe emitted `MODEL_IDENTITY_OK opencode/hy4-flash-free`; provider native `opencode`; cost 0; effort UNPINNED. No silent substitution, paid escalation, retained-DB change, live Notte/provider call, HMAC grant, permission change, mapping activation, gate opening, merge, closure or cleanup.
