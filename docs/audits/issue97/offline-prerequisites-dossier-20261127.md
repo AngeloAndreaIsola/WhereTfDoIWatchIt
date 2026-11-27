@@ -18,7 +18,7 @@ This dossier aggregates all offline prerequisites required to advance issue #97 
 - No HMAC grants, signing keys, quota changes, or runtime-permission changes.
 - No production writes, migrations, deployments, issue closures, or branch merges.
 
-Merging this dossier into master or retaining it as a draft PR grants zero operational approval. All runtime activities remain locked behind owner decision gates.
+Merging this dossier into master or retaining it as a draft PR grants zero operational approval. All runtime activities remain locked behind owner decision gates. Read-only offline checks and gated synthetic writes on disposable infrastructure are distinct; neither establishes operational readiness nor grants live permission.
 
 ---
 
@@ -44,8 +44,8 @@ Historical note only: a Streaming Availability / RapidAPI free-tier limit was an
 
 ## 3. Exclusive-Use Attestation & HMAC Authorization Request Template
 
-### Exclusive-Use Attestation
-> "I attest that all offline rehearsals and future authorized executions use dedicated, single-tenant test accounts and disposable PostgreSQL instances (`WTDWI_DISPOSABLE_TEST_DB=1`) with read-only boundaries. No shared production credentials, concurrency leaks, or unauthorized service principals are employed."
+### Exclusive-Use Attestation (actual Stage D configuration)
+> "I attest that Stage D offline rehearsals use a dedicated, single-tenant disposable PostgreSQL instance with `WTDWI_DISPOSABLE_TEST_DB=1`, `AVAILABILITY_STAGE_D_DISPOSABLE=1`, an exact disposable database identity/fingerprint, application source mounted read-only on an internal Docker network, and a fresh tmpfs database. Read-only preflight uses `PGOPTIONS='-c default_transaction_read_only=on'` and performs no writes and no reservations. Gated offline writes occur only in synthetic test paths with mocked transport, disposable-DB attestation and exact target fingerprint; they are not production writes and do not authorize live execution. No shared production credentials, concurrency leaks or unauthorized service principals are employed."
 
 ### Non-executable HMAC Authorization Request Templates
 
