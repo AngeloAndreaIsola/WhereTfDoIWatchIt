@@ -117,3 +117,48 @@ No production deployment, migration, config change or production DB write; no li
 ## 6. ChatGPT Web review request
 
 ChatGPT Web independent review is explicitly requested for all four draft PRs (#234, #235, #236, #237) and for this independent audit, with the corrections in §3 applied before final review. No gate may be opened, no issue closed and no PR merged on the strength of this document alone.
+
+## 7. Addendum — focused re-review of documentation corrections (§3)
+
+Scope: correction verification only. Gate conclusions in §4 are unchanged; the verdicts below are **correction-verification statuses**, not new gate decisions. No substantive review was repeated.
+
+### 7.1 Freshly verified heads and hosted CI
+
+All values re-read with `gh pr view`, `gh pr checks`, `gh api …/pulls/<n>` and `gh api …/actions/runs/<run>/jobs`; heads re-fetched via `refs/pull/<n>/head`.
+
+| PR | Reviewed head (substantive) | Current corrected head (PR metadata) | Hosted CI on corrected head | Jobs | Correction handoff |
+| --- | --- | --- | --- | --- | --- |
+| #234 | `524ae05d5fbc1ed85c7761b5e14dc3533474a99c` | unchanged `524ae05d…` | [run 46062151975](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/actions/runs/46062151975) | 3/3 SUCCESS | prior handoff comment `7227368798` |
+| #235 | `ad58af9aa908ba2929ef64cd0aede09a64b1871c` | `f0b762fb4dc176ce6dc7daa4e76cf54ce3367e4b` | [run 46066247827](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/actions/runs/46066247827) | Backend Tests SUCCESS; Frontend Lint, Build & Test SUCCESS; Browser Extension Build, Typecheck & Tests SUCCESS (3/3) | #97 comment [7227955064](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/issues/97#issuecomment-7227955064) |
+| #236 | `33a0a2c476c83e2461f64817f36c3004ec75b0aa` | `f2edda937453271fe9143ea2f564741ff31cf12f` | [run 46066280562](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/actions/runs/46066280562) | Browser Extension Build, Typecheck & Tests SUCCESS; Backend Tests SUCCESS; Frontend Lint, Build & Test SUCCESS (3/3) | #103 comment [7227952176](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/issues/103#issuecomment-7227952176) |
+| #237 | `5560b20fa59b463305f68fdade0fcf1ace46016f` | `54ac141ea2677c4f1847ff65bb0548571d06fdbb` | [run 46066271305](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/actions/runs/46066271305) | Backend Tests SUCCESS; Frontend Lint, Build & Test SUCCESS; Browser Extension Build, Typecheck & Tests SUCCESS (3/3) | #97 comment [7227941918](https://github.com/AngeloAndreaIsola/WhereTfDoIWatchIt/issues/97#issuecomment-7227941918) |
+
+All four PRs remain OPEN drafts on the exact base `6af4cd8421ec9c85e4fff724fded60d5cce86c85`.
+
+### 7.2 Correction checks
+
+- **#235:** report §0 now names preferred `opencode/deepseek-v4.1-flash-free`, fallback `omniroute/ag-gemini-3.8-flash-tiered`, and explicitly states `ag-gemini-3.5-flash-lite` was not the preferred route for this review task. §14 now names reviewed head `ad58af9…` and run `46062730381` (3/3 SUCCESS) with "PR metadata authoritative" phrasing; `255e39c2…`, run `46062258574` and "CI link to be appended" are gone from the report and PR body (`git grep` over `origin/pr/235` changed files). PR body contains exact CI link `46066247827` with all three job conclusions.
+- **#236:** PR body `Reviewed head:` field names `33a0a2c…` with "GitHub PR metadata remains authoritative for the current head"; report line 9 has inline `| Reviewed head | 33a0a2c… |` (same metadata-authoritative phrasing); stale `10cc1308…` and its CI self-reference are gone from the changed files.
+- **#237:** report line 6 now states inline "The reviewed head for this correction is `5560b20…`; PR metadata remains authoritative for the current head"; the stale `ddcdd184…` self-reference and "Exact final head and hosted run are recorded in issue #97 handoff" are gone. PR body names the current corrected head `54ac141e…` and explicitly delegates authority to PR metadata.
+- **#234:** unchanged at `524ae05…`; prior READY verdict stands.
+
+Commands used (results above): `gh pr view <n> --json state,isDraft,baseRefOid,headRefOid`, `gh api repos/AngeloAndreaIsola/WhereTfDoIWatchIt/pulls/<n>`, `gh api …/actions/runs/<run>/jobs`, `gh api …/commits/<head>/check-runs`, `git fetch origin '+refs/pull/<n>/head:refs/remotes/origin/pr/<n>'`, `git rev-parse origin/pr/<n>`, `git show origin/pr/<n>:<report> | grep -n …`, `git grep -n … origin/pr/<n> -- docs/audits`.
+
+### 7.3 Correction-verification verdicts
+
+| PR | Prior verdict | Correction-verification status |
+| --- | --- | --- |
+| #234 | READY_FOR_CHATGPT_REVIEW | **READY_FOR_CHATGPT_REVIEW** (unchanged) |
+| #235 | REQUEST_CHANGES | **READY_FOR_CHATGPT_REVIEW** — all three §3 corrections applied and verified |
+| #236 | REQUEST_CHANGES | **READY_FOR_CHATGPT_REVIEW** — PR body and inline report field corrected |
+| #237 | REQUEST_CHANGES | **READY_FOR_CHATGPT_REVIEW** — PR body and inline report field corrected |
+
+Gate status table in §4 is intentionally not modified; only the correction-verification statuses above are new.
+
+### 7.4 Route record for this addendum
+
+Own fresh probe: `opencode run --format json -m opencode/hy4-flash-free 'Reply with exactly: MODEL_IDENTITY_OK <your actual model id>'` → `MODEL_IDENTITY_OK opencode/hy4-flash-free`, session `ses_de13351d2ffe2Ty5r7dnVzDXY9`, provider OpenCode, effort UNPINNED, JSON `cost: 0` (input 64,576 / output 15 / reasoning 50). Preferred route `opencode/deepseek-v4.1-flash-free` timed out twice and specified fallback `omniroute/ag-gemini-3.8-flash-tiered` failed with 503 `ALL_TARGETS_SKIPPED`; verified fallback used. No silent substitution, Sol, Astra or paid escalation.
+
+### 7.5 Forbidden operations (addendum)
+
+No merge, deployment, live request, HMAC grant, quota/runtime permission change, mapping activation, gate opening, issue closure or cleanup was performed. All checks used read-only GitHub API and local `git show`/`git grep`; the only writes are this addendum, its draft-PR push and the two updated handoff comments. #103 and #97 remain open; all reviewed PRs remain open drafts. Explicit ChatGPT Web final review requested.
