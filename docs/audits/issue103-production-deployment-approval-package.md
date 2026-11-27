@@ -42,14 +42,15 @@ Nothing in this work executes or authorizes:
 ## 3. Backup and Preflight Target Validation
 
 1. **Exact Checked Target:** The owner must supply and verify the exact database host, port, name, role, release SHA and cutover window through a secure channel. Do not use broad globs, inferred hosts or unchecked target lists.
-2. **Table Validation Before Backup:** Validate current table names with `SELECT to_regclass('public.<table>')` before recording counts or hashes. The validated Django table set for this package is: `tracker_movie`, `tracker_availability`, `tracker_titleavailabilitycheck`, `tracker_entitlementplan`, `tracker_entitlementchannel`, `tracker_reviewedentitlementpackage`, `tracker_entitlementcoverage`, `availability_providercontent`, `availability_offer`, `availability_offerprice`, `availability_offerevidence`. Any table whose `to_regclass` is null must invalidate the preflight.
+2. **Table Validation Before Backup:** Validate current table names with `SELECT to_regclass('public.<table>')` before recording counts or hashes. The offline-derived Django table list is: `tracker_movie`, `tracker_availability`, `tracker_titleavailabilitycheck`, `tracker_entitlementplan`, `tracker_entitlementchannel`, `tracker_reviewedentitlementpackage`, `tracker_entitlementcoverage`, `availability_providercontent`, `availability_offer`, `availability_offerprice`, `availability_offerevidence`. This list is **not proof of the live schema**; owner preflight must verify every name against the actual target schema and fail closed on any null `to_regclass`, missing table or mismatch.
 3. **Count/Hash Procedure:** For each validated table, record `SELECT count(*) FROM public.<table>` and a deterministic content hash via `COPY (SELECT * FROM public.<table> ORDER BY id) TO STDOUT WITH CSV HEADER | sha256sum` into private protected custody. Store only sanitized counts/hashes in Git; never store raw production rows.
 4. **Pre-Cutover Backup:** Full logical PostgreSQL dump of the exact checked target: `pg_dump -Fc -v --host "$DB_HOST" --port "$DB_PORT" --username "$DB_USER" --dbname "$DB_NAME" --file "$BACKUP_PATH"`. Record SHA256 off-repo.
 5. **Required Backup Validation:** `pg_restore --list "$BACKUP_PATH"` succeeds; isolated restoration rehearsal on disposable PostgreSQL confirms schema, validated table counts and content hashes; only then may the cutover proceed.
 6. **Retention:** Private encrypted storage with owner-managed retention and review policy; no credentials, DSNs or raw production data in repository or issue comments.
-4. **Restore Verification Step:** Test restore on a disposable staging container before executing production cutover:
+7. **Restore Verification Step:** Test restore on a disposable staging container before executing production cutover. Use only the exact checked backup path recorded in §3.4; no filename wildcard is permitted:
    ```bash
-   pg_restore --clean --if-exists --dbname=$STAGING_DATABASE_URL pre_cutover_backup_*.dump
+   pg_restore --list "$BACKUP_PATH"
+   pg_restore --dbname "$STAGING_DATABASE_URL" "$BACKUP_PATH"
    python manage.py migrate --check
    ```
 
