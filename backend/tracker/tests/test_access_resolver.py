@@ -1,22 +1,4 @@
-"""Regression tests for the single shared access resolver (task 6).
-
-These pin the ten behaviours the availability redesign promised, so the
-watchlist badge and the title-detail offer list can never disagree again:
-
-1. an included, local, language-matching subscription is 🟢 available here;
-2. the same offer in a configured VPN region is 🟡 (potential), never 🟢;
-3. a cross-country offer with no VPN regions configured is not "accessible";
-4. a cross-country offer outside the configured regions is not "accessible";
-5. ``vpn_enabled=True`` with no regions reaches any country;
-6. an add-on the user declared entitles them;
-7. ``free_with_ads`` is a real free stream, and broadcaster VOD auto-counts;
-8. a rent/buy offer with no rent/buy account is 🟠, not 🟣;
-9. a rent/buy offer *with* a rent/buy account is 🟣 purchase-only;
-10. a language mismatch is reported as such — never misattributed to
-    subscriptions — and a refusal reason is only a real blocker.
-
-Plus the cross-surface consistency check and the ``access_mode`` bucketing.
-"""
+"""Regression tests for access, language and reach under reviewed fixture facts."""
 from django.test import TestCase
 
 from tracker.models import Movie, Preference, Provider, ProviderCategory, Subscription
@@ -26,11 +8,24 @@ from tracker.services.access import (
     Locality,
     SubscriptionAccessMode,
     build_user_access,
-    resolve_title,
+    build_explicit_access,
+    resolve_title as _resolve_title,
 )
 from tracker.services.offers import Offer
 from tracker.services.ranking import rank_offers
 from tracker.services.watchability import WatchabilityStatus, evaluate_watchability
+
+from tracker.tests.reviewed_entitlement import reviewed_access
+
+
+def resolve_title(movie, offers, pref, *, current_country=None, access=None, user_subscriptions=None):
+    if access is None:
+        access = build_user_access(pref.user_id) if user_subscriptions is None else build_explicit_access(user_subscriptions)
+    access = reviewed_access(
+        offers, access, current_country=current_country or pref.current_country,
+        hosts={"hayu_amazon": "prime", "mgm_plus": "prime"},
+    )
+    return _resolve_title(movie, offers, pref, access=access, current_country=current_country)
 
 
 class AccessResolverTests(TestCase):
@@ -343,7 +338,8 @@ class AccessResolverTests(TestCase):
         self.assertEqual(res.verdict, AccessVerdict.UNKNOWN)
 
     # -- 6 ----------------------------------------------------------------
-    def test_06_declared_addon_entitles(self):
+    def test_06_reviewed_base_and_channel_grant_access(self):
+        self._sub("prime")
         self._sub("mgm_plus", mode=SubscriptionAccessMode.ADDON)
         pref = self._pref()
         res = resolve_title(
@@ -356,7 +352,7 @@ class AccessResolverTests(TestCase):
         self.assertEqual(res.best_offer.access_type, AccessType.ADDON)
 
     # -- 7 ----------------------------------------------------------------
-    def test_07_free_with_ads_counts_and_bvod_auto_counts(self):
+    def test_07_reviewed_free_with_ads_and_public_free(self):
         self._sub("tubi", mode=SubscriptionAccessMode.FREE)
         pref = self._pref()
         free_ads = resolve_title(
@@ -367,8 +363,7 @@ class AccessResolverTests(TestCase):
         )
         self.assertEqual(free_ads.verdict, AccessVerdict.AVAILABLE_HERE)
 
-        # A broadcaster (BVOD) provider is auto-available even with no
-        # Subscription row: public-service streams are free by definition.
+        # The reviewed fixture asserts that the broadcaster offer is public.
         Provider.objects.update_or_create(
             slug="bbc_iplayer",
             defaults={
@@ -387,7 +382,7 @@ class AccessResolverTests(TestCase):
         self.assertEqual(bvod.verdict, AccessVerdict.AVAILABLE_HERE)
 
     # -- 8 ----------------------------------------------------------------
-    def test_08_rent_without_account_is_available_elsewhere(self):
+    def test_08_reviewed_rent_without_account_is_purchase_only(self):
         pref = self._pref()
         res = resolve_title(
             self.movie,
@@ -395,12 +390,9 @@ class AccessResolverTests(TestCase):
                          url="u", audio_languages=["EN"], subtitle_languages=["EN"])],
             pref,
         )
-        self.assertEqual(res.verdict, AccessVerdict.AVAILABLE_ELSEWHERE)
-        self.assertEqual(res.status_symbol, "🟠")
-        self.assertFalse(res.access_flags["has_rent"])
-        self.assertTrue(
-            any("Only available to rent" in r for r in res.explanation)
-        )
+        self.assertEqual(res.verdict, AccessVerdict.PURCHASE_ONLY)
+        self.assertTrue(res.access_flags["has_rent"])
+        self.assertFalse(res.purchase_offers[0].is_entitled)
 
     # -- 9 ----------------------------------------------------------------
     def test_09_rent_with_account_is_purchase_only(self):
@@ -444,7 +436,7 @@ class AccessResolverTests(TestCase):
                          url="u")],  # no language metadata
             pref,
         )
-        self.assertEqual(res.status_label, "Available — language data unknown")
+        self.assertEqual(res.status_label, "Unknown")
 
     def test_10c_11660_style_reasons_are_real_blockers_only(self):
         """Following (1999) regression: JA-only rule, EN/IT offers, no VPN.
@@ -479,7 +471,9 @@ class AccessResolverTests(TestCase):
                         url="u", audio_languages=["EN"], subtitle_languages=["EN"]),
         ]
         detail = resolve_title(self.movie, offers, pref)
-        badge = evaluate_watchability(self.movie, offers, pref)
+        badge = evaluate_watchability(
+            self.movie, offers, pref, access=reviewed_access(offers, build_user_access(1), current_country=pref.current_country),
+        )
         self.assertEqual(detail.verdict, AccessVerdict.AVAILABLE_HERE)
         self.assertEqual(badge.status, WatchabilityStatus.WATCHABLE_HERE)
         self.assertEqual(badge.status_symbol, detail.status_symbol)

@@ -247,7 +247,7 @@ class SyntheticProfilesTests(SimpleTestCase):
         result = resolve_title(SimpleNamespace(id=1), [Offer(country="NL", service="netflix", offer_type="subscription")],
                                preference, current_country="NL", access=access,
                                provider_map={"netflix": provider})
-        self.assertEqual(result.verdict, AccessVerdict.AVAILABLE_ELSEWHERE)
+        self.assertEqual(result.verdict, AccessVerdict.UNKNOWN)
 
     def test_all_relevant_profile_respects_addon_base_requirement(self):
         base = Provider(slug="prime", name="Prime Video", category=ProviderCategory.OFFICIAL, is_enabled=True)

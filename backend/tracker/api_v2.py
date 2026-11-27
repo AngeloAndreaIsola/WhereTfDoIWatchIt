@@ -454,7 +454,10 @@ def unofficial_movie_offers(request, tmdb_id: int):
     from tracker.services.access import build_reach, build_user_access, classify_offer
     from tracker.services.preferences import build_preference
 
-    preference = build_preference(1)
+    from tracker.services.entitlement_selections import viewer_id
+
+    user = viewer_id(request)
+    preference = build_preference(user)
     preference.current_country = (country or preference.current_country).upper().strip()
 
     include_bvod = request.GET.get("include_bvod", "").lower() == "true"
@@ -471,7 +474,7 @@ def unofficial_movie_offers(request, tmdb_id: int):
     ranked = rank_offers(
         offers, preference, current_country=preference.current_country
     )
-    access = build_user_access(1)
+    access = build_user_access(user, offers=offers)
     reach = build_reach(preference, preference.current_country)
 
     # Format for frontend
@@ -490,10 +493,7 @@ def unofficial_movie_offers(request, tmdb_id: int):
             reach=reach,
             provider_map=provider_map,
         )
-        d["locality"] = classified.locality
-        d["is_accessible"] = classified.is_accessible
-        d["is_entitled"] = classified.is_entitled
-        d["rejection_reasons"] = classified.rejection_reasons
+        d.update(classified.entitlement_fields())
         d["territorial_scope"] = classified.territorial_scope
         offers_out.append(d)
 

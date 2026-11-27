@@ -235,7 +235,7 @@ class AvailabilityDisplayContractTests(ReconciliationFixtureMixin, TestCase):
             current_country="US", user_subscriptions=set(),
         )
 
-        self.assertEqual(result.status, "available_elsewhere")
+        self.assertEqual(result.status, "unknown")
         self.assertIsNone(result.best_offer)
         payload = result.to_dict()
         self.assertNotIn("playback", payload)

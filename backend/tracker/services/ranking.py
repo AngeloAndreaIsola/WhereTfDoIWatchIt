@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
 from tracker.models import Preference
-from .offers import Offer, effective_territorial_scope
+from .offers import OfferLineage, Offer, effective_territorial_scope
 from .score import QUALITY_RANK, evaluate_language_rule, score_offer, _normalize_lang_list
 from .preferences import get_default_ranking_preferences
 
@@ -49,6 +49,7 @@ class RankedOffer:
     available_until: Optional[str] = None
     season_number: Optional[int] = None
     episode_number: Optional[int] = None
+    lineage: OfferLineage | None = None
 
     def to_dict(self) -> dict:
         ranking_dict = {
@@ -86,6 +87,8 @@ class RankedOffer:
             value = getattr(self, field_name)
             if value is not None:
                 payload[field_name] = value
+        if self.lineage:
+            payload.update(self.lineage.public_scope())
         return payload
 
 
@@ -301,6 +304,7 @@ def rank_offers(
                 available_until=offer.available_until,
                 season_number=offer.season_number,
                 episode_number=offer.episode_number,
+                lineage=offer.lineage,
             )
         )
 

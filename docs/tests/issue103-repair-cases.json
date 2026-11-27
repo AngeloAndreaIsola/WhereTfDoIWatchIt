@@ -1,0 +1,552 @@
+{
+  "version": 1,
+  "artifact": {
+    "id": "issue103-repair-cases",
+    "title": "Issue #103 repair regression cases - database/API boundary and rendered UI",
+    "repository": "AngeloAndreaIsola/WhereTfDoIWatchIt",
+    "branch": "repair/103-matrix-c",
+    "branchBase": "8985946b61c24c4b0fa9d6e0b2d19b45fd720cca",
+    "ownedBy": "Agent C - regression matrix and test coverage",
+    "route": "opencode / opencode/hy4-flash-free",
+    "reasoningEffort": "MEDIUM requested, UNPINNED",
+    "cost": "COST_UNKNOWN",
+    "transport": "Deterministic, mocked only. Zero live provider, first-party, TMDb or playback requests. Disposable PostgreSQL via scripts/test-backend-isolated.sh only."
+  },
+  "sourceFindings": {
+    "report": "docs/audits/issue103-independent-review.md at PR #226 head c5dbae111431e30665f252f8d8da87d4dcf95d6e",
+    "affectedCombinedHead": "bb438d3d1fd6f2ae1da28e9de43dff7febc37e83",
+    "reviewBaseMaster": "f9a4431ed4db85c29abd29a28ba4b90b82c32e9d",
+    "contractHead": "2cfa9204a8d5c8c9ebd85ef4205b68eee81fb5f6",
+    "defectHeads": {
+      "222": "6667ebcae41bfcad18928f190ddf23ef17f9b3e7",
+      "223": "e8280ee95f4209d738ff47ff7253a5f245de72cf",
+      "224": "67948f5fe965c5606f032d957c2d5757a6e821a6",
+      "225": "bb438d3d1fd6f2ae1da28e9de43dff7febc37e83"
+    }
+  },
+  "scope": {
+    "included": [
+      "Backend reconciliation and read-adapter boundaries where source package, variant and language are bound (B1, B2)",
+      "Detail-view country propagation from request to rows and title verdict (B3)",
+      "Selection write ordering: structural validation, replay, 409 stale revision, catalogue membership (B4)",
+      "Filter predicate presence vs empty recognized-code set (B5)",
+      "Rendered UI contracts for series purchase actions, conflict drafts, retired plans, evidence-gated verdict badges and channel caveats (U1-U5)"
+    ],
+    "excluded": [
+      "Pure evaluate_entitlement()/project_title() evaluator cases E01-E42 and HTTP cases H01-H12 already specified in docs/tests/issue103-adversarial-cases.json (#223)",
+      "Any application code change: this artifact owns only docs/tests/issue103-repair-acceptance.md and this file",
+      "Live transport, permission grants, production data, deployment, merge or issue closure"
+    ]
+  },
+  "coverageGapVs223": {
+    "finding": "CONFIRMED_GAP",
+    "evidence": "git diff --stat 6667ebc e8280ee changes only docs/tests/issue103-adversarial-cases.json and docs/tests/issue103-adversarial-matrix.md (2 files, 865 insertions). #223 specifies 42 evaluator cases and 12 HTTP cases against evaluate_entitlement()/project_title()/the API response surface, i.e. it starts after database reconciliation and does not render React components.",
+    "uncoveredBy223": ["B1", "B2", "B3", "B4", "B5", "U1", "U2", "U3", "U4", "U5"],
+    "note": "No existing suite at the combined head asserts group-level language from a second package, per-package deny replacing a covered package, contradictory country parameters, 409-before-catalogue-membership, invalid-only filter codes, or the five mocked UI expectations."
+  },
+  "conventions": {
+    "frozenAsOf": "2030-01-15T12:00:00Z",
+    "probeBase": "OfferProjectionTests in backend/tracker/tests/test_issue103_api.py:187-233; rollback-only TestCase; tracker.views.request_title_refresh mocked; viewer user_id=1; Preference(current_country=NL, audio_languages=[EN]); movie tmdb_id=910003.",
+    "seedNaming": "Identifiers below use the synthetic probe naming (source synthetic-rights, provider synthetic-aster, packages pkg-a/pkg-b). Exact IDs must be read from the probe helpers' offer()/rule()/put() return values; no raw provenance reference, account identifier, signed URL or private key is public.",
+    "passDefinition": "Every 'expectedAfterRepair' assertion must PASS on the corrected combined tree with the #223 corpus and the existing suites still green. 'observedBeforeRepair' is the FAIL state at bb438d3 recorded in PR #226 and independently confirmed by source inspection."
+  },
+  "cases": [
+    {
+      "id": "B1",
+      "layer": "backend",
+      "surface": "database/API",
+      "severity": "High",
+      "title": "Audio language from an unreviewed later package is borrowed by an uncovered package and makes it watchable",
+      "codeEvidence": [
+        "backend/availability/services/reconciliation.py:205-255 - group key is (content_type, tmdb_id, season, episode, provider, country) with offer_type subgroup; source package and variant are not group keys",
+        "backend/availability/services/reconciliation.py:460-470 and 617-639 - _language_value picks language from any observation in the group",
+        "backend/tracker/services/availability_reads.py:131-166 - _tracker_offer copies group-level audio_languages onto the rendered row",
+        "backend/tracker/services/entitlement_reads.py:95-143 - entitlement lineage is package/variant-bound but the language shown is not"
+      ],
+      "databaseSeed": {
+        "title": {"tmdb_id": 910003, "content_type": "movie"},
+        "viewer": {"user_id": 1, "current_country": "NL", "audio_languages": ["EN"]},
+        "selection": {"provider_slug": "synthetic-aster", "billing_country": "NL", "holding": "yes", "plan_state": "selected", "plan_id": "base", "revision": 0},
+        "packageA": {"source_package_id": "pkg-a", "provider_content_id": "100", "variant_id": "variant-a", "reviewed": true, "audio_languages": [], "subtitles": [], "observed_at": "frozen now"},
+        "packageB": {"source_package_id": "pkg-b", "provider_content_id": "101", "variant_id": "variant-b", "reviewed": false, "audio_languages": ["EN"], "observed_at": "frozen now minus 3 minutes"}
+      },
+      "endpoints": [
+        "GET /api/prime/movie/910003/?current_country=NL",
+        "GET /api/watchlist/report/?watchable=1&audio_languages=EN"
+      ],
+      "steps": [
+        "Seed package A (allow-NL verified subscription, no audio, no subtitles, reviewed) and its base-plan allow rule.",
+        "Assert detail: title unknown; A row is_accessible=false; A has no EN audio.",
+        "Insert package B (unreviewed subscription, EN audio, observed 3 minutes after A) in the same provider/country/offer-type group.",
+        "Re-read detail and the filtered watchlist report."
+      ],
+      "observedBeforeRepair": {
+        "detail": "A row reports audio_languages=[EN], is_accessible=true, title available_here",
+        "report": "GET /api/watchlist/report/?watchable=1&audio_languages=EN returns the title"
+      },
+      "expectedAfterRepair": {
+        "detail": "A row keeps its own empty language set and is_accessible=false; B cannot confer EN; title stays unknown",
+        "report": "GET /api/watchlist/report/?watchable=1&audio_languages=EN does not return the title",
+        "invariants": [
+          "Language used for accessibility is bound to the same package and rendition as the rights",
+          "Detail row, title verdict and filtered report agree",
+          "Reverse observation order gives the same result"
+        ]
+      },
+      "regressionAssertions": [
+        "assert detail.offers[*] where source_package_id=pkg-a has no EN in audio_languages",
+        "assert detail.watchability.verdict == 'unknown'",
+        "assert report rows for this title are empty under watchable=1&audio_languages=EN",
+        "assert no raw provenance_reference/source package secret in any payload"
+      ],
+      "crossPrDependencies": [
+        "Corrected #222 head (reconciliation.py, availability_reads.py, entitlement_reads.py) is required; #223 evaluator cases begin after reconciliation and cannot catch this",
+        "#224 offer rows consume the corrected fields; #225 integration replay fixture must be refreshed to include two packages"
+      ],
+      "reproductionCommand": "./scripts/test-backend-isolated.sh tracker.tests.test_issue103_api.OfferProjectionTests -v 2 (add the two-package probe case; disposable PostgreSQL, mocked transport)"
+    },
+    {
+      "id": "B2",
+      "layer": "backend",
+      "surface": "database/API",
+      "severity": "High",
+      "title": "A denied later package hides an earlier covered package and downgrades the title",
+      "codeEvidence": [
+        "backend/availability/services/reconciliation.py:205-255 - one group per provider/country/offer class collapses distinct packages",
+        "backend/tracker/services/availability_reads.py:176-216 - _offer_lineage selects one observation via group-level chosen price/URL",
+        "backend/tracker/services/entitlement_reads.py:95-143 - a single lineage/variant drives rule lookup, so an allow on A is lost when B's variant is selected",
+        "backend/tracker/views.py:2857-2916 and 2990-3040 - _build_prime_offers rows and _prime_detail_response title aggregate from the collapsed set"
+      ],
+      "databaseSeed": {
+        "title": {"tmdb_id": 910003, "content_type": "movie"},
+        "viewer": {"user_id": 1, "current_country": "NL", "audio_languages": ["EN"]},
+        "selection": {"provider_slug": "synthetic-aster", "billing_country": "NL", "holding": "yes", "plan_state": "selected", "plan_id": "base", "revision": 0},
+        "packageA": {"source_package_id": "pkg-a", "variant_id": "variant-a", "reviewed": true, "observed_at": "frozen now minus 3 minutes", "rule": "allow:base"},
+        "packageB": {"source_package_id": "pkg-b", "variant_id": "variant-b", "reviewed": true, "observed_at": "frozen now", "rule": "deny:variant-b"},
+        "note": "Same provider, country and offer class; distinct provider-content IDs, source package IDs and variant IDs. A's observation and rule remain valid throughout."
+      },
+      "endpoints": ["GET /api/prime/movie/910003/?current_country=NL"],
+      "steps": [
+        "Seed covered A observed three minutes ago; assert detail returns A as INCLUDED / PLAN_COVERS_TITLE and title available_here.",
+        "Add current package B of the same provider/country/offer class with a deny rule for B's exact variant.",
+        "Re-read detail.",
+        "Repeat with the observation order reversed."
+      ],
+      "observedBeforeRepair": {
+        "detail": "Only B remains, as BLOCKED; title available_elsewhere; A's valid positive is dropped"
+      },
+      "expectedAfterRepair": {
+        "detail": "Both eligible packages are evaluated before display row selection and title aggregation; A stays INCLUDED and the title stays available_here even though B is BLOCKED",
+        "invariants": [
+          "Preserve both alternatives; never let a denied package suppress a positive from another package",
+          "Reversed observation order yields the same rows and title",
+          "Per-package deny applies only to its own variant"
+        ]
+      },
+      "regressionAssertions": [
+        "assert detail.offers contains a row with source_package_id=pkg-a and entitlement.verdict=INCLUDED",
+        "assert any BLOCKED row for pkg-b does not change watchability.verdict",
+        "assert detail.watchability.verdict == 'available_here'",
+        "assert repeated run with reversed insertion order produces equal keyed verdicts"
+      ],
+      "crossPrDependencies": [
+        "Corrected #222 head (reconciliation grouping, availability_reads lineage, entitlement_reads, views) is required",
+        "#223 cases E33-E35 cover same-scope allow/deny conflict within one offer, not two packages in one group",
+        "#225 integration replay must preserve both alternatives"
+      ],
+      "reproductionCommand": "./scripts/test-backend-isolated.sh tracker.tests.test_issue103_api.OfferProjectionTests -v 2 (add the two-package deny probe; disposable PostgreSQL, mocked transport)"
+    },
+    {
+      "id": "B3",
+      "layer": "backend",
+      "surface": "database/API",
+      "severity": "Medium",
+      "title": "Contradictory country parameters make a row local while the title verdict uses a different country",
+      "codeEvidence": [
+        "backend/tracker/views.py:2780-2804 - _current_country reads current_country only; _active_country reads current_country or legacy country",
+        "backend/tracker/views.py:2919-2934 - _prime_detail_response computes country via _active_country",
+        "backend/tracker/views.py:2882-2886 - _build_prime_offers recomputes current_country from query param country first",
+        "backend/tracker/views.py:2995-3025 - rows and title/availability are assembled from the two different countries"
+      ],
+      "databaseSeed": {
+        "title": {"tmdb_id": 910003, "content_type": "movie"},
+        "viewer": {"user_id": 1, "current_country": "DE", "audio_languages": ["EN"], "vpn_enabled": false},
+        "selection": {"provider_slug": "synthetic-aster", "billing_country": "NL", "holding": "yes", "plan_state": "selected", "plan_id": "base", "revision": 0},
+        "offers": [{"country": "NL", "kind": "subscription", "rule": "allow:base", "evidence": "verified"}]
+      },
+      "endpoints": [
+        "GET /api/prime/movie/910003/?current_country=DE",
+        "GET /api/prime/movie/910003/?current_country=DE&country=NL"
+      ],
+      "steps": [
+        "With one covered NL offer, DE viewing location and VPN disabled, request ?current_country=DE.",
+        "Assert title available_elsewhere and an inaccessible row.",
+        "Append &country=NL and re-read."
+      ],
+      "observedBeforeRepair": {
+        "detail": "With both parameters, title stays available_elsewhere but the same row becomes local/accessible and qualifies for Best Match"
+      },
+      "expectedAfterRepair": {
+        "detail": "One effective viewing country is passed from _prime_detail_response into _build_prime_offers and used for every row and the title; contradictory parameters either both resolve to the same country or are rejected consistently",
+        "invariants": ["Row locality, accessibility and title verdict never disagree", "Legacy country and current_country handling match the list surfaces (movie 615457 guard)"]
+      },
+      "regressionAssertions": [
+        "assert detail.offers[*].country locality matches the title verdict's effective country",
+        "assert no row is simultaneously local=true and outside the effective viewing country",
+        "assert existing backend/tracker/tests/test_surface_country_agreement.py still passes"
+      ],
+      "crossPrDependencies": [
+        "Corrected #222 head (views.py) is required",
+        "#224 UI displays the row locality badge and Best Match; #225 integration must replay the contradictory-parameter response consistently"
+      ],
+      "reproductionCommand": "./scripts/test-backend-isolated.sh tracker.tests.test_issue103_api.OfferProjectionTests tracker.tests.test_surface_country_agreement -v 2"
+    },
+    {
+      "id": "B4",
+      "layer": "backend",
+      "surface": "database/API",
+      "severity": "Medium",
+      "title": "Structurally valid stale revision draft returns 400 instead of the 409 recovery response",
+      "codeEvidence": [
+        "backend/tracker/services/entitlement_selections.py:125-146 - SelectionInput.validate rejects inconsistent input before replace_selection runs",
+        "backend/tracker/services/entitlement_selections.py:170-184 - plan/channel catalogue membership is validated before the revision check at line 183",
+        "backend/tracker/views.py:638-649 - conflict=true maps to HTTP 409 with body {code: revision_conflict, selection: {...}}"
+      ],
+      "databaseSeed": {
+        "title": "n/a",
+        "provider": {"slug": "synthetic-aster", "market": "NL"},
+        "selectionHistory": [
+          {"revision": 1, "plan_state": "selected", "plan_id": "base"},
+          {"revision": 2, "plan_state": "selected", "plan_id": "premium"}
+        ],
+        "event": "base plan expires from the active catalogue after revision 2"
+      },
+      "endpoints": ["PUT /api/subscriptions/synthetic-aster/markets/NL/"],
+      "steps": [
+        "Save base at revision 1, then premium at revision 2.",
+        "Let base expire (outside active window).",
+        "Submit the old but structurally valid base draft at revision 1."
+      ],
+      "observedBeforeRepair": {
+        "status": 400,
+        "effect": "Client loses the 409 recovery path that carries the current saved selection"
+      },
+      "expectedAfterRepair": {
+        "status": 409,
+        "body": {"code": "revision_conflict", "selection": "<saved revision-2 selection>"},
+        "invariants": [
+          "After structural validation and replay handling, return 409 for a stale revision before validating current catalogue membership",
+          "Retain 400 for invalid choices at the current revision",
+          "Identical replay at saved or one-behind revision still returns 200 without incrementing (F01 of #223)"
+        ]
+      },
+      "regressionAssertions": [
+        "assert PUT(old-base, revision=1).status_code == 409",
+        "assert response.selection.revision == 2 and response.selection.plan_id == 'premium'",
+        "assert PUT(invalid-choice, revision=2).status_code == 400",
+        "assert identical replay of revision-2 body returns 200 and does not increment"
+      ],
+      "crossPrDependencies": [
+        "Corrected #222 head (entitlement_selections.py) is required",
+        "#224 MarketPlanSelector.tsx conflict handling consumes the 409 body; U2 shares this path",
+        "#223 H02/H05/H06 must still pass"
+      ],
+      "reproductionCommand": "./scripts/test-backend-isolated.sh tracker.tests.test_issue103_api.SelectionWriteTests -v 2 (add the expired-plan stale-revision probe)"
+    },
+    {
+      "id": "B5",
+      "layer": "backend",
+      "surface": "database/API",
+      "severity": "Low",
+      "title": "Invalid-only language filter is treated as an absent filter and returns every row",
+      "codeEvidence": [
+        "backend/tracker/services/filtering.py:319-323 - languages() returns an empty set for invalid-only input",
+        "backend/tracker/services/filtering.py:342-343 - 'not audio_filter' treats empty set as no predicate"
+      ],
+      "databaseSeed": {
+        "title": {"tmdb_id": 910003, "content_type": "movie"},
+        "offers": [{"country": "NL", "kind": "subscription", "rule": "allow:base", "evidence": "verified", "audio_languages": ["EN"]}],
+        "viewer": {"user_id": 1, "current_country": "NL"}
+      },
+      "endpoints": [
+        "GET /api/catalog/?audio_languages=not-a-language",
+        "GET /api/catalog/?audio_languages=EN"
+      ],
+      "steps": [
+        "Seed one synthetic official result.",
+        "Request an invalid-only audio language code and compare with a matching EN filter."
+      ],
+      "observedBeforeRepair": {
+        "detail": "Both requests return the row; invalid-only input disables the predicate"
+      },
+      "expectedAfterRepair": {
+        "detail": "Distinguish absent filter from an active filter with zero recognized codes: return a validation error or zero matches consistently for official and unofficial rows",
+        "invariants": ["Absent param keeps current behavior", "Invalid-only param never widens results"]
+      },
+      "regressionAssertions": [
+        "assert invalid-only response is either 400 or a result set with zero matches",
+        "assert matching EN response still returns the synthetic row",
+        "assert unofficial rows follow the same rule as official rows"
+      ],
+      "crossPrDependencies": [
+        "Corrected #222 head (filtering.py) is required",
+        "#224 filter/count UI must not double-count when the corrected predicate returns zero"
+      ],
+      "reproductionCommand": "./scripts/test-backend-isolated.sh tracker.tests.test_issue103_api tracker.tests.test_detail_availability_state -v 2"
+    },
+    {
+      "id": "U1",
+      "layer": "frontend",
+      "surface": "rendered UI",
+      "severity": "Medium",
+      "title": "Series transaction-only detail hides the rental because purchase actions are nested in the nonempty-offers branch",
+      "codeEvidence": ["frontend/app/tv/[tmdb_id]/page.tsx:630-741 - purchase_offers block is inside the data.offers.length > 0 branch; movie detail renders it independently"],
+      "databaseSeed": {
+        "apiResponse": {
+          "offers": [],
+          "purchase_offers": [{"offer_type": "rent", "service": "synthetic-store", "country": "NL", "entitlement": {"verdict": "RENT_OR_BUY", "reason": "RENTAL"}, "requires_payment": true}],
+          "refresh_pending": false,
+          "availability": "available_elsewhere"
+        },
+        "note": "Mocked Vitest render; no network."
+      },
+      "endpoints": ["GET /api/prime/series/<tmdb_id>/ (mocked response)"],
+      "steps": [
+        "Render TV detail with offers=[] and one current purchase_offers rental.",
+        "Wait for series metadata to load.",
+        "Inspect the rendered offer list."
+      ],
+      "observedBeforeRepair": {
+        "detail": "Rental provider and action are absent"
+      },
+      "expectedAfterRepair": {
+        "detail": "Render TV purchase actions independently of offers, as movie detail does; cover transaction-only series and seasons",
+        "invariants": ["Empty offers state still shows AvailabilityState", "Purchase action is labelled and requires_payment is preserved"]
+      },
+      "regressionAssertions": [
+        "assert rental provider text and Rent action are present with offers=[]",
+        "assert no Best Match badge for a transaction-only row",
+        "assert season transaction-only case also renders"
+      ],
+      "crossPrDependencies": [
+        "Corrected #224 head (frontend/app/tv/[tmdb_id]/page.tsx) is required",
+        "#225 integration replay must include a transaction-only series fixture"
+      ],
+      "reproductionCommand": "cd frontend && npm test -- __tests__/series-page.test.tsx (add the transaction-only mocked case)"
+    },
+    {
+      "id": "U2",
+      "layer": "frontend",
+      "surface": "rendered UI",
+      "severity": "Medium",
+      "title": "Catalogue polling after a 409 overwrites the conflict draft and hides the conflict summary",
+      "codeEvidence": [
+        "frontend/components/MarketPlanSelector.tsx:85-101 - useEffect re-seeds draft whenever selectionIdentity changes",
+        "frontend/components/MarketPlanSelector.tsx:63-72 - selectionKey includes saved revision/state",
+        "frontend/components/MarketPlanSelector.tsx:129-137 - conflict path sets savedState and keeps the draft"
+      ],
+      "databaseSeed": {
+        "apiResponseSequence": [
+          {"step": 1, "selection": {"revision": 3, "plan_state": "selected", "plan_id": "base"}},
+          {"step": 2, "action": "viewer edits draft plan to ads then saves"},
+          {"step": 3, "response": "409 with saved revision 4 / premium"},
+          {"step": 4, "response": "GET catalogue now returns revision 4 / premium (subscriptions polling)"}
+        ],
+        "note": "Mocked Vitest render; no network."
+      },
+      "endpoints": ["PUT /api/subscriptions/{provider}/markets/{market}/ (mocked 409)", "GET /api/providers/?billing_country=NL (mocked refresh)"],
+      "steps": [
+        "Start with base at revision 3, draft ads, save and receive 409 carrying premium at revision 4.",
+        "Confirm the draft still shows ads and the conflict summary is visible.",
+        "Rerender with the revision-4 catalogue response."
+      ],
+      "observedBeforeRepair": {
+        "detail": "Input switches to premium and the conflict summary disappears"
+      },
+      "expectedAfterRepair": {
+        "detail": "Track the conflict draft independently of catalogue updates for the same market/provider; refresh the saved comparison while preserving unsaved edits until save or discard",
+        "invariants": ["409 body remains the source of the saved comparison", "A later GET does not silently discard the draft"]
+      },
+      "regressionAssertions": [
+        "assert draft still shows ads after rerender with revision-4 catalogue",
+        "assert conflict summary still visible after rerender",
+        "assert ordinary non-conflict catalogue refresh still updates the draft"
+      ],
+      "crossPrDependencies": [
+        "Corrected #224 head (MarketPlanSelector.tsx) is required",
+        "Corrected #222 head must supply the 409 body consumed by U2/B4",
+        "#223 H02 must still pass"
+      ],
+      "reproductionCommand": "cd frontend && npm test -- __tests__/subscriptions-market.test.tsx components/__tests__/MarketPlanSelector.test.tsx"
+    },
+    {
+      "id": "U3",
+      "layer": "frontend+backend",
+      "surface": "rendered UI + write API",
+      "severity": "Medium",
+      "title": "Saving an unrelated edit to a retired selected plan clears the retired plan ID and display name",
+      "codeEvidence": [
+        "frontend/components/MarketPlanSelector.tsx:33-60 - retiredChoice() encodes the saved ID but planInput() returns plan_id=null for retired choices",
+        "frontend/components/MarketPlanSelector.tsx:118-126 - that null plan_id is sent on every save",
+        "backend/tracker/services/entitlement_selections.py:158-194 - replace_selection writes state plan_id=null directly, losing the retired profile ID",
+        "backend/tracker/services/entitlement_selections.py:47-63 - selection_data derives plan_display_name from an active plan only"
+      ],
+      "databaseSeed": {
+        "profile": {"provider_slug": "synthetic-aster", "billing_country": "NL", "holding": "yes", "plan_state": "unsupported", "plan_id": "base", "plan_display_name": "base", "revision": 5, "retired": true},
+        "catalogue": "base no longer in active plan_options; review of retired selection must keep unsupported state",
+        "uiAction": "change only a channel holding, then save",
+        "note": "Mocked UI + real API replay on disposable PostgreSQL."
+      },
+      "endpoints": ["PUT /api/subscriptions/synthetic-aster/markets/NL/", "GET /api/providers/?billing_country=NL"],
+      "steps": [
+        "Load a retired selected plan with saved plan_id=base and display name 'base'.",
+        "Change only a channel and save.",
+        "Capture the PUT payload, then replay it through the real API and re-read the catalogue."
+      ],
+      "observedBeforeRepair": {
+        "request": {"plan_state": "unsupported", "plan_id": null},
+        "persisted": "Saved plan ID and display name change from base to null"
+      },
+      "expectedAfterRepair": {
+        "request": "Either retain the exact existing retired plan_id (narrow backend exception for this profile) or require an explicit replacement before saving; newly submitted arbitrary IDs must still be rejected",
+        "persisted": "plan_id=base and display name 'base' survive an unrelated channel edit; plan_state stays unsupported",
+        "invariants": [
+          "Unsupported plan remains distinct from unspecified plan after catalogue retirement",
+          "No arbitrary new ID is accepted by the write API",
+          "The repaired UI payload replays through the real API without changing the retired selection"
+        ]
+      },
+      "regressionAssertions": [
+        "assert PUT payload does not send plan_id=null for an unchanged retired selection",
+        "assert re-read selection.plan_id == 'base' and plan_display_name == 'base'",
+        "assert PUT with a new arbitrary retired ID returns 400",
+        "assert #223 E18/E23/E24 (unsupported/expired plan) still pass"
+      ],
+      "crossPrDependencies": [
+        "Requires BOTH corrected #224 (frontend) and a narrow corrected #222 backend exception; this is the only case with a deliberate two-PR contract change",
+        "#220 contract section 'Unsupported plan means a declared plan has no supported mapping ... keep these reasons distinct, including after a formerly supported product retires'",
+        "#225 integration fixture must carry the retired display name across a save"
+      ],
+      "reproductionCommand": "cd frontend && npm test -- components/__tests__/MarketPlanSelector.test.tsx && ./scripts/test-backend-isolated.sh tracker.tests.test_issue103_api -v 2"
+    },
+    {
+      "id": "U4",
+      "layer": "frontend",
+      "surface": "rendered UI",
+      "severity": "Medium",
+      "title": "Stale evidence suppresses Best Match but still shows the Included verdict badge",
+      "codeEvidence": [
+        "frontend/components/OfferRow.tsx:87-96 - unverified/stale gate applies to positive and bestMatch only",
+        "frontend/components/OfferRow.tsx:240-268 - verdictPresentation.label renders beside the unverified badge without an evidence gate"
+      ],
+      "databaseSeed": {
+        "apiResponse": {
+          "offer": {
+            "availability_evidence": "stale",
+            "entitlement": {"verdict": "INCLUDED", "reason": "PLAN_COVERS_TITLE"},
+            "is_accessible": true,
+            "is_entitled": true
+          },
+          "isBest": true
+        },
+        "note": "Mocked contradictory response; no network."
+      },
+      "endpoints": ["mocked detail response rendered by OfferRow"],
+      "steps": [
+        "Render an offer with outer availability_evidence=stale and nested INCLUDED / PLAN_COVERS_TITLE.",
+        "Inspect Best Match and the verdict badge/explanation."
+      ],
+      "observedBeforeRepair": {
+        "detail": "Best Match is suppressed but 'Included with your selected plan' still appears beside the stale badge"
+      },
+      "expectedAfterRepair": {
+        "detail": "Apply the evidence gate to the verdict badge and its explanation; contradictory stale and source-reported payloads show only the evidence label and an unconfirmed explanation",
+        "invariants": ["Missing legacy entitlement remains unconfirmed", "Current verified INCLUDED rows keep their badge"]
+      },
+      "regressionAssertions": [
+        "assert no Included badge when availability_evidence=stale",
+        "assert no Included badge when availability_evidence=source_reported with a contradictory verdict",
+        "assert verified INCLUDED row still renders the badge"
+      ],
+      "crossPrDependencies": [
+        "Corrected #224 head (OfferRow.tsx, lib/entitlement.ts) is required",
+        "#223 E30-E32/H09/H10 cover the API-side evidence partition, not the rendered badge"
+      ],
+      "reproductionCommand": "cd frontend && npm test -- components/__tests__/OfferRowEntitlement.test.tsx"
+    },
+    {
+      "id": "U5",
+      "layer": "frontend",
+      "surface": "rendered UI",
+      "severity": "Low",
+      "title": "Reviewed market-specific channel caveat is not rendered next to its channel control",
+      "codeEvidence": [
+        "backend/tracker/services/entitlement_selections.py:81-88 - channel_options[] carries caveat",
+        "frontend/components/MarketPlanSelector.tsx:214-217 - only selectedPlan.caveat is rendered; channel caveat is unused"
+      ],
+      "databaseSeed": {
+        "apiResponse": {
+          "channel_options": [{"package_id": "orbit", "parent_provider": "synthetic-aster", "country": "NL", "display_name": "Orbit", "caveat": "Reviewed NL channel caveat"}]
+        },
+        "note": "Mocked provider catalogue response; no network."
+      },
+      "endpoints": ["GET /api/providers/?billing_country=NL (mocked response)"],
+      "steps": [
+        "Render the selector with a hosted channel carrying a nonempty market-specific caveat.",
+        "Inspect the rendered channel control."
+      ],
+      "observedBeforeRepair": {
+        "detail": "Host and country render; the supplied caveat is omitted"
+      },
+      "expectedAfterRepair": {
+        "detail": "Render the reviewed caveat beside its channel control and assert its presence",
+        "invariants": ["Caveat is scoped to its channel and country", "Plan caveat rendering is unchanged"]
+      },
+      "regressionAssertions": [
+        "assert 'Reviewed NL channel caveat' is present in the selector",
+        "assert no caveat text is attributed to a different channel"
+      ],
+      "crossPrDependencies": [
+        "Corrected #224 head (MarketPlanSelector.tsx) is required",
+        "Backend already emits channel_options[].caveat at #222 head; no backend change expected"
+      ],
+      "reproductionCommand": "cd frontend && npm test -- components/__tests__/MarketPlanSelector.test.tsx"
+    }
+  ],
+  "integrationGates": [
+    {"gate": 1, "name": "Contract anchor", "command": "git merge-base --is-ancestor 2cfa9204a8d5c8c9ebd85ef4205b68eee81fb5f6 <corrected-222-head> && git cat-file -e 8985946b61c24c4b0fa9d6e0b2d19b45fd720cca", "pass": "Architecture head is an ancestor and final PR base is master 8985946"},
+    {"gate": 2, "name": "Backend full suite", "command": "./scripts/test-backend-isolated.sh --noinput", "pass": "No regressions against the 3,928-test baseline recorded in PR #226"},
+    {"gate": 3, "name": "Focused backend repairs B1-B5", "command": "./scripts/test-backend-isolated.sh tracker.tests.test_issue103_api tracker.tests.test_issue103_fixtures tracker.tests.test_issue103_migration tracker.tests.test_entitlement_exact -v 2", "pass": "All cases pass including new B1-B5 probes and reversed-order variants"},
+    {"gate": 4, "name": "#223 corpus still green", "command": "python -m unittest tracker.tests.test_issue103_fixtures && python -m pytest -q -rs scripts/test_*.py", "pass": "76 cases/85 row pairs and 46 script tests with one documented #97 skip"},
+    {"gate": 5, "name": "Frontend repairs U1-U5", "command": "cd frontend && npm test && ./node_modules/.bin/tsc --noEmit && npm run lint && NEXT_TELEMETRY_DISABLED=1 npm run build", "pass": "All tests pass; typecheck/build pass; lint warnings limited to existing LeavingSoonSection/UnofficialCatalogItem"},
+    {"gate": 6, "name": "Migration and drift", "command": "cd backend && python manage.py makemigrations --check --dry-run && python manage.py migrate --noinput", "pass": "No model drift; migration 0064 still applies on empty and upgraded disposable databases"},
+    {"gate": 7, "name": "Combined #225 refresh", "command": "git diff --check <master> <corrected-combined-head> && hosted CI all three jobs green", "pass": "Integration-only fixtures preserved; PR remains DRAFT pending ChatGPT Web final review"}
+  ],
+  "reRegressionSentinels": [
+    {"id": "S1", "guard": "backend/tracker/tests/test_entitlement_exact.py + #223 E01-E42", "risk": "Package/variant binding fixes must not reintroduce substring, prefix or display-name provider matching (#57) or cross-variant rule/price movement (#198/#205)"},
+    {"id": "S2", "guard": "backend/tracker/tests/test_surface_country_agreement.py", "risk": "B3 country fix must keep detail, watchlist, catalog and homepage on one effective country (movie 615457)"},
+    {"id": "S3", "guard": "backend/tracker/tests/test_issue103_api.py + #223 H02/H05/H06", "risk": "B4 409 ordering must preserve identical replay semantics, invalid 400s and concurrent [200,409] outcomes"},
+    {"id": "S4", "guard": "backend/tracker/tests/test_detail_availability_state.py + #223 E30-E32/H09/H10", "risk": "B5 filter fix must keep current/source-reported/last-known partitions and stale-only needs_recheck"},
+    {"id": "S5", "guard": "frontend/__tests__/availability-status-panel.test.tsx, error-states.test.tsx, subscriptions-market.test.tsx", "risk": "U1-U5 fixes must keep reload, cache invalidation, market-switch ordering and ordinary 409 recovery"},
+    {"id": "S6", "guard": "backend/tracker/tests/test_issue103_migration.py", "risk": "U3 backend exception must not add schema, backfill or legacy-table columns; additive storage and read rollback unchanged"}
+  ],
+  "verification": {
+    "commandsRun": [
+      "git fetch origin pull/225/head and pull/223/head; git worktree add --detach at bb438d3",
+      "git diff --stat 6667ebcae41bfcad18928f190ddf23ef17f9b3e7 e8280ee95f4209d738ff47ff7253a5f245de72cf",
+      "./scripts/test-backend-isolated.sh tracker.tests.test_issue103_fixtures tracker.tests.test_issue103_api tracker.tests.test_issue103_migration -v 1"
+    ],
+    "results": [
+      "#223 diff touches exactly 2 documentation files (865 insertions)",
+      "Baseline issue103 suite: Ran 16 tests in 3.914s - OK (0 failures, 0 errors, 0 skips) on disposable PostgreSQL; confirms B1-B5 are not covered",
+      "Ten defects independently confirmed by source inspection at combined head bb438d3; no application code changed"
+    ],
+    "skips": ["None in the 16-test baseline run; #223 records one optional #97 restricted-evidence script skip"]
+  },
+  "guardrails": {
+    "liveRequests": "ZERO live provider, first-party source, TMDb or playback requests",
+    "permissions": "No grants, tokens, runtime permission changes or credential acquisition",
+    "data": "Disposable PostgreSQL only; no production DB, restricted evidence or raw secrets in Git",
+    "operations": "No deploy, merge, issue closure, force-push or history rewrite; target PR remains DRAFT"
+  }
+}

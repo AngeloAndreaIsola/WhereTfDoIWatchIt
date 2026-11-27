@@ -21,12 +21,13 @@ interface CountrySelectProps {
   country: string;
   onChange: (country: string) => void;
   disabled?: boolean;
+  label?: string;
 }
 
-export default function CountrySelect({ country, onChange, disabled = false }: CountrySelectProps) {
+export default function CountrySelect({ country, onChange, disabled = false, label = "Current location" }: CountrySelectProps) {
   return (
     <select
-      aria-label="Current location"
+      aria-label={label}
       value={country}
       disabled={disabled}
       onChange={(event) => onChange(event.target.value)}

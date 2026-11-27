@@ -727,17 +727,22 @@ class PriceDoesNotAffectAccessTests(TestCase):
         self.movie = Movie.objects.create(tmdb_id=550, title="Fight Club", year=1999)
 
     def _rent_offer(self, with_price):
+        from tracker.tests.reviewed_entitlement import record_reviewed_offer
+
         offer = Offer.objects.create(
             provider=self.provider, country=self.country, source=self.source,
             content_type=ContentType.MOVIE, tmdb_id=550,
-            offer_type=OfferType.RENT, provider_content_id=f"pcid-{with_price}",
+            offer_type=OfferType.RENT, audio_languages=["EN"], provider_content_id=f"pcid-{with_price}",
         )
+        record_reviewed_offer(offer)
         if with_price:
+            row = OfferPrice.objects.get(offer_identity=offer.identity)
+            variants = [{**variant, "amount": "2.9900", "currency": "EUR", "validation_error": ""} for variant in row.variants]
             OfferPriceRepository().record(
                 offer=offer, source=self.source, amount=Decimal("2.9900"),
-                currency="EUR",
+                currency="EUR", variants=variants,
             )
-        return get_local_offers(self.movie)[0]
+        return next(o for o in get_local_offers(self.movie) if o.lineage.identity == offer.identity)
 
     def test_price_does_not_make_an_unowned_offer_accessible(self):
         preference = Preference(user_id=1, candidate_countries=["NL"])
@@ -754,8 +759,8 @@ class PriceDoesNotAffectAccessTests(TestCase):
         self.assertIsNotNone(classified.price)
 
     def test_price_presence_does_not_change_the_title_verdict(self):
-        # Declare a rent/buy account so the offer is a *purchasable* option; the
-        # verdict must be identical with and without a price.
+        # A store account is independent of the reviewed rental action.
+        # The action remains available with or without a price.
         Subscription.objects.create(
             user_id=1, provider=self.provider, access_mode="rent_buy",
         )
@@ -764,6 +769,7 @@ class PriceDoesNotAffectAccessTests(TestCase):
             self.movie, [self._rent_offer(with_price=True)], preference,
             current_country="NL",
         )
+        Offer.objects.filter(provider_content_id="pcid-True").delete()
         OfferPrice.objects.all().delete()
         without_price = resolve_title(
             self.movie, [self._rent_offer(with_price=False)], preference,

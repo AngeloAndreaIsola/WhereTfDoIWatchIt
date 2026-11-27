@@ -28,6 +28,8 @@ urlpatterns = [
     path("providers/<str:slug>/", views.provider_delete, name="provider-delete"),
     path("subscriptions/", views.subscriptions_list_create, name="subscriptions-list-create"),
     path("subscriptions", views.subscriptions_list_create),
+    path("subscriptions/<str:provider_slug>/markets/<str:billing_country>/",
+         views.subscription_market_selection, name="subscription-market-selection"),
     path("subscriptions/<int:pk>/", views.subscription_detail, name="subscription-detail"),
     path("subscriptions/<int:pk>", views.subscription_detail),
     path("scrapers/import-url/", views.scraper_import_url, name="scraper-import-url"),

@@ -416,7 +416,7 @@ class AccessRemainsIndependentTests(EvidencePipelineMixin, TestCase):
         classified = self._classified(
             access=build_explicit_access({"netflix"}), current_country="IT",
         )
-        self.assertTrue(classified.is_entitled)
+        self.assertFalse(classified.is_entitled)
         self.assertEqual(classified.locality, "out_of_reach")
         self.assertFalse(classified.is_accessible)
 

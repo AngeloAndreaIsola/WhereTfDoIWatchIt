@@ -1529,3 +1529,136 @@ class CatalogueRefreshAvailabilityRefresh(models.Model):
 
     def __str__(self):
         return f"marker {self.marker_id} <- refresh {self.availability_refresh_id}"
+
+
+class EntitlementPlan(models.Model):
+    """Reviewed product option identified independently of its display label."""
+
+    provider_slug = models.CharField(max_length=100)
+    billing_country = models.CharField(max_length=2)
+    plan_id = models.CharField(max_length=100)
+    display_name = models.CharField(max_length=200)
+    plan_class = models.CharField(max_length=12, choices=[
+        ("base", "Base"), ("paid_ads", "Paid with ads"), ("premium", "Premium"), ("other", "Other"),
+    ])
+    caveat = models.CharField(max_length=300, blank=True)
+    starts_at = models.DateTimeField()
+    ends_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["provider_slug", "billing_country", "plan_id"], name="uniq_entitlement_plan",
+            ),
+        ]
+
+
+class EntitlementChannel(models.Model):
+    """Reviewed distribution product selectable under one host in one market."""
+
+    parent_provider = models.CharField(max_length=100)
+    country = models.CharField(max_length=2)
+    package_id = models.CharField(max_length=100)
+    display_name = models.CharField(max_length=200)
+    caveat = models.CharField(max_length=300, blank=True)
+    starts_at = models.DateTimeField()
+    ends_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["parent_provider", "country", "package_id"], name="uniq_entitlement_channel",
+            ),
+        ]
+
+
+class ViewerMarketSelection(models.Model):
+    """Explicit viewer declaration. The provider slug avoids historical FK traversal."""
+
+    user_id = models.IntegerField()
+    provider_slug = models.CharField(max_length=100)
+    billing_country = models.CharField(max_length=2)
+    holding = models.CharField(max_length=11, choices=[
+        ("yes", "Held"), ("no", "Not held"), ("unspecified", "Unspecified"),
+    ])
+    plan_state = models.CharField(max_length=11, choices=[
+        ("selected", "Selected"), ("unsupported", "Unsupported"), ("unspecified", "Unspecified"),
+    ])
+    plan_id = models.CharField(max_length=100, null=True, blank=True)
+    revision = models.PositiveBigIntegerField()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user_id", "provider_slug", "billing_country"], name="uniq_viewer_market_selection",
+            ),
+        ]
+
+
+class ViewerChannelDeclaration(models.Model):
+    selection = models.ForeignKey(ViewerMarketSelection, on_delete=models.CASCADE, related_name="channels")
+    package_id = models.CharField(max_length=100)
+    holding = models.CharField(max_length=3, choices=[("yes", "Held"), ("no", "Not held")])
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["selection", "package_id"], name="uniq_viewer_channel_declaration",
+            ),
+        ]
+
+
+class ReviewedEntitlementPackage(models.Model):
+    """Reviewed fidelity for an exact source package and class in one market."""
+
+    source = models.CharField(max_length=100)
+    country = models.CharField(max_length=2)
+    source_package_id = models.CharField(max_length=150)
+    provider_slug = models.CharField(max_length=100)
+    offer_type = models.CharField(max_length=20)
+    channel = models.ForeignKey(EntitlementChannel, on_delete=models.PROTECT, null=True, blank=True)
+    starts_at = models.DateTimeField()
+    ends_at = models.DateTimeField(null=True, blank=True)
+    source_label = models.CharField(max_length=100)
+    public_conditions_met = models.BooleanField(default=False)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["source", "country", "source_package_id", "offer_type"],
+                name="uniq_reviewed_entitlement_package",
+            ),
+        ]
+
+
+class EntitlementCoverage(models.Model):
+    """Reviewed first-party assertion bound to the source observation and variant."""
+
+    offer_identity = models.CharField(max_length=255)
+    package = models.ForeignKey(ReviewedEntitlementPackage, on_delete=models.PROTECT)
+    product = models.ForeignKey(EntitlementPlan, on_delete=models.PROTECT)
+    variant_id = models.CharField(max_length=150)
+    offer_country = models.CharField(max_length=2)
+    effect = models.CharField(max_length=5, choices=[("allow", "Allowed"), ("deny", "Denied")])
+    portability = models.CharField(max_length=11, choices=[
+        ("allowed", "Allowed"), ("denied", "Denied"), ("unspecified", "Unspecified"),
+    ], default="unspecified")
+    starts_at = models.DateTimeField()
+    ends_at = models.DateTimeField(null=True, blank=True)
+    observed_at = models.DateTimeField()
+    fresh_until = models.DateTimeField()
+    source_label = models.CharField(max_length=100)
+    provenance_reference = models.CharField(max_length=255)
+    revision = models.PositiveIntegerField(default=1)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["offer_identity", "offer_country"], name="idx_ent_coverage_offer_market"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["offer_identity", "package", "product", "variant_id", "offer_country",
+                        "effect", "provenance_reference", "starts_at", "revision"],
+                name="uniq_entitlement_assertion",
+            ),
+        ]

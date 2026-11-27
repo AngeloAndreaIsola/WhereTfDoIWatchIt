@@ -126,6 +126,7 @@ class OfferObservation:
 
     observed_at: Optional[datetime] = None
     title_checked_at: Optional[datetime] = None
+    offer_identity: str = ""
 
     @property
     def evidence(self) -> AvailabilityEvidence:
