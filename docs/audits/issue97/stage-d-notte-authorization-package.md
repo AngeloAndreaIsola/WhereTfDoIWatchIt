@@ -166,7 +166,7 @@ Computed from the exact base file `backend/availability/services/issue97_stage_d
 
 | Field | Digest |
 | --- | --- |
-| `manifest_digest` | `d7308681ae99363a6e02e63a6e801d7e9b6d749fb8727` (matches `MANIFEST_SHA256` and the offline/report references) |
+| `manifest_digest` | `d7308681ae99376352eeedf9d271e63fa2a6e02e63a6e801d7e9b6d749fb8727` (canonical 64-character value, recomputed from the exact base file and matching `MANIFEST_SHA256` and the offline/report references) |
 | `document_sha256` | `997e0b1f6ce3bafba0fd722cf62936762a2dfd5d0c2ad3305ad9a382da373f51` |
 | Empty prior-checkpoint digest | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | Cohort CSV SHA-256 | `f573eff980127bb08943ea2c101d8354c6f18a6fd659e24ca727ae0576354e30` |
@@ -203,7 +203,7 @@ Template columns (one row per external call/probe): timestamp (UTC) | actor/rout
 | --- | --- | --- | --- | --- | ---: | ---: | --- | --- | --- | --- | --- |
 | 2026-11-27 (this task) | native OpenCode identity probe | `opencode/hy4-flash-free` (CLI 1.19.6) | n/a (model identity) | `MODEL_IDENTITY_OK` probe | 0 (not a source call) | 0 | ~77 ms text part | 0 (`step_finish.cost`) | success | exact reply `MODEL_IDENTITY_OK opencode/hy4-flash-free` | Preferred route 503 ALL_TARGETS_SKIPPED; effort UNPINNED (HIGH not pinnable) |
 | 2026-11-27 (this task) | OmniRoute read-only quota metadata | `omniroute_check_quota` (`read:quota`) | n/a | quota metadata | 0 | 0 | one call | 0 observed | success | `generatedAt 2026-11-27T21:30:48.637Z`, 79 providers | No JustWatch/Notte connection; `percentRemaining` null |
-| 2026-11-27 (this task) | Stage D mocked rehearsal | runner at `3e439e6`, manifest `d7308681…8727` | Godfather NL / Breaking Bad NL (mock) | `GetSearchTitles` (mocked `Session.post`) | 0 live (mock sends only) | 0 | 15.7 s suite | 0 (no provider) | 98 pass / 1 skip / 0 fail | suite output; ledger `0|0|0|0` | No live transport handoff |
+| 2026-11-27 (this task) | Stage D mocked rehearsal | runner at `3e439e6`, manifest `d7308681ae99376352eeedf9d271e63fa2a6e02e63a6e801d7e9b6d749fb8727` | Godfather NL / Breaking Bad NL (mock) | `GetSearchTitles` (mocked `Session.post`) | 0 live (mock sends only) | 0 | 15.7 s suite | 0 (no provider) | 98 pass / 1 skip / 0 fail | suite output; ledger `0|0|0|0` | No live transport handoff |
 | — (historical, reviewed, **not this task**) | Notte canary JW-CANARY-v1b | `stage-a-notte-function` `v20261124_150434`, Notte CLI `v0.0.79` | Inception / Dune (US discovery, NL collection) | browser navigation + `GetUrlTitleDetails` | 3 collection + 1 probe (not Stage D) | 1 recorded retry | per-call ranges in custody | UNKNOWN | 3/6 collection, 1/3 probe | source spec `faf8b4ba…a23f`, show `e25f3721…219c` | Internal JustWatch HTTP count **UNKNOWN**; not an HTTP receipt |
 
 **Live Stage D Batch 1 rows: none — zero live calls were made.** The template above is the required schema for populating any call made after exact owner authorization. Any future row must additionally record `evidence_sha256` / `runtime_receipt_sha256`, `authorization_id`, attempt ordinal and response/checkpoint digests, with raw payloads kept off-repository in approved custody.
