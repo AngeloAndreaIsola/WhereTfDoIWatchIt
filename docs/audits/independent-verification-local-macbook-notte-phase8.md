@@ -65,9 +65,9 @@ python3 -BE scripts/audit_issue97_stage_e.py
 
 # Stage D canonical manifest digest — matches mission's expected digest and policy MANIFEST_SHA256
 python3 -c 'import json,hashlib; d=open("backend/availability/services/issue97_stage_d_titles.json","rb").read(); print(hashlib.sha256(json.dumps(json.loads(d),sort_keys=True,separators=(",",":"),ensure_ascii=True).encode()).hexdigest())'
-# d7308681ae99363a6e02e63a6e801d7e9b6d749fb8727
+# d7308681ae99376352eeedf9d271e63fa2a6e02e63a6e801d7e9b6d749fb8727
 grep -n MANIFEST_SHA256 backend/availability/services/issue97_stage_d_policy.py
-# line 17: MANIFEST_SHA256 = "d7308681ae99363a6e02e63a6e801d7e9b6d749fb8727"
+# line 17: MANIFEST_SHA256 = "d7308681ae99376352eeedf9d271e63fa2a6e02e63a6e801d7e9b6d749fb8727"
 
 # Retained DB identity / counts — in-container psql, read-only
 docker ps --format '{{.Names}}\t{{.Status}}\t{{.Ports}}'
@@ -109,7 +109,7 @@ Independently observed facts matching the documents: retained DB `tracker` in `w
 
 ## 4. Stage D (PR #240) verification
 
-- **Runner identity:** reviewed at base; policy binds `MANIFEST_SHA256 = d7308681ae99363a6e02e63a6e801d7e9b6d749fb8727` at `issue97_stage_d_policy.py:17`, independently recomputed from the immutable titles JSON. Fail-closed scope equality covers manifest, database identity, experiment/authorization ids, phase/batch/scope ids, country, endpoint, method, operation, document SHA, attempt ceilings, prior-checkpoint and evidence/receipt digests.
+- **Runner identity:** reviewed at base; policy binds `MANIFEST_SHA256 = d7308681ae99376352eeedf9d271e63fa2a6e02e63a6e801d7e9b6d749fb8727` at `issue97_stage_d_policy.py:17`, independently recomputed from the immutable titles JSON. Fail-closed scope equality covers manifest, database identity, experiment/authorization ids, phase/batch/scope ids, country, endpoint, method, operation, document SHA, attempt ceilings, prior-checkpoint and evidence/receipt digests.
 - **Fail-closed / HMAC boundaries:** no grant, key, token or signature was created; `evidence_sha256` and `runtime_receipt_sha256` are UNAVAILABLE, so no final signed-scope digest is produced. Documented rehearsal: 99 tests, 98 pass / 1 skip / 0 fail; manifest suite 6 pass / 1 skip; 503 charged once with zero retries; 13th reservation refused; ledger `0|0|0|0`. Accepted as documented mocked evidence; not re-run here.
 - **Zero live calls:** document accounting table plus #97 handoff confirm zero live `GetSearchTitles`, zero Notte calls; only OpenCode identity probe and read-only quota metadata (`omniroute_check_quota`, 79 providers, none JustWatch/Notte).
 - **Not-accounting fields:** historical canary internal JustWatch HTTP count `UNKNOWN` (`measured_count: null`); static "4 browser actions per success" explicitly `ESTIMATE_NOT_MEASURED`; current Notte version and runtime receipt `BLOCKED_ON_SPECIFIC_EVIDENCE`; per-request cost UNKNOWN.
@@ -171,3 +171,11 @@ Scope: correction-only re-review of PRs #239 and #241. Substantive gate conclusi
 ### Route / cost / effort for this addendum
 
 Route remained the verified fallback `opencode/hy4-flash-free` after the deepseek and OmniRoute 3.8 failures. Reviewer probe emitted `MODEL_IDENTITY_OK opencode/hy4-flash-free`; provider native `opencode`; cost 0; effort UNPINNED. No silent substitution, paid escalation, retained-DB change, live Notte/provider call, HMAC grant, permission change, mapping activation, gate opening, merge, closure or cleanup.
+
+## 10. Repair addendum — Stage D manifest digest transcription (task_e76fc9bc81dc)
+
+Preserves historical findings and distinguishes them from current disposition; gates are unchanged (`97-D-NOTTE` and `97-E-NOTTE` remain `BLOCKED_ON_SPECIFIC_EVIDENCE`; `103-DEPLOY-LOCAL` remains `READY_FOR_EXACT_APPROVAL` only).
+
+- **Original finding (Agent D, docs-only accuracy defect):** §3 lines 68/70 and §4 line 112 displayed a 45-character truncated/garbled digest beginning `d7308681ae99363a6e02e…`, omitting the `eff1...52eeedf9d271e` segment; the adjacent comment claimed the displayed value was the output of the recompute command and of `grep -n MANIFEST_SHA256 .../issue97_stage_d_policy.py:17`. That claim was false as written: the real policy line 17 and an independent recomputation both yield the 64-character canonical digest.
+- **Current disposition (this repair):** all three occurrences were replaced with the canonical `d7308681ae99376352eeedf9d271e63fa2a6e02e63a6e801d7e9b6d749fb8727`. Validation re-run at base: recompute from `backend/availability/services/issue97_stage_d_titles.json` via `json.dumps(sort_keys=True, separators=(',', ':'), ensure_ascii=True)` + SHA-256 returned the canonical value; `grep -n MANIFEST_SHA256 backend/availability/services/issue97_stage_d_policy.py` returned line 17 with the same canonical value; grep of this document confirmed zero 45-character variants and three canonical occurrences.
+- **Scope note:** the same transcription defect in PR #240 is being repaired by its author; PR #240 was not edited from this branch. PR #241's new REQUEST_CHANGES from Agent C covers three documentation defects still under repair; no claim is made here that #241 is resolved. The §6/§9 disposition table is not retroactively changed.
